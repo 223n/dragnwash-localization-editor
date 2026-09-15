@@ -8,5 +8,5 @@
     "extends": "@223n/lint-config-ja/config/markdownlint.jsonc"
   },
   "globs": ["**/*.md"],
-  "ignores": ["node_modules/**"]
+  "ignores": ["node_modules/**", "docs/port-spec.md"]
 }

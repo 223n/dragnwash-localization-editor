@@ -15,3 +15,9 @@ node_modules/
 .env.*
 !.env.example
 .npmrc
+
+# Go
+/dist/
+*.exe
+*.test
+/dwloc
