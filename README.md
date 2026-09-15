@@ -29,13 +29,50 @@ Go言語で実装します。
 
 ## 現在の状態
 
-調査の段階です。
-実装はまだ始まっていません。
+`CLI`の`dwloc`が動きます。
+既存のPowerShellとPythonのスクリプトを置き換えられます。
+編集用の`UI`はまだありません。
+
+| できること | 元のツール |
+| ---- | ---- |
+| `dwloc publish` | `tools/hash-strings.ps1` |
+| `dwloc validate` | `tools/check-translations.py` |
+
+移植が正しいことは、元リポジトリの`Translations/<locale>/strings.csv`を入力にして`dwloc publish`を通し、入力とバイト単位で一致するかで確かめます。
+13ロケールすべてで一致します。
+`validate`は元のPythonスクリプトと同じ報告を出すかで確かめます。
 
 | 文書 | 内容 |
 | ---- | ---- |
 | [docs/research.md](docs/research.md) | 事前調査レポートです。既存仕様の分析、`UI`方式の比較、推奨する構成があります |
 | [docs/port-spec.md](docs/port-spec.md) | 既存実装から抽出した移植仕様です。156件の規則と、敵対的な検証で見つかった42件の食い違いが入っています |
+
+## 使い方
+
+翻訳リポジトリのルートで実行します。
+
+```bash
+go build ./cmd/dwloc
+
+./dwloc validate --root ../dragnwash-localization
+./dwloc publish  --root ../dragnwash-localization --dry-run
+./dwloc publish  --root ../dragnwash-localization
+```
+
+| サブコマンド | 何をするか |
+| ---- | ---- |
+| `validate` | `Translations/<locale>/strings.csv`の形式を検査します |
+| `publish` | 公開用の`strings.csv`を作り直します |
+| `version` | 版を表示します |
+
+`publish`は対象をすべて組み立ててから書き出します。
+1件でも失敗すれば何も書きません。
+書き出しは一時ファイル経由なので、途中で止まっても元のファイルは残ります。
+
+`--locale`で対象を絞れます。
+`--path`を使うと`Translations`の走査をやめて、指定したファイルだけを変換します。
+
+終了コードは、0が成功、1が`validate`で問題を見つけたとき、2が実行時のエラーです。
 
 ## 方針
 
@@ -46,6 +83,9 @@ Go言語で実装します。
 - `IME`とRTLの扱いをブラウザーへ委ねます。Goのネイティブ描画系`GUI`ライブラリは、この2点が未解決のためです
 - `CGO`に依存しません。クロスコンパイルだけで、全プラットフォーム向けのバイナリを作れます
 - まず`CLI`から作ります。既存のPowerShellとPythonのスクリプトを置き換えるだけでも、独立した価値があります
+
+`CLI`の部分はできました。
+残りは`UI`です。
 
 ## 関連するリポジトリ
 
@@ -61,6 +101,18 @@ Go言語で実装します。
 | ---- | ---- |
 | Node 22以上 | 日本語の文書の検査に使います |
 | Go 1.27.1以上 | 実装に使います。`go.mod`で指定しています |
+
+### Goのコードを検査する
+
+```bash
+gofmt -l ./cmd ./internal   # 書式が崩れているファイルを並べる
+go vet ./cmd/... ./internal/...
+go test ./cmd/... ./internal/... -count=1
+```
+
+元リポジトリを参照するテストがあります。
+`DRAGNWASH_SOURCE_REPO`にそのパスを入れると走ります。
+指定しない場合は既定の場所を探し、見つからなければ飛ばします。
 
 ### 日本語の文書を検査する
 
@@ -136,7 +188,7 @@ npm version patch --no-git-tag-version
 
 | ファイル | いつ動くか | 何をするか |
 | ---- | ---- | ---- |
-| `ci.yml` | `main`と`develop`への`push`、Pull Request、手動 | 日本語の文書、ワークフローの構文、ワークフローの安全性を検査します |
+| `ci.yml` | `main`と`develop`への`push`、Pull Request、手動 | 日本語の文書、Goの書式とテスト、ワークフローの構文と安全性を検査します |
 | `codeql.yml` | `main`と`develop`への`push`、Pull Request、毎週月曜、手動 | ワークフローの安全性をCodeQLで走査します |
 | `labels.yml` | `.github/labels.yml`の変更、手動 | リポジトリのラベルを定義に揃えます |
 | `labeler.yml` | Pull Requestを開いたとき、更新したとき | 変えたファイルとブランチ名からラベルを付けます |
