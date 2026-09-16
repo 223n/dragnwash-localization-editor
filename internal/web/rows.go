@@ -26,9 +26,19 @@ const maxRowsEdits = 20000
 
 // rowEdit は1行ぶんの書き換え要求。
 type rowEdit struct {
-	// Line は1始まりの物理行番号。行の同定はこれだけで行う。
-	// クライアントにパスもキーも書かせない。
+	// Line は1始まりの物理行番号。書き込む先はこれで決める。
+	// クライアントにパスは書かせない。
 	Line int `json:"line"`
+	// Key はクライアントがその行にあると思っているキー（先頭フィールド）。
+	//
+	// 行番号だけで同定すると、409 のあとが危うい。409 を受けた画面は読み直した
+	// 内容に自分の編集を載せ直すが、そのあいだによそが行を足したり消したり
+	// していると、同じ行番号が別のキーの行を指す。訳が別の行へ入り、その行に
+	// もとからあった訳が消える。
+	//
+	// 空なら照合しない。キーを持たない行（キー列が空の作業コピー）があるため
+	// で、送られてきたときは必ず照合する。画面は常に送る。
+	Key string `json:"key,omitempty"`
 	// Translation は差し替える訳。CR / LF / NUL / 不正なUTF-8 は
 	// internal/edit が拒む。画面側は送る前に置き換えておくこと。
 	Translation string `json:"translation"`
@@ -113,58 +123,126 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		// 誤りの中身は返さない。本文には訳が入っている。
-		s.writeError(w, cat, http.StatusBadRequest, "error.bad_request", nil)
+		s.writeError(w, cat, http.StatusBadRequest, "error.bad_request")
 		return
 	}
 
 	target := s.target(req.Locale)
 	if target == nil {
 		// 誤りの文面にロケール名を書き戻さない（handleLines と同じ）。
-		s.writeError(w, cat, http.StatusNotFound, "error.unknown_locale", nil)
+		s.writeError(w, cat, http.StatusNotFound, "error.unknown_locale", "locale", "")
 		return
 	}
 	if req.BaseVersion == "" {
 		// 版が無い要求は通さない。通すと「読んだときの状態」を確かめずに
 		// 書くことになり、別の窓や publish が書いた内容を消す。
-		s.writeError(w, cat, http.StatusBadRequest, "error.version_required", nil)
+		s.writeError(w, cat, http.StatusBadRequest, "error.version_required")
 		return
 	}
 	if len(req.Edits) == 0 || len(req.Edits) > maxRowsEdits {
-		s.writeError(w, cat, http.StatusBadRequest, "error.bad_request", nil)
+		s.writeError(w, cat, http.StatusBadRequest, "error.bad_request")
 		return
 	}
 
-	// 保存は直列にする。同じファイルへ同時に2つ書くと、片方の版の照合が
-	// 通ったあとにもう片方が書き終える、という並びが起きうる。
+	out := s.saveRows(cat, target, req)
+
+	// ここから先はファイルに触らない。錠はもう放してある。
+	switch {
+	case out.conflict:
+		s.writeConflict(w, cat, target, out.file)
+		return
+	case out.errKey != "":
+		s.writeErrorResults(w, cat, out.status, out.errKey, out.results)
+		return
+	}
+
+	// 件数の局所更新。訳が入ったキーを未翻訳から引くだけで、カテゴリの
+	// 再判定はしない（13ロケール全部を読み直すことになる）。
+	for i := range out.results {
+		if !out.results[i].Saved {
+			continue
+		}
+		line, ok := out.file.Line(out.results[i].Line)
+		if !ok {
+			continue
+		}
+		s.markFilled(target.Locale, line.Key(), line.Translation() != "")
+	}
+
+	sum := s.summary(target.Locale)
+	filled := s.filledKeys(target.Locale)
+	badges := s.badgesByKey(cat, s.findings[target.Locale], filled)
+	for i := range out.results {
+		if line, ok := out.file.Line(out.results[i].Line); ok {
+			out.results[i].Badges = badges[line.Key()]
+		}
+	}
+
+	noteRequest(w, " locale=%s edits=%d saved=%d", target.Locale, len(req.Edits), out.applied)
+	s.writeJSON(w, rowsResponse{
+		Locale:  target.Locale,
+		Version: out.file.Version(),
+		Results: out.results,
+		Counts:  s.buildCounts(cat, target.Locale, sum),
+		Notes: s.buildNotes(cat, target.Locale, sum,
+			out.file.Header() != nil && hasSourceColumn(out.file.Header())),
+	})
+}
+
+// saveOutcome は [server.saveRows] の結果。
+//
+// 応答そのものではなく、応答を組み立てるための材料である。錠の中でファイルを
+// 読み書きし、錠を放してから応答を組む、という順にするために挟んでいる。
+type saveOutcome struct {
+	// file は読み込んだファイル。conflict のときは読み直したいまの中身。
+	file *edit.File
+	// results は行ごとの結果。
+	results []rowResult
+	// applied は実際にモデルへ入れた行数。
+	applied int
+	// conflict が true なら 409。1バイトも書いていない。
+	conflict bool
+	// status と errKey は誤りのとき。errKey が空なら成功。
+	status int
+	errKey string
+}
+
+// saveRows は錠の中でファイルを読み、行を差し替えて書く。
+//
+// 錠はファイルを読んで書き終えるまでで放す。応答の組み立て（1839行ぶんの
+// JSON になる）まで抱えると、錠の範囲が「ファイルを守る」よりずっと広く見える。
+//
+// 保存を直列にするのは、同じファイルへ同時に2つ書くと、片方の版の照合が
+// 通ったあとにもう片方が書き終える、という並びが起きうるためである。
+func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest) saveOutcome {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 
-	s.applyRows(w, cat, target, req)
-}
-
-// applyRows は版を照合し、行を差し替えて保存する。
-func (s *server) applyRows(w http.ResponseWriter, cat *Catalog, target *publish.Target, req rowsRequest) {
 	file, err := edit.Open(target.Input)
 	if err != nil {
 		s.logf("open failed locale=%s", target.Locale)
-		s.writeError(w, cat, http.StatusInternalServerError, "error.read_failed", nil)
-		return
+		return saveOutcome{status: http.StatusInternalServerError, errKey: "error.read_failed"}
 	}
 	if file.ReadOnly() {
 		// ヘッダーが受理できないファイル。理由は internal/edit の文面をそのまま出す。
-		s.writeError(w, cat, http.StatusUnprocessableEntity, "error.file_readonly", nil)
-		return
+		return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 	}
 	if file.Version() != req.BaseVersion {
 		// 手前でファイルが変わっている。1バイトも書かずに、いまの中身を返す。
-		s.writeConflict(w, cat, target, file)
-		return
+		return saveOutcome{file: file, conflict: true}
 	}
 
 	results := make([]rowResult, 0, len(req.Edits))
 	applied := 0
 	for _, e := range req.Edits {
 		res := rowResult{Line: e.Line}
+		if !keyMatches(file, e) {
+			// その行番号には別のキーの行がある。書くと訳が別の行へ入り、
+			// その行にもとからあった訳が消える。書かずに理由を返す。
+			res.Error = s.cat.T(cat, "error.row_moved")
+			results = append(results, res)
+			continue
+		}
 		switch err := file.SetTranslation(e.Line, e.Translation); {
 		case err == nil:
 			applied++
@@ -181,8 +259,7 @@ func (s *server) applyRows(w http.ResponseWriter, cat *Catalog, target *publish.
 		case errors.Is(err, edit.ErrReadOnly):
 			// ファイル全体が読み取り専用。上で弾いているのでここへは来ないが、
 			// 来たなら1行ずつ断るのではなくまとめて断る。
-			s.writeError(w, cat, http.StatusUnprocessableEntity, "error.file_readonly", nil)
-			return
+			return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 		default:
 			// 編集できない行と、書けない値（改行・NUL・不正なUTF-8）。
 			// 理由は internal/edit が持つ文面をそのまま出す。行の中身は含まない。
@@ -194,16 +271,23 @@ func (s *server) applyRows(w http.ResponseWriter, cat *Catalog, target *publish.
 	if applied == 0 {
 		// 1行も書けなかった。書いていないことを状態コードでも示す。
 		// 画面はこの結果を見て、その行を「保存できていない行」として残す。
-		s.writeErrorResults(w, cat, http.StatusUnprocessableEntity, "error.no_row_saved", results)
-		return
+		return saveOutcome{
+			results: results,
+			status:  http.StatusUnprocessableEntity,
+			errKey:  "error.no_row_saved",
+		}
 	}
 
 	if err := file.Save(); err != nil {
 		if errors.Is(err, edit.ErrConflict) {
 			// Save は書く直前にもう一度版を照合する。ここで弾かれたときも
-			// 1バイトも書いていない。読み直して返す。
-			s.writeConflictReload(w, cat, target)
-			return
+			// 1バイトも書いていない。手元の File はもう古いので読み直す。
+			fresh, err := edit.Open(target.Input)
+			if err != nil {
+				s.logf("open failed locale=%s", target.Locale)
+				return saveOutcome{status: http.StatusInternalServerError, errKey: "error.read_failed"}
+			}
+			return saveOutcome{file: fresh, conflict: true}
 		}
 		// 書けなかった。誤りの中身（パスを含む）は返さない。
 		//
@@ -219,40 +303,29 @@ func (s *server) applyRows(w http.ResponseWriter, cat *Catalog, target *publish.
 		// rename が共有違反で失敗する（実測で、読み手がいると数パーセント）。
 		// 画面はこれを見て少し待ってからもう一度送る。
 		s.logf("save failed locale=%s", target.Locale)
-		s.writeErrorResults(w, cat, http.StatusServiceUnavailable, "error.save_failed", results)
-		return
-	}
-
-	// 件数の局所更新。訳が入ったキーを未翻訳から引くだけで、カテゴリの
-	// 再判定はしない（13ロケール全部を読み直すことになる）。
-	for i := range results {
-		if !results[i].Saved {
-			continue
-		}
-		line, ok := file.Line(results[i].Line)
-		if !ok {
-			continue
-		}
-		s.markFilled(target.Locale, line.Key(), line.Translation() != "")
-	}
-
-	sum := s.summary(target.Locale)
-	filled := s.filledKeys(target.Locale)
-	badges := s.badgesByKey(cat, s.findings[target.Locale], filled)
-	for i := range results {
-		if line, ok := file.Line(results[i].Line); ok {
-			results[i].Badges = badges[line.Key()]
+		return saveOutcome{
+			results: results,
+			status:  http.StatusServiceUnavailable,
+			errKey:  "error.save_failed",
 		}
 	}
 
-	noteRequest(w, " locale=%s edits=%d saved=%d", target.Locale, len(req.Edits), applied)
-	s.writeJSON(w, rowsResponse{
-		Locale:  target.Locale,
-		Version: file.Version(),
-		Results: results,
-		Counts:  s.buildCounts(cat, target.Locale, sum),
-		Notes:   s.buildNotes(cat, target.Locale, sum, file.Header() != nil && hasSourceColumn(file.Header())),
-	})
+	return saveOutcome{file: file, results: results, applied: applied}
+}
+
+// keyMatches は、要求が指す行がクライアントの思っているキーの行かを返す。
+//
+// キーを送ってこない要求（キー列が空の行）は照合しない。行が無いときも通す。
+// 行が無いことは [edit.File.SetTranslation] が断るので、理由を2か所で作らない。
+func keyMatches(file *edit.File, e rowEdit) bool {
+	if e.Key == "" {
+		return true
+	}
+	line, ok := file.Line(e.Line)
+	if !ok {
+		return true
+	}
+	return line.Key() == e.Key
 }
 
 // writeConflict は 409 といまの行一覧を返す。1バイトも書いていない。
@@ -268,28 +341,18 @@ func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publ
 	})
 }
 
-// writeConflictReload はファイルを読み直してから 409 を返す。
-//
-// [edit.File.Save] が書く直前の照合で弾いたとき、手元の File はもう古い。
-func (s *server) writeConflictReload(w http.ResponseWriter, cat *Catalog, target *publish.Target) {
-	file, err := edit.Open(target.Input)
-	if err != nil {
-		s.logf("open failed locale=%s", target.Locale)
-		s.writeError(w, cat, http.StatusInternalServerError, "error.read_failed", nil)
-		return
-	}
-	s.writeConflict(w, cat, target, file)
-}
-
 // writeError は誤りを JSON で返す。文面は目録から引く。
-func (s *server) writeError(w http.ResponseWriter, cat *Catalog, status int, key string, results []rowResult) {
-	s.writeErrorResults(w, cat, status, key, results)
+//
+// kv は文面の {name} を埋める組。埋めずに残すと、翻訳者の画面に {locale} の
+// ような鍵がそのまま出る。
+func (s *server) writeError(w http.ResponseWriter, cat *Catalog, status int, key string, kv ...string) {
+	s.writeErrorResults(w, cat, status, key, nil, kv...)
 }
 
 // writeErrorResults は誤りと行ごとの理由を返す。
-func (s *server) writeErrorResults(w http.ResponseWriter, cat *Catalog, status int, key string, results []rowResult) {
+func (s *server) writeErrorResults(w http.ResponseWriter, cat *Catalog, status int, key string, results []rowResult, kv ...string) {
 	s.writeJSONStatus(w, status, errorResponse{
-		Message: s.cat.T(cat, key),
+		Message: s.cat.T(cat, key, kv...),
 		Results: results,
 	})
 }

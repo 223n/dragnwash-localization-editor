@@ -10,8 +10,9 @@ import (
 const (
 	// tokenParam は最初の1回だけ受け取る問い合わせ文字列の名前。
 	tokenParam = "t"
-	// cookieName は移し替えたあとの Cookie の名前。
-	cookieName = "dwloc_session"
+	// cookiePrefix は移し替えたあとの Cookie の名前の前半。
+	// 後ろにポートを足して、待ち受けごとに別の名前にする（[cookieNameFor]）。
+	cookiePrefix = "dwloc_session"
 	// tokenBytes はトークンの長さ（バイト）。
 	//
 	// 32バイトにしてあるのは、総当たりを問題にしないため。手元の待ち受けなので
@@ -42,6 +43,22 @@ func sameToken(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+// cookieNameFor は待ち受けているポートごとの Cookie の名前を返す。
+//
+// Cookie はポートで分かれない。127.0.0.1:19801 が置いた Cookie は
+// 127.0.0.1:19802 にも送られるし、名前が同じなら後から置いたほうが前の値を
+// 上書きする。名前を固定にすると、dwloc edit をもう1つ動かした（あるいは1つを
+// 止めて開き直した）だけで、先に開いていた画面のトークンが消える。その画面は
+// 以後すべての要求が 404 になり、打った訳をファイルへ入れる手立てが無くなる。
+//
+// 名前にポートを入れて、待ち受けごとに別の Cookie にする。ブラウザーは
+// 127.0.0.1 の全ポートへ両方の Cookie を送るが、それぞれが自分の名前だけを
+// 見るので混ざらない。Host と Origin をポートまで見て分けている
+// （[allowedHosts]）のと同じ分け方である。
+func cookieNameFor(port string) string {
+	return cookiePrefix + "_" + port
+}
+
 // sessionCookie は移し替えたあとの Cookie を作る。
 //
 //   - HttpOnly:  頁の JavaScript から読ませない。読めても使い道は無いが、
@@ -55,9 +72,9 @@ func sameToken(got, want string) bool {
 //
 // 期限は付けない（セッション Cookie）。待ち受けが終われば、その Cookie で
 // 開ける先はもう無い。トークンは起動のたびに変わる。
-func sessionCookie(token string) *http.Cookie {
+func sessionCookie(name, token string) *http.Cookie {
 	return &http.Cookie{
-		Name:     cookieName,
+		Name:     name,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,

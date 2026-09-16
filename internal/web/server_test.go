@@ -102,8 +102,8 @@ func newTestServer(t *testing.T, opt Options) *server {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
-	// run が実際のポートから作る照合表を、テストでは決め打ちで入れる。
-	s.hosts = allowedHosts(testPort)
+	// run が実際のポートから作る照合表と Cookie の名前を、テストでは決め打ちで入れる。
+	s.usePort(testPort)
 	return s
 }
 
@@ -121,7 +121,7 @@ func do(t *testing.T, s *server, method, target string, cookie bool, headers map
 		req.Header.Set(k, v)
 	}
 	if cookie {
-		req.AddCookie(&http.Cookie{Name: cookieName, Value: s.token})
+		req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.token})
 	}
 	rec := httptest.NewRecorder()
 	s.handler().ServeHTTP(rec, req)
@@ -159,7 +159,7 @@ func TestTokenIsMovedToCookie(t *testing.T) {
 	}
 	c := cookies[0]
 	switch {
-	case c.Name != cookieName:
+	case c.Name != s.cookieName:
 		t.Errorf("Cookie の名前が %q", c.Name)
 	case c.Value != s.token:
 		t.Errorf("Cookie の値がトークンと違う")
@@ -214,7 +214,7 @@ func TestHostMustMatchExactly(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/bootstrap", nil)
 		req.Host = tc.host
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.AddCookie(&http.Cookie{Name: cookieName, Value: s.token})
+		req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.token})
 		rec := httptest.NewRecorder()
 		s.handler().ServeHTTP(rec, req)
 		if rec.Code != tc.want {

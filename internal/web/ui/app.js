@@ -47,7 +47,10 @@
     conflictTitle: document.getElementById("conflict-title"),
     conflictHelp: document.getElementById("conflict-help"),
     conflictKeep: document.getElementById("conflict-keep"),
-    conflictTake: document.getElementById("conflict-take")
+    conflictTake: document.getElementById("conflict-take"),
+    orphans: document.getElementById("orphans"),
+    orphansTitle: document.getElementById("orphans-title"),
+    orphansList: document.getElementById("orphans-list")
   };
 
   /*
@@ -55,7 +58,12 @@
     state.failed    保存できなかった行（行番号 → 理由）。値は欄に残したまま、
                     自動保存の対象からだけ外す。書き換えれば pending へ戻る。
     state.mine      競合のあいだ抱えている自分の編集。選ばせるまで捨てない。
+    state.orphans   載せる先の行がファイルから無くなった訳。捨てずに画面へ出す。
     state.rows      行番号 → 描いた要素。保存の結果を差し込むために持つ。
+    state.gen       読み直しとロケール切り替えのたびに進める番号。送りかけの
+                    保存の応答が「もう画面のものではない」と分かるようにする。
+    state.saveError 要求そのものが落ちているか（届かない、404、503）。行ごとの
+                    理由（state.failed）とは別に持つ。
   */
   var state = {
     locale: "",
@@ -66,10 +74,13 @@
     pending: new Map(),
     failed: new Map(),
     mine: null,
+    orphans: [],
     rows: new Map(),
+    gen: 0,
     editing: null,
     composing: false,
     saving: false,
+    saveError: false,
     timer: null,
     retry: 0
   };
@@ -82,10 +93,12 @@
     （待ち受け側も短い間隔で3回まで試すが、それでも落ちる）。待てば直る種類の
     失敗なので、画面からももう一度送る。
 
-    諦めたあとも未保存の訳は抱えたまま、画面に「保存できませんでした」と出す。
-    黙って消さないし、黙って成功したようにも見せない。
+    諦めない。決めた回数を使い切ったあとは、最後の間隔のまま送り続ける。
+    諦めると、原因（ゲームがファイルを開いている）が消えたあとも、その訳は
+    二度と送られない。翻訳者が別の行を触るまで、訳はブラウザーの中だけに残る。
+    送り先は自分自身なので、間隔さえ広げれば送り続けても重くない。
   */
-  var retryDelays = [500, 1000, 2000];
+  var retryDelays = [500, 1000, 2000, 5000, 15000, 30000];
 
   /*
     文言を引く。置換は {name} の1形式だけ。複数形の規則は持ち込まない。
@@ -195,6 +208,7 @@
     el.conflictHelp.textContent = t("ui.conflict_help");
     el.conflictKeep.textContent = t("ui.conflict_keep_mine");
     el.conflictTake.textContent = t("ui.conflict_take_file");
+    el.orphansTitle.textContent = t("ui.orphans_title");
   }
 
   function fillLocales(selected) {
@@ -391,6 +405,11 @@
       setRowNote(entry, "");
       markRow(entry);
     }
+    /*
+      打ち直したら、送り直しの間隔を最初に戻す。広がったままだと、直したのに
+      30秒待たされる。
+    */
+    state.retry = 0;
     updateStatus();
     if (!state.composing) {
       schedule();
@@ -407,6 +426,16 @@
   */
   editor.addEventListener("compositionstart", function () {
     state.composing = true;
+    /*
+      走っている時計を止める。止めないと、変換を始める前の1打鍵で動き出した
+      時計が変換の途中で切れて、打ちかけの読み（「あこ」など）がそのまま
+      保存される。作業コピーへ書けば、ゲームが約2秒でそれを読み込む。
+      確定したら compositionend が onInput から時計を引き直す。
+    */
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
   });
   editor.addEventListener("compositionend", function () {
     state.composing = false;
@@ -502,15 +531,38 @@
       clearTimeout(state.timer);
       state.timer = null;
     }
+    /*
+      変換の途中では送らない。送ると打ちかけの読みがファイルに入る。
+      確定したら compositionend から onInput が時計を引き直す。
+    */
+    if (state.composing) {
+      return;
+    }
     if (state.saving || state.mine || state.pending.size === 0) {
       return;
     }
     var edits = [];
     var sent = new Map();
     state.pending.forEach(function (value, line) {
-      edits.push({ line: line, translation: value });
+      var entry = state.rows.get(line);
+      edits.push({
+        line: line,
+        /*
+          キーも送る。行番号だけで送ると、手前でよそが行を足したり消したり
+          していたときに、訳が別のキーの行へ入る。待ち受けは食い違いを見つけ
+          たら書かずに断る。
+        */
+        key: entry && entry.key ? entry.key : "",
+        translation: value
+      });
       sent.set(line, value);
     });
+    /*
+      送った時点の世代を覚えておく。返ってくるまでにロケールが変わっていたら、
+      その応答は画面のものではない。載せると、別ロケールの版と件数が入り、
+      誰も触っていないファイルで 409 が出る。
+    */
+    var gen = state.gen;
     state.saving = true;
     updateStatus();
     postJSON("/api/rows", {
@@ -520,6 +572,10 @@
     })
       .then(function (res) {
         state.saving = false;
+        if (gen !== state.gen) {
+          updateStatus();
+          return;
+        }
         onSaved(res, sent);
       })
       .catch(function () {
@@ -528,20 +584,36 @@
           画面に出す（黙って成功したように見せない）。
         */
         state.saving = false;
+        if (gen !== state.gen) {
+          updateStatus();
+          return;
+        }
         showMessage(t("ui.save_failed_detail"));
-        updateStatus();
         scheduleRetry();
+        updateStatus();
       });
   }
 
   function onSaved(res, sent) {
-    if (res.status === 409 && res.body && res.body.current) {
-      onConflict(res.body);
+    var body = res.body || {};
+    /*
+      応答が、いま画面に出ているロケールのものか確かめる。世代でも弾いているが、
+      ここでも見る。別ロケールの版を載せると、誰も触っていないファイルで
+      409 が出て、ありもしない競合を人に選ばせることになる。
+    */
+    if (body.locale && body.locale !== state.locale) {
       return;
     }
-    var body = res.body || {};
+    if (res.status === 409 && body.current) {
+      if (body.current.locale !== state.locale) {
+        return;
+      }
+      onConflict(body);
+      return;
+    }
     if (res.status === 200) {
       state.retry = 0;
+      state.saveError = false;
       applyResults(body.results || [], sent);
       state.version = body.version;
       showMessage("");
@@ -561,8 +633,8 @@
     */
     applyRowErrors(body.results || []);
     showMessage(body.message ? body.message : t("ui.save_failed_detail"));
-    updateStatus();
     scheduleRetry();
+    updateStatus();
   }
 
   /* 行ごとの理由だけを取り出す。値は欄に残したまま、自動保存の対象から外す。 */
@@ -581,13 +653,26 @@
 
   /*
     待ってからもう一度送る。待ち受けが 503 を返す失敗（Windows の共有違反）は
-    待てば直る。決めた回数で諦め、未保存のまま画面に残す。
+    待てば直る。
+
+    諦めない。決めた間隔を使い切ったあとは、最後の間隔のまま送り続ける。
+    途中で諦めると、原因が消えたあともその訳は二度と送られない（実際に、
+    読み取り専用を解除して12秒待っても送られなかった）。
   */
   function scheduleRetry() {
-    if (state.pending.size === 0 || state.retry >= retryDelays.length) {
+    if (state.pending.size === 0) {
+      /*
+        送るものが残っていない。1行ずつの理由（state.failed）のほうで出るので、
+        「保存できません」の表示はそちらに任せる。
+      */
+      state.saveError = false;
       return;
     }
-    var wait = retryDelays[state.retry];
+    state.saveError = true;
+    var i = state.retry;
+    if (i >= retryDelays.length) {
+      i = retryDelays.length - 1;
+    }
     state.retry = state.retry + 1;
     if (state.timer) {
       clearTimeout(state.timer);
@@ -595,7 +680,7 @@
     state.timer = setTimeout(function () {
       state.timer = null;
       flush();
-    }, wait);
+    }, retryDelays[i]);
   }
 
   /* 200 のときだけ呼ぶ。saved はファイルに入ったことを意味する。 */
@@ -629,6 +714,97 @@
     });
   }
 
+  /* いま描いている行の 行番号 → キー。読み直す前に控えておく。 */
+  function keyIndex() {
+    var keys = new Map();
+    state.rows.forEach(function (entry, line) {
+      keys.set(line, entry.key);
+    });
+    return keys;
+  }
+
+  /*
+    読み直した内容の上に、抱えている編集を載せ直す。
+
+    行番号だけで載せ直すと危ない。読み直すまでのあいだによそが行を足したり
+    消したりしていると、同じ行番号が別のキーの行を指す。訳が別の行に入り、
+    その行にもとからあった訳が消える（実際に起きた）。だから載せ直しはキーで行う。
+
+      同じキーが同じ行番号にある  → その行番号のまま（ずれていない）
+      どこか1か所にだけある       → その行番号へ移す
+      無い、2か所以上ある、先が埋まっている
+                                  → 載せる先を決められない。捨てずに
+                                    「行き先が見つからない訳」として画面に出す
+
+    キーを持たない行（キー列が空の作業コピー）は、行番号で載せるしかない。
+    待ち受けもキーの無い要求は照合しないので、扱いはそろっている。
+  */
+  function remap(edits, oldKeys, data) {
+    var byKey = new Map();
+    (data.lines || []).forEach(function (line) {
+      if (line.kind !== "data" || !line.key) {
+        return;
+      }
+      var seen = byKey.get(line.key);
+      if (seen) {
+        seen.push(line.n);
+        return;
+      }
+      byKey.set(line.key, [line.n]);
+    });
+
+    var moved = new Map();
+    var lost = [];
+    edits.forEach(function (value, line) {
+      var k = oldKeys.get(line);
+      if (!k) {
+        moved.set(line, value);
+        return;
+      }
+      var seen = byKey.get(k);
+      var to = null;
+      if (seen && seen.indexOf(line) >= 0) {
+        to = line;
+      } else if (seen && seen.length === 1) {
+        to = seen[0];
+      }
+      if (to === null || moved.has(to)) {
+        lost.push({ key: k, text: value });
+        return;
+      }
+      moved.set(to, value);
+    });
+    return { edits: moved, lost: lost };
+  }
+
+  /*
+    行き先が見つからなくなった訳を控える。捨てない。
+
+    ここが、その訳が残っている最後の場所になる。翻訳者が控えるまで出し続け、
+    残っているあいだは beforeunload でも引き止める。
+  */
+  function addOrphans(lost) {
+    lost.forEach(function (item) {
+      state.orphans.push(item);
+    });
+    renderOrphans();
+  }
+
+  function renderOrphans() {
+    clear(el.orphansList);
+    state.orphans.forEach(function (item) {
+      var row = li(null, "");
+      row.appendChild(span("note-label", item.key + ": "));
+      var text = span("note-value", item.text);
+      /* 訳なので向きは中身から決めさせる。 */
+      text.dir = "auto";
+      text.lang = state.locale;
+      row.appendChild(text);
+      el.orphansList.appendChild(row);
+    });
+    el.orphans.hidden = state.orphans.length === 0;
+  }
+
   /*
     409。手前でファイルが変わっている。1バイトも書かれていない。
 
@@ -636,8 +812,10 @@
     人に選ばせる。選ぶまで自動保存は止める（止めないと、選ぶ前に片方が消える）。
   */
   function onConflict(body) {
-    state.mine = new Map(state.pending);
+    var carried = remap(state.pending, keyIndex(), body.current);
+    state.mine = carried.edits;
     state.pending = new Map();
+    addOrphans(carried.lost);
     render(body.current);
     showMessage(body.message ? body.message : t("ui.save_conflict"));
     el.conflict.hidden = false;
@@ -645,8 +823,18 @@
   }
 
   function keepMine() {
-    /* 自分の訳を、読み直した内容の上に載せ直して保存する。 */
-    state.pending = new Map(state.mine);
+    /*
+      自分の訳を、読み直した内容の上に載せ直して保存する。
+
+      選んでいるあいだに打った訳（state.pending）のほうが新しいので、そちらを
+      残す。丸ごと置き換えると、選んでいるあいだの入力が黙って消える。
+      「黙って破棄もしない」が破れるのは、まさにこの場面だった。
+    */
+    state.mine.forEach(function (value, line) {
+      if (!state.pending.has(line)) {
+        state.pending.set(line, value);
+      }
+    });
     state.mine = null;
     el.conflict.hidden = true;
     showMessage("");
@@ -658,11 +846,17 @@
     /*
       ファイルの訳を採る。ここで初めて自分の編集を捨てる。人が選んだ結果であって、
       待ち受けも画面も黙って捨ててはいない。
+
+      捨てるのは競合したぶん（state.mine）だけである。選んでいるあいだに打った
+      訳は、人が捨てると言っていないので残す。最後に flush を呼ぶのは、
+      競合のあいだ止めていた自動保存をここで動かし直すためである。呼ばないと、
+      その訳は別の行を触るまで送られない。
     */
     state.mine = null;
     el.conflict.hidden = true;
     showMessage("");
     render(state.data);
+    flush();
   }
 
   function updateStatus() {
@@ -674,6 +868,14 @@
     } else if (state.saving) {
       text = t("ui.save_saving");
       kind = "saving";
+    } else if (state.saveError) {
+      /*
+        要求そのものが落ちている（届かない、404、503を出し切った）。ここで
+        「未保存 N 件」と出すと、打ったばかりでまだ送っていない状態と
+        見分けが付かない。常に見えている場所で、保存できていないことを言う。
+      */
+      text = t("ui.save_retrying");
+      kind = "failed";
     } else if (state.failed.size) {
       text = t("ui.save_failed");
       kind = "failed";
@@ -685,9 +887,9 @@
     el.saveState.className = "save-state " + kind;
   }
 
-  /* 未保存のものがあるか。競合で抱えているぶんも入れる。 */
+  /* 未保存のものがあるか。競合で抱えているぶんと、行き先が無いぶんも入れる。 */
   function hasUnsaved() {
-    if (state.pending.size || state.failed.size) {
+    if (state.pending.size || state.failed.size || state.orphans.length) {
       return true;
     }
     return Boolean(state.mine && state.mine.size);
@@ -723,9 +925,15 @@
     */
     value.dir = "auto";
     value.lang = locale;
-    if (!line.editable && line.reason) {
-      value.className = "cell reason";
-      value.textContent = t("ui.not_editable", { reason: line.reason });
+    if (!line.editable) {
+      /*
+        編集できない行。中身は生の行のまま出す（列がずれているので、最終
+        フィールドが訳とは限らない）。理由は行に添える1言のほうへ回す。
+        中身を理由で置き換えると、直せない行を読むことすらできなくなる。
+      */
+      value.className = "cell raw";
+      value.dir = "ltr";
+      value.textContent = line.text ? line.text : "";
     }
     row.appendChild(value);
 
@@ -740,11 +948,16 @@
       value: value,
       badges: badges,
       note: note,
+      /* キーは行の同定に使う。409 のあとに編集を載せ直すのはこれが頼り。 */
+      key: line.key ? line.key : "",
       editable: Boolean(line.editable) && state.canEdit,
       saved: line.translation ? line.translation : ""
     };
     state.rows.set(line.n, entry);
     renderBadges(entry, line.badges);
+    if (!line.editable && line.reason) {
+      setRowNote(entry, t("ui.not_editable", { reason: line.reason }));
+    }
 
     if (entry.editable) {
       /*
@@ -823,6 +1036,17 @@
   }
 
   function load(locale) {
+    /*
+      世代を1つ進める。進めておくと、送りかけの保存の応答が返ってきたときに
+      「もう画面のものではない」と分かる。別ロケールの版と件数を載せない。
+    */
+    state.gen = state.gen + 1;
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    state.retry = 0;
+    state.saveError = false;
     if (!locale) {
       clear(el.list);
       el.rows.textContent = "";
@@ -837,12 +1061,20 @@
         state.pending = new Map();
         state.failed = new Map();
         state.mine = null;
+        state.orphans = [];
+        renderOrphans();
         el.conflict.hidden = true;
         render(data);
       })
       .catch(function () {
-        /* 失敗の中身は出さない。翻訳者にできるのは読み直すことだけ。 */
+        /*
+          失敗の中身は出さない。翻訳者にできるのは読み直すことだけ。
+          ロケールの欄は元に戻す。戻さないと、欄だけが新しいロケールを指した
+          まま中身は前のロケール、という食い違いが画面に残る。
+        */
+        el.locale.value = state.locale;
         showMessage(t("ui.load_failed"));
+        updateStatus();
       });
   }
 
@@ -898,7 +1130,7 @@
         load(data.selected || "");
       })
       .catch(function () {
-        showMessage("ui.load_failed");
+        showMessage(t("ui.load_failed"));
       });
   }
 

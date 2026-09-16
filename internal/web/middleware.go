@@ -195,7 +195,7 @@ func (s *server) checkFetchSite(next http.Handler) http.Handler {
 // 自体が分からない。
 func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(cookieName); err == nil && sameToken(c.Value, s.token) {
+		if c, err := r.Cookie(s.cookieName); err == nil && sameToken(c.Value, s.token) {
 			s.idle.touch()
 			next.ServeHTTP(w, r)
 			return
@@ -203,7 +203,7 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 		if r.Method == http.MethodGet && r.URL.Path == "/" &&
 			sameToken(r.URL.Query().Get(tokenParam), s.token) {
 			s.idle.touch()
-			http.SetCookie(w, sessionCookie(s.token))
+			http.SetCookie(w, sessionCookie(s.cookieName, s.token))
 			// 303 にするのは、送り先を必ず GET で取りにいかせるため。
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return

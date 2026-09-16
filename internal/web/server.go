@@ -104,9 +104,11 @@ type server struct {
 	// saveMu は保存を直列にする。同じファイルへ同時に2つ書かせない。
 	saveMu sync.Mutex
 
-	token  string
-	hosts  map[string]struct{}
-	assets map[string]asset
+	token string
+	hosts map[string]struct{}
+	// cookieName は Cookie の名前。待ち受けているポートを含む（[cookieNameFor]）。
+	cookieName string
+	assets     map[string]asset
 
 	idle *idleTracker
 
@@ -248,10 +250,10 @@ func (s *server) run() error {
 	}
 	defer ln.Close()
 
-	// Host ヘッダーの照合表は、実際に取れたポートから作る。--port 0 のときは
-	// ここで初めてポートが決まる。
+	// Host ヘッダーの照合表と Cookie の名前は、実際に取れたポートから作る。
+	// --port 0 のときはここで初めてポートが決まる。
 	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	s.hosts = allowedHosts(port)
+	s.usePort(port)
 
 	url := "http://" + listenHost + ":" + port + "/?" + tokenParam + "=" + s.token
 	s.announce(url)
@@ -293,6 +295,15 @@ func (s *server) run() error {
 	}
 	fmt.Fprintln(s.stdout, s.t("server.stopped"))
 	return nil
+}
+
+// usePort は取れたポートから、Host の照合表と Cookie の名前を作る。
+//
+// 2つを同じ場所で作るのは、片方だけ変えて食い違うのを避けるためである。
+// どちらも「この待ち受けはこのポートのもの」という同じ1つの根拠から出ている。
+func (s *server) usePort(port string) {
+	s.hosts = allowedHosts(port)
+	s.cookieName = cookieNameFor(port)
 }
 
 // announce は開く先を標準出力へ書く。

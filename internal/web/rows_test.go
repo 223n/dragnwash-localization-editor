@@ -118,7 +118,7 @@ func doPost(t *testing.T, s *server, target, body string, headers map[string]str
 		}
 		req.Header.Set(k, v)
 	}
-	req.AddCookie(&http.Cookie{Name: cookieName, Value: s.token})
+	req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.token})
 	rec := httptest.NewRecorder()
 	s.handler().ServeHTTP(rec, req)
 	return rec
