@@ -103,13 +103,13 @@ func (r *Report) writeTextLocale(b *strings.Builder, opt TextOptions, sum Summar
 			if c.Status() != status {
 				continue
 			}
-			writeCategory(b, opt, sum, c, findings[c], r.hintIgnoreFile(findings[c]))
+			writeCategory(b, opt, sum, c, findings[c], findings[CatCarryover], r.hintIgnoreFile(findings[c]))
 		}
 	}
 }
 
 // writeCategory はカテゴリ1つ分（件数の1行と、必要なら内訳）を書く。
-func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category, list []Finding, hintIgnore bool) {
+func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category, list, carry []Finding, hintIgnore bool) {
 	label := pad(c.String(), categoryNameWidth())
 
 	if !sum.canJudge(c) {
@@ -133,7 +133,7 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 	}
 	switch c {
 	case CatVanished:
-		writeCarryHint(b, sum)
+		writeCarryHint(b, sum, list, carry)
 	case CatCarryover:
 		writeCarryBreakdown(b, sum)
 	case CatNotPublished:
@@ -215,14 +215,28 @@ func carryCopiedFirst(list []Finding) []Finding {
 // 実データのゲーム更新では23件が23件とも重なり、一覧が丸ごと二度出る。
 // 何も言わないと、翻訳者は同じ23行を目で突き合わせてから重複に気づくことになる。
 //
-// 数えるのは「移動」だけ。「複製」は旧キーがいまも再生順にあるので、
-// 「台本から消えた行」には最初から出ていない。
-func writeCarryHint(b *strings.Builder, sum Summary) {
-	if sum.CarryMoved == 0 || !sum.canJudge(CatCarryover) {
+// 数えるのは、実際に両方へ出ている行だけ。「複製」は旧キーがいまも再生順に
+// あるので「台本から消えた行」には出ない。「移動」も、公開行の section が 'UI' だと
+// 別のカテゴリへ回るので必ずしも重ならない。Summary.CarryMoved をそのまま
+// 書くと、重なりの数が「台本から消えた行」の件数を超えることがある。
+func writeCarryHint(b *strings.Builder, sum Summary, vanished, carry []Finding) {
+	if !sum.canJudge(CatCarryover) {
 		return
 	}
-	fmt.Fprintf(b, "        うち %d 件には引き継ぎ候補があります（下の「引き継ぎ候補」に移し先を書いてあります）。\n",
-		sum.CarryMoved)
+	carried := make(map[string]struct{}, len(carry))
+	for _, f := range carry {
+		carried[f.Key] = struct{}{}
+	}
+	n := 0
+	for _, f := range vanished {
+		if _, ok := carried[f.Key]; ok {
+			n++
+		}
+	}
+	if n == 0 {
+		return
+	}
+	fmt.Fprintf(b, "        うち %d 件には引き継ぎ候補があります（下の「引き継ぎ候補」に移し先を書いてあります）。\n", n)
 }
 
 // writeCarryBreakdown は引き継ぎ候補の内訳（移動と複製）を書く。

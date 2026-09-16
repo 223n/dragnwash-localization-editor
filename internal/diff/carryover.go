@@ -143,6 +143,15 @@ func carryoverCandidates(idx *orderIndex, old *order.Data, mine map[string]struc
 	// 旧版として読んだものが、いまの版と見分けがつかないかどうか。
 	same := sameLineIDKeys(oldKeys, newKeys)
 
+	// 旧版に載っていたキー。引き継ぎ先が「今回はじめて現れたキー」であることを
+	// 確かめるのに使う。
+	wasThere := make(map[string]struct{}, len(old.Entries))
+	for _, e := range old.Entries {
+		if e.Key != "" {
+			wasThere[e.Key] = struct{}{}
+		}
+	}
+
 	targets := make(map[string]map[string]struct{})
 	sources := make(map[string]map[string]struct{})
 	for id, from := range oldKeys {
@@ -199,6 +208,14 @@ func carryoverCandidates(idx *orderIndex, old *order.Data, mine map[string]struc
 		if _, have := mine[to]; have {
 			// このロケールは引き継ぎ先のキーを既に公開している。移すと
 			// いまある訳を上書きすることになるので、候補にしない。
+			continue
+		}
+		if _, old := wasThere[to]; old {
+			// 引き継ぎ先のキーは旧版にも載っていた。つまりその英文は前から
+			// ゲームにあり、今回現れたものではない。この行の英文が「前からある
+			// 別の英文」に変わったということなので、旧訳をそこへ持って行くと
+			// 別の台詞に別の訳を貼ることになる。公開が遅れているロケールでは
+			// 他の言語が既に訳している行でもある。
 			continue
 		}
 		kind := CarryMoved
