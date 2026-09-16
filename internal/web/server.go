@@ -297,7 +297,7 @@ func (s *server) announce(url string) {
 	fmt.Fprintln(s.stdout, s.t("server.readonly"))
 	fmt.Fprintln(s.stdout, s.t("server.locales", "locales", strings.Join(localeNames(s.targets), ", ")))
 	if s.opt.IdleTimeout > 0 {
-		fmt.Fprintln(s.stdout, s.t("server.idle_hint", "minutes", itoa(int(s.opt.IdleTimeout.Minutes()))))
+		fmt.Fprintln(s.stdout, s.t("server.idle_hint", "duration", s.opt.IdleTimeout.String()))
 	} else {
 		fmt.Fprintln(s.stdout, s.t("server.idle_off"))
 	}
@@ -334,7 +334,7 @@ func (s *server) watchIdle() {
 			if s.idle.since() >= s.opt.IdleTimeout {
 				s.stopOnce.Do(func() {
 					s.stopReason = s.t("server.idle_stopped",
-						"minutes", itoa(int(s.opt.IdleTimeout.Minutes())))
+						"duration", s.opt.IdleTimeout.String())
 					close(s.stop)
 				})
 				return

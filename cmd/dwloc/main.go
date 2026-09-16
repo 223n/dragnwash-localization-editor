@@ -1,9 +1,10 @@
 // Command dwloc は Drag'n Wash の翻訳リポジトリを扱うコマンドです。
 //
-// サブコマンドは4つあります。
+// サブコマンドは5つあります。
 //
 //	dwloc validate   公開ファイルを検証する（tools/check-translations.py の移植）
 //	dwloc diff       公開ファイルと再生順を突き合わせ、次にやることを並べる
+//	dwloc edit       ブラウザーで行を読む（いまは読み取り専用）
 //	dwloc publish    公開用CSVを生成する（tools/hash-strings.ps1 の移植）
 //	dwloc version    版を表示する
 //

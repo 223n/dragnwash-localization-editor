@@ -251,14 +251,11 @@
 
   /*
     断り書きを1つにまとめる。文面はすべて待ち受けから来たもので、
-    ここで新しい判断はしない（source 列があるかどうかは、待ち受けが読んだ
-    ファイルのヘッダーそのもの）。
+    ここで新しい判断はしない。読み取り専用の理由だけは、待ち受けが返した
+    文面を決まった枠に入れて出す。
   */
   function collectNotes(data) {
     var notes = (data.notes || []).slice();
-    if (!data.sourceColumn) {
-      notes.push(t("ui.no_source"));
-    }
     if (data.readOnlyReason) {
       notes.push(t("ui.file_readonly", { reason: data.readOnlyReason }));
     }

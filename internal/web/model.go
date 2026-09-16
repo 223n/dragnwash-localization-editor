@@ -63,7 +63,12 @@ type lineView struct {
 
 	// Heading は見出しの深さ。Kind が [lineKindHeading] のときだけ入る。
 	Heading string `json:"heading,omitempty"`
-	// Text は見出しの生テキスト（改行を除く）。書き換えずにそのまま出す。
+	// Text は生テキスト（改行を除く）。書き換えずにそのまま出す。
+	//
+	// 見出し行では見出しの文、データ行では編集できないときだけ入る。
+	// 編集できない行は [edit.Line.Translation] が空を返す（列がずれているので、
+	// 最終フィールドが訳とは限らないため）。読むための画面でその行だけ中身が
+	// 見えなくなるのは困るので、生の行をそのまま渡して画面に出せるようにする。
 	Text string `json:"text,omitempty"`
 
 	// Key は先頭フィールド。
@@ -182,7 +187,7 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 	resp.Rows = dataRows
 	resp.Counts = s.buildCounts(cat, sum)
 	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
-	resp.Notes = s.buildNotes(cat, sum)
+	resp.Notes = s.buildNotes(cat, sum, idx.source >= 0)
 	return resp
 }
 
@@ -220,6 +225,11 @@ func dataView(line edit.Line, idx columns, badges map[string][]badgeView) lineVi
 		Translation: line.Translation(),
 		Editable:    line.Editable,
 		Reason:      line.Reason,
+	}
+	if !line.Editable {
+		// 訳として出せない行は、生の行を渡して読めるようにする。
+		// 改行は含めない（画面に出すのは1行ぶんの文字列）。
+		v.Text = strings.TrimRight(line.Text, "\r\n")
 	}
 	v.KeyKind = keyKind(v.Key)
 	v.Badges = badges[v.Key]
@@ -333,8 +343,14 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 //
 // 件数の欄に出る「判定していません（理由）」と重ならないよう、ここには
 // 読んだものと読めなかったものだけを書く。
-func (s *server) buildNotes(cat *Catalog, sum diff.Summary) []string {
+func (s *server) buildNotes(cat *Catalog, sum diff.Summary, hasSource bool) []string {
 	var notes []string
+	if !hasSource {
+		// ヘッダーに source_en 列が無い。原文の欄が空のままになる理由を、
+		// ここで言い切る。画面側で「source 列が無い → 作業コピーが無いから」と
+		// 組み立てると、根拠と結論の対応が待ち受けと画面の2か所に割れる。
+		notes = append(notes, s.cat.T(cat, "note.no_source"))
+	}
 	switch {
 	case sum.HasWorking:
 		notes = append(notes, s.cat.T(cat, "note.working_read", "path", s.displayPath(sum.WorkingPath)))
