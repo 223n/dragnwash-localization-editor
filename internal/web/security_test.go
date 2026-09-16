@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestNoOutboundHTTP は、このパッケージが外向きの通信を持たないことを字面で見張る。
@@ -211,5 +212,102 @@ func TestCatalogsAreEmbedded(t *testing.T) {
 	}
 	if string(onDisk) != string(embedded) {
 		t.Error("ui/index.html の中身が埋め込みと違う")
+	}
+}
+
+// TestEditorInputBlocksOutsideHelp は、入力欄がブラウザーの「お節介」を全部
+// 切っていることを見る。
+//
+// 綴り検査は、内蔵翻訳と同じく入力の中身を外部のサービスへ送りうる経路である。
+// CSP はこの頁が出す通信しか塞げないので、ブラウザー自身が出す通信は属性で止める。
+// autocorrect / autocapitalize / autocomplete は、それに加えて訳を勝手に
+// 書き換えさせないために切る。
+//
+// 字面の試験である。入力欄を作り直したときに、この試験の存在が
+// 「その4つは必ず付ける」と伝わればよい。
+func TestEditorInputBlocksOutsideHelp(t *testing.T) {
+	body, err := fs.ReadFile(uiFS, "ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(body)
+	for _, want := range []string{
+		`setAttribute("spellcheck", "false")`,
+		`setAttribute("autocorrect", "off")`,
+		`setAttribute("autocapitalize", "off")`,
+		`setAttribute("autocomplete", "off")`,
+		`setAttribute("translate", "no")`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js に %s が無い。入力欄は外へ出しうる経路を全部切る", want)
+		}
+	}
+}
+
+// TestEditorDoesNotStealEnterWhileComposing は、変換中に Enter を横取りして
+// いないことを見る。
+//
+// 横取りすると ja / ko / zh-Hans / zh-Hant で変換を確定できなくなる。
+// この4言語のために入力欄の方式（1行だけ差し替える input）を選んでいる。
+func TestEditorDoesNotStealEnterWhileComposing(t *testing.T) {
+	body, err := fs.ReadFile(uiFS, "ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(body)
+	for _, want := range []string{"compositionstart", "compositionend", "e.isComposing"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js に %s が無い。変換中は Enter を横取りしない", want)
+		}
+	}
+}
+
+// TestPageWarnsBeforeLosingEdits は、未保存のまま閉じさせない仕掛けがあることを見る。
+func TestPageWarnsBeforeLosingEdits(t *testing.T) {
+	body, err := fs.ReadFile(uiFS, "ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(body)
+	for _, want := range []string{"beforeunload", "e.returnValue"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js に %s が無い。未保存のまま閉じさせない", want)
+		}
+	}
+}
+
+// TestAssetsHaveNoControlBytes は、埋め込んだ資産に制御文字が紛れていないことを見る。
+//
+// 実際に起きた事故の見張りである。app.js に書いた "\u0000"（6文字のエスケープ）が、
+// 書き出しの途中で生の NUL 1バイトになっていた。文法としては通ってしまうので、
+// 動かして気づくのは難しい。
+func TestAssetsHaveNoControlBytes(t *testing.T) {
+	err := fs.WalkDir(uiFS, "ui", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		body, err := fs.ReadFile(uiFS, p)
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(body) {
+			t.Errorf("%s が正しいUTF-8ではない", p)
+		}
+		for i, b := range body {
+			switch b {
+			case '\t', '\n', '\r':
+				continue
+			}
+			if b < 0x20 || b == 0x7f {
+				t.Fatalf("%s の %d バイト目に制御文字 %#x がある", p, i, b)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -115,6 +115,10 @@ type statView struct {
 // linesResponse は GET /api/lines の応答。
 type linesResponse struct {
 	Locale string `json:"locale"`
+	// Version は読んだときのファイルの版（バイト列全体の SHA-256）。
+	// 画面はこれを覚えておき、保存要求の baseVersion に載せる。手前でファイルが
+	// 変わっていれば待ち受けが照合で弾くので、黙って上書きすることがない。
+	Version string `json:"version"`
 	// Path は表示用のパス。ルートからの相対で、スラッシュ区切り。
 	// クライアントはこれを受け取るだけで、要求に載せることはない。
 	Path string `json:"path"`
@@ -159,13 +163,17 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 
 	resp := &linesResponse{
 		Locale:         locale,
+		Version:        file.Version(),
 		Path:           displayPath,
 		Columns:        columns,
 		SourceColumn:   idx.source >= 0,
 		ReadOnlyReason: file.ReadOnlyReason(),
 	}
 
-	badges := s.badgesByKey(cat, findings)
+	// 起動後に訳が入ったキーは「未翻訳」のバッジを外す。局所更新はここだけで、
+	// カテゴリの割り当てそのものは起動時のまま動かさない。
+	filled := s.filledKeys(locale)
+	badges := s.badgesByKey(cat, findings, filled)
 
 	lines := file.Lines()
 	resp.Lines = make([]lineView, 0, len(lines))
@@ -185,9 +193,9 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 	}
 
 	resp.Rows = dataRows
-	resp.Counts = s.buildCounts(cat, sum)
+	resp.Counts = s.buildCounts(cat, locale, sum)
 	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
-	resp.Notes = s.buildNotes(cat, sum, idx.source >= 0)
+	resp.Notes = s.buildNotes(cat, locale, sum, idx.source >= 0)
 	return resp
 }
 
@@ -253,7 +261,9 @@ func keyKind(value string) string {
 // 同じキーが同じカテゴリで2回出ることがある（引き継ぎ候補は行ごとに候補が付く）。
 // バッジは「その行に何が当たっているか」を示すものなので、カテゴリで重複を消す。
 // 数を知りたいときのために件数は別に出してあるので、ここで数えなおさない。
-func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding) map[string][]badgeView {
+func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
+	filled map[string]struct{}) map[string][]badgeView {
+
 	out := make(map[string][]badgeView)
 	seen := make(map[string]map[string]struct{})
 	for _, f := range findings {
@@ -268,6 +278,13 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding) map[string][
 		}
 		if _, dup := seen[f.Key][id]; dup {
 			continue
+		}
+		if f.Category == diff.CatUntranslated {
+			if _, ok := filled[f.Key]; ok {
+				// 起動後に訳が入った行。件数から引いたぶんと同じ扱いにする。
+				// ここを残すと、いま訳した行に「未翻訳」が付いたままになる。
+				continue
+			}
 		}
 		seen[f.Key][id] = struct{}{}
 		out[f.Key] = append(out[f.Key], badgeView{
@@ -284,7 +301,7 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding) map[string][
 //
 // 判定できていないカテゴリは Judged を false にして理由を入れる。0 件と書くと
 // 「もう何も残っていない」と読まれる（internal/diff の doc.go）。
-func (s *server) buildCounts(cat *Catalog, sum diff.Summary) []countView {
+func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []countView {
 	// [diff.Summary.Counts] には全カテゴリが入っている。並びは Category の値の順が
 	// そのまま internal/diff の表示順なので、値で並べ替えるだけでよい。
 	all := make([]diff.Category, 0, len(sum.Counts))
@@ -309,6 +326,16 @@ func (s *server) buildCounts(cat *Catalog, sum diff.Summary) []countView {
 			}
 			if !view.Judged {
 				view.Reason = sum.JudgeBlockReason(c)
+			}
+			if view.Judged && c == diff.CatUntranslated {
+				// 起動後に訳が入ったぶんだけ引く。引くだけで、カテゴリの
+				// 再判定はしない。0 を下回らせないのは、起動時に「未翻訳」で
+				// なかった行へ訳を入れても引かないため（filled との積で数える）
+				// だが、念のため床を置く。
+				view.Count = view.Count - s.untranslatedFilled(locale)
+				if view.Count < 0 {
+					view.Count = 0
+				}
 			}
 			out = append(out, view)
 		}
@@ -343,8 +370,13 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 //
 // 件数の欄に出る「判定していません（理由）」と重ならないよう、ここには
 // 読んだものと読めなかったものだけを書く。
-func (s *server) buildNotes(cat *Catalog, sum diff.Summary, hasSource bool) []string {
+func (s *server) buildNotes(cat *Catalog, locale string, sum diff.Summary, hasSource bool) []string {
 	var notes []string
+	if s.untranslatedFilled(locale) > 0 {
+		// 件数を局所更新したことを断る。できないこと（カテゴリの再判定）を
+		// 黙っていると、翻訳者は画面の数字を publish 後の状態だと読む。
+		notes = append(notes, s.cat.T(cat, "note.counts_local"))
+	}
 	if !hasSource {
 		// ヘッダーに source_en 列が無い。原文の欄が空のままになる理由を、
 		// ここで言い切る。画面側で「source 列が無い → 作業コピーが無いから」と

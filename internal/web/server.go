@@ -99,9 +99,16 @@ type server struct {
 	summaries map[string]diff.Summary
 	findings  map[string][]diff.Finding
 
-	token  string
-	hosts  map[string]struct{}
-	assets map[string]asset
+	// overlay は起動後の局所更新（訳が入ったキー）。件数とバッジをここで引く。
+	overlay *editOverlay
+	// saveMu は保存を直列にする。同じファイルへ同時に2つ書かせない。
+	saveMu sync.Mutex
+
+	token string
+	hosts map[string]struct{}
+	// cookieName は Cookie の名前。待ち受けているポートを含む（[cookieNameFor]）。
+	cookieName string
+	assets     map[string]asset
 
 	idle *idleTracker
 
@@ -152,6 +159,7 @@ func newServer(opt Options) (*server, error) {
 		serverCat: cat.forServer(opt.UILang),
 		summaries: make(map[string]diff.Summary),
 		findings:  make(map[string][]diff.Finding),
+		overlay:   newEditOverlay(),
 		idle:      newIdleTracker(),
 		stdout:    opt.Stdout,
 		stderr:    opt.Stderr,
@@ -189,6 +197,11 @@ func newServer(opt Options) (*server, error) {
 	}
 	for _, f := range report.Findings {
 		s.findings[f.Locale] = append(s.findings[f.Locale], f)
+		if f.Category == diff.CatUntranslated {
+			// 「未翻訳」のキーだけ控えておく。保存で訳が入ったら、この集合との
+			// 積のぶんだけ件数から引く。引くだけで、カテゴリの再判定はしない。
+			s.overlay.addUntranslated(f.Locale, f.Key)
+		}
 	}
 
 	if err := s.loadAssets(); err != nil {
@@ -237,10 +250,10 @@ func (s *server) run() error {
 	}
 	defer ln.Close()
 
-	// Host ヘッダーの照合表は、実際に取れたポートから作る。--port 0 のときは
-	// ここで初めてポートが決まる。
+	// Host ヘッダーの照合表と Cookie の名前は、実際に取れたポートから作る。
+	// --port 0 のときはここで初めてポートが決まる。
 	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	s.hosts = allowedHosts(port)
+	s.usePort(port)
 
 	url := "http://" + listenHost + ":" + port + "/?" + tokenParam + "=" + s.token
 	s.announce(url)
@@ -284,6 +297,15 @@ func (s *server) run() error {
 	return nil
 }
 
+// usePort は取れたポートから、Host の照合表と Cookie の名前を作る。
+//
+// 2つを同じ場所で作るのは、片方だけ変えて食い違うのを避けるためである。
+// どちらも「この待ち受けはこのポートのもの」という同じ1つの根拠から出ている。
+func (s *server) usePort(port string) {
+	s.hosts = allowedHosts(port)
+	s.cookieName = cookieNameFor(port)
+}
+
 // announce は開く先を標準出力へ書く。
 //
 // URL を必ず標準出力へ出すのは、ブラウザーが開かない環境があるため（WSL、
@@ -294,7 +316,8 @@ func (s *server) run() error {
 func (s *server) announce(url string) {
 	fmt.Fprintln(s.stdout, s.t("server.listening"))
 	fmt.Fprintln(s.stdout, s.t("server.url", "url", url))
-	fmt.Fprintln(s.stdout, s.t("server.readonly"))
+	fmt.Fprintln(s.stdout, s.t("server.editing"))
+	fmt.Fprintln(s.stdout, s.t("server.save_target"))
 	fmt.Fprintln(s.stdout, s.t("server.locales", "locales", strings.Join(localeNames(s.targets), ", ")))
 	if s.opt.IdleTimeout > 0 {
 		fmt.Fprintln(s.stdout, s.t("server.idle_hint", "duration", s.opt.IdleTimeout.String()))

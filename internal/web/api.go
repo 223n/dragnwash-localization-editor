@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
@@ -27,8 +28,16 @@ type bootstrapResponse struct {
 	Locales []string `json:"locales"`
 	// Selected は最初に出すロケール。--locale が無ければ空。
 	Selected string `json:"selected"`
-	// ReadOnly はこの段が読み取り専用であること。画面はこれを見て断りを出す。
-	ReadOnly bool `json:"readOnly"`
+	// CanEdit は訳を書き換えて保存できるか。画面はこれを見て入力欄を出す。
+	//
+	// ファイル単位で編集できない場合（ヘッダーが受理できない）は、行を読む
+	// ときに linesResponse.ReadOnlyReason で分かる。ここは待ち受け全体の話。
+	CanEdit bool `json:"canEdit"`
+	// AutosaveDelayMs は入力が止まってから自動保存するまでの待ち時間。
+	//
+	// 画面に持たせず待ち受けから渡すのは、値を変えたときに直す場所を1つに
+	// するため。画面はこの値をそのまま使う。
+	AutosaveDelayMs int `json:"autosaveDelayMs"`
 }
 
 // handleIndex は画面そのものを返す。
@@ -75,9 +84,10 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			Name:     cat.Name,
 			Messages: cat.Messages,
 		},
-		Locales:  localeNames(s.targets),
-		Selected: s.opt.Locale,
-		ReadOnly: true,
+		Locales:         localeNames(s.targets),
+		Selected:        s.opt.Locale,
+		CanEdit:         true,
+		AutosaveDelayMs: int(autosaveDelay.Milliseconds()),
 	})
 }
 
@@ -125,13 +135,33 @@ func (s *server) handleLines(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-// writeJSON は応答を JSON で書く。
+// autosaveDelay は入力が止まってから自動保存するまでの待ち時間。
+//
+// 1.5 秒にしてあるのは、打っている途中の1文字ごとに書かないため。作業コピーへ
+// 書くとゲームが約2秒でホットリロードするので、打鍵ごとに保存するとゲームの
+// 画面が打ちかけの訳で何度も書き換わる。欄から離れたときは待たずに保存する。
+const autosaveDelay = 1500 * time.Millisecond
+
+// writeJSON は応答を JSON で書く。状態コードは 200。
 func (s *server) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	if err := enc.Encode(v); err != nil {
 		// 書き出しの途中で切れた場合。状態コードはもう送ってあるので
 		// 書き換えられない。記録にも中身は書かない。
+		s.logf("write failed")
+	}
+}
+
+// writeJSONStatus は状態コードを指定して JSON を書く。
+//
+// Content-Type を WriteHeader より先に置く。逆にすると、その応答だけ
+// Content-Type が付かない。
+func (s *server) writeJSONStatus(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(v); err != nil {
 		s.logf("write failed")
 	}
 }
