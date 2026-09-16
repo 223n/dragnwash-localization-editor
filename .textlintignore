@@ -1,2 +1,3 @@
 # 除外の書き方は .gitignore と違い、ディレクトリごと外すときは末尾を /** にする
 node_modules/**
+docs/port-spec.md

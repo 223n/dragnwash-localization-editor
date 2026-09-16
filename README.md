@@ -1,254 +1,384 @@
-# repo_template
+# dragnwash-localization-editor
 
-リポジトリのテンプレートです。
-日本語の文書の検査、日本語のラベル、Dependabot、GitFlowに沿ったリリースのワークフローが最初から入っています。
+[Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization)の翻訳作業を助けるエディターです。
 
-## 何が入っているか
+Windows、macOS、Linuxで動く単一のバイナリを目指します。
+Go言語で実装します。
 
-| 位置 | 中身 |
+## 何をするもの
+
+翻訳者が行う次の作業を、1つの道具にまとめます。
+
+| 機能 | 内容 |
 | ---- | ---- |
-| `.textlintrc.js`、`.markdownlint-cli2.jsonc` | 日本語の文書の検査設定です。規則は公開されている共有設定`@223n/lint-config-ja`にあります |
-| `.textlintignore`、`.github/.markdownlint.jsonc` | 検査から外すものと、`.github/`配下だけに効く追加の規則です |
-| `package.json` | 検査に使う道具の依存です。版もここで管理します |
-| `.github/labels.yml` | IssueとPull Requestのラベルの定義です。すべて日本語です |
-| `.github/labeler.yml` | Pull Requestに、変えたファイルやブランチ名からラベルを付ける規則です |
-| `.github/dependabot.yml` | Dependabotの設定です。npmとGitHub Actionsを毎週まとめて更新します |
-| `.github/release.yml` | GitHub Releaseの本文を自動で作るときの分類です |
-| `.github/ISSUE_TEMPLATE/` | Issueのフォームです。バグ報告、機能の要望、質問の3つがあります |
-| `.github/pull_request_template.md` | Pull Requestのテンプレートです |
-| `.github/CODEOWNERS` | 変更の確認を求める相手です |
-| `.github/workflows/` | CI、CodeQL、ラベルの同期、ラベル付け、headブランチの確認、リリースのワークフローです |
-| `scripts/setup.sh`、`scripts/setup.ps1` | テンプレートから作った直後の設定をまとめて行うスクリプトです。`gh`を使います。中身は同じで、`.ps1`はWindows向けです |
-| `CONTRIBUTING.md` | 貢献の手引きです。ブランチの運用と文書の書き方があります |
-| `CLAUDE.md` | Claude Codeが読む決まりです。ブランチを消さないための注意があります |
-| `SECURITY.md` | 脆弱性の報告先です |
+| 翻訳CSVの編集 | 原文と訳文を並べて表示し、訳文を編集します |
+| 作業用ファイルとの比較 | ゲームから取り出したファイルと突き合わせます |
+| 未登録の行の抽出 | 未翻訳の行と、ゲーム側に無くなった行を見つけます |
+| 保存 | 公開用のCSVを生成し、形式を検証します |
 
-## テンプレートから作る
+## なぜ専用の道具が要るのか
 
-1. GitHubでこのリポジトリを開き、「Use this template」から「Create a new repository」を選びます
-1. 「Include all branches」にはチェックを入れません
-1. 作ったリポジトリで、次の「作った直後にやること」を順に行います
+元のリポジトリの`Translations/<locale>/strings.csv`は、一般的なCSVとして扱えません。
+理由は3つあります。
 
-「Include all branches」でブランチを複製すると、複製したブランチどうしが共通の祖先を持たない状態になります。
-テンプレートから作ったリポジトリは、ブランチごとに独立した最初のコミットから始まるためです。
-この状態では`main`と`develop`の間でPull Requestを作れず、リリースのワークフローも`merge`で止まります。
-`develop`は次の手順でスクリプトが`main`から作るため、チェックを入れる必要はありません。
-すでにチェックを入れて作ってしまった場合は、後の「履歴が繋がっていないとき」を見てください。
+1. `#`で始まるコメント行と空行が混ざります。Excelなどで開いて保存すると、見出しが失われます
+1. 保存は書き戻しではありません。行の並び順と見出しを、ゲームの台本の順に生成し直す必要があります
+1. 既存のツールはWindows専用のPowerShellと、Pythonに依存するスクリプトです。macOSやLinuxの翻訳者は実行できません
+
+くわしくは[事前調査レポート](docs/research.md)にあります。
+
+## 現在の状態
+
+`CLI`の`dwloc`が動きます。
+既存のPowerShellとPythonのスクリプトを置き換えられます。
+ブラウザーで訳を書き換える画面（`dwloc edit`）も動きます。
+
+| できること | 元のツール |
+| ---- | ---- |
+| `dwloc publish` | `tools/hash-strings.ps1` |
+| `dwloc validate` | `tools/check-translations.py` |
+| `dwloc diff` | 対応するものはありません |
+| `dwloc edit` | 対応するものはありません |
+
+`edit`の画面は、実際の`IME`での変換と、`Chromium`系以外のブラウザーでは
+まだ確かめていません。
+日本語・韓国語・中国語を打ってみて、おかしなところがあれば
+[Issue](https://github.com/223n/dragnwash-localization-editor/issues)で教えてください。
+
+移植が正しいことは、元リポジトリの`Translations/<locale>/strings.csv`を入力にして`dwloc publish`を通し、入力とバイト単位で一致するかで確かめます。
+13ロケールすべてで一致します。
+`validate`は元のPythonスクリプトと同じ報告を出すかで確かめます。
+
+| 文書 | 内容 |
+| ---- | ---- |
+| [docs/research.md](docs/research.md) | 事前調査レポートです。既存仕様の分析、`UI`方式の比較、推奨する構成があります |
+| [docs/port-spec.md](docs/port-spec.md) | 既存実装から抽出した移植仕様です。156件の規則と、敵対的な検証で見つかった42件の食い違いが入っています |
+
+## 入手する
+
+[Releases](https://github.com/223n/dragnwash-localization-editor/releases)から、お使いの環境向けの書庫をダウンロードします。
+Goのインストールは要りません。
+
+### どのファイルを落とすか
+
+ファイル名は`dwloc_<版>_<OS>_<CPU>`の形です。
+
+| 使っている環境 | 落とすファイル |
+| ---- | ---- |
+| Windows（ふつうのPC） | `dwloc_<版>_windows_amd64.zip` |
+| Windows（Snapdragonなどのarm64機） | `dwloc_<版>_windows_arm64.zip` |
+| macOS（M1以降のApple Silicon） | `dwloc_<版>_darwin_arm64.tar.gz` |
+| macOS（Intel） | `dwloc_<版>_darwin_amd64.tar.gz` |
+| Linux（64ビットのPC） | `dwloc_<版>_linux_amd64.tar.gz` |
+| Linux（Raspberry Piなどのarm64機） | `dwloc_<版>_linux_arm64.tar.gz` |
+
+`darwin`はmacOSのことです。
+`amd64`はIntelとAMDの64ビットのCPU、`arm64`はApple SiliconやSnapdragonなどのCPUを指します。
+
+どちらか分からないときは、その場で確かめられます。
+
+| 環境 | 確かめかた | 見かた |
+| ---- | ---- | ---- |
+| macOS | ターミナルで`uname -m`を実行します | `arm64`ならarm64、`x86_64`ならamd64です |
+| Linux | 端末で`uname -m`を実行します | `aarch64`ならarm64、`x86_64`ならamd64です |
+| Windows | 「設定」→「システム」→「バージョン情報」の「システムの種類」を見ます | 「ARMベース」と書いてあればarm64、そうでなければamd64です |
+
+間違えたものを落とすと、実行したときに起動しません。
+落とし直せば直ります。
+自動で付く「Source code」の2つはソースコードです。
+バイナリは入っていません。
+
+書庫の中身は3つです。
+
+| 中身 | 何か |
+| ---- | ---- |
+| `dwloc`（Windowsは`dwloc.exe`） | 本体です |
+| `LICENSE` | ライセンス（Apache License 2.0）です |
+| `README.txt` | 実行のしかたを短くまとめたものです |
+
+このバイナリには署名を付けていません。
+署名にはApple Developer Program（年99ドル）とWindowsの証明書が要るため、今のところ見送っています。
+そのため、macOSとWindowsでは初回に警告の出る場合があります。
+下に回避の手順を書きます。
+
+### Windowsで実行する
+
+1. ダウンロードしたzipを右クリックし、「すべて展開」を選びます
+1. PowerShellを開き、展開したフォルダーへ移動します
+1. `.\dwloc.exe version`を実行します。版が表示されれば動いています
+
+「WindowsによってPCが保護されました」と出た場合は、「詳細情報」を押してから「実行」を選びます。
+これはSmartScreenによる、署名の無いプログラムへの警告です。
+
+展開したフォルダーに`dwloc.exe`が見当たらない場合は、Microsoft Defenderによる隔離を疑ってください。
+何が隔離されたかは、Windowsセキュリティの「保護の履歴」で確認できます。
+元のリポジトリのREADMEには、配布物の`Install.exe`を`Trojan:Script/Wacatac.B!ml`として検出した事例が書かれています。
+そこでは、これは誤検知であり、末尾の`!ml`は機械学習による推定を表すと説明されています。
+署名の無いファイルは、このように検出されることがあります。
+隔離された場合は、まず下の「チェックサムを確かめる」で、**落とした`zip`が**配布物と同じかを確かめてください。
+公開しているチェックサムは書庫に対するもので、`dwloc.exe`単体のハッシュは載せていません。
+書庫が配布物と同じであれば、そこから出てきた`dwloc.exe`も同じものです。
+そのうえで「保護の履歴」から許可します。
+許可するのは、そのファイルだけにします。
+
+> [!NOTE]
+> Windowsでの実際の見え方は、このバイナリでは確かめていません。
+> 上の内容は[docs/research.md](docs/research.md)の5.3節と、元のリポジトリのREADMEの記述によるものです。
+
+### macOSで実行する
+
+ターミナルを開き、ダウンロードしたフォルダーで次を実行します。
+
+```bash
+tar xzf dwloc_<版>_darwin_arm64.tar.gz
+cd dwloc_<版>_darwin_arm64
+xattr -d com.apple.quarantine ./dwloc
+./dwloc version
+```
+
+`xattr`の行は、ダウンロードしたファイルに付く隔離の印を外します。
+この印が残っていると、Gatekeeperが実行を止めます。
+`No such xattr`と出た場合は、印が付いていないので、そのまま次へ進みます。
+
+[docs/research.md](docs/research.md)の5.3節には、macOS 15のSequoia以降で右クリックからの「開く」による回避が廃止されたと書かれています。
+同じ節に、コマンドラインのバイナリであれば`xattr`の1行で済むとあります。
+
+> [!NOTE]
+> macOSでの実際の見え方も、このバイナリでは確かめていません。
+
+### Linuxで実行する
+
+```bash
+tar xzf dwloc_<版>_linux_amd64.tar.gz
+cd dwloc_<版>_linux_amd64
+./dwloc version
+```
+
+書庫の中の`dwloc`には実行権限を付けてあります。
+`Permission denied`と出る場合は、展開のしかたで権限が落ちています。
+`chmod +x ./dwloc`を実行してください。
+
+Linuxには署名の仕組みが事実上ありません（[docs/research.md](docs/research.md)の5.3節）。
+実行権限だけで動きます。
+
+### チェックサムを確かめる
+
+`dwloc_<版>_checksums.txt`に、6つの書庫それぞれのSHA-256を載せています。
+1行は「ハッシュ、スペース2つ、ファイル名」の形です。
+落とした書庫と同じフォルダーに置いて確かめます。
+
+macOSとLinuxでは、次のように確かめます。
+
+```bash
+sha256sum --check --ignore-missing dwloc_<版>_checksums.txt      # Linux
+shasum -a 256 --check --ignore-missing dwloc_<版>_checksums.txt  # macOS
+```
+
+`--ignore-missing`は、手元にある書庫だけを対象にします。
+これを付けないと、落としていない5つが見つからずに失敗します。
+
+WindowsではPowerShellで確かめます。
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\dwloc_<版>_windows_amd64.zip
+```
+
+表示された`Hash`と、`checksums.txt`の同じファイル名の行が一致すれば、配布しているものと同じファイルです。
+大文字と小文字の違いは無視してかまいません。
+一致は「配布しているファイルと同じもの」の確認であって、安全であることの証明ではありません。
+
+リリースをやり直すと、書庫に入る時刻が変わるため、チェックサムも変わります。
+書庫とチェックサムは、必ず同じReleaseのものを使ってください。
+
+## 使い方
+
+ダウンロードした`dwloc`を、翻訳リポジトリのルートを指して実行します。
+自分でビルドする場合は、下の「開発」を見てください。
+
+```bash
+./dwloc validate --root ../dragnwash-localization
+./dwloc diff     --root ../dragnwash-localization
+./dwloc publish  --root ../dragnwash-localization --dry-run
+./dwloc publish  --root ../dragnwash-localization
+```
+
+| サブコマンド | 何をするか |
+| ---- | ---- |
+| `validate` | `Translations/<locale>/strings.csv`の形式を検査します |
+| `diff` | 次にやることと、確かめたほうがよい行を並べます |
+| `publish` | 公開用の`strings.csv`を作り直します |
+| `edit` | 手元だけの待ち受けを始め、ブラウザーで訳を書き換えます |
+| `version` | 版を表示します |
+
+### 画面で訳を書き換える
+
+`edit`は、手元だけの待ち受けを始めます。
+`127.0.0.1`にしか束ねません。
+
+```bash
+./dwloc edit --root ../dragnwash-localization --locale ja
+```
+
+標準出力に出た`URL`をブラウザーで開くと、1ロケールの全行が並びます。
+訳の欄を選ぶと書き換えられます。
+入力が止まると自動で保存します。
+
+画面での操作は次のとおりです。
+
+| 操作 | 何が起きるか |
+| ---- | ---- |
+| 絞り込み | 選んだ条件のどれかに当たった行だけを出します。複数選べます |
+| 検索 | speaker、原文、訳、キーに打った字を含む行だけを出します |
+| 条件を外す | 絞り込みと検索をまとめて外します |
+| `Enter` | 訳を確定して、次の（いま出ている）行の入力欄を開きます。出ている最後の行では、閉じずにその行に留まります |
+| `Escape` | 入力欄を閉じます。打った訳は残ります |
+| `Tab` | 次の行へ移ります |
+| `/` | 検索の欄へ移ります。絞り込みの一帯を画面へ送ってから移ります |
+
+絞り込みと検索の一帯は、画面の上に貼り付きません。
+行の途中から触りたいときは`/`を押してください。
+貼り付けると、競合したときの決断用のボタンが帯の中で押し出されて押せなくなるためです。
+
+いま何行出ているかは、いちばん上の帯に「表示中」の行数として出ます。
+条件や検索に1行も当たらなかったときは、一覧の場所にそう出ます。
+
+`/`は、訳や検索の欄に文字を打っている間は効きません。
+絞り込みのチェックボックスに焦点があるときは効きます。
+
+検索はブラウザーの中だけで行います。
+打った語は待ち受けへ送られません。
+`URL`にも残りません。
+
+ロケールを切り替えると、条件と検索語は外れます。
+前のロケールで決めた条件を持ち越しません。
+外れるのは読み込めたときだけです。
+読み込みに失敗したときは、条件・検索欄・一覧のどれも前のままにします。
+
+競合（手前でファイルが変わったとき）が起きている行は、どちらを残すか選ぶまで書き換えられません。
+その行の訳欄を押しても入力欄は開かず、行に「どちらを残すか選んでから直せます」と出ます。
+決まっていない行への入力は、`自分の訳を上に載せる`と`ファイルの訳を採る`のどちらの意味にも取れてしまうためです。
+競合していない行は、引き止めが出ているあいだも今までどおり書き換えられます。
+
+未保存の訳がある行と、保存できなかった行と、いま入力欄が開いている行は、条件に当たらなくても隠しません。
+隠すと、直すべき行と触っている行が画面から消えるためです。
+
+入力欄を閉じると、その行が条件に当たらないときはそこで隠れます。
+上から順に`Enter`で打っていくときは隠れません。
+閉じる時点ではまだ未保存なので、「未保存の訳がある行」として残るためです。
+
+件数の欄の数と、条件で出る行数は一致しないことがあります。
+その行がこのロケールのファイルに無いなど、行として出せないカテゴリがあるためです。
+
+変換中（`IME`で文字を組み立てている間）は、キーを横取りしません。
+変換を確定した直後の`Enter`も、行送りには使いません。
+確定しただけで次の行へ飛ばないようにするためです。
+
+### 走らせる順番
+
+ゲームが更新されたときは、`diff`を`publish`より先に走らせてください。
+
+```text
+ゲーム更新 → ゲーム内で Export game flow → dwloc diff → dwloc edit で訳を直す → dwloc publish → dwloc validate
+```
+
+`diff`は、英文が変わってキーが変わった行の「引き継ぎ先」を示します。
+判断の材料に、gitに残っている1つ前の`data/script_order.csv`を使います。
+再生順の更新をコミットする前に走らせると、`HEAD`からそのまま読めます。
+
+`diff`が示すのは候補であって確証ではありません。
+訳は書き換えないので、中身を確かめてから移してください。
+
+`publish`は対象をすべて組み立ててから書き出します。
+1件でも失敗すれば何も書きません。
+書き出しは一時ファイル経由なので、途中で止まっても元のファイルは残ります。
+
+`--locale`で対象を絞れます。
+`--path`を使うと`Translations`の走査をやめて、指定したファイルだけを変換します。
+
+終了コードは、0が成功、1が`validate`で問題を見つけたとき、2が実行時のエラーです。
+
+## 方針
+
+事前調査の結論です。
+決定ではなく、現時点での見通しです。
+
+- Goの単一バイナリが、ローカルの`HTTP`サーバーを起動します。`UI`には既定のブラウザーを使います
+- `IME`とRTLの扱いをブラウザーへ委ねます。Goのネイティブ描画系`GUI`ライブラリは、この2点が未解決のためです
+- `CGO`に依存しません。クロスコンパイルだけで、全プラットフォーム向けのバイナリを作れます
+- まず`CLI`から作ります。既存のPowerShellとPythonのスクリプトを置き換えるだけでも、独立した価値があります
+
+`CLI`の部分はできました。
+残りは`UI`です。
+
+## 関連するリポジトリ
+
+| リポジトリ | 関係 |
+| ---- | ---- |
+| [TomXV/dragnwash-localization](https://github.com/TomXV/dragnwash-localization) | 翻訳データとゲーム内プラグインの本体です。このエディターが扱う対象です |
+
+## 開発
 
 ### 要るもの
 
-セットアップのスクリプトを実行する前に、次をそろえます。
-
-| 要るもの | 何に使うか |
+| 道具 | 用途 |
 | ---- | ---- |
-| リポジトリの管理者権限 | スクリプトが変える設定は、どれも管理者権限が要ります |
-| `gh`（GitHub CLI）とログイン | 設定の変更とPull Requestの作成に使います。先に`gh auth login`を済ませます |
-| `git`の`user.name`と`user.email` | スクリプトが名前の書き換えをコミットします |
-| Node 22以上 | 文書の検査（`npm run lint`）に使います。`scripts/setup.sh`は名前の書き換えにも使います |
-| PowerShell 7以上 | Windowsで`scripts/setup.ps1`を使う場合です。Windows PowerShell 5.1では動きません |
+| Node 22以上 | 日本語の文書の検査に使います |
+| Go 1.27.1以上 | 実装に使います。`go.mod`で指定しています |
 
-`scripts/setup.ps1`は、名前の書き換えにNodeを使いません。
-
-スクリプトはcloneのルートで実行します。
-次の場合は、名前の書き換えと履歴の確認が飛ばされます。
-飛ばした項目は実行の最後に一覧で出るため、直してから実行し直せます。
-
-- cloneの外や、サブディレクトリで実行した
-- `--repo OWNER/REPO`で、いまいるcloneとは別のリポジトリを指定した
-- 作業木に未コミットの変更がある
-- 浅いclone（`--depth`付き）を使っている
-
-### 作った直後にやること
-
-`gh`（GitHub CLI）にログインしたうえで、cloneの中で次を実行します。
+### 自分でビルドする
 
 ```bash
-scripts/setup.sh                        # 設定をまとめて行う
-scripts/setup.sh --runs-on self-hosted  # セルフホストのランナーも設定する
-scripts/setup.sh --dry-run              # 何をするかを表示するだけ
+go build ./cmd/dwloc
 ```
 
-WindowsではPowerShell 7以上で`scripts/setup.ps1`を使います。
-行うことは`scripts/setup.sh`と同じで、引数の書き方が違います。
+版を埋め込む場合は、リリースと同じ形で指定します。
 
-```powershell
-.\scripts\setup.ps1                      # 設定をまとめて行う
-.\scripts\setup.ps1 -RunsOn self-hosted  # セルフホストのランナーも設定する
-.\scripts\setup.ps1 -DryRun              # 何をするかを表示するだけ
+```bash
+go build -trimpath -ldflags "-s -w -X main.version=1.2.3" ./cmd/dwloc
 ```
 
-`Get-Help .\scripts\setup.ps1 -Detailed`で引数の説明が読めます。
-実行が「このシステムではスクリプトの実行が無効になっている」と拒まれる場合は、`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`を実行してから使います。
+指定しない場合、`dwloc version`は`dev`と表示します。
 
-スクリプトは次を行います。
-何度実行しても結果は同じで、失敗した項目は最後にまとめて表示します。
+### Goのコードを検査する
 
-- `develop`ブランチが無ければ`main`から作ります
-- `develop`ブランチがすでにある場合は、`main`と共通の祖先があるかを確かめます。無ければ警告します
-- 「Allow GitHub Actions to create and approve pull requests」を有効にします。リリースのワークフローがPull Requestを開くために要ります
-- squash mergeとrebase mergeを無効にし、マージ後にブランチを消す設定にします
-- 「ブランチの削除を禁止する」ルールセットを作り、`main`と`develop`が消えないようにします。効いているかも確かめます
-- Private vulnerability reporting、Dependabot alerts、Dependabot security updatesを有効にします
-- 「ラベルを同期する」ワークフローを起動します。既定の英語のラベルが日本語に置き換わります
-- `.github/CODEOWNERS`、`.github/ISSUE_TEMPLATE/config.yml`のURL、`package.json`の`name`をこのリポジトリのものに書き換え、`develop`へのPull Requestを開きます
+```bash
+gofmt -l ./cmd ./internal   # 書式が崩れているファイルを並べる
+go vet ./cmd/... ./internal/...
+go test ./cmd/... ./internal/... -count=1
+```
 
-スクリプトを実行したら、残りは次の「必要な設定」と「自分で書き換えるファイル」を見てください。
+元リポジトリを参照するテストがあります。
+`DRAGNWASH_SOURCE_REPO`にそのパスを入れると走ります。
+指定しない場合は既定の場所を探し、見つからなければ飛ばします。
 
-実行のあと、手元は`feature/setup-repository`ブランチに残ります。
-開かれたPull Requestをマージしたら、`develop`に戻してから作業を始めます。
+### 日本語の文書を検査する
 
-### 必要な設定
+Markdownの書式を`markdownlint`で、日本語の書き方を`textlint`で検査します。
+規則は公開されている共有設定[@223n/lint-config-ja](https://www.npmjs.com/package/@223n/lint-config-ja)にあります。
+このリポジトリには、何を検査するかだけを書いてあります。
 
-GitHubの画面で行う設定です。
-「スクリプト」が「行う」のものは、セットアップのスクリプトが代わりに設定します。
+```bash
+npm ci
+npm run lint          # 書式と日本語をまとめて検査する
+npm run lint:md:fix   # 書式の指摘を直す
+npm run lint:ja:fix   # 日本語の指摘のうち、機械的に直せるものを直す
+```
 
-| 設定 | 場所 | スクリプト |
-| ---- | ---- | ---- |
-| ActionsにPull Requestの作成と承認を許す | 「Settings」→「Actions」→「General」→「Workflow permissions」 | 行う |
-| マージコミットだけを許し、マージ後にブランチを消す | 「Settings」→「General」→「Pull Requests」 | 行う |
-| Private vulnerability reporting | 「Settings」→「Advanced Security」 | 行う |
-| Dependabot alerts、Dependabot security updates | 「Settings」→「Advanced Security」 | 行う |
-| Code scanningのDefault setupを使わない | 「Settings」→「Advanced Security」 | 行わない |
-| `main`と`develop`の削除を禁止する | 「Settings」→「Rules」 | 行う |
-| `main`と`develop`のそのほかのブランチ保護（任意） | 「Settings」→「Rules」 | 行わない |
-| 変数`RUNS_ON`（セルフホストのランナーを使う場合） | 「Settings」→「Secrets and variables」→「Actions」→「Variables」 | `--runs-on`で行う |
-| このリポジトリ自身をテンプレートにする | 「Settings」→「General」→「Template repository」 | `--template`で行う |
+文体は「ですます調」です。
+一文一行で書きます。
+全角文字と半角文字の間にスペースを入れません。
 
-次は組織の管理者に頼みます。
-どれも、リポジトリ側では変えられません。
-
-- 組織の「Settings」→「Actions」→「General」で、ActionsによるPull Requestの作成を許可します
-- 組織で使えるアクションを制限している場合は、`.github/workflows/`が使うアクションを許可リストに入れてもらいます
-- 組織のセキュリティ設定が強制（enforced）で当たっている場合は、そちらを緩めてもらいます
-- 非公開リポジトリでCodeQLの結果を出すには、GitHub Code Securityのライセンスが要ります
-
-設定するときの注意です。
-
-- Private vulnerability reportingは公開リポジトリの機能です。非公開リポジトリでは有効にできず、Issueの選択画面の「脆弱性の報告」リンクも働きません
-- Code scanningのDefault setupは使いません。走査は`codeql.yml`が行います。誤って有効にしたときは、同じ画面で無効に戻します
-- 「Require code scanning results」の規則は、`codeql.yml`の結果（ツール名はCodeQL）で満たせます。ただし解析中とツールが未設定のときもマージを止めます
-- `develop`にPull Requestを必須にする規則をかけると、リリース後の戻しは毎回Pull Requestになります
-- ルールセットは無料プランの非公開リポジトリでは効きません。作れても守られないため、スクリプトが確かめて警告します
-- 「ブランチの削除を禁止する」ルールセットがあると、`develop`を消して作り直す復旧ができません。後の「履歴が繋がっていないとき」を見てください
-
-### 自分で書き換えるファイル
-
-テンプレート由来の値が残っているファイルです。
-「スクリプト」が「行う」のものは、セットアップのスクリプトが書き換えて`develop`へのPull Requestを開きます。
-
-| ファイル | 書き換えるところ | スクリプト |
-| ---- | ---- | ---- |
-| `.github/CODEOWNERS` | 変更の確認を求める相手 | 行う |
-| `.github/ISSUE_TEMPLATE/config.yml` | 脆弱性の報告先のURL | 行う |
-| `package.json` | `name` | 行う |
-| `package.json` | `description`と`version` | 行わない |
-| `package.json` | `private: true`。npmに公開するなら外します | 行わない |
-| `README.md` | このファイル全体 | 行わない |
-| `SECURITY.md` | 非公開で連絡できる先 | 行わない |
-| `LICENSE` | `Copyright [yyyy] [name of copyright owner]`の行 | 行わない |
-| `LICENSE`と`package.json`の`license` | ライセンスを変える場合 | 行わない |
-
-`version`はテンプレートの`0.2.0`から始まります。
-最初のリリースは`0.2.0`より大きい版だけが通ります。
-もっと小さい版から始めるなら、`main`と`develop`の両方で先に`version`を下げます。
+`main`と`develop`への`push`、およびすべてのPull RequestでCIが同じ検査をします。
+CIではあわせて、ワークフローの構文を`actionlint`で、安全性を`zizmor`で検査します。
 
 ## 使ううえでの注意
-
-作る前に知っておくと、あとで困らないものです。
 
 | 場面 | 何が起きるか | どうするか |
 | ---- | ---- | ---- |
 | ブランチ名 | `release/`、`hotfix/`、`merge/`で始めると、リリースの仕組みが反応します | 作業ブランチには`feature/`を使います |
 | Pull Requestのhead | `main`や`develop`をheadにすると、「PRのheadブランチを確かめる」が失敗します | リリースはワークフローに任せます。詳しくは[CLAUDE.md](CLAUDE.md)にあります |
 | マージの方法 | squashやrebaseだと、リリースノートにPull Requestが載らず、次の版で衝突します | マージコミット（Create a merge commit）でマージします |
-| ラベル | 同期が済むまで、IssueフォームとDependabotが指定するラベルは黙って付きません | 最初のPull Requestを開く前にセットアップを済ませます |
-| `.github/CODEOWNERS` | Pull Requestのbaseブランチのものが読まれ、`main`には最初のリリースまで届きません | `main`向けのPull Requestで確認者が付かなくても、設定漏れではありません |
-| Issueのフォーム | 既定ブランチ（`main`）に入るまで、画面に反映されません | 同じく、`main`に入るまで待ちます |
-| セルフホストのランナー | `RUNS_ON`のラベルに一致するランナーが無いと、失敗せずに待機のまま止まります | 設定したらCIを手で1回動かして確かめます |
 | 改行コード | `.gitattributes`が全ファイルをLFに固定します | CRLFのファイルを持ち込むと、最初のコミットで全行が差分になります |
-
-リリースやCIが途中で止まったときは、ワークフローのログに日本語で対処方法が出ます。
-`main`と`develop`に共通の祖先が無い場合だけ、後の「履歴が繋がっていないとき」を見てください。
-
-## 日本語の文書を検査する
-
-Markdownの書式を`markdownlint`で、日本語の書き方を`textlint`で検査します。
-規則は公開されている共有設定[@223n/lint-config-ja](https://www.npmjs.com/package/@223n/lint-config-ja)にあり、このリポジトリには「何を検査するか」だけを書いてあります。
-規則の理由は[node_japanese_lint_template](https://github.com/223n/node_japanese_lint_template)にあります。
-
-```bash
-npm install
-npm run lint          # 書式と日本語をまとめて検査する
-npm run lint:md:fix   # 書式の指摘を直す
-npm run lint:ja:fix   # 日本語の指摘のうち、機械的に直せるものを直す
-```
-
-Node 22以上が要ります。
-
-文体は「ですます調」です。
-「である調」にしたい場合や、規則を一部だけ変えたい場合は、`.textlintrc.js`のコメントに書き方があります。
-
-`main`と`develop`への`push`と、すべてのPull Requestで、CIが同じ検査をします。
-CIではあわせて、ワークフローの構文を`actionlint`で、安全性を`zizmor`で検査します。
-ワークフローの安全性は、`codeql.yml`もCodeQLの`actions`言語で走査します。
-ワークフローが開いたPull Request（リリースのPull Requestなど）では、CIは「承認待ち」で作られます。
-書き込み権限のある人が「Approve workflows to run」を押すと動きます。
-承認せずにマージすると、承認待ちの実行は失敗として記録されますが、検査が落ちたわけではありません。
-
-## ラベル
-
-IssueとPull Requestのラベルはすべて日本語です。
-`.github/labels.yml`が定義で、「ラベルを同期する」ワークフローがリポジトリのラベルをこの内容に揃えます。
-ラベルを足したり変えたりするときは、GitHubの画面ではなくこのファイルを変えてください。
-ファイルに無いラベルは消えます。
-ただし`main`からの同期では消しません。
-`main`の`.github/labels.yml`が`develop`より古い期間に、`develop`で足したラベルを消さないためです。
-
-| ラベル | 用途 | 誰が付けるか |
-| ---- | ---- | ---- |
-| バグ | 期待どおりに動かない | Issueフォーム |
-| 機能追加 | 新しい機能や改善の要望 | Issueフォーム |
-| ドキュメント | 文書の追加や修正 | ラベラー、人 |
-| 質問 | 使い方や仕様についての質問 | Issueフォーム |
-| アクセシビリティ | 障害のある人の利用を妨げるもの | 人 |
-| 重複 | すでにあるIssueやPull Requestと同じ内容 | 人 |
-| 無効 | 内容が正しくない、または対象外 | 人 |
-| 対応しない | 対応しないと判断したもの | 人 |
-| 初心者向け | はじめて貢献する人に向く課題 | 人 |
-| 助けが必要 | 手を貸してほしい課題 | 人 |
-| 依存関係 | 依存パッケージやアクションの更新 | Dependabot、ラベラー |
-| npm | npmパッケージの更新 | Dependabot |
-| GitHub Actions | GitHub Actionsの更新 | Dependabot、ラベラー |
-| リリース | リリースの準備と公開 | リリースのワークフロー |
-| セキュリティ | 脆弱性やセキュリティに関わる修正 | 人、ラベラー |
-| 破壊的変更 | 後方互換性を壊す変更 | 人 |
-
-GitHubが最初から用意する英語のラベル（`bug`や`enhancement`など）は、付いているIssueを保ったまま日本語のラベルに改名されます。
-Dependabotが作る既定のラベル（`dependencies`、`javascript`、`github_actions`）も同じように改名されます。
-対応は`.github/labels.yml`の`from_name`にあります。
-
-「初心者向け」と「助けが必要」は、GitHubの「Contribute」ページが英語名の`good first issue`と`help wanted`で判定するため、改名するとそこには載らなくなります。
-その機能を使うなら、この2つは英語名のまま残してください。
-
-Pull Requestには、変えたファイルとブランチ名から`.github/labeler.yml`の規則でラベルが自動で付きます。
-
-## Dependabot
-
-`.github/dependabot.yml`で、npmの依存とGitHub Actionsのアクションを毎週月曜の朝に確かめます。
-Pull Requestは`develop`に向けて開かれ、「依存関係」と「npm」または「GitHub Actions」のラベルが付きます。
-npmではminorとpatchの更新が本番用と開発用の2つのPull Requestにまとまり、majorの更新は個別に開かれます。
-GitHub Actionsのアクションは、majorも含めてすべて1つのPull Requestにまとまります。
-
-ワークフローが使うアクションはコミットSHAで固定し、版はコメントに書いてあります。
-DependabotはSHAとコメントの両方を更新します。
-
-セキュリティ更新は常に既定ブランチ（`main`）に向けて開かれます。
-既定ブランチ向けのエントリも書いてあるため、そこにも同じラベルと接頭辞が付きます。
-このエントリは版の更新を開かない設定（`open-pull-requests-limit: 0`）です。
-不要に見えても消さないでください。消すとセキュリティ更新からラベルと接頭辞が無くなります。
-
-`develop`をやめて`main`だけで運用する場合は、`.github/dependabot.yml`の`target-branch`を消してください。
-`develop`が無いまま残っていると、版の更新が一切来なくなります。
 
 ## ブランチとリリース
 
@@ -265,28 +395,28 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 1. `version`にリリースする版を入れます。`v`は付けません（例: `1.2.0`、`1.2.0-rc.1`）
 1. ワークフローが`develop`から`release/vX.Y.Z`ブランチを切り、`package.json`の版を上げ、`main`へのPull Requestを開きます
 1. Pull Requestの内容を確かめ、マージコミット（Create a merge commit）でマージします
-1. 「リリースを公開する」ワークフローが動き、タグ`vX.Y.Z`を打ち、GitHub Releaseを作り、`main`を`develop`に戻します
+1. 「リリースを公開する」ワークフローが動きます。タグ`vX.Y.Z`を打ち、6種類の書庫を添えたGitHub Releaseを作り、`main`を`develop`に戻します
+
+バイナリはタグを打つ前に作ります。
+1つでもビルドに失敗した場合は、タグとGitHub Releaseを作らずに止まります。
+6種類のうち一部だけが載ったReleaseを出さないためです。
+
+添付するのは、6つの書庫と`dwloc_<版>_checksums.txt`の7ファイルです。
+入れ直しのために再実行した場合は、同じ名前の添付を入れ替えます。
 
 版は`package.json`の`version`で管理します。
 `develop`と`main`の版、最新のタグのどれよりも大きい版だけを受け付けます。
 すでにあるタグや、開いたままの`release/*`ブランチがあると止まります。
 `-rc.1`のようなプレリリースの版は、GitHub Releaseでもプレリリースになります。
 
-`auto_merge`を有効にして実行すると、Pull Requestを人手で確かめずにマージし、公開まで一気に進めます。
-ただし`main`に必須のチェックや承認のルールがあると、マージで止まります。
-ワークフローが開いたPull RequestのCIは承認待ちのままで、ルールを満たせないためです。
-その場合は人がPull Requestをマージすれば、公開のワークフローが続きを行います。
-
 `develop`にPull Requestを必須にする規則がある場合、`main`から`develop`への戻しは毎回Pull Requestになります。
 ブランチ名は`merge/vX.Y.Z-into-develop`です。
 リリースのあとに、このPull Requestもマージコミットでマージしてください。
 
-マージコミットでマージする理由は「使ううえでの注意」にあります。
-
 GitHub Releaseの本文は、マージしたPull Requestのタイトルとラベルから自動で作られます。
 分類は`.github/release.yml`にあります。
 
-### 緊急の修正（hotfix）
+### 緊急の修正
 
 リリース済みの内容を急いで直すときは、`main`から`hotfix/名前`ブランチを切ります。
 そのブランチで修正し、`package.json`の版も上げます。
@@ -298,74 +428,28 @@ npm version patch --no-git-tag-version
 `main`へのPull Requestをマージコミットでマージすると、「リリースを公開する」ワークフローが`release/*`と同じように動きます。
 版を上げ忘れると、同じ版のタグがすでにあるため止まります。
 
-## GitHub Actionsのランナー
-
-ワークフローは既定でGitHubがホストする`ubuntu-latest`で動きます。
-セルフホストのランナーがある場合は、リポジトリまたは組織の変数`RUNS_ON`に、ランナーのラベル（例: `self-hosted`）を設定します。
-設定は「Settings」→「Secrets and variables」→「Actions」の「Variables」にあります。
-`scripts/setup.sh --runs-on ラベル`でも行えます。
-Windowsでは`.\scripts\setup.ps1 -RunsOn ラベル`です。
-変数が無いときは`ubuntu-latest`に倒れるため、設定しなくても動きます。
-
-セルフホストのランナーには、`git`と`gh`（GitHub CLI）、Dockerが要ります。
-Dockerはzizmorの検査（コンテナで動きます）に使います。
-Nodeはワークフローが用意します。
-公開リポジトリでセルフホストのランナーを使うと、フォークからのPull Requestで任意のコードが動くため、非公開のリポジトリで使ってください。
-
 ## ワークフローの一覧
 
 | ファイル | いつ動くか | 何をするか |
 | ---- | ---- | ---- |
-| `ci.yml` | `main`と`develop`への`push`、Pull Request、手動 | 日本語の文書、ワークフローの構文（actionlint）、ワークフローの安全性（zizmor）を検査します |
-| `codeql.yml` | `main`と`develop`への`push`、Pull Request、毎週月曜、手動 | ワークフローの安全性をCodeQLで走査します。結果は「Security」→「Code scanning」に出ます |
-| `labels.yml` | `.github/labels.yml`か`.github/workflows/labels.yml`の変更、手動 | リポジトリのラベルを定義に揃えます。Pull Requestでは差分の表示だけです |
+| `ci.yml` | `main`と`develop`への`push`、Pull Request、手動 | 日本語の文書、Goの書式とテスト、ワークフローの構文と安全性を検査します |
+| `codeql.yml` | `main`と`develop`への`push`、Pull Request、毎週月曜、手動 | ワークフローの安全性をCodeQLで走査します |
+| `labels.yml` | `.github/labels.yml`の変更、手動 | リポジトリのラベルを定義に揃えます |
 | `labeler.yml` | Pull Requestを開いたとき、更新したとき | 変えたファイルとブランチ名からラベルを付けます |
 | `branch-guard.yml` | Pull Requestを開いたとき、更新したとき | headブランチが`main`か`develop`なら失敗します。マージは止めません |
 | `release.yml` | 手動 | `develop`からリリースブランチを切り、版を上げ、`main`へのPull Requestを開きます |
-| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき | タグを打ち、GitHub Releaseを作り、`main`を`develop`に戻します |
+| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき | 6種類のバイナリを作り、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します |
 
-## 履歴が繋がっていないとき
+## ラベル
 
-「Include all branches」にチェックを入れて作ったリポジトリでは、`main`と`develop`が共通の祖先を持ちません。
-セットアップのスクリプトはこれを見つけると、次のように警告します。
+IssueとPull Requestのラベルはすべて日本語です。
+`.github/labels.yml`が定義で、「ラベルを同期する」ワークフローがリポジトリのラベルをこの内容に揃えます。
+ラベルを足したり変えたりするときは、GitHubの画面ではなくこのファイルを変えてください。
 
-```text
-  ! main と develop の履歴が繋がっていない（共通の祖先が無い）
-```
+## 貢献
 
-放っておくと、リリースのワークフローが`main`を取り込むところで止まります。
-`main`から`develop`への戻しもできず、版が`develop`に届かなくなります。
-
-直し方は2つあります。
-どちらを選ぶかは、`develop`に残したい変更があるかどうかで決まります。
-
-`develop`に残したい変更が無い場合は、`develop`を消してからスクリプトを実行し直します。
-スクリプトが`main`から`develop`を作り直すため、履歴が繋がります。
-Windowsでは`scripts/setup.sh`のところを`.\scripts\setup.ps1`に読み替えてください。
-
-```bash
-gh api --method DELETE "repos/OWNER/REPO/git/refs/heads/develop"
-scripts/setup.sh
-```
-
-「ブランチの削除を禁止する」ルールセットがあると、この削除は拒まれます。
-「Settings」→「Rules」でそのルールセットの「Enforcement」を「Disabled」にし、作り直したあとで「Active」に戻します。
-
-`develop`にすでに作業がある場合は、`main`を`--allow-unrelated-histories`付きで取り込みます。
-共通の祖先ができるため、以後は普通に行き来できます。
-
-```bash
-git switch develop
-git merge --allow-unrelated-histories origin/main
-git push origin develop
-```
-
-こちらには副作用が2つあります。
-共通の祖先が無いため、`main`にしかないファイルは削除ではなく追加として扱われ、`develop`に現れます。
-履歴にも、2つの根を繋ぐマージコミットが残ります。
-
-どちらの方法でも、`develop`から切った作業ブランチと、`develop`に向けて開いているPull Requestの扱いは確かめてください。
-`develop`を作り直した場合、それらは繋がらなくなります。
+変更の進め方は[CONTRIBUTING.md](CONTRIBUTING.md)にあります。
+`develop`から`feature/*`ブランチを切り、`develop`へのPull Requestを開きます。
 
 ## ライセンス
 

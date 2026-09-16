@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<!--
+  画面の骨組み。文言は1つも書かない。すべて app.js が目録（/api/bootstrap）から
+  埋める。ここに日本語を書くと、目録を英語にしても残る文字列ができてしまう。
+
+  lang と dir の初期値は、目録が届くまでの暫定。届いたら app.js が書き換える。
+
+  題名（title）は "dwloc" のまま始める。題名はブラウザーの履歴に残るので、
+  原文はもちろん、行の中身になりうる値を一切入れない。
+-->
+<html lang="en" dir="ltr" translate="no" class="notranslate">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<!--
+  ブラウザー内蔵の翻訳を止める。CSP はこの頁が出す通信しか塞げないが、
+  ブラウザー自身の翻訳はページの文字列を外部のサービスへ送る。原文を
+  再配布しないことがこのプロジェクトの設計の中心なので、その経路を塞ぐ。
+  html の translate="no" と class="notranslate" も同じ目的。
+-->
+<meta name="google" content="notranslate">
+<title>dwloc</title>
+<!--
+  空の data: URL を favicon にしておく。これが無いと、ブラウザーが /favicon.ico を
+  取りにきて毎回 404 になる。外部の画像は参照しない。
+-->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<!--
+  上に貼り付けておく一帯。保存の状態と、競合の引き止めと、失敗の理由を入れる。
+
+  貼り付けるのは、1839行の途中で競合が起きても決断用のボタンが画面に残るように
+  するためである。貼り付けないと、ボタンは画面の55,000px 上にあり、そのあいだ
+  自動保存は止まったままになる（実際に起きた）。
+
+  ここへ入れるのは bar / message / conflict / orphans の4つだけにする。足すと、
+  その高さのぶんだけ競合の引き止めが下へ押し出される。一帯は max-height: 50vh で
+  止めてあるので、あふれたぶんは一帯の中でスクロールアウトし、決断用のボタンが
+  押せなくなる（絞り込みの一帯を入れていたときに 800x600 で実際に起きた）。
+-->
+<div class="top">
+  <header class="bar">
+    <h1 id="app-title">dwloc</h1>
+    <label class="field">
+      <span id="locale-label"></span>
+      <select id="locale"></select>
+    </label>
+    <button id="reload" type="button"></button>
+    <span id="rows" class="rows"></span>
+    <!--
+      いま何行出ているか。絞り込みと検索の唯一の手応えなので、条件の一帯ではなく
+      常に見えているこの帯へ置く。読み上げにも出す（aria-live）。0行になったことは
+      一覧の場所にも文言で出す（#empty）。
+    -->
+    <span id="shown" class="shown" aria-live="polite"></span>
+    <!--
+      保存の状態。保存済み／保存しています／未保存 N 件／保存できません／競合。
+      黙って成功したように見せないための欄で、文言は app.js が目録から入れる。
+      読み上げにも出す。黙って失敗しないことは、目で見ている人だけの約束ではない。
+    -->
+    <span id="save-state" class="save-state" aria-live="polite"></span>
+  </header>
+
+  <!--
+    失敗の理由。読み上げにも出す（role="status"）。
+
+    hidden を出し入れしない。hidden の要素は支援技術の木から外れるので、
+    文字が変わる瞬間にこの要素が木に居らず、告知しない実装があり得る。
+    出し入れは中身の入れ替えで行い、空のときは app.css の .notice:empty が
+    余白と下線を落とす（中身の無いブロックの高さは0になる）。
+  -->
+  <p id="message" class="notice error" role="status"></p>
+
+  <!--
+    競合（409）の引き止め。手前でファイルが変わったとき、どちらの編集を載せるかを
+    人に選ばせる。黙って上書きも、黙って破棄もしない。ボタンは2つとも type="button"
+    で、form は使わない（CSP の form-action 'none' と、CSRF の入口を増やさないため）。
+  -->
+  <section id="conflict" class="conflict" hidden>
+    <p id="conflict-title"></p>
+    <p id="conflict-help"></p>
+    <button id="conflict-keep" type="button"></button>
+    <button id="conflict-take" type="button"></button>
+  </section>
+
+  <!--
+    行き先が見つからなくなった訳。読み直した内容にその行が無いとき、訳を
+    捨てずにここへ出す。画面から消さないのは、それが訳の残っている最後の
+    場所になるためで、翻訳者が控えるまでは出し続ける。
+  -->
+  <section id="orphans" class="orphans" hidden>
+    <p id="orphans-title"></p>
+    <ul id="orphans-list" class="orphans-list"></ul>
+  </section>
+</div>
+
+<p id="edit-notice" class="notice"></p>
+
+<!--
+  絞り込みと検索。貼り付ける一帯の外に、貼り付けずに置く。
+
+  一帯の中に置いていたが、800x600 で 409 を起こすと競合の引き止めのボタンが
+  一帯の中でスクロールアウトして押せなくなった（elementFromPoint がボタンを
+  返さない）。この一帯だけで 126〜151px あり、狭い画面では帯が画面の4割を
+  占めてもいた。条件をいつでも触れることより、競合のボタンがいつでも押せる
+  ことのほうが重い。前者はスラッシュの近道（この一帯を画面へ送ってから検索の
+  欄へ移る）で補える。
+
+  「表示中 N 行」だけは上の帯へ移してある。絞り込みの唯一の手応えなので、
+  条件の一帯まで戻らないと見えないのでは困る。
+
+  条件も検索語も、URL にも待ち受けへの要求にも載せない。行はもうブラウザーの
+  中にあるので、待ち受けに聞く必要がない。聞けば、検索語（＝原文の断片）が
+  待ち受けの記録に残りうる。
+-->
+<section class="finder">
+  <span id="filter-label" class="finder-label"></span>
+  <!--
+    条件の群。role="group" と aria-labelledby が無いと、文脈の無いチェックボックスが
+    9個並んでいるようにしか読み上げられない。
+  -->
+  <span id="filters" class="filters" role="group" aria-labelledby="filter-label"></span>
+  <button id="filter-clear" type="button"></button>
+  <label class="field">
+    <span id="search-label"></span>
+    <!--
+      検索の入力欄。綴り検査と自動補正と自動補完を切る。訳の入力欄と同じ理由で、
+      ブラウザーの綴り検査は入力の中身を外部のサービスへ送りうる経路である。
+      検索語は原文の断片なので、訳と同じ扱いにする。
+
+      type は text にする。search にすると、ブラウザーによっては前に打った語を
+      候補として出す。その候補はブラウザー側に残る。
+
+      dir と lang は app.js がロケールに合わせて入れる。訳の入力欄と同じ扱いで、
+      he や ar の翻訳者が検索語を打つときにキャレットと並びを合わせる。
+    -->
+    <input id="search" type="text" class="notranslate" translate="no"
+      spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off">
+  </label>
+</section>
+
+<!--
+  効くキーを画面から読めるようにする。覚えていないと使えない近道は、
+  無いのと同じである。文言は目録から入れる。
+-->
+<p id="keys" class="notice keys"></p>
+<!--
+  絞り込みと検索の断り書き。貼り付く一帯の外に置く。読むのは1度で足りるのに、
+  貼り付けると1839行のあいだずっと画面の1割を占める。
+-->
+<p id="finder-note" class="notice keys"></p>
+
+<section class="panel">
+  <p id="file-path" class="path"></p>
+  <ul id="notes" class="notes"></ul>
+  <div class="panel-cols">
+    <div>
+      <h2 id="counts-title"></h2>
+      <ul id="counts" class="counts"></ul>
+    </div>
+    <div>
+      <h2 id="stats-title"></h2>
+      <ul id="stats" class="stats"></ul>
+    </div>
+  </div>
+</section>
+
+<!--
+  1行も出なかったときの文言。真っ白な一覧だけだと、壊れたのか条件に当たって
+  いないのかが画面から読み取れない。文言は目録から入れる。
+
+  #message と同じく hidden を出し入れしない。出し入れは中身の入れ替えで行い、
+  空のときは app.css の .notice.empty:empty が余白を落とす。
+-->
+<p id="empty" class="notice empty" role="status"></p>
+
+<main id="list" class="list"></main>
+</body>
+</html>

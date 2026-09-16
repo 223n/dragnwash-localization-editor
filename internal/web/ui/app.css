@@ -1,0 +1,682 @@
+/*
+  画面の見た目。
+
+  外部のフォントも CDN も参照しない。font-family は OS が持つものだけを並べる。
+  外から取るものが1つでもあると、翻訳者の PC から外へ通信が出る。この道具が
+  扱うのはゲームの英語の台本なので、外へ出る経路は1本も作らない。
+
+  色だけで意味を伝えない。状態バッジは色を変えるが、名前も必ず出す。
+  色の見え方は人によって違う。
+*/
+
+:root {
+  --bg: #ffffff;
+  --fg: #1b1b1b;
+  --muted: #5a5a5a;
+  --line: #d8d8d8;
+  --panel: #f5f5f5;
+  --heading-section: #e8eef7;
+  --heading-node: #f0f0f0;
+
+  /* 状態の色。白地に対する明度差をそろえてある。 */
+  --todo: #8a4b00;
+  --review: #9a1c1c;
+  --info: #3a4a5a;
+
+  /* 保存の状態。色だけで意味を伝えないので、文字と下線も必ず変える。 */
+  --saved: #1b5e20;
+  --pending: #8a4b00;
+  --failed: #9a1c1c;
+
+  /*
+    貼り付く帯の下に取る、ほんの少しの余裕。帯の高さそのものは app.js が測って
+    --top-height に入れる（watchTopHeight）。焦点の入る要素の余白は
+    calc(var(--top-height, 10em) + var(--top-gap)) で作る。
+
+    帯の高さを測るのは、競合の引き止めと行き先の無い訳が出ると帯が
+    max-height: 50vh まで伸びるからである。固定値にしていたときは、帯が
+    伸びた場面でちょうど足りなくなった。詳しくは watchTopHeight を見よ。
+    var() の第2引数（10em＝140px）は、測れなかったとき（ResizeObserver が無い）に
+    使われる既定値である。引き止めも行き先の無い訳も出ていないときの帯は、
+    実測で最大 121.4px（320x600）だったので、それを上回る値にしてある。
+  */
+  --top-gap: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+  hidden を必ず効かせる。ブラウザーが持つ [hidden] { display: none } は
+  作者の指定より弱いので、.row { display: grid } のような指定があると、
+  hidden を立てても行が残る。絞り込みと検索はこの属性だけで出し入れするので、
+  ここで押さえておく。
+*/
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI",
+    system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/*
+  上の一帯を貼り付ける。中身（保存の状態、競合の引き止め、失敗の理由）は
+  行のどこを見ていても画面に残す。背が高くなりすぎないよう半分で止めて、
+  あふれたぶんはこの中で送らせる。
+
+  だから、ここへ入れるものは増やさない。max-height の中でスクロールアウトした
+  ボタンは、貼り付いていても押せない。
+
+  そのうえで、競合の引き止めだけは帯の先頭に出す（#conflict の order）。
+  絞り込みを外へ出しても、画面が狭い・低いと bar が何段にも折り返し、その下に
+  ある引き止めが 50vh の外へ沈む。実測で、600x500 と 320x600 では
+  「ファイルの訳を採る」に elementFromPoint が当たらず、実際に押しても何も
+  起きなかった。引き止めが出ているあいだ自動保存は止まっているので、ボタンに
+  手が届かないことは「打ち続けられるのに1バイトも保存されない」状態が続くことを
+  意味する。並びを変えて、いちばん先に出す。
+
+  実測（800x600、409 を起こした状態、Chromium）。絞り込みの一帯を外へ出した
+  いまは、帯の高さも中身も 245px で、「自分の訳を上に載せる」は画面の 198.4px に
+  あり elementFromPoint がそのボタンを返す。同じ場面で一帯を帯の中へ戻すと、
+  中身は 396px になるのに帯は 300px（50vh）で止まるので、ボタンは 349.7〜382.1px、
+  つまり帯の下端より下に沈み、elementFromPoint は一覧の行を返す。
+  絞り込みは貼り付けるのをやめて外へ出してある。
+*/
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  max-height: 50vh;
+  overflow: auto;
+  background: var(--bg);
+  /* order を効かせるために縦に並べる。見た目の並びは HTML のままである。 */
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+  競合の引き止めだけを帯の先頭へ。HTML の並び（bar → message → conflict →
+  orphans）は読み上げと焦点の順のために変えず、見た目の順だけを変える。
+
+  order を負にすると、焦点の順（HTML の並び）と見た目の順が食い違う。ここでは
+  それを承知で入れている。引き止めが出ているのは競合が起きたときだけで、その
+  ときいちばん先に見えるべきものがこれだからである。
+*/
+#conflict {
+  order: -1;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+select,
+button,
+input {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+button {
+  cursor: pointer;
+}
+
+.rows {
+  color: var(--muted);
+}
+
+/*
+  絞り込みと検索の一帯。貼り付けない（position は static のまま）。
+
+  貼り付けると、その高さぶんだけ .top の中身が増え、競合の引き止めのボタンが
+  帯の中でスクロールアウトする。この一帯だけで、実測 1280x900 で 126.2px、
+  800x600 で 151.3px、375x812 で 252.1px（画面の 31%）あった。条件へ戻る道は
+  スラッシュの近道（この一帯を画面へ送ってから検索の欄へ移る）で確保してある。
+*/
+.finder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  /*
+    スラッシュで送られてきたときに、上の貼り付く帯の下へ潜らないようにする。
+    帯の高さは app.js が測って --top-height に入れる
+    （.row .translation[tabindex] を見よ）。
+  */
+  scroll-margin-top: calc(var(--top-height, 10em) + var(--top-gap));
+}
+
+.finder-label {
+  color: var(--muted);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+/*
+  条件の1つ。色だけで意味を伝えないので、重さの色は縁にだけ添えて、
+  名前は必ず出す。名前は待ち受けが返した件数から取ったものをそのまま使う。
+*/
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 4px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip input {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/*
+  条件の重さ（要作業／要確認／参考）。縁と文字の色だけでは伝わらない。
+  --todo #8a4b00 と --review #9a1c1c は色覚によっては近く、冒頭に書いた
+  「色だけで意味を伝えない」に反していた。件数の欄と同じように名前も出す。
+  小さく前に置くのは、カテゴリ名のほうが読みたいものだからである。
+*/
+.chip-status {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.chip.todo {
+  color: var(--todo);
+  border-color: currentColor;
+}
+
+.chip.review {
+  color: var(--review);
+  border-color: currentColor;
+}
+
+.chip.info {
+  color: var(--info);
+  border-color: currentColor;
+}
+
+.chip.pending {
+  color: var(--pending);
+  border-color: currentColor;
+}
+
+.chip.failed {
+  color: var(--failed);
+  border-color: currentColor;
+}
+
+/* 条件に選ばれているあいだは、縁を太くして地色も変える。色だけに頼らない。 */
+.chip:has(input:checked) {
+  background: var(--bg);
+  border-width: 2px;
+  font-weight: 600;
+}
+
+.chip:focus-within {
+  outline: 2px solid var(--info);
+  outline-offset: 1px;
+}
+
+/*
+  いま何行出ているか。上の帯（貼り付く側）に置く。絞り込みの唯一の手応えなので、
+  条件の一帯まで戻らないと見えないのでは使えない。
+
+  件数の欄（internal/diff 由来）とは別の場所に置き、文言も別にする。混ぜると、
+  diff が判定した数と画面が出している数が同じものに見える。
+*/
+.shown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 効くキーの一覧。読み飛ばしてよいので、断り書きと同じ弱さで出す。 */
+.keys {
+  font-size: 12px;
+}
+
+.notice {
+  margin: 0;
+  padding: 8px 16px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.notice.error {
+  color: var(--review);
+}
+
+/*
+  中身が空の断り書きは、場所も取らない。
+
+  #message と #empty は読み上げの見張り（role="status"）なので、hidden で
+  出し入れしない。hidden の要素は支援技術の木から外れるので、文字が変わる
+  瞬間にその要素が木に居らず、告知しない実装があり得る。出し入れは中身の
+  入れ替えで行い、空のときにここで余白と下線を落とす。中身の無いブロックは
+  行ボックスを作らないので、高さは0になる。
+*/
+.notice:empty {
+  padding: 0;
+  border-bottom: 0;
+}
+
+/*
+  1行も出なかったときの文言。一覧の場所に、一覧と同じ左端で出す。
+  真っ白な一覧だけだと壊れたように見え、直し方が画面から読み取れない。
+  読み飛ばす文ではないので、断り書きより強く（本文と同じ濃さで）出す。
+
+  .notice.empty と2つ重ねて書くのは、詳細度で勝つためである。.empty だけだと
+  .notice と同じ詳細度になり、あとに書いたほうが勝つ。順序でしか決まっていない
+  ころは padding も color も border-bottom も .notice のほうが当たっていて、
+  「断り書きより強く出す」が1つも実現していなかった。順序に頼らない。
+*/
+.notice.empty {
+  padding: 16px;
+  color: var(--fg);
+  border-bottom: 0;
+}
+
+/* 空のときは場所を取らない。上の .notice:empty と同じ理由。 */
+.notice.empty:empty {
+  padding: 0;
+}
+
+.panel {
+  padding: 12px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel h2 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.panel-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.path {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+}
+
+.notes,
+.counts,
+.stats {
+  margin: 0 0 8px;
+  padding-inline-start: 18px;
+}
+
+.counts li,
+.stats li,
+.notes li {
+  color: var(--muted);
+}
+
+.counts .todo {
+  color: var(--todo);
+}
+
+.counts .review {
+  color: var(--review);
+}
+
+.counts .held {
+  font-style: italic;
+}
+
+/* 行の一覧 */
+
+.list {
+  padding: 0 16px 48px;
+}
+
+/*
+  見出しはファイルにあるコメント行をそのまま出す。組み直さないので、
+  印（# ===== / # ---）も残る。ファイルの写しであることが目で分かるほうがよい。
+*/
+.heading {
+  margin: 16px 0 4px;
+  padding: 4px 8px;
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-inline-start: 4px solid var(--line);
+}
+
+.heading.section {
+  background: var(--heading-section);
+  font-weight: 600;
+}
+
+.heading.node {
+  background: var(--heading-node);
+}
+
+/*
+  1行は ［行番号｜状態バッジ｜speaker｜原文｜訳］。
+  minmax(0, 1fr) にしてあるのは、長い訳で列が押し広げられないようにするため。
+*/
+.row {
+  display: grid;
+  grid-template-columns: 6ch 18ch 12ch minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/*
+  狭いときは並べ替える。列を2つに減らすだけだと、5つ目の欄（訳）が
+  1列目（行番号の幅）へ落ちて、数文字ずつ折り返される。
+  短い欄を1行に流し、原文と訳はそれぞれ幅いっぱいにする。
+*/
+@media (max-width: 900px) {
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  .row .cell {
+    flex: 1 1 100%;
+  }
+
+  .row .num,
+  .row .speaker,
+  .row .badges {
+    flex: 0 0 auto;
+  }
+}
+
+.cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.num {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.speaker {
+  color: var(--muted);
+}
+
+/* 原文は常に英語なので左から右に固定する。右から左の訳に引きずられないため。 */
+.source {
+  color: var(--muted);
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.badge {
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge.todo {
+  color: var(--todo);
+}
+
+.badge.review {
+  color: var(--review);
+}
+
+.badge.info {
+  color: var(--info);
+}
+
+.row.not-editable {
+  background: #fbf3f3;
+}
+
+.reason {
+  color: var(--review);
+  font-size: 12px;
+}
+
+/*
+  編集できない行の中身。列がずれているので訳としては読めない。生の行のまま、
+  等幅で出す。読めなくしてしまうと、直しようがあるかどうかも分からない。
+*/
+.raw {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/*
+  保存の状態。色だけで伝えない。文言（保存済み／未保存 N 件／保存できません／
+  競合しています）を必ず出したうえで、色を添える。
+*/
+.save-state {
+  margin-inline-start: auto;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.save-state.clean {
+  color: var(--saved);
+}
+
+.save-state.saving {
+  color: var(--muted);
+}
+
+.save-state.pending {
+  color: var(--pending);
+  font-weight: 600;
+}
+
+.save-state.failed,
+.save-state.conflict {
+  color: var(--failed);
+  font-weight: 600;
+}
+
+/* 競合の引き止め。読み飛ばされない位置と強さで出す。 */
+.conflict {
+  padding: 12px 16px;
+  background: #fff6f6;
+  border-block-end: 2px solid var(--failed);
+}
+
+.conflict p {
+  margin: 0 0 8px;
+}
+
+.conflict button {
+  margin-inline-end: 8px;
+}
+
+/*
+  行き先が見つからなくなった訳。競合の引き止めと同じ強さで出す。
+  ここが、その訳が残っている最後の場所になる。
+*/
+.orphans {
+  padding: 12px 16px;
+  background: #fff6f6;
+  border-block-end: 2px solid var(--failed);
+}
+
+.orphans p {
+  margin: 0 0 8px;
+}
+
+.orphans-list {
+  margin: 0;
+  padding-inline-start: 18px;
+}
+
+.orphans-list .note-label {
+  color: var(--muted);
+}
+
+/*
+  訳の欄。焦点が入ると入力欄へ差し替わるので、差し替わったことが
+  枠で分かるようにする。幅は元の欄と同じ（grid の列に収まる）。
+*/
+.row .translation {
+  border-radius: 4px;
+}
+
+/*
+  訳が空でも的が残るように、1行ぶんの高さを敷く。敷かないと、狭いとき
+  （下の @media で flex に変わったとき）に枠線ぶんの2pxしか高さが出ず、
+  いちばん打ちたい未訳の行がマウスで掴めない（実際に起きた）。
+
+  余白（scroll-margin-top）は、焦点の入るこの要素と .editor に付ける。
+  .row に付けても1度も使われない。ブラウザーが画面へ入れようとするのは
+  焦点の入った要素であって、その親ではないためで、getComputedStyle で見ると
+  .editor の scrollMarginTop は "0px" のままだった（実際に起きた。Shift+Tab で
+  上の行へ戻ると、開いた入力欄が貼り付く帯の下へ完全に潜った）。
+
+  値は固定値にしない。帯（.top）は競合の引き止めと行き先の無い訳が出ると
+  max-height: 50vh まで伸びる。実測した帯の高さ（Chromium）。
+
+    1280x900 / 800x600  49.4px    競合も行き先の無い訳も出ていないとき
+    375x812             92.4px    帯の中身が2列に折り返す
+    320x600            121.4px    さらに折り返す
+    800x600            150.6px    行き先の無い訳が1件だけ出ているとき
+    800x600 / 320x600  300px      競合と行き先の無い訳の両方（50vh そのもの）
+
+  8em（14px 基準で 112px）では、下の3つで足りない。app.js が ResizeObserver で
+  帯の高さを測って --top-height に入れる（watchTopHeight）ので、ここはその値に
+  --top-gap を足すだけにする。var() の第2引数（10em＝140px）は、測れなかった
+  ときの既定値である。引き止めも行き先の無い訳も出ていないときの帯の高さは、
+  実測で 49.4px（1280x900 と 800x600）、92.4px（375x812）、121.4px（320x600）
+  だった。いちばん高い 121.4px を上回る値にしてある。8em（112px）では
+  320x600 に 1.4px 足りなかった。
+
+  vh で取らないのは、ほとんどの行が「はみ出している」ことになって毎回大きく
+  送られるためである。帯の実際の高さに見合う値でなければならない。
+*/
+.row .translation[tabindex] {
+  min-height: 1.6em;
+  padding: 0 4px;
+  border: 1px dashed var(--line);
+  cursor: text;
+  scroll-margin-top: calc(var(--top-height, 10em) + var(--top-gap));
+  scroll-margin-bottom: 3em;
+}
+
+/*
+  競合している行の訳欄。どちらを残すか選ぶまで開かないので、tabindex を外して
+  ある（app.js の rowNode）。外すと上の指定がまるごと当たらなくなり、高さと
+  余白だけが消えて行が詰まるので、見た目のぶんはここで敷き直す。
+  破線の枠と cursor: text は戻さない。打てない欄に「打てそうな」印は出さない。
+*/
+.row.conflicted .translation {
+  min-height: 1.6em;
+  padding: 0 4px;
+}
+
+.row .translation[tabindex]:hover {
+  border-color: var(--muted);
+}
+
+.editor {
+  width: 100%;
+  padding: 0 4px;
+  border: 1px solid var(--info);
+  /* 差し込んだ入力欄も、焦点が入る要素なので同じ余白を持たせる。 */
+  scroll-margin-top: calc(var(--top-height, 10em) + var(--top-gap));
+  scroll-margin-bottom: 3em;
+}
+
+/* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */
+.row.unsaved {
+  background: #fffbf0;
+}
+
+.row.unsaved .translation {
+  border-inline-start: 3px solid var(--pending);
+}
+
+.row.save-failed {
+  background: #fff1f1;
+}
+
+.row.conflicted {
+  background: #fff6f6;
+}
+
+/*
+  行に添える1言（保存できない理由、値が変わった断り、競合中の新旧）。
+  grid の最終列に置くと訳の下へ来ないので、行いっぱいに敷く。
+*/
+.row-note {
+  grid-column: 1 / -1;
+  color: var(--failed);
+  font-size: 12px;
+}
+
+.row-note .note-label {
+  color: var(--muted);
+}
+
+/*
+  競合している行に出す「選んでから直せます」。材料（ファイルの訳／あなたの訳）
+  とは役割が違うので、少し弱く出す。読まれなければ、押しても入力欄が開かない
+  理由が画面のどこにも無くなるので、消しはしない。
+*/
+.row-note .note-locked {
+  color: var(--muted);
+  font-style: italic;
+}
