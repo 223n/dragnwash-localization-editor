@@ -31,13 +31,19 @@ Go言語で実装します。
 
 `CLI`の`dwloc`が動きます。
 既存のPowerShellとPythonのスクリプトを置き換えられます。
-編集用の`UI`はまだありません。
+ブラウザーで訳を書き換える画面（`dwloc edit`）も動きます。
 
 | できること | 元のツール |
 | ---- | ---- |
 | `dwloc publish` | `tools/hash-strings.ps1` |
 | `dwloc validate` | `tools/check-translations.py` |
 | `dwloc diff` | 対応するものはありません |
+| `dwloc edit` | 対応するものはありません |
+
+`edit`の画面は、実際の`IME`での変換と、`Chromium`系以外のブラウザーでは
+まだ確かめていません。
+日本語・韓国語・中国語を打ってみて、おかしなところがあれば
+[Issue](https://github.com/223n/dragnwash-localization-editor/issues)で教えてください。
 
 移植が正しいことは、元リポジトリの`Translations/<locale>/strings.csv`を入力にして`dwloc publish`を通し、入力とバイト単位で一致するかで確かめます。
 13ロケールすべてで一致します。
@@ -272,7 +278,7 @@ Get-FileHash -Algorithm SHA256 .\dwloc_<版>_windows_amd64.zip
 ゲームが更新されたときは、`diff`を`publish`より先に走らせてください。
 
 ```text
-ゲーム更新 → ゲーム内で Export game flow → dwloc diff → 訳を直す → dwloc publish → dwloc validate
+ゲーム更新 → ゲーム内で Export game flow → dwloc diff → dwloc edit で訳を直す → dwloc publish → dwloc validate
 ```
 
 `diff`は、英文が変わってキーが変わった行の「引き継ぎ先」を示します。
