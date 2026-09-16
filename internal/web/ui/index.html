@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!--
+  画面の骨組み。文言は1つも書かない。すべて app.js が目録（/api/bootstrap）から
+  埋める。ここに日本語を書くと、目録を英語にしても残る文字列ができてしまう。
+
+  lang と dir の初期値は、目録が届くまでの暫定。届いたら app.js が書き換える。
+
+  題名（title）は "dwloc" のまま始める。題名はブラウザーの履歴に残るので、
+  原文はもちろん、行の中身になりうる値を一切入れない。
+-->
+<html lang="en" dir="ltr" translate="no" class="notranslate">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<!--
+  ブラウザー内蔵の翻訳を止める。CSP はこの頁が出す通信しか塞げないが、
+  ブラウザー自身の翻訳はページの文字列を外部のサービスへ送る。原文を
+  再配布しないことがこのプロジェクトの設計の中心なので、その経路を塞ぐ。
+  html の translate="no" と class="notranslate" も同じ目的。
+-->
+<meta name="google" content="notranslate">
+<title>dwloc</title>
+<!--
+  空の data: URL を favicon にしておく。これが無いと、ブラウザーが /favicon.ico を
+  取りにきて毎回 404 になる。外部の画像は参照しない。
+-->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <h1 id="app-title">dwloc</h1>
+  <label class="field">
+    <span id="locale-label"></span>
+    <select id="locale"></select>
+  </label>
+  <button id="reload" type="button"></button>
+  <span id="rows" class="rows"></span>
+</header>
+
+<p id="readonly-notice" class="notice"></p>
+<p id="message" class="notice error" hidden></p>
+
+<section class="panel">
+  <p id="file-path" class="path"></p>
+  <ul id="notes" class="notes"></ul>
+  <div class="panel-cols">
+    <div>
+      <h2 id="counts-title"></h2>
+      <ul id="counts" class="counts"></ul>
+    </div>
+    <div>
+      <h2 id="stats-title"></h2>
+      <ul id="stats" class="stats"></ul>
+    </div>
+  </div>
+</section>
+
+<main id="list" class="list"></main>
+</body>
+</html>
