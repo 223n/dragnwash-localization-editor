@@ -56,6 +56,7 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
   validate   公開ファイル（Translations/<ロケール>/strings.csv）を検証する
   publish    公開用CSVを生成し直す
   diff       公開ファイルと再生順を突き合わせ、次にやることを並べる
+  edit       手元だけで待ち受けを始め、1ロケールの全行を1画面に出す（読み取り専用）
   version    版を表示する
 
 共通のオプション:
@@ -104,6 +105,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPublish(rest[1:], *root, stdout, stderr)
 	case "diff":
 		return runDiff(rest[1:], *root, stdout, stderr)
+	case "edit":
+		return runEdit(rest[1:], *root, stdout, stderr)
 	case "version":
 		return runVersion(rest[1:], stdout, stderr)
 	case "help":
