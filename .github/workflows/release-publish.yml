@@ -144,6 +144,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           # CGO を切ると、1台のランナーから6つの対象すべてを作れる（docs/research.md 5.4節）
           CGO_ENABLED: '0'
+          # ジョブ全体の GH_TOKEN を、この段だけ空にする。ここはビルドした実行ファイルを
+          # 実際に走らせる唯一の段で、gh は使わない。書き込み権限つきのトークンを
+          # プロジェクト由来のコードから読める場所に置かない
+          GH_TOKEN: ''
         run: |
           if [ -z "${VERSION}" ]; then
             echo "::error::版が空。書庫を作れない"
@@ -174,6 +178,9 @@ jobs:
           macOS では、初回に Gatekeeper が実行を止めることがあります。次の1行で隔離の印を外せます。
             xattr -d com.apple.quarantine ./dwloc
           Windows では、SmartScreen の警告が出ることがあります。
+          「詳細情報」を押すと「実行」が出ます。
+          dwloc.exe が見当たらないときは、Microsoft Defender による隔離を疑ってください。
+          Windows セキュリティの「保護の履歴」で確認し、そこから許可します。
           macOS と Linux で Permission denied と出たときは、実行権限を付けます。
             chmod +x ./dwloc
 
@@ -280,7 +287,16 @@ jobs:
             exit 0
           fi
           # 本文は PR のタイトルとラベルから自動で作る。分類は .github/release.yml で決める
+          # 本文の頭に「どれを落とせばよいか」を置く。Release の画面にはファイル名しか
+          # 並ばず、darwin が macOS のことだと分からない。README へ戻らないと選べない
+          # 状態にしない。GitHub は --generate-notes の内容をこの後ろに足す
           args=(--verify-tag --title "${TAG}" --generate-notes)
+          header='.github/release-notes-header.md'
+          if [ -f "${header}" ]; then
+            args+=(--notes-file "${header}")
+          else
+            echo "::warning::${header} が無い。Release の本文に入手の案内が載らない"
+          fi
           if [ "${PRERELEASE}" = 'true' ]; then
             args+=(--prerelease)
           fi
@@ -302,9 +318,13 @@ jobs:
             dist/dwloc_"${VERSION}"_*.zip \
             "dist/dwloc_${VERSION}_checksums.txt" \
             --clobber
+          # ls をパイプすると shellcheck の SC2012 に当たり、actionlint を掛ける
+          # CI（lint-workflows）が落ちる。for でファイル名を直に回す
           {
             echo '- 添付したもの:'
-            ls dist | sed 's/^/  - /'
+            for f in dist/*; do
+              echo "  - $(basename "${f}")"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: mainをdevelopへ戻す
