@@ -45,6 +45,14 @@ type Repo struct {
 	Order *order.Data
 	// OrderPath は再生順の読み込み元（data/script_order.csv）。
 	OrderPath string
+	// OldOrder は1つ前の版の再生順。取れなかったときは nil。
+	// 使うのは引き継ぎ候補だけで、ほかの8カテゴリはこれを見ない。
+	OldOrder *order.Data
+	// OldOrderReason は [Repo.OldOrder] が nil のときの理由。取れたときは空。
+	//
+	// 「0 件」と書けない場面を利用者に伝えるために持つ。旧版が取れないのに
+	// 引き継ぎ候補を 0 件と書くと、「移すべき訳は無い」と読まれてしまう。
+	OldOrderReason string
 	// Locales はディレクトリ名順。--locale で絞っても、ここには全ロケールが入る。
 	Locales []Locale
 	// EmptyLocales は Translations 直下にディレクトリだけがあり、公開ファイルも
@@ -56,7 +64,21 @@ type Repo struct {
 	EmptyLocales []string
 }
 
-// Load は root 配下を読む。
+// Options は [LoadWith] の指定。
+//
+// 引数を増やさず構造体にしたのは、旧再生順の取り方を差せるようにしたあとも
+// [Load] の呼び出し側（cmd/dwloc）を変えずに済ませるため。
+type Options struct {
+	// Working が true なら作業コピーも読む。
+	Working bool
+	// OldOrder は1つ前の版の再生順を返す関数。nil なら [GitOldOrder]。
+	//
+	// テストで旧再生順を直に渡すための穴でもある。ここを固定にすると、
+	// 引き継ぎ候補を試すだけで git リポジトリが要る形になってしまう。
+	OldOrder OldOrderSource
+}
+
+// Load は root 配下を読む。旧再生順の取り方は [GitOldOrder]。
 //
 // ロケールの列挙と作業コピーの有無の判定は publish.DiscoverTargets に委ねる。
 // publish が入力に選ぶファイルと、この道具が「作業コピー」と呼ぶファイルが
@@ -71,6 +93,11 @@ type Repo struct {
 // 列名の重複があるとき。公開ファイルが存在しないロケール（作業コピーだけがある
 // 状態）はエラーにせず、公開0行として扱う。
 func Load(root string, useWorking bool) (*Repo, error) {
+	return LoadWith(root, Options{Working: useWorking})
+}
+
+// LoadWith は [Load] と同じことを、指定を変えられる形で行う。
+func LoadWith(root string, opt Options) (*Repo, error) {
 	data, err := publish.LoadOrder(root)
 	if err != nil {
 		return nil, fmt.Errorf("再生順のデータを読めません: %w", err)
@@ -86,6 +113,11 @@ func Load(root string, useWorking bool) (*Repo, error) {
 		OrderPath: data.Source,
 		Locales:   make([]Locale, 0, len(targets)),
 	}
+	// 旧再生順が取れなくてもエラーにはしない。引き継ぎ候補1カテゴリだけが
+	// 判定できなくなる話で、残り8カテゴリは旧版が無くても成り立つ。
+	// git の無い環境で道具そのものが動かなくなるほうが困る。
+	repo.OldOrder, repo.OldOrderReason = loadOldOrder(root, repo.OrderPath, opt.OldOrder)
+
 	for _, t := range targets {
 		loc := Locale{
 			Name:          t.Locale,
@@ -106,7 +138,7 @@ func Load(root string, useWorking bool) (*Repo, error) {
 			// publish が実際に読むパスを覚えておく。_discovered 以外の場所を
 			// 入力にする将来の変更があっても、表示が嘘にならないようにする。
 			loc.WorkingPath = t.Input
-			if useWorking {
+			if opt.Working {
 				working, err := readRowsFile(t.Input)
 				if err != nil {
 					return nil, err
@@ -124,6 +156,42 @@ func Load(root string, useWorking bool) (*Repo, error) {
 	}
 	repo.EmptyLocales = empty
 	return repo, nil
+}
+
+// loadOldOrder は1つ前の版の再生順を読む。読めなかったときは理由を日本語で返す。
+//
+// 理由を error のまま持ち回らずに文字列にするのは、そのまま画面に出す文面だから。
+// 呼び出し側（表示）で種類ごとに場合分けする予定が無いのに型を残すと、
+// 「どの理由なら何を書くか」の分岐が表示側へ漏れる。
+func loadOldOrder(root, orderPath string, src OldOrderSource) (*order.Data, string) {
+	if src == nil {
+		src = GitOldOrder
+	}
+	raw, err := src(root, orderPath)
+	if err != nil {
+		return nil, err.Error()
+	}
+	data, err := order.LoadPowerShell(raw, nil)
+	if err != nil {
+		return nil, "1つ前の再生順を読めません"
+	}
+	if !hasLineIDKeys(data) {
+		// 取り出せはしたが、台詞IDとキーの組が1つも無い。列名が変わった古い版か、
+		// 取り違えた別のファイル。突き合わせる手がかりが無いので判定しない。
+		// ここで 0 件と書くと「移すべき訳は無い」と読まれる。
+		return nil, "1つ前の再生順に台詞IDとキーの組がありません"
+	}
+	return data, ""
+}
+
+// hasLineIDKeys は台詞IDとキーがそろった行が1つでもあるかを返す。
+func hasLineIDKeys(data *order.Data) bool {
+	for _, e := range data.Entries {
+		if e.LineID != "" && e.Key != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // emptyLocales は Translations 直下のロケールのうち、publish が対象にしなかった

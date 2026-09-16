@@ -44,9 +44,26 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--locale
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
 
+ゲームが更新されて英文が変わると、その行のキーも変わります。旧キーの訳を
+どの新キーへ移せばよいかの見当を「引き継ぎ候補」として出します。訳は
+書き換えません。中身を確かめてから、作業コピーで移してください。
+
+見当は data/script_order.csv の1つ前の版を git から読み、新旧を台詞ID
+(line_id) で突き合わせて求めます。旧キーがいまの再生順のどこにも無ければ
+「移動」（旧行はもう要りません）、別の行で生きていれば「複製」（元の行の訳は
+残してください）です。一覧では行の先頭にどちらかが付き、「複製」を先に並べます
+（--limit で切り詰めても残るようにするためです）。
+「移動」の行は「台本から消えた行」にも出ます。
+
+git が無い、git リポジトリでない、再生順の履歴が1版しかない、といったときは
+「引き継ぎ候補」を 0 件とは書かず、理由を添えて保留します。--format csv では
+書く場所が無いので、その保留を標準エラーへ書きます。carryover の行が無いこと
+だけを見て「引き継ぎ先は無い」と読まないでください。
+
 data/script_order.csv が更新されたあと、dwloc publish より先に走らせてください。
 publish は再生順に置けなかった行の section 列を 'UI' に書き直すため、
 「台本から消えた行」の根拠が publish 後には弱くなります。
+再生順の更新をコミットする前なら、1つ前の版を HEAD からそのまま読めます。
 
 終了コード:
   0   要確認なし（未翻訳が何件残っていても 0）
@@ -109,6 +126,19 @@ func runDiff(args []string, defaultRoot string, stdout, stderr io.Writer) int {
 			"dwloc: 警告: %s から再生順を読めません。台本から消えた行などは判定しません。\n",
 			displayPath(*root, repo.OrderPath))
 	}
+	if *format == diffFormatCSV && repo.OldOrder == nil {
+		// 1つ前の再生順を取り出せなかった場合です。引き継ぎ候補は判定せず、
+		// text 形式なら「判定していません（理由）」と本文に書きます。csv には
+		// その1行を置く場所がありません。行が1つも無いだけだと「引き継ぎ先は
+		// 無い」と読まれ、翻訳者は移すべき訳をそのまま捨てます。
+		//
+		// text 形式で重ねて出さないのは、本文がロケールごとに同じことを既に
+		// 書いているからです。git を使っていない利用者の毎回の実行に、
+		// 読む必要のない警告を足すことになります。
+		fmt.Fprintf(stderr, "dwloc: 警告: 引き継ぎ候補は判定しません（%s）。\n",
+			oldOrderReasonText(repo))
+		fmt.Fprintf(stderr, "dwloc:       carryover の行が無いことは、引き継ぎ先が無いという意味ではありません。\n")
+	}
 	if len(repo.EmptyLocales) > 0 {
 		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
 		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
@@ -129,6 +159,13 @@ func runDiff(args []string, defaultRoot string, stdout, stderr io.Writer) int {
 
 	// 報告だけを絞ります。比較の母集合は Compare が常に全ロケールから作ります。
 	report := diff.Compare(repo, locales)
+
+	if *format == diffFormatCSV {
+		// csv には「判定していません」が出ません。行が無いことと、判定して
+		// いないことが見分けられないので、保留は必ず標準エラーへ書きます。
+		// text 形式では同じことを標準出力の本文に書いてあるので、繰り返しません。
+		warnHeldCarryover(repo, report, stderr)
+	}
 
 	if *format == diffFormatCSV {
 		if err := report.WriteCSV(stdout); err != nil {
@@ -189,6 +226,17 @@ func checkDiffLocales(found []diff.Locale, empty []string, want []string) error 
 	return err
 }
 
+// oldOrderReasonText は1つ前の再生順を読めなかった理由を返します。
+//
+// internal/diff は理由を必ず埋めますが、空のまま「（）」と書くと理由を
+// 取り違えたように見えるので、ここで最後の受け皿を用意しておきます。
+func oldOrderReasonText(repo *diff.Repo) string {
+	if repo.OldOrderReason != "" {
+		return repo.OldOrderReason
+	}
+	return "1つ前の再生順を読めません"
+}
+
 // hasOrderKeys は再生順のキーを1種でも読めたかを返します。
 //
 // 行数ではなくキーの種類数で見ます。行はあるのに key 列を引けないファイル
@@ -213,4 +261,28 @@ func diffErrorText(root string, err error) string {
 		return fmt.Sprintf("%s: %v", displayPath(root, fileErr.Path), fileErr.Err)
 	}
 	return err.Error()
+}
+
+// warnHeldCarryover は、引き継ぎ候補を保留したことを標準エラーへ書きます。
+//
+// csv 形式のためにあります。csv は Finding を1行ずつ並べるだけなので、
+// 「候補が0件だった」と「候補を判定していない」が同じ姿（行が無い）になります。
+// 黙っていると「移すべき訳は無い」と読まれ、消えた行の訳を捨てる判断に直結します。
+func warnHeldCarryover(repo *diff.Repo, report *diff.Report, stderr io.Writer) {
+	if repo.OldOrder == nil {
+		fmt.Fprintf(stderr, "dwloc: 1つ前の再生順を読めないので、引き継ぎ候補は判定しません: %s\n",
+			repo.OldOrderReason)
+		return
+	}
+	var stale []string
+	for _, sum := range report.Locales {
+		if sum.OldOrderStale {
+			stale = append(stale, sum.Locale)
+		}
+	}
+	if len(stale) > 0 {
+		fmt.Fprintf(stderr,
+			"dwloc: 読めた1つ前の再生順が、いまの版と同じ内容に見えます。引き継ぎ候補は判定しません: %s\n",
+			strings.Join(stale, ", "))
+	}
 }

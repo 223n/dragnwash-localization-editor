@@ -52,7 +52,17 @@ func orderFile(rows ...orderRow) string {
 
 // newRepo は一時ディレクトリに翻訳リポジトリを作って読み込む。
 // files のキーはルートからのスラッシュ区切りの相対パス。
+//
+// 旧再生順の取り方は既定（git）のまま。一時ディレクトリは git リポジトリでは
+// ないので、引き継ぎ候補は「判定していません」になる。旧再生順が要るテストは
+// [newRepoWith] に [fixedOldOrder] を渡すこと。
 func newRepo(t *testing.T, files map[string]string, useWorking bool) *Repo {
+	t.Helper()
+	return newRepoWith(t, files, Options{Working: useWorking})
+}
+
+// newRepoWith は [newRepo] と同じものを、指定を変えて読み込む。
+func newRepoWith(t *testing.T, files map[string]string, opt Options) *Repo {
 	t.Helper()
 	root := t.TempDir()
 	for name, content := range files {
@@ -64,7 +74,7 @@ func newRepo(t *testing.T, files map[string]string, useWorking bool) *Repo {
 			t.Fatalf("ファイルを書けない: %v", err)
 		}
 	}
-	repo, err := Load(root, useWorking)
+	repo, err := LoadWith(root, opt)
 	if err != nil {
 		t.Fatalf("読み込みに失敗した: %v", err)
 	}

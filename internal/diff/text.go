@@ -132,6 +132,10 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 		fmt.Fprintf(b, "        %s\n", line)
 	}
 	switch c {
+	case CatVanished:
+		writeCarryHint(b, sum)
+	case CatCarryover:
+		writeCarryBreakdown(b, sum)
 	case CatNotPublished:
 		writeNodeBreakdown(b, list, hintIgnore)
 	case CatScriptGap:
@@ -142,6 +146,9 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 	}
 
 	shown := list
+	if c == CatCarryover {
+		shown = carryCopiedFirst(shown)
+	}
 	if opt.Limit > 0 && len(shown) > opt.Limit {
 		shown = shown[:opt.Limit]
 	}
@@ -158,6 +165,10 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 // 「0 件」と書けない場面はここに集まる。ファイルが無いのか、読まないと
 // 指定されたのかを分けるのは、後者に「ゲーム内で書き出してください」と
 // 促すと、すでに済んでいる作業をやり直させることになるため。
+//
+// 見る順は [Summary.canJudge] と同じにしてある。引き継ぎ候補は再生順と旧再生順の
+// 両方を要るので、順が食い違うと「再生順は読めているのに再生順を読めていません」
+// と書くことになる。
 func judgeBlockReason(sum Summary, c Category) string {
 	if c.needsWorking() && !sum.HasWorking {
 		if sum.WorkingExists {
@@ -165,7 +176,73 @@ func judgeBlockReason(sum Summary, c Category) string {
 		}
 		return "作業コピーがありません"
 	}
+	if (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs) {
+		return "再生順を読めていません"
+	}
+	if c.needsOldOrder() && (!sum.OldOrder || sum.OldOrderStale) {
+		if sum.OldOrderReason != "" {
+			return sum.OldOrderReason
+		}
+		return "1つ前の再生順を読めていません"
+	}
 	return "再生順を読めていません"
+}
+
+// carryCopiedFirst は「複製」を先にした写しを返す。元の並びは変えない。
+//
+// --limit で切り詰められるのは末尾なので、並べ替えないと複製が落ちうる。実データの
+// ゲーム更新では複製は24件中1件で、キー順だと19番目に来る。既定の --limit 20 では
+// たまたま残るが、候補が1件増えれば消える。消えると翻訳者は「複製 1 件」という
+// 内訳だけを見せられ、どの行かを知る手立てが無いまま、いまも再生されている行の訳を
+// 消すことになる。落としてよいのは移動のほうで、そちらは取りこぼしても
+// 「台本から消えた行」に同じ行が残る。
+//
+// 並べ替えるのは text の一覧だけで、Report.Findings と CSV の並びはそのまま。
+// CSV は表計算で好きに並べ替えられるので、こちらで先回りする理由が無い。
+func carryCopiedFirst(list []Finding) []Finding {
+	out := make([]Finding, len(list))
+	copy(out, list)
+	// 安定ソートにして、複製どうし・移動どうしはキー順のまま残す。
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].CarryKind == CarryCopied && out[j].CarryKind != CarryCopied
+	})
+	return out
+}
+
+// writeCarryHint は、消えた行のうち引き継ぎ候補が付いた件数を書く。
+//
+// 同じ行が下の「引き継ぎ候補」にもう一度並ぶので、二重に読ませないよう先に断る。
+// 実データのゲーム更新では23件が23件とも重なり、一覧が丸ごと二度出る。
+// 何も言わないと、翻訳者は同じ23行を目で突き合わせてから重複に気づくことになる。
+//
+// 数えるのは「移動」だけ。「複製」は旧キーがいまも再生順にあるので、
+// 「台本から消えた行」には最初から出ていない。
+func writeCarryHint(b *strings.Builder, sum Summary) {
+	if sum.CarryMoved == 0 || !sum.canJudge(CatCarryover) {
+		return
+	}
+	fmt.Fprintf(b, "        うち %d 件には引き継ぎ候補があります（下の「引き継ぎ候補」に移し先を書いてあります）。\n",
+		sum.CarryMoved)
+}
+
+// writeCarryBreakdown は引き継ぎ候補の内訳（移動と複製）を書く。
+//
+// 分けて書くのは、旧行の始末が正反対になるから。「移動」の旧行はもう再生順に
+// 無いので訳ごと移してよいが、「複製」の旧行はいまも別の場所で再生される。
+// そちらの訳まで消すと、生きている行が英語に戻る。
+//
+// 0 件の側は書かない。実データのゲーム更新では複製が1件しか出ず、
+// 毎回「複製 0 件」と並べても読む手がかりにならない。
+func writeCarryBreakdown(b *strings.Builder, sum Summary) {
+	if sum.CarryMoved > 0 {
+		fmt.Fprintf(b, "        移動 %d 件   旧キーはもう再生順にありません。訳を移してください。\n", sum.CarryMoved)
+	}
+	if sum.CarryCopied > 0 {
+		fmt.Fprintf(b, "        複製 %d 件   旧キーは別の行で生きています。元の行の訳は残してください。\n", sum.CarryCopied)
+	}
+	if sum.CarryMoved > 0 {
+		b.WriteString("        「移動」の行は上の「台本から消えた行」にも出ます（同じ行の別の見方です）。\n")
+	}
 }
 
 // writeNodeBreakdown は「どのロケールにも訳が無い行」をノード別に畳んで書く。
@@ -247,17 +324,30 @@ func writeScriptGapDetail(b *strings.Builder, list []Finding) {
 }
 
 // writeTextFooter は締めの1行を書く。
+//
+// 件ではなく行で数える。同じ行が2つのカテゴリに出るからで、実データのゲーム更新
+// では「台本から消えた行」23件と「引き継ぎ候補」24件が、23行ぶん重なる。のべで
+// 数えると 47 件になるが、翻訳者が開く行は 24 行しかない。最後の1行は「あと何行
+// 見ればよいか」を伝えるためのものなので、重ねずに数えるほうを選んだ。
+//
+// のべ件数も添えるのは、上の一覧の数字（カテゴリごとの件数）を足しても締めの数に
+// ならないため。黙って減らすと、どちらかが間違っているように見える。
 func (r *Report) writeTextFooter(b *strings.Builder) {
 	b.WriteString("\n")
 	if len(r.Locales) == 0 {
 		b.WriteString("報告するロケールがありません。\n")
 		return
 	}
-	if n := r.CountByStatus(StatusReview); n > 0 {
-		fmt.Fprintf(b, "要確認が %d 件あります。\n", n)
+	rows := r.RowCountByStatus(StatusReview)
+	if rows == 0 {
+		b.WriteString("要確認はありません。（--all で内訳、--strict で要作業も終了コード 1）\n")
 		return
 	}
-	b.WriteString("要確認はありません。（--all で内訳、--strict で要作業も終了コード 1）\n")
+	if total := r.CountByStatus(StatusReview); total != rows {
+		fmt.Fprintf(b, "要確認が %d 行あります（カテゴリをまたぐ重なりを含めて、のべ %d 件）。\n", rows, total)
+		return
+	}
+	fmt.Fprintf(b, "要確認が %d 行あります。\n", rows)
 }
 
 // localeFindings はそのロケールの Finding をカテゴリ別に分ける。
@@ -280,6 +370,17 @@ func (r *Report) localeFindings(locale string) map[Category][]Finding {
 // 縮めると使えない。
 func findingLine(f Finding) string {
 	parts := []string{}
+
+	// 引き継ぎ候補だけは、移動か複製かを行の先頭に置く。
+	//
+	// 末尾の note にも同じ語が入るが、そちらは CSV と共通の自己完結した文面で、
+	// 位置・話者・キー・訳を並べたあとに来る。実データの1行は200桁を超え、
+	// 24行のうち複製は1行しかない。右端まで読まないと分からない置き方だと、
+	// その1行を見落として、いまも再生されている行の訳を消すことになる。
+	// 目が縦に走るのは左端なので、旧行を消してよいかどうかは左端に出す。
+	if f.Category == CatCarryover && f.CarryKind != CarryNone {
+		parts = append(parts, f.CarryKind.String())
+	}
 
 	pos := joinNonEmpty(" / ", f.Section, f.Node, f.OrderText)
 	if pos == "" {

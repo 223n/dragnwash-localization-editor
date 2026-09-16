@@ -27,6 +27,19 @@ type Finding struct {
 	Translation string
 	// Note は短い日本語の理由。CSV の最終列に入る。
 	Note string
+	// CarryTo は訳の引き継ぎ先の新しいキー（[CatCarryover] のときだけ入る）。
+	//
+	// CSV には列を足さず、同じ内容を Note の文面にも入れてある。11列という
+	// 出力の形は使い方の説明にも書いてある約束で、列を増やすと表計算に
+	// 貼る側の手順が変わる。機械で読みたいときのためにこの欄を用意し、
+	// 人が読む側は既にある note 列で足りるようにした。
+	CarryTo string
+	// CarryKind は引き継ぎ元の旧行を移すのか写すのか（[CatCarryover] のときだけ入る）。
+	//
+	// CarryTo と分けて持つのは、旧行の始末が正反対になるから。[CarryMoved] の
+	// 旧行はもう再生順に無いので訳ごと移してよいが、[CarryCopied] の旧行は
+	// いまも別の場所で再生される。そちらの訳を消すと、生きている行が英語に戻る。
+	CarryKind CarryKind
 }
 
 // Summary は1ロケール分の要約。
@@ -43,6 +56,27 @@ type Summary struct {
 	OrderKeys bool
 	// OrderLineIDs は再生順の台詞IDを1件以上読めたか。意味は OrderKeys と同じ。
 	OrderLineIDs bool
+	// OldOrder は1つ前の版の再生順を読めたか。
+	// これが false のあいだ、引き継ぎ候補は判定しない。
+	OldOrder bool
+	// OldOrderStale は、読めた旧再生順が本当に「更新前の版」かどうかを疑う印。
+	//
+	// 立つのは「旧版と新版でキーが1行も変わっていないのに、公開ファイルには
+	// 台本から消えた行がある」とき。消えた行がある以上、どこかでキーが
+	// 変わったはずで、それが見えないなら旧版として読んだものが既に更新後の
+	// 内容になっている。この状態で「引き継ぎ候補 0 件」と書くと、23行の訳を
+	// 捨ててよいと読まれる。
+	OldOrderStale bool
+	// OldOrderReason は旧再生順を読めなかった理由（[Repo.OldOrderReason]）。
+	// 読めたときは空。
+	OldOrderReason string
+
+	// CarryMoved は引き継ぎ候補のうち「移動」の件数。
+	// 旧キーがもう再生順に無いので、これらは「台本から消えた行」にも出る。
+	CarryMoved int
+	// CarryCopied は引き継ぎ候補のうち「複製」の件数。
+	// 旧キーは別の行で生きているので、「台本から消えた行」には出ない。
+	CarryCopied int
 
 	// HashRows は公開ファイルのハッシュ行の数。
 	HashRows int
@@ -60,15 +94,16 @@ type Summary struct {
 	// Finding にはせず件数だけ持つ。
 	SourceMissing int
 
-	// Counts はカテゴリごとの件数。8カテゴリすべてに値が入る。
+	// Counts はカテゴリごとの件数。全カテゴリに値が入る。
 	Counts map[Category]int
 }
 
 // canJudge はそのカテゴリを判定できたかを返す。false のとき Counts の 0 は
 // 「1件も無い」ではなく「判定していない」を意味する。
 //
-// 判定できないのは2つの場合しかない。作業コピーが要るのに読んでいないときと、
-// 再生順が要るのに読めていないときで、どちらも「0 件」と書くと嘘になる。
+// 判定できないのは3つの場合しかない。作業コピーが要るのに読んでいないとき、
+// 再生順が要るのに読めていないとき、1つ前の版の再生順を取り出せないときで、
+// どれも「0 件」と書くと嘘になる。
 func (s Summary) canJudge(c Category) bool {
 	if c.needsWorking() && !s.HasWorking {
 		return false
@@ -77,6 +112,9 @@ func (s Summary) canJudge(c Category) bool {
 		return false
 	}
 	if c.needsOrderLineIDs() && !s.OrderLineIDs {
+		return false
+	}
+	if c.needsOldOrder() && (!s.OldOrder || s.OldOrderStale) {
 		return false
 	}
 	return true
@@ -120,12 +158,47 @@ func (r *Report) Status() Status {
 }
 
 // CountByStatus はその重さのカテゴリに属する Finding の件数を返す。
+// 同じ行が2つのカテゴリに出ていれば2件と数える（のべ件数）。
 func (r *Report) CountByStatus(s Status) int {
 	n := 0
 	for _, f := range r.Findings {
 		if f.Category.Status() == s {
 			n++
 		}
+	}
+	return n
+}
+
+// RowCountByStatus はその重さの Finding が指している行の数を、重複を除いて返す。
+//
+// のべ件数と分けてあるのは、同じ行が2つのカテゴリに出るため。引き継ぎ候補の
+// 「移動」は「台本から消えた行」にも出るので、実データのゲーム更新では
+// 「のべ 47 件」だが、翻訳者が開く行は 24 行しかない。締めの1行が言いたいのは
+// 「何行を見ればよいか」なので、そちらは行で数える。
+//
+// キーが空の Finding は1件ずつ別に数える。key 列が壊れた作業コピーの行がここへ
+// 来るので、空文字どうしを同じ行と見なすと、何行壊れていても1行に潰れる。
+//
+// 終了コードには使わない。あちらは「要確認が1件でもあるか」だけを見るので、
+// 数え方で答えが変わらない。
+func (r *Report) RowCountByStatus(s Status) int {
+	type row struct{ locale, key string }
+	seen := make(map[row]struct{}, len(r.Findings))
+	n := 0
+	for _, f := range r.Findings {
+		if f.Category.Status() != s {
+			continue
+		}
+		if f.Key == "" {
+			n++
+			continue
+		}
+		k := row{locale: f.Locale, key: f.Key}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		n++
 	}
 	return n
 }
@@ -286,19 +359,24 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 	mine map[string]struct{}, owners map[string]int, union map[string]struct{}) (Summary, []Finding) {
 
 	sum := Summary{
-		Locale:        loc.Name,
-		PublishedPath: loc.PublishedPath,
-		WorkingPath:   loc.WorkingPath,
-		HasWorking:    loc.HasWorking,
-		WorkingExists: loc.WorkingExists,
-		OrderKeys:     len(idx.first) > 0,
-		OrderLineIDs:  len(idx.lineIDs) > 0,
-		WorkingRows:   len(loc.Working),
-		Counts:        make(map[Category]int, len(categories)),
+		Locale:         loc.Name,
+		PublishedPath:  loc.PublishedPath,
+		WorkingPath:    loc.WorkingPath,
+		HasWorking:     loc.HasWorking,
+		WorkingExists:  loc.WorkingExists,
+		OrderKeys:      len(idx.first) > 0,
+		OrderLineIDs:   len(idx.lineIDs) > 0,
+		OldOrder:       r.OldOrder != nil,
+		OldOrderReason: r.OldOrderReason,
+		WorkingRows:    len(loc.Working),
+		Counts:         make(map[Category]int, len(categories)),
 	}
 	for _, c := range categories {
 		sum.Counts[c] = 0
 	}
+
+	// 台本から消えた行の数。旧再生順が本当に更新前のものかを疑う材料に使う。
+	vanished := 0
 
 	// カテゴリごとに集めてから、カテゴリ順に連結する。
 	found := make(map[Category][]Finding, len(categories))
@@ -325,7 +403,11 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 			if _, inOrder := idx.first[row.Key]; inOrder {
 				continue
 			}
-			add(residualCategory(row), publishedFinding(row))
+			cat := residualCategory(row)
+			if cat == CatVanished {
+				vanished++
+			}
+			add(cat, publishedFinding(row))
 		case KindLineID:
 			sum.LineRows++
 			if !sum.OrderLineIDs {
@@ -339,6 +421,47 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 			// 公開ファイル側の形式不備は internal/validate が拾うので数えるだけ。
 			// 二重に報告しても直し方は増えない。
 			sum.BrokenRows++
+		}
+	}
+
+	// 引き継ぎ候補。既存の判定には手を出さず、別のカテゴリとして足す。
+	//
+	// 「移動」の行は「台本から消えた行」にも出たままにする。候補が付いた行を
+	// 元のカテゴリから外すと、候補の作り方を変えただけで「台本から消えた行」の
+	// 件数が動くことになり、いちばん確かな判定がいちばん当てにならない候補に
+	// 引きずられる。「複製」の行は旧キーが生きているので、そもそも重ならない。
+	carry, sameTable := carryoverCandidates(idx, r.OldOrder, mine)
+	if sum.OldOrder && looksStaleOldOrder(sameTable, vanished) {
+		// 旧版として読んだものが、いまの版と同じ内容になっている疑い。
+		// 台本から消えた行があるのにキーの変化が1つも見えないのは辻褄が合わない。
+		sum.OldOrderStale = true
+		sum.OldOrderReason = staleOldOrderReason
+	}
+	if sum.canJudge(CatCarryover) {
+		for _, row := range loc.Published {
+			if row.Kind != KindHash {
+				continue
+			}
+			target, ok := carry[row.Key]
+			if !ok {
+				continue
+			}
+			if row.Translation == "" {
+				// 移す訳が無い。キーの対応としては正しくても、翻訳者に
+				// できることが何も無いので出さない。
+				continue
+			}
+			f := publishedFinding(row)
+			f.CarryTo = target.key
+			f.CarryKind = target.kind
+			f.Note = target.note()
+			switch target.kind {
+			case CarryCopied:
+				sum.CarryCopied++
+			default:
+				sum.CarryMoved++
+			}
+			add(CatCarryover, f)
 		}
 	}
 

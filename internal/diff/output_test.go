@@ -55,7 +55,7 @@ func TestWriteText(t *testing.T) {
 				"要確認",
 				"参考",
 				"台本から消えた行",
-				"要確認が 1 件あります。",
+				"要確認が 1 行あります。",
 			},
 			notWant: []string{"未翻訳                    0 件"},
 		},

@@ -58,6 +58,8 @@ const (
 	CatLocaleGap
 	// CatVanished は前回の公開時は再生順にあったのに、いまの再生順に無い行。
 	CatVanished
+	// CatCarryover は訳の引き継ぎ先の候補がある行。
+	CatCarryover
 	// CatDropped は publish を回すと捨てられる作業コピーの行。
 	CatDropped
 	// CatStrayLineID は再生順に無い台詞ID行。
@@ -73,7 +75,7 @@ const (
 // categories は表示順に並べた全カテゴリ。
 var categories = []Category{
 	CatUntranslated, CatLocaleGap,
-	CatVanished, CatDropped, CatStrayLineID,
+	CatVanished, CatCarryover, CatDropped, CatStrayLineID,
 	CatNotPublished, CatScriptGap, CatUnknownOrigin,
 }
 
@@ -92,6 +94,10 @@ type categoryInfo struct {
 	needsOrderKeys bool
 	// needsOrderLineIDs は再生順の台詞IDについて同じ意味。
 	needsOrderLineIDs bool
+	// needsOldOrder は1つ前の版の再生順が無いと判定できないかどうか。
+	// git から取り出せない環境（git が無い、リポジトリでない、履歴が1版しかない）
+	// でも道具そのものは動くので、ここも「0 件」ではなく理由を書く印として立てる。
+	needsOldOrder bool
 	// note は Finding.Note の既定値。CSV の note 列に入る。
 	note string
 	// detail は一覧の前に出す説明。空なら出さない。
@@ -131,6 +137,16 @@ var categoryTable = map[Category]categoryInfo{
 		detail: []string{
 			"前回の公開時は再生順にありましたが、いまの再生順にありません。",
 			"原文が変わってキーが変わった可能性があります。",
+		},
+	},
+	CatCarryover: {
+		// note は空。行ごとに引き継ぎ先が違うので、Finding.Note へ1件ずつ入れる。
+		name: "引き継ぎ候補", id: "carryover", status: StatusReview,
+		needsOrderKeys: true, needsOldOrder: true,
+		detail: []string{
+			"原文が変わってキーが変わった行の、引き継ぎ先の見当です。",
+			"1つ前の版の再生順を git から読み、新旧を台詞ID (line_id) で突き合わせて求めます。",
+			"訳は書き換えていません。中身を確かめてから、作業コピーで移してください。",
 		},
 	},
 	CatDropped: {
@@ -191,6 +207,11 @@ func (c Category) needsOrderKeys() bool {
 // needsOrderLineIDs は再生順の台詞IDが読めていないと判定できないカテゴリかを返す。
 func (c Category) needsOrderLineIDs() bool {
 	return categoryTable[c].needsOrderLineIDs
+}
+
+// needsOldOrder は1つ前の版の再生順が無いと判定できないカテゴリかを返す。
+func (c Category) needsOldOrder() bool {
+	return categoryTable[c].needsOldOrder
 }
 
 // note は Finding.Note の既定値を返す。
