@@ -277,47 +277,70 @@ jobs:
           git tag --annotate "${TAG}" --message "${TAG}"
           git push origin "refs/tags/${TAG}"
 
-      - name: GitHub Releaseを作る
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
-        run: |
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::notice::Release ${TAG} はすでにある。作り直さない"
-            exit 0
-          fi
-          # 本文は PR のタイトルとラベルから自動で作る。分類は .github/release.yml で決める
-          # 本文の頭に「どれを落とせばよいか」を置く。Release の画面にはファイル名しか
-          # 並ばず、darwin が macOS のことだと分からない。README へ戻らないと選べない
-          # 状態にしない。GitHub は --generate-notes の内容をこの後ろに足す
-          args=(--verify-tag --title "${TAG}" --generate-notes)
-          header='.github/release-notes-header.md'
-          if [ -f "${header}" ]; then
-            args+=(--notes-file "${header}")
-          else
-            echo "::warning::${header} が無い。Release の本文に入手の案内が載らない"
-          fi
-          if [ "${PRERELEASE}" = 'true' ]; then
-            args+=(--prerelease)
-          fi
-          gh release create "${TAG}" "${args[@]}"
-          echo "- Release: $(gh release view "${TAG}" --json url --jq '.url')" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 書庫をReleaseに載せる
-        # Release を作る段とは分ける。Release がすでにあるときも、ここは必ず通す。
-        # --clobber は同じ名前の添付を入れ替える。前の実行が途中で落ちて半端に載っていても、
-        # 入れ直せば6つとチェックサムが揃う。
-        # 書庫の中身は同じでも、tar.gz と zip に入る時刻が実行ごとに変わるため、
-        # 入れ直すとチェックサムも変わる。6つの書庫とチェックサムは必ず一緒に載せ替える
+      - name: 書庫を載せたGitHub Releaseを作る
+        # 書庫は Release を作るのと同じ呼び出しで載せ、下書きのまま作ってから公開する。
+        #
+        # このリポジトリは「不変のリリース（immutable releases）」が有効である。
+        # 公開した瞬間に添付が固定されるので、あとから gh release upload で足せない。
+        # 実際、v0.4.0 は Release を作ってから書庫を載せる2段構えだったため、
+        # 2段目が HTTP 422「Cannot upload assets to an immutable release」で落ちた。
+        # タグと Release だけが公開され、書庫が1つも無い Release が残った。
+        # 不変になるのは公開した時点なので、下書きのうちに載せてから公開する。
+        #
+        # 再実行の扱いも変える。前は「Release がすでにあれば作り直さず、添付だけ
+        # 入れ直す」だった。不変のリリースではそれができないので、公開済みなら
+        # 黙って続けず、理由を出して止める。下書きのまま残っていれば入れ直せる。
         env:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
-          gh release upload "${TAG}" \
-            dist/dwloc_"${VERSION}"_*.tar.gz \
-            dist/dwloc_"${VERSION}"_*.zip \
-            "dist/dwloc_${VERSION}_checksums.txt" \
-            --clobber
+          files=(
+            dist/dwloc_"${VERSION}"_*.tar.gz
+            dist/dwloc_"${VERSION}"_*.zip
+            "dist/dwloc_${VERSION}_checksums.txt"
+          )
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            draft="$(gh release view "${TAG}" --json isDraft --jq '.isDraft')"
+            if [ "${draft}" != 'true' ]; then
+              echo "::error::Release ${TAG} はすでに公開されている。不変のリリースには後から書庫を足せない。版を上げてやり直す"
+              exit 1
+            fi
+            # 下書きのまま残っている。前の実行が公開の手前で落ちた場合がこれにあたる。
+            # --clobber は同じ名前の添付を入れ替える。書庫の中身が同じでも tar.gz と
+            # zip に入る時刻は実行ごとに変わるので、6つとチェックサムは必ず一緒に入れ替える
+            echo "::notice::Release ${TAG} は下書きのまま残っている。書庫を入れ直して公開する"
+            gh release upload "${TAG}" "${files[@]}" --clobber
+          else
+            # 本文は PR のタイトルとラベルから自動で作る。分類は .github/release.yml で決める
+            # 本文の頭に「どれを落とせばよいか」を置く。Release の画面にはファイル名しか
+            # 並ばず、darwin が macOS のことだと分からない。README へ戻らないと選べない
+            # 状態にしない。GitHub は --generate-notes の内容をこの後ろに足す
+            args=(--draft --verify-tag --title "${TAG}" --generate-notes)
+            header='.github/release-notes-header.md'
+            if [ -f "${header}" ]; then
+              args+=(--notes-file "${header}")
+            else
+              echo "::warning::${header} が無い。Release の本文に入手の案内が載らない"
+            fi
+            if [ "${PRERELEASE}" = 'true' ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "${TAG}" "${args[@]}" "${files[@]}"
+          fi
+
+          # 載せたものを数えてから公開する。途中で足りないまま公開すると、
+          # 不変になったあとでは足せない
+          got="$(gh release view "${TAG}" --json assets --jq '.assets | length')"
+          want="${#files[@]}"
+          if [ "${got}" -ne "${want}" ]; then
+            echo "::error::添付が ${got} 件しかない（${want} 件を期待）。公開しない"
+            exit 1
+          fi
+
+          gh release edit "${TAG}" --draft=false
+          echo "- Release: $(gh release view "${TAG}" --json url --jq '.url')" >> "$GITHUB_STEP_SUMMARY"
           # ls をパイプすると shellcheck の SC2012 に当たり、actionlint を掛ける
           # CI（lint-workflows）が落ちる。for でファイル名を直に回す
           {
