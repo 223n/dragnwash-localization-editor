@@ -37,6 +37,7 @@ Go言語で実装します。
 | ---- | ---- |
 | `dwloc publish` | `tools/hash-strings.ps1` |
 | `dwloc validate` | `tools/check-translations.py` |
+| `dwloc diff` | 対応するものはありません |
 
 移植が正しいことは、元リポジトリの`Translations/<locale>/strings.csv`を入力にして`dwloc publish`を通し、入力とバイト単位で一致するかで確かめます。
 13ロケールすべてで一致します。
@@ -55,6 +56,7 @@ Go言語で実装します。
 go build ./cmd/dwloc
 
 ./dwloc validate --root ../dragnwash-localization
+./dwloc diff     --root ../dragnwash-localization
 ./dwloc publish  --root ../dragnwash-localization --dry-run
 ./dwloc publish  --root ../dragnwash-localization
 ```
@@ -62,8 +64,24 @@ go build ./cmd/dwloc
 | サブコマンド | 何をするか |
 | ---- | ---- |
 | `validate` | `Translations/<locale>/strings.csv`の形式を検査します |
+| `diff` | 次にやることと、確かめたほうがよい行を並べます |
 | `publish` | 公開用の`strings.csv`を作り直します |
 | `version` | 版を表示します |
+
+### 走らせる順番
+
+ゲームが更新されたときは、`diff`を`publish`より先に走らせてください。
+
+```text
+ゲーム更新 → ゲーム内で Export game flow → dwloc diff → 訳を直す → dwloc publish → dwloc validate
+```
+
+`diff`は、英文が変わってキーが変わった行の「引き継ぎ先」を示します。
+判断の材料に、gitに残っている1つ前の`data/script_order.csv`を使います。
+再生順の更新をコミットする前に走らせると、`HEAD`からそのまま読めます。
+
+`diff`が示すのは候補であって確証ではありません。
+訳は書き換えないので、中身を確かめてから移してください。
 
 `publish`は対象をすべて組み立ててから書き出します。
 1件でも失敗すれば何も書きません。

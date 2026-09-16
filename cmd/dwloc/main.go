@@ -1,12 +1,15 @@
 // Command dwloc は Drag'n Wash の翻訳リポジトリを扱うコマンドです。
 //
-// サブコマンドは3つあります。
+// サブコマンドは4つあります。
 //
 //	dwloc validate   公開ファイルを検証する（tools/check-translations.py の移植）
+//	dwloc diff       公開ファイルと再生順を突き合わせ、次にやることを並べる
 //	dwloc publish    公開用CSVを生成する（tools/hash-strings.ps1 の移植）
 //	dwloc version    版を表示する
 //
-// 終了コードは 0 が成功、1 が validate で問題を見つけたとき、2 が実行時のエラーです。
+// 終了コードは 0 が成功、1 が「実行はできたが、人が見るべきものが残っている」、
+// 2 が実行時のエラーです。1 を返すのは validate が問題を見つけたときと、
+// diff が要確認を見つけたとき（--strict なら要作業も）です。
 // この3段に分けているのは、CIが「検証に落ちた」と「そもそも実行できなかった」を
 // 区別できるようにするためです。元実装の check-translations.py は前者だけを1で返し、
 // 後者はトレースバックで落ちていました（移植仕様「形式検証 / 未決の点」）。
@@ -33,7 +36,8 @@ var version = "dev"
 const (
 	// exitOK は成功。
 	exitOK = 0
-	// exitProblems は validate が問題を見つけたとき。実行そのものは成功している。
+	// exitProblems は validate が問題を見つけたときと、diff が要確認を
+	// 見つけたとき。実行そのものは成功している。
 	exitProblems = 1
 	// exitError は実行できなかったとき。引数の誤り、ファイルが読めない、などが入る。
 	exitError = 2
@@ -51,6 +55,7 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
 サブコマンド:
   validate   公開ファイル（Translations/<ロケール>/strings.csv）を検証する
   publish    公開用CSVを生成し直す
+  diff       公開ファイルと再生順を突き合わせ、次にやることを並べる
   version    版を表示する
 
 共通のオプション:
@@ -60,7 +65,8 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
 
 終了コード:
   0   成功
-  1   validate が問題を見つけた
+  1   validate が問題を見つけた、または diff が要確認を見つけた
+      （diff --strict では要作業でも 1 になります）
   2   実行時のエラー（引数の誤り、ファイルが読めない、など）
 
 サブコマンドごとの説明は dwloc <サブコマンド> --help で表示します。
@@ -96,6 +102,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidate(rest[1:], *root, stdout, stderr)
 	case "publish":
 		return runPublish(rest[1:], *root, stdout, stderr)
+	case "diff":
+		return runDiff(rest[1:], *root, stdout, stderr)
 	case "version":
 		return runVersion(rest[1:], stdout, stderr)
 	case "help":
