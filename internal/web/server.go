@@ -99,6 +99,11 @@ type server struct {
 	summaries map[string]diff.Summary
 	findings  map[string][]diff.Finding
 
+	// overlay は起動後の局所更新（訳が入ったキー）。件数とバッジをここで引く。
+	overlay *editOverlay
+	// saveMu は保存を直列にする。同じファイルへ同時に2つ書かせない。
+	saveMu sync.Mutex
+
 	token  string
 	hosts  map[string]struct{}
 	assets map[string]asset
@@ -152,6 +157,7 @@ func newServer(opt Options) (*server, error) {
 		serverCat: cat.forServer(opt.UILang),
 		summaries: make(map[string]diff.Summary),
 		findings:  make(map[string][]diff.Finding),
+		overlay:   newEditOverlay(),
 		idle:      newIdleTracker(),
 		stdout:    opt.Stdout,
 		stderr:    opt.Stderr,
@@ -189,6 +195,11 @@ func newServer(opt Options) (*server, error) {
 	}
 	for _, f := range report.Findings {
 		s.findings[f.Locale] = append(s.findings[f.Locale], f)
+		if f.Category == diff.CatUntranslated {
+			// 「未翻訳」のキーだけ控えておく。保存で訳が入ったら、この集合との
+			// 積のぶんだけ件数から引く。引くだけで、カテゴリの再判定はしない。
+			s.overlay.addUntranslated(f.Locale, f.Key)
+		}
 	}
 
 	if err := s.loadAssets(); err != nil {
@@ -294,7 +305,8 @@ func (s *server) run() error {
 func (s *server) announce(url string) {
 	fmt.Fprintln(s.stdout, s.t("server.listening"))
 	fmt.Fprintln(s.stdout, s.t("server.url", "url", url))
-	fmt.Fprintln(s.stdout, s.t("server.readonly"))
+	fmt.Fprintln(s.stdout, s.t("server.editing"))
+	fmt.Fprintln(s.stdout, s.t("server.save_target"))
 	fmt.Fprintln(s.stdout, s.t("server.locales", "locales", strings.Join(localeNames(s.targets), ", ")))
 	if s.opt.IdleTimeout > 0 {
 		fmt.Fprintln(s.stdout, s.t("server.idle_hint", "duration", s.opt.IdleTimeout.String()))

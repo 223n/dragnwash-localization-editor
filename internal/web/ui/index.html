@@ -38,10 +38,27 @@
   </label>
   <button id="reload" type="button"></button>
   <span id="rows" class="rows"></span>
+  <!--
+    保存の状態。保存済み／保存しています／未保存 N 件／保存できません／競合。
+    黙って成功したように見せないための欄で、文言は app.js が目録から入れる。
+  -->
+  <span id="save-state" class="save-state"></span>
 </header>
 
-<p id="readonly-notice" class="notice"></p>
+<p id="edit-notice" class="notice"></p>
 <p id="message" class="notice error" hidden></p>
+
+<!--
+  競合（409）の引き止め。手前でファイルが変わったとき、どちらの編集を載せるかを
+  人に選ばせる。黙って上書きも、黙って破棄もしない。ボタンは2つとも type="button"
+  で、form は使わない（CSP の form-action 'none' と、CSRF の入口を増やさないため）。
+-->
+<section id="conflict" class="conflict" hidden>
+  <p id="conflict-title"></p>
+  <p id="conflict-help"></p>
+  <button id="conflict-keep" type="button"></button>
+  <button id="conflict-take" type="button"></button>
+</section>
 
 <section class="panel">
   <p id="file-path" class="path"></p>

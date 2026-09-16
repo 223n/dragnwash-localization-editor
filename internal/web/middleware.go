@@ -2,7 +2,9 @@ package web
 
 import (
 	"fmt"
+	"mime"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -34,7 +36,8 @@ const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 
 //  4. Host の検査      通す綴りの完全一致だけ。
 //  5. Sec-Fetch の検査 同一生成元だけ。
 //  6. トークンと Cookie  無ければ 404。
-//  7. 経路            ここまで通ったものだけが届く。
+//  7. 書き込みの守り   POST の Origin と Content-Type を検査する。
+//  8. 経路            ここまで通ったものだけが届く。
 func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
@@ -42,8 +45,10 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /app.js", s.handleAsset("/app.js"))
 	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("GET /api/lines", s.handleLines)
+	mux.HandleFunc("POST /api/rows", s.handleRows)
 
-	return s.securityHeaders(s.recoverer(s.logger(s.checkHost(s.checkFetchSite(s.authenticate(mux))))))
+	return s.securityHeaders(s.recoverer(s.logger(s.checkHost(s.checkFetchSite(
+		s.authenticate(s.checkWrite(mux)))))))
 }
 
 // securityHeaders は守りのヘッダーを付ける。
@@ -205,6 +210,58 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 		}
 		s.notFound(w)
 	})
+}
+
+// checkWrite は書き込む要求の入口を絞る。
+//
+// 見るのは2つ。どちらも「素のフォーム送信では満たせない」ことが根拠になる。
+//
+//	Origin        同じ生成元の綴りと完全一致すること。ブラウザーは POST に必ず
+//	              付けるうえ、頁の JavaScript から偽れない。他の頁から送られた
+//	              要求はここで落ちる。
+//	Content-Type  application/json であること。<form> が送れるのは
+//	              application/x-www-form-urlencoded と multipart/form-data と
+//	              text/plain の3つだけなので、この要求を満たせない。
+//
+// Cookie が SameSite=Strict なので他の生成元からの要求にはそもそも載らないが、
+// 守りを1本だけにしない。SameSite の扱いはブラウザーごとに差があり、
+// 将来どれかが緩む可能性を、この2つが引き受ける。
+//
+// Origin が無い、または合わない要求は 404 にする。認証の失敗と同じ扱いで、
+// 「そこに何かがある」と教えない。Content-Type だけは 415 を返す。ここまで
+// 通っているのは Cookie も Origin も揃った要求、つまりこの画面自身なので、
+// 直せる相手に理由を返すほうがよい。
+func (s *server) checkWrite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.sameOrigin(r.Header.Get("Origin")) {
+			s.notFound(w)
+			return
+		}
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mediaType != "application/json" {
+			http.Error(w, s.t("error.not_json"), http.StatusUnsupportedMediaType)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameOrigin は Origin がこの待ち受け自身かを返す。
+//
+// 通す綴りは [allowedHosts] から作る。Host の照合表と根拠を1つにしておくと、
+// 片方だけ緩めて食い違う、ということが起きない。http:// しか剥がさないので、
+// https:// で来た要求は（同じ host:port でも）通らない。
+func (s *server) sameOrigin(origin string) bool {
+	host, ok := strings.CutPrefix(origin, "http://")
+	if !ok {
+		return false
+	}
+	_, ok = s.hosts[host]
+	return ok
 }
 
 // notFound は「ありません」を返す。中身は増やさない。

@@ -12,6 +12,15 @@
     （ゲームの書式）。textContent で入れれば、その字はその字として見える。
   - 取りにいく先は自分自身だけ。外向きの通信はこの頁からも出さない。
   - 題名に行の中身を入れない。題名はブラウザーの履歴に残る。
+
+  編集について守ること。いちばん大事なのは訳を失わないこと。
+
+  - 409（手前でファイルが変わった）で、未保存の編集を捨てない。読み直した内容を
+    出したうえで、どちらを載せるかを人に選ばせる。黙って上書きも、黙って破棄もしない。
+  - 保存できなかった行は「保存できていない行」として画面に残す。入力は消さない。
+  - 未保存のまま頁を閉じようとしたら beforeunload で止める。
+  - 入力欄は1つだけ作って、いま触っている行へ差し込む。1839行ぶんの入力欄を
+    常設すると、開くだけで重くなる。
 */
 
 (function () {
@@ -24,7 +33,8 @@
     locale: document.getElementById("locale"),
     reload: document.getElementById("reload"),
     rows: document.getElementById("rows"),
-    readonly: document.getElementById("readonly-notice"),
+    saveState: document.getElementById("save-state"),
+    notice: document.getElementById("edit-notice"),
     message: document.getElementById("message"),
     path: document.getElementById("file-path"),
     notes: document.getElementById("notes"),
@@ -32,8 +42,50 @@
     counts: document.getElementById("counts"),
     statsTitle: document.getElementById("stats-title"),
     stats: document.getElementById("stats"),
-    list: document.getElementById("list")
+    list: document.getElementById("list"),
+    conflict: document.getElementById("conflict"),
+    conflictTitle: document.getElementById("conflict-title"),
+    conflictHelp: document.getElementById("conflict-help"),
+    conflictKeep: document.getElementById("conflict-keep"),
+    conflictTake: document.getElementById("conflict-take")
   };
+
+  /*
+    state.pending   まだ保存していない訳（行番号 → 値）。
+    state.failed    保存できなかった行（行番号 → 理由）。値は欄に残したまま、
+                    自動保存の対象からだけ外す。書き換えれば pending へ戻る。
+    state.mine      競合のあいだ抱えている自分の編集。選ばせるまで捨てない。
+    state.rows      行番号 → 描いた要素。保存の結果を差し込むために持つ。
+  */
+  var state = {
+    locale: "",
+    version: "",
+    canEdit: false,
+    autosaveDelay: 1500,
+    data: null,
+    pending: new Map(),
+    failed: new Map(),
+    mine: null,
+    rows: new Map(),
+    editing: null,
+    composing: false,
+    saving: false,
+    timer: null,
+    retry: 0
+  };
+
+  /*
+    保存に失敗したあと、もう一度送るまでの待ち時間。
+
+    Windows では、ゲームがホットリロードでファイルを開いている最中の rename が
+    共有違反で失敗する。実測で、読み手がいる状態の連続保存は数パーセント落ちた
+    （待ち受け側も短い間隔で3回まで試すが、それでも落ちる）。待てば直る種類の
+    失敗なので、画面からももう一度送る。
+
+    諦めたあとも未保存の訳は抱えたまま、画面に「保存できませんでした」と出す。
+    黙って消さないし、黙って成功したようにも見せない。
+  */
+  var retryDelays = [500, 1000, 2000];
 
   /*
     文言を引く。置換は {name} の1形式だけ。複数形の規則は持ち込まない。
@@ -99,6 +151,36 @@
     });
   }
 
+  /*
+    保存の要求。Content-Type: application/json を必ず付ける。待ち受けはこれと
+    Origin の2つを要求するので、素のフォーム送信では届かない（form が送れる
+    Content-Type は3種あるが、そこに application/json は無い）。
+
+    状態コードで投げ分けない。409 も 422 も本文に理由が入っているので、
+    呼び出し側が本文ごと受け取って扱う。
+  */
+  function postJSON(path, body) {
+    return fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.json().then(
+        function (data) {
+          return { status: res.status, body: data };
+        },
+        function () {
+          /* 本文が JSON でない（404 の平文など）。状態コードだけ返す。 */
+          return { status: res.status, body: null };
+        }
+      );
+    });
+  }
+
   function applyCatalog() {
     document.documentElement.lang = ui.lang;
     document.documentElement.dir = ui.dir;
@@ -108,7 +190,11 @@
     el.reload.textContent = t("ui.reload");
     el.countsTitle.textContent = t("ui.counts");
     el.statsTitle.textContent = t("ui.stats");
-    el.readonly.textContent = t("ui.readonly_notice");
+    el.notice.textContent = t("ui.edit_notice");
+    el.conflictTitle.textContent = t("ui.conflict_title");
+    el.conflictHelp.textContent = t("ui.conflict_help");
+    el.conflictKeep.textContent = t("ui.conflict_keep_mine");
+    el.conflictTake.textContent = t("ui.conflict_take_file");
   }
 
   function fillLocales(selected) {
@@ -141,6 +227,8 @@
   /*
     件数。判定できていないカテゴリは数を出さず、待ち受けが付けた理由を出す。
     0 件と書くと「もう何も残っていない」と読まれる。
+
+    保存のあとに来る件数も、待ち受けが数え直したものである。ここでは足しも引きもしない。
   */
   function renderCounts(counts) {
     clear(el.counts);
@@ -176,12 +264,440 @@
     return e;
   }
 
+  function renderBadges(entry, badges) {
+    clear(entry.badges);
+    (badges || []).forEach(function (b) {
+      entry.badges.appendChild(badgeNode(b));
+    });
+  }
+
+  /* 入力欄。頁に1つだけ作り、いま触っている行へ差し込む。 */
+  var editor = document.createElement("input");
+  editor.type = "text";
+  editor.className = "cell translation editor notranslate";
+  /*
+    綴り検査を切る。ブラウザーの綴り検査は、内蔵翻訳と同じく入力の中身を
+    外部のサービスへ送りうる経路である。原文と訳を外へ出さないという約束は、
+    この頁が出す通信だけでは守りきれない。
+    autocorrect / autocapitalize / autocomplete も、同じ理由と、訳を勝手に
+    書き換えさせないために切る。
+  */
+  editor.setAttribute("spellcheck", "false");
+  editor.setAttribute("autocorrect", "off");
+  editor.setAttribute("autocapitalize", "off");
+  editor.setAttribute("autocomplete", "off");
+  editor.setAttribute("translate", "no");
+
+  /*
+    訳に入れられない字を落とす。
+
+    改行は空白へ置き換える。internal/edit は CR / LF を含む値を拒む（公開ファイルの
+    読み手が1物理行=1レコードで読むため）ので、拒まれる値を送らない。入ってくるのは
+    ほとんど貼り付けなので、落とすのではなく空白にしてその行に収める。
+    NUL も internal/edit が拒む値なので、同じく落とす。
+  */
+  function sanitize(value) {
+    return String(value).replace(/[\r\n]+/g, " ").replace(/\u0000/g, "");
+  }
+
+  /* いま欄に出す値。未保存があればそれ、無ければ保存済みの値。 */
+  function shownValue(n, saved) {
+    return state.pending.has(n) ? state.pending.get(n) : saved;
+  }
+
+  function markRow(entry) {
+    if (!entry) {
+      return;
+    }
+    entry.row.classList.toggle("unsaved", state.pending.has(entry.line));
+    entry.row.classList.toggle("save-failed", state.failed.has(entry.line));
+  }
+
+  /* 行に添える1言（保存できない理由、値が変わった断り）。空なら消す。 */
+  function setRowNote(entry, text) {
+    if (!entry) {
+      return;
+    }
+    entry.note.textContent = text || "";
+    entry.note.hidden = !text;
+  }
+
+  function openEditor(n) {
+    if (!state.canEdit || state.editing === n) {
+      return;
+    }
+    var entry = state.rows.get(n);
+    if (!entry || !entry.editable) {
+      return;
+    }
+    closeEditor();
+    state.editing = n;
+    editor.value = shownValue(n, entry.saved);
+    /*
+      向きは中身から決めさせ、lang にはロケール名をそのまま入れる（ヘブライ語の
+      確認用）。字形の選び方がこれで変わる。
+    */
+    editor.dir = "auto";
+    editor.lang = state.locale;
+    editor.setAttribute("aria-label", t("ui.edit_label"));
+    /*
+      差し込んでから焦点を移し、そのあとで元の欄を隠す。順番を逆にすると、
+      焦点の載った欄を隠した瞬間に焦点が body へ飛び、入力欄を出した直後に
+      blur が走って閉じてしまう（実際に起きた）。
+    */
+    entry.row.insertBefore(editor, entry.value);
+    editor.focus();
+    entry.value.hidden = true;
+  }
+
+  function closeEditor() {
+    var n = state.editing;
+    if (n === null) {
+      return;
+    }
+    state.editing = null;
+    state.composing = false;
+    if (editor.parentNode) {
+      editor.parentNode.removeChild(editor);
+    }
+    var entry = state.rows.get(n);
+    if (entry) {
+      entry.value.hidden = false;
+    }
+  }
+
+  /* 入力のたび。値を控えて、自動保存の時計を引き直す。 */
+  function onInput() {
+    var n = state.editing;
+    if (n === null) {
+      return;
+    }
+    var clean = sanitize(editor.value);
+    if (clean !== editor.value) {
+      var caret = editor.selectionStart;
+      editor.value = clean;
+      editor.setSelectionRange(caret, caret);
+    }
+    var entry = state.rows.get(n);
+    if (entry) {
+      entry.value.textContent = clean;
+      if (clean === entry.saved) {
+        state.pending.delete(n);
+      } else {
+        state.pending.set(n, clean);
+      }
+      /* 書き換えたら「保存できない行」から外す。次の保存でまた試す。 */
+      state.failed.delete(n);
+      setRowNote(entry, "");
+      markRow(entry);
+    }
+    updateStatus();
+    if (!state.composing) {
+      schedule();
+    }
+  }
+
+  editor.addEventListener("input", onInput);
+
+  /*
+    変換中（compositionstart から compositionend まで）は Enter を横取りしない。
+    横取りすると、ja / ko / zh-Hans / zh-Hant で変換の確定ができなくなる。
+    この4言語のためにこの入力方式を選んでいる。
+    自動保存も変換が終わるまで待つ。打ちかけの読みを保存しないため。
+  */
+  editor.addEventListener("compositionstart", function () {
+    state.composing = true;
+  });
+  editor.addEventListener("compositionend", function () {
+    state.composing = false;
+    onInput();
+  });
+
+  editor.addEventListener("keydown", function (e) {
+    if (state.composing || e.isComposing || e.keyCode === 229) {
+      return;
+    }
+    if (e.key === "Enter") {
+      /* 改行は入れない。確定して欄から離れる（離れたら保存する）。 */
+      e.preventDefault();
+      editor.blur();
+      return;
+    }
+    if (e.key === "Escape") {
+      /* 閉じるだけ。入力は消さない（消すと黙って破棄したことになる）。 */
+      e.preventDefault();
+      editor.blur();
+    }
+  });
+
+  /*
+    貼り付け。ブラウザー任せにすると改行の扱いが実装ごとに違う（落とすもの、
+    詰めるものがある）。空白へ置き換えると決めて、ここで差し込む。
+  */
+  editor.addEventListener("paste", function (e) {
+    var text = e.clipboardData ? e.clipboardData.getData("text") : "";
+    e.preventDefault();
+    editor.setRangeText(sanitize(text), editor.selectionStart, editor.selectionEnd, "end");
+    onInput();
+  });
+
+  /* 欄から離れたら待たずに保存する。 */
+  editor.addEventListener("blur", function () {
+    closeEditor();
+    flush();
+  });
+
+  /* 焦点を受けた訳欄の行番号。訳欄でなければ null。 */
+  function lineOf(target) {
+    if (!target || target === editor || !target.dataset || !target.dataset.line) {
+      return null;
+    }
+    return Number(target.dataset.line);
+  }
+
+  /*
+    押した時点で入力欄に差し替える。
+
+    mousedown の既定の動作（押した要素へ焦点を移す）を止めてから差し替える。
+    止めないと、この直後にブラウザーが元の欄へ焦点を戻し、その欄はもう隠れて
+    いるので焦点が body へ落ちる。入力欄は出た瞬間に閉じる（実際に起きた）。
+  */
+  el.list.addEventListener("mousedown", function (e) {
+    var n = lineOf(e.target);
+    if (n === null) {
+      return;
+    }
+    e.preventDefault();
+    openEditor(n);
+  });
+
+  /* Tab で移ってきたとき。こちらはブラウザーが焦点を移し終えている。 */
+  el.list.addEventListener("focusin", function (e) {
+    var n = lineOf(e.target);
+    if (n === null) {
+      return;
+    }
+    openEditor(n);
+  });
+
+  function schedule() {
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    state.timer = setTimeout(function () {
+      state.timer = null;
+      flush();
+    }, state.autosaveDelay);
+  }
+
+  /*
+    未保存の行をまとめて送る。
+
+    送ったぶんを pending から先に消さない。消してから応答が来ないと、その訳は
+    どこにも残らない。応答で「保存できた」と分かった行だけ、送った値と同じなら消す。
+    送ったあとに打ち直した行は値が違うので残り、次の保存で送られる。
+  */
+  function flush() {
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    if (state.saving || state.mine || state.pending.size === 0) {
+      return;
+    }
+    var edits = [];
+    var sent = new Map();
+    state.pending.forEach(function (value, line) {
+      edits.push({ line: line, translation: value });
+      sent.set(line, value);
+    });
+    state.saving = true;
+    updateStatus();
+    postJSON("/api/rows", {
+      locale: state.locale,
+      baseVersion: state.version,
+      edits: edits
+    })
+      .then(function (res) {
+        state.saving = false;
+        onSaved(res, sent);
+      })
+      .catch(function () {
+        /*
+          届かなかった。未保存の訳はそのまま抱えたままにする。失敗したことは
+          画面に出す（黙って成功したように見せない）。
+        */
+        state.saving = false;
+        showMessage(t("ui.save_failed_detail"));
+        updateStatus();
+        scheduleRetry();
+      });
+  }
+
+  function onSaved(res, sent) {
+    if (res.status === 409 && res.body && res.body.current) {
+      onConflict(res.body);
+      return;
+    }
+    var body = res.body || {};
+    if (res.status === 200) {
+      state.retry = 0;
+      applyResults(body.results || [], sent);
+      state.version = body.version;
+      showMessage("");
+      renderCounts(body.counts);
+      renderNotes(body.notes);
+      updateStatus();
+      if (state.pending.size) {
+        /* 送っているあいだに足されたぶん。続けて保存する。 */
+        schedule();
+      }
+      return;
+    }
+    /*
+      200 でないときは、結果の saved を信じない。ファイルに入っていない値を
+      「保存できた」と読むと、未保存の控えを捨ててしまう。行ごとの理由
+      （編集できない行、書けない値）だけを取り出して、残りは未保存のまま抱える。
+    */
+    applyRowErrors(body.results || []);
+    showMessage(body.message ? body.message : t("ui.save_failed_detail"));
+    updateStatus();
+    scheduleRetry();
+  }
+
+  /* 行ごとの理由だけを取り出す。値は欄に残したまま、自動保存の対象から外す。 */
+  function applyRowErrors(results) {
+    results.forEach(function (r) {
+      if (!r.error) {
+        return;
+      }
+      var entry = state.rows.get(r.line);
+      state.failed.set(r.line, r.error);
+      state.pending.delete(r.line);
+      setRowNote(entry, t("ui.row_error", { reason: r.error }));
+      markRow(entry);
+    });
+  }
+
+  /*
+    待ってからもう一度送る。待ち受けが 503 を返す失敗（Windows の共有違反）は
+    待てば直る。決めた回数で諦め、未保存のまま画面に残す。
+  */
+  function scheduleRetry() {
+    if (state.pending.size === 0 || state.retry >= retryDelays.length) {
+      return;
+    }
+    var wait = retryDelays[state.retry];
+    state.retry = state.retry + 1;
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    state.timer = setTimeout(function () {
+      state.timer = null;
+      flush();
+    }, wait);
+  }
+
+  /* 200 のときだけ呼ぶ。saved はファイルに入ったことを意味する。 */
+  function applyResults(results, sent) {
+    results.forEach(function (r) {
+      var entry = state.rows.get(r.line);
+      if (r.saved) {
+        if (state.pending.get(r.line) === sent.get(r.line)) {
+          state.pending.delete(r.line);
+        }
+        state.failed.delete(r.line);
+        if (entry) {
+          entry.saved = r.translation;
+          if (state.editing !== r.line) {
+            /* ファイルから読み直した値を出す。画面とファイルを同じにする。 */
+            entry.value.textContent = r.translation;
+          }
+          renderBadges(entry, r.badges);
+          setRowNote(entry, r.warning ? r.warning : "");
+        }
+      } else {
+        /*
+          この行は保存できない。値は欄に残したまま、自動保存の対象からだけ外す。
+          外さないと、同じ要求を投げ続けることになる。書き換えれば戻る。
+        */
+        state.failed.set(r.line, r.error ? r.error : "");
+        state.pending.delete(r.line);
+        setRowNote(entry, t("ui.row_error", { reason: r.error ? r.error : "" }));
+      }
+      markRow(entry);
+    });
+  }
+
+  /*
+    409。手前でファイルが変わっている。1バイトも書かれていない。
+
+    未保存の編集を捨てない。読み直した内容を描いたうえで、どちらを載せるかを
+    人に選ばせる。選ぶまで自動保存は止める（止めないと、選ぶ前に片方が消える）。
+  */
+  function onConflict(body) {
+    state.mine = new Map(state.pending);
+    state.pending = new Map();
+    render(body.current);
+    showMessage(body.message ? body.message : t("ui.save_conflict"));
+    el.conflict.hidden = false;
+    updateStatus();
+  }
+
+  function keepMine() {
+    /* 自分の訳を、読み直した内容の上に載せ直して保存する。 */
+    state.pending = new Map(state.mine);
+    state.mine = null;
+    el.conflict.hidden = true;
+    showMessage("");
+    render(state.data);
+    flush();
+  }
+
+  function takeFile() {
+    /*
+      ファイルの訳を採る。ここで初めて自分の編集を捨てる。人が選んだ結果であって、
+      待ち受けも画面も黙って捨ててはいない。
+    */
+    state.mine = null;
+    el.conflict.hidden = true;
+    showMessage("");
+    render(state.data);
+  }
+
+  function updateStatus() {
+    var text = t("ui.save_clean");
+    var kind = "clean";
+    if (state.mine) {
+      text = t("ui.save_conflict");
+      kind = "conflict";
+    } else if (state.saving) {
+      text = t("ui.save_saving");
+      kind = "saving";
+    } else if (state.failed.size) {
+      text = t("ui.save_failed");
+      kind = "failed";
+    } else if (state.pending.size) {
+      text = t("ui.save_pending", { count: state.pending.size });
+      kind = "pending";
+    }
+    el.saveState.textContent = text;
+    el.saveState.className = "save-state " + kind;
+  }
+
+  /* 未保存のものがあるか。競合で抱えているぶんも入れる。 */
+  function hasUnsaved() {
+    if (state.pending.size || state.failed.size) {
+      return true;
+    }
+    return Boolean(state.mine && state.mine.size);
+  }
+
   /*
     1行を組む。
 
-    訳の欄には入力欄を置かない。1839行ぶんの入力欄を常設すると、開くだけで
-    重くなり、次の段で編集を足すときに作りを変えることになる。編集は
-    「選んだ1行にだけ入力欄を差し込む」形で足せるよう、いまは文字だけ置く。
+    訳の欄には入力欄を常設しない。1839行ぶんの入力欄を置くと、開くだけで重くなる。
+    焦点が入った1行にだけ、頁に1つだけ作った入力欄を差し込む。
   */
   function rowNode(line, locale) {
     var row = document.createElement("div");
@@ -191,9 +707,6 @@
 
     var badges = document.createElement("div");
     badges.className = "cell badges";
-    (line.badges || []).forEach(function (b) {
-      badges.appendChild(badgeNode(b));
-    });
     row.appendChild(badges);
 
     row.appendChild(span("cell speaker", line.speaker));
@@ -203,19 +716,60 @@
     source.dir = "ltr";
     row.appendChild(source);
 
-    var translation = span("cell translation", line.translation);
+    var value = span("cell translation", line.translation);
     /*
       訳の向きは中身から決めさせる（ヘブライ語の確認用）。lang はロケール名を
       そのまま入れる。字形の選び方がこれで変わる。
     */
-    translation.dir = "auto";
-    translation.lang = locale;
+    value.dir = "auto";
+    value.lang = locale;
     if (!line.editable && line.reason) {
-      translation.className = "cell reason";
-      translation.textContent = t("ui.not_editable", { reason: line.reason });
+      value.className = "cell reason";
+      value.textContent = t("ui.not_editable", { reason: line.reason });
     }
-    row.appendChild(translation);
+    row.appendChild(value);
 
+    var note = document.createElement("div");
+    note.className = "cell row-note";
+    note.hidden = true;
+    row.appendChild(note);
+
+    var entry = {
+      line: line.n,
+      row: row,
+      value: value,
+      badges: badges,
+      note: note,
+      editable: Boolean(line.editable) && state.canEdit,
+      saved: line.translation ? line.translation : ""
+    };
+    state.rows.set(line.n, entry);
+    renderBadges(entry, line.badges);
+
+    if (entry.editable) {
+      /*
+        焦点を受けられるようにする。ここに焦点が入ると入力欄へ差し替わる。
+        Tab で行から行へ移れるので、キーボードだけでも打っていける。
+      */
+      value.tabIndex = 0;
+      value.dataset.line = String(line.n);
+      value.textContent = shownValue(line.n, entry.saved);
+    }
+    if (state.mine && state.mine.has(line.n)) {
+      /*
+        競合中の行。ファイルの値と自分の値を両方出す。どちらを残すか選ぶのは
+        人で、画面はそのための材料を並べるだけ。
+      */
+      row.classList.add("conflicted");
+      value.textContent = entry.saved;
+      clear(note);
+      note.hidden = false;
+      note.appendChild(span("note-label", t("ui.conflict_file") + ": "));
+      note.appendChild(span("note-value", entry.saved));
+      note.appendChild(span("note-label", " / " + t("ui.conflict_mine") + ": "));
+      note.appendChild(span("note-value", state.mine.get(line.n)));
+    }
+    markRow(entry);
     return row;
   }
 
@@ -228,6 +782,8 @@
   }
 
   function renderLines(data) {
+    closeEditor();
+    state.rows = new Map();
     var fragment = document.createDocumentFragment();
     (data.lines || []).forEach(function (line) {
       if (line.kind === "heading") {
@@ -242,11 +798,15 @@
   }
 
   function render(data) {
+    state.data = data;
+    state.locale = data.locale;
+    state.version = data.version;
     el.path.textContent = t("ui.file") + ": " + data.path;
     renderNotes(collectNotes(data));
     renderCounts(data.counts);
     renderStats(data.stats);
     renderLines(data);
+    updateStatus();
   }
 
   /*
@@ -274,6 +834,10 @@
     getJSON("/api/lines?locale=" + encodeURIComponent(locale))
       .then(function (data) {
         showMessage("");
+        state.pending = new Map();
+        state.failed = new Map();
+        state.mine = null;
+        el.conflict.hidden = true;
         render(data);
       })
       .catch(function () {
@@ -282,19 +846,55 @@
       });
   }
 
+  /*
+    読み直しとロケールの切り替えは、未保存の訳を消す。消す前に必ず尋ねる。
+    自動保存があるので未保存が残るのは、保存できなかったときと競合中だけである。
+  */
+  function confirmDiscard() {
+    if (!hasUnsaved()) {
+      return true;
+    }
+    return window.confirm(t("ui.discard_confirm"));
+  }
+
   function boot() {
     getJSON("/api/bootstrap")
       .then(function (data) {
         ui = data.ui;
         locales = data.locales || [];
+        state.canEdit = Boolean(data.canEdit);
+        if (data.autosaveDelayMs) {
+          state.autosaveDelay = data.autosaveDelayMs;
+        }
         applyCatalog();
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
+          if (!confirmDiscard()) {
+            el.locale.value = state.locale;
+            return;
+          }
           load(el.locale.value);
         });
         el.reload.addEventListener("click", function () {
+          if (!confirmDiscard()) {
+            return;
+          }
           load(el.locale.value);
         });
+        el.conflictKeep.addEventListener("click", keepMine);
+        el.conflictTake.addEventListener("click", takeFile);
+        window.addEventListener("beforeunload", function (e) {
+          if (!hasUnsaved()) {
+            return;
+          }
+          /*
+            未保存のまま閉じさせない。文面はブラウザーが決めるので出ないことが
+            多いが、returnValue を入れないと引き止めそのものが効かない。
+          */
+          e.preventDefault();
+          e.returnValue = t("ui.unsaved");
+        });
+        updateStatus();
         load(data.selected || "");
       })
       .catch(function () {

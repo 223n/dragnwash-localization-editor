@@ -33,8 +33,11 @@ func TestBootstrap(t *testing.T) {
 		// publish.DiscoverTargets はディレクトリ名順で返す。
 		t.Errorf("Locales が %v", got.Locales)
 	}
-	if !got.ReadOnly {
-		t.Error("ReadOnly が false。この段は読み取り専用")
+	if !got.CanEdit {
+		t.Error("CanEdit が false。訳を書き換えられる段になっている")
+	}
+	if got.AutosaveDelayMs <= 0 {
+		t.Errorf("AutosaveDelayMs が %d。画面はこの値で自動保存を待つ", got.AutosaveDelayMs)
 	}
 	if got.UI.Lang != "ja" || got.UI.Dir != "ltr" {
 		t.Errorf("UI が %+v", got.UI)

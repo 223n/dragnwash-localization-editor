@@ -37,9 +37,12 @@ func TestRunEditHelp(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("--help で標準エラーに出ている:\n%s", stderr)
 	}
-	// 読み取り専用であることを、使い方の時点で伝える。
-	if !strings.Contains(stdout, "読み取り専用") {
-		t.Error("使い方に読み取り専用と書かれていない")
+	// 保存の性質を、使い方の時点で伝える。どこへ書くのか、publish を回すのか、
+	// 手前でファイルが変わっていたらどうなるのか。起動する前に読めるようにする。
+	for _, want := range []string{"自動で保存", "publish は回しません", "1バイトも"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("使い方に %q が書かれていない", want)
+		}
 	}
 	// 待ち受ける先が 127.0.0.1 に固定であることも、使う前に読めるようにする。
 	if !strings.Contains(stdout, "127.0.0.1") {

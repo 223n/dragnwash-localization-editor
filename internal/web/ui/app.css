@@ -22,6 +22,11 @@
   --todo: #8a4b00;
   --review: #9a1c1c;
   --info: #3a4a5a;
+
+  /* 保存の状態。色だけで意味を伝えないので、文字と下線も必ず変える。 */
+  --saved: #1b5e20;
+  --pending: #8a4b00;
+  --failed: #9a1c1c;
 }
 
 * {
@@ -63,7 +68,8 @@ body {
 }
 
 select,
-button {
+button,
+input {
   font: inherit;
   padding: 4px 8px;
   border: 1px solid var(--line);
@@ -258,4 +264,104 @@ button {
 .reason {
   color: var(--review);
   font-size: 12px;
+}
+
+/*
+  保存の状態。色だけで伝えない。文言（保存済み／未保存 N 件／保存できません／
+  競合しています）を必ず出したうえで、色を添える。
+*/
+.save-state {
+  margin-inline-start: auto;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.save-state.clean {
+  color: var(--saved);
+}
+
+.save-state.saving {
+  color: var(--muted);
+}
+
+.save-state.pending {
+  color: var(--pending);
+  font-weight: 600;
+}
+
+.save-state.failed,
+.save-state.conflict {
+  color: var(--failed);
+  font-weight: 600;
+}
+
+/* 競合の引き止め。読み飛ばされない位置と強さで出す。 */
+.conflict {
+  padding: 12px 16px;
+  background: #fff6f6;
+  border-block-end: 2px solid var(--failed);
+}
+
+.conflict p {
+  margin: 0 0 8px;
+}
+
+.conflict button {
+  margin-inline-end: 8px;
+}
+
+/*
+  訳の欄。焦点が入ると入力欄へ差し替わるので、差し替わったことが
+  枠で分かるようにする。幅は元の欄と同じ（grid の列に収まる）。
+*/
+.row .translation {
+  border-radius: 4px;
+}
+
+.row .translation[tabindex] {
+  padding: 0 4px;
+  border: 1px dashed var(--line);
+  cursor: text;
+}
+
+.row .translation[tabindex]:hover {
+  border-color: var(--muted);
+}
+
+.editor {
+  width: 100%;
+  padding: 0 4px;
+  border: 1px solid var(--info);
+}
+
+/* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */
+.row.unsaved {
+  background: #fffbf0;
+}
+
+.row.unsaved .translation {
+  border-inline-start: 3px solid var(--pending);
+}
+
+.row.save-failed {
+  background: #fff1f1;
+}
+
+.row.conflicted {
+  background: #fff6f6;
+}
+
+/*
+  行に添える1言（保存できない理由、値が変わった断り、競合中の新旧）。
+  grid の最終列に置くと訳の下へ来ないので、行いっぱいに敷く。
+*/
+.row-note {
+  grid-column: 1 / -1;
+  color: var(--failed);
+  font-size: 12px;
+}
+
+.row-note .note-label {
+  color: var(--muted);
 }
