@@ -176,6 +176,23 @@ func TestTitleHasNoRowContent(t *testing.T) {
 // 件数と状態は internal/diff から来たものだけを描く。画面が数え始めると、
 // diff/doc.go が名指しで警告している誤検出を作り直すことになる。
 //
+// # 何を禁じているのか
+//
+// 禁じたいのは「画面がカテゴリや状態を導き出すこと」であって、「足し算をする
+// こと」ではない。バッジの数から状態を決める、行を数えて件数の欄を作る、と
+// いったことが 2つ目の判定になる。
+//
+// 待ち受けが決めた出し入れの結果を数えるのは、これとぶつからない。applyView は
+// 「いま何行出しているか」を forEach の中で shown = shown + 1 と数えている。
+// 出すか隠すかを決めているのは待ち受けが付けたバッジと、人が選んだ条件で、
+// 画面はその結果を数えているだけである。だから綴りの一覧に引っかからない
+// 書き方をしているのは回避ではない。ここに挙げた綴りは、うっかり数え始める
+// ときに出やすい形を並べた目印にすぎない。
+//
+// 実際の網は [TestUIDoesNotNameCategories] のほうである。あちらは待ち受けが
+// 返したカテゴリ識別子が app.js に1つも書かれていないことを、実データの応答と
+// 突き合わせて見ている。カテゴリを画面が持ち始めたら、そちらが落ちる。
+//
 // 字面の試験なので万全ではない。数え方を足したときに、この試験の存在が
 // 「そこは足す場所ではない」と伝われば十分である。
 func TestUIDoesNotCount(t *testing.T) {
@@ -309,5 +326,84 @@ func TestAssetsHaveNoControlBytes(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSearchStaysInThePage は、検索語が頁の外へ出ないことを見る。
+//
+// 検索の当て先（speaker / 原文 / 訳 / キー）は原文の断片そのものである。
+// 待ち受けへ聞けば、その語が要求の経路に乗る。URL に載せればブラウザーの
+// 履歴に残り、待ち受けが終わったあとも残る。行はもうブラウザーの中にあるので、
+// 聞く必要がそもそも無い。
+//
+// 頁が出してよい要求は3つだけである。増えていないことを、要求を組み立てる
+// 2か所（getJSON / postJSON）の引数の字面で見る。
+func TestSearchStaysInThePage(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	allowed := map[string]bool{
+		"/api/bootstrap":     true,
+		"/api/lines?locale=": true,
+		"/api/rows":          true,
+	}
+	for _, call := range []string{`getJSON("`, `postJSON("`} {
+		rest := js
+		for {
+			at := strings.Index(rest, call)
+			if at < 0 {
+				break
+			}
+			rest = rest[at+len(call):]
+			end := strings.IndexByte(rest, '"')
+			if end < 0 {
+				t.Fatalf("%s の引数が閉じていない", call)
+			}
+			if path := rest[:end]; !allowed[path] {
+				t.Errorf("%s が %q を取りにいく。頁が出す要求は3つだけにする", call, path)
+			}
+		}
+	}
+	// 要求を組み立てる場所そのものが増えていないことも見る。
+	if got := strings.Count(js, "fetch("); got != 2 {
+		t.Errorf("fetch( が %d 箇所ある。要求は getJSON と postJSON の2か所だけにする", got)
+	}
+	// URL とブラウザーの控えに残す経路。1つでもあれば検索語がそこへ残りうる。
+	//
+	// 呼び出しの形（後ろに . が続く）で見る。名前だけで見ると、注記で
+	// 「localStorage には残さない」と書いたことでこの試験が落ちる。
+	for _, bad := range []string{
+		"localStorage.", "sessionStorage.", "indexedDB.", ".setItem(", ".getItem(",
+		"history.pushState", "history.replaceState", "location.search", "location.hash",
+	} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js が %s を使っている。条件も検索語も外に残さない", bad)
+		}
+	}
+}
+
+// TestSearchInputBlocksOutsideHelp は、検索の入力欄もブラウザーの「お節介」を
+// 全部切っていることを見る。
+//
+// 訳の入力欄と同じ理由である。綴り検査は入力の中身を外部のサービスへ送りうる。
+// 検索語は原文の断片なので、訳と同じ扱いにする。
+func TestSearchInputBlocksOutsideHelp(t *testing.T) {
+	html := uiSource(t, "ui/index.html")
+
+	at := strings.Index(html, `<input id="search"`)
+	if at < 0 {
+		t.Fatal("index.html に検索の入力欄が無い")
+	}
+	end := strings.Index(html[at:], ">")
+	if end < 0 {
+		t.Fatal("検索の入力欄が閉じていない")
+	}
+	tag := html[at : at+end]
+	for _, want := range []string{
+		`spellcheck="false"`, `autocorrect="off"`, `autocapitalize="off"`,
+		`autocomplete="off"`, `translate="no"`, `type="text"`,
+	} {
+		if !strings.Contains(tag, want) {
+			t.Errorf("検索の入力欄に %s が無い。外へ出しうる経路を全部切る", want)
+		}
 	}
 }
