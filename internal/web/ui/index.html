@@ -53,6 +53,38 @@
     <span id="save-state" class="save-state"></span>
   </header>
 
+  <!--
+    絞り込みと検索。貼り付ける一帯の中に置く。1839行のどこを見ていても条件を
+    変えられるようにするためで、外に出すと画面の上まで戻らないと触れない。
+
+    この一帯には div 要素を置かない。TestAlertsStayOnScreen が「.top の最初の
+    閉じ div まで」を貼り付いている範囲と見ているので、途中に div を挟むと
+    競合の引き止めが範囲の外に出たことになる。
+
+    条件も検索語も、URL にも待ち受けへの要求にも載せない。行はもうブラウザーの
+    中にあるので、待ち受けに聞く必要がない。聞けば、検索語（＝原文の断片）が
+    待ち受けの記録に残りうる。
+  -->
+  <section class="finder">
+    <span id="filter-label" class="finder-label"></span>
+    <span id="filters" class="filters"></span>
+    <button id="filter-clear" type="button"></button>
+    <label class="field">
+      <span id="search-label"></span>
+      <!--
+        検索の入力欄。綴り検査と自動補正と自動補完を切る。訳の入力欄と同じ理由で、
+        ブラウザーの綴り検査は入力の中身を外部のサービスへ送りうる経路である。
+        検索語は原文の断片なので、訳と同じ扱いにする。
+
+        type は text にする。search にすると、ブラウザーによっては前に打った語を
+        候補として出す。その候補はブラウザー側に残る。
+      -->
+      <input id="search" type="text" class="notranslate" translate="no"
+        spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off">
+    </label>
+    <span id="shown" class="shown"></span>
+  </section>
+
   <p id="message" class="notice error" hidden></p>
 
   <!--
@@ -79,6 +111,16 @@
 </div>
 
 <p id="edit-notice" class="notice"></p>
+<!--
+  効くキーを画面から読めるようにする。覚えていないと使えない近道は、
+  無いのと同じである。文言は目録から入れる。
+-->
+<p id="keys" class="notice keys"></p>
+<!--
+  絞り込みと検索の断り書き。貼り付く一帯の外に置く。読むのは1度で足りるのに、
+  貼り付けると1839行のあいだずっと画面の1割を占める。
+-->
+<p id="finder-note" class="notice keys"></p>
 
 <section class="panel">
   <p id="file-path" class="path"></p>

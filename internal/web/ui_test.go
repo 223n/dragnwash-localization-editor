@@ -2,6 +2,7 @@ package web
 
 import (
 	"io/fs"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -150,5 +151,161 @@ func TestEmptyTranslationIsClickable(t *testing.T) {
 	}
 	if !strings.Contains(css[block:block+200], "min-height") {
 		t.Error("訳の欄に高さが敷かれていない。空の行がマウスで掴めない")
+	}
+}
+
+// TestFilterKeepsUnsavedRowsVisible は、絞り込みと検索が「未保存の訳がある行」と
+// 「保存できなかった行」を隠さないことを見る。
+//
+// 隠すと、直すべき行が画面から消える。翻訳者は、消えたことにも気づけない。
+// 自動保存があるので未保存が残るのは保存できなかったときと競合中だけだが、
+// その2つはまさに人が見て直さなければならない状態である。
+func TestFilterKeepsUnsavedRowsVisible(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	if !strings.Contains(js, "function keepAlways(") {
+		t.Fatal("app.js に keepAlways が無い。条件に当たらなくても出す行が要る")
+	}
+	// 3つとも見ていること。競合で抱えているぶん（state.mine）も未保存である。
+	start := strings.Index(js, "function keepAlways(")
+	end := strings.Index(js[start:], "\n  }")
+	if end < 0 {
+		t.Fatal("keepAlways の終わりが分からない")
+	}
+	body := js[start : start+end]
+	for _, want := range []string{"state.pending.has(n)", "state.failed.has(n)", "state.mine"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("keepAlways が %s を見ていない", want)
+		}
+	}
+	// 出すか決めるところで、条件より先に keepAlways を見ていること。
+	if !strings.Contains(js, "var show = keepAlways(entry.line) ||") {
+		t.Error("出す行の決め方が keepAlways を通っていない")
+	}
+}
+
+// TestHidingAnOpenRowSavesFirst は、絞り込みで行が消えるとき、その行の入力欄が
+// 開いていたら先に保存してから閉じることを見る。
+//
+// 入力欄を差し込んだまま行ごと隠すと、打った訳が画面からも消える。未保存の行は
+// そもそも隠さないので通る道は狭いが、打ち始める前（まだ未保存でない）の行は
+// ここを通る。
+func TestHidingAnOpenRowSavesFirst(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, "function applyView()")
+	if start < 0 {
+		t.Fatal("applyView が無い")
+	}
+	end := strings.Index(js[start:], "\n  }")
+	if end < 0 {
+		t.Fatal("applyView の終わりが分からない")
+	}
+	if !strings.Contains(js[start:start+end], "commitEditor()") {
+		t.Error("applyView が入力欄を保存してから閉じていない")
+	}
+	// commitEditor は閉じる前に保存へ回すこと。
+	at := strings.Index(js, "function commitEditor()")
+	if at < 0 {
+		t.Fatal("commitEditor が無い")
+	}
+	if !strings.Contains(js[at:at+120], "flush()") {
+		t.Error("commitEditor が flush を呼んでいない")
+	}
+}
+
+// TestEnterOpensTheNextRow は、Enter が確定して次の行を開くことを見る。
+//
+// 翻訳作業のいちばん太い道である。上から順に打っていけないと、1839行の
+// ファイルでは1行ごとにマウスへ手が戻る。
+//
+// 同時に、変換中の Enter を横取りしていないことも見る。横取りすると
+// ja / ko / zh-Hans / zh-Hant で変換の確定ができなくなる。
+func TestEnterOpensTheNextRow(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, `editor.addEventListener("keydown"`)
+	if start < 0 {
+		t.Fatal("入力欄の keydown が無い")
+	}
+	block := js[start:]
+	guard := strings.Index(block, "if (state.composing || e.isComposing || e.keyCode === 229)")
+	enter := strings.Index(block, `if (e.key === "Enter")`)
+	if guard < 0 || enter < 0 {
+		t.Fatal("変換中の見張りか Enter の扱いが無い")
+	}
+	if guard > enter {
+		t.Error("変換中の見張りが Enter より後ろにある。変換の確定ができなくなる")
+	}
+	for _, want := range []string{"nextEditable(state.editing)", "openEditor(next)"} {
+		if !strings.Contains(block[enter:], want) {
+			t.Errorf("Enter が %s を通っていない。次の行が開かない", want)
+		}
+	}
+	// 次の行を決めてから閉じること。閉じると state.editing が空になる。
+	next := strings.Index(block[enter:], "nextEditable(state.editing)")
+	commit := strings.Index(block[enter:], "commitEditor()")
+	if commit < 0 || next > commit {
+		t.Error("閉じてから次の行を決めている。state.editing はもう空である")
+	}
+	// 隠れている行は飛ばすこと。
+	body := strings.Index(js, "function nextEditable(")
+	if body < 0 || !strings.Contains(js[body:body+700], "entry.row.hidden") {
+		t.Error("nextEditable が隠れている行を飛ばしていない")
+	}
+}
+
+// TestShortcutsAreOffWhileTyping は、一文字の近道が入力欄で効かないことを見る。
+//
+// 効くと、その字が訳にも検索語にも打てなくなる。変換中にも横取りしない。
+func TestShortcutsAreOffWhileTyping(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, `document.addEventListener("keydown"`)
+	if start < 0 {
+		t.Fatal("頁全体の keydown が無い")
+	}
+	end := strings.Index(js[start:], "\n  });")
+	if end < 0 {
+		t.Fatal("頁全体の keydown の終わりが分からない")
+	}
+	block := js[start : start+end]
+	for _, want := range []string{
+		"state.composing || e.isComposing || e.keyCode === 229",
+		"isTyping(e.target)",
+		"e.ctrlKey || e.metaKey || e.altKey",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("頁全体の keydown に %s が無い", want)
+		}
+	}
+	// 見張りは、キーを見分ける前に置くこと。
+	if key := strings.Index(block, `e.key === "/"`); key < strings.Index(block, "isTyping(e.target)") {
+		t.Error("入力欄の見張りがキーの見分けより後ろにある")
+	}
+}
+
+// TestUIDoesNotNameCategories は、画面がカテゴリを名前で持っていないことを見る。
+//
+// 絞り込みの一覧は、待ち受けが返した件数（countView）から組む。画面に
+// カテゴリ名を書くと、そこが2つ目の定義になる。internal/diff にカテゴリが
+// 増えたとき、画面だけが古いままになる。
+func TestUIDoesNotNameCategories(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	s := newTestServer(t, Options{})
+	rec := do(t, s, http.MethodGet, "/api/lines?locale=ja", true, nil)
+	got := decode[linesResponse](t, rec.Body.Bytes())
+	if len(got.Counts) == 0 {
+		t.Fatal("件数が空")
+	}
+	for _, c := range got.Counts {
+		if strings.Contains(js, c.Category) {
+			t.Errorf("app.js に %q がある。カテゴリは待ち受けが返したものだけを使う", c.Category)
+		}
+	}
+	// 組み立てが件数から来ていること。
+	if !strings.Contains(js, `filterChip("cat:" + c.category`) {
+		t.Error("絞り込みの一覧が件数から組まれていない")
 	}
 }

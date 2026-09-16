@@ -311,3 +311,82 @@ func TestAssetsHaveNoControlBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestSearchStaysInThePage は、検索語が頁の外へ出ないことを見る。
+//
+// 検索の当て先（speaker / 原文 / 訳 / キー）は原文の断片そのものである。
+// 待ち受けへ聞けば、その語が要求の経路に乗る。URL に載せればブラウザーの
+// 履歴に残り、待ち受けが終わったあとも残る。行はもうブラウザーの中にあるので、
+// 聞く必要がそもそも無い。
+//
+// 頁が出してよい要求は3つだけである。増えていないことを、要求を組み立てる
+// 2か所（getJSON / postJSON）の引数の字面で見る。
+func TestSearchStaysInThePage(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	allowed := map[string]bool{
+		"/api/bootstrap":     true,
+		"/api/lines?locale=": true,
+		"/api/rows":          true,
+	}
+	for _, call := range []string{`getJSON("`, `postJSON("`} {
+		rest := js
+		for {
+			at := strings.Index(rest, call)
+			if at < 0 {
+				break
+			}
+			rest = rest[at+len(call):]
+			end := strings.IndexByte(rest, '"')
+			if end < 0 {
+				t.Fatalf("%s の引数が閉じていない", call)
+			}
+			if path := rest[:end]; !allowed[path] {
+				t.Errorf("%s が %q を取りにいく。頁が出す要求は3つだけにする", call, path)
+			}
+		}
+	}
+	// 要求を組み立てる場所そのものが増えていないことも見る。
+	if got := strings.Count(js, "fetch("); got != 2 {
+		t.Errorf("fetch( が %d 箇所ある。要求は getJSON と postJSON の2か所だけにする", got)
+	}
+	// URL とブラウザーの控えに残す経路。1つでもあれば検索語がそこへ残りうる。
+	//
+	// 呼び出しの形（後ろに . が続く）で見る。名前だけで見ると、注記で
+	// 「localStorage には残さない」と書いたことでこの試験が落ちる。
+	for _, bad := range []string{
+		"localStorage.", "sessionStorage.", "indexedDB.", ".setItem(", ".getItem(",
+		"history.pushState", "history.replaceState", "location.search", "location.hash",
+	} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js が %s を使っている。条件も検索語も外に残さない", bad)
+		}
+	}
+}
+
+// TestSearchInputBlocksOutsideHelp は、検索の入力欄もブラウザーの「お節介」を
+// 全部切っていることを見る。
+//
+// 訳の入力欄と同じ理由である。綴り検査は入力の中身を外部のサービスへ送りうる。
+// 検索語は原文の断片なので、訳と同じ扱いにする。
+func TestSearchInputBlocksOutsideHelp(t *testing.T) {
+	html := uiSource(t, "ui/index.html")
+
+	at := strings.Index(html, `<input id="search"`)
+	if at < 0 {
+		t.Fatal("index.html に検索の入力欄が無い")
+	}
+	end := strings.Index(html[at:], ">")
+	if end < 0 {
+		t.Fatal("検索の入力欄が閉じていない")
+	}
+	tag := html[at : at+end]
+	for _, want := range []string{
+		`spellcheck="false"`, `autocorrect="off"`, `autocapitalize="off"`,
+		`autocomplete="off"`, `translate="no"`, `type="text"`,
+	} {
+		if !strings.Contains(tag, want) {
+			t.Errorf("検索の入力欄に %s が無い。外へ出しうる経路を全部切る", want)
+		}
+	}
+}

@@ -33,6 +33,16 @@
   box-sizing: border-box;
 }
 
+/*
+  hidden を必ず効かせる。ブラウザーが持つ [hidden] { display: none } は
+  作者の指定より弱いので、.row { display: grid } のような指定があると、
+  hidden を立てても行が残る。絞り込みと検索はこの属性だけで出し入れするので、
+  ここで押さえておく。
+*/
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -95,6 +105,103 @@ button {
 
 .rows {
   color: var(--muted);
+}
+
+/*
+  絞り込みと検索の一帯。貼り付く .top の中に置くので、背は低く保つ。
+  条件が増えても折り返して収まるように flex-wrap を掛ける。
+*/
+.finder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.finder-label {
+  color: var(--muted);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+/*
+  条件の1つ。色だけで意味を伝えないので、重さの色は縁にだけ添えて、
+  名前は必ず出す。名前は待ち受けが返した件数から取ったものをそのまま使う。
+*/
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 4px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip input {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.chip.todo {
+  color: var(--todo);
+  border-color: currentColor;
+}
+
+.chip.review {
+  color: var(--review);
+  border-color: currentColor;
+}
+
+.chip.info {
+  color: var(--info);
+  border-color: currentColor;
+}
+
+.chip.pending {
+  color: var(--pending);
+  border-color: currentColor;
+}
+
+.chip.failed {
+  color: var(--failed);
+  border-color: currentColor;
+}
+
+/* 条件に選ばれているあいだは、縁を太くして地色も変える。色だけに頼らない。 */
+.chip:has(input:checked) {
+  background: var(--bg);
+  border-width: 2px;
+  font-weight: 600;
+}
+
+.chip:focus-within {
+  outline: 2px solid var(--info);
+  outline-offset: 1px;
+}
+
+/*
+  いま何行出ているか。件数の欄（internal/diff 由来）とは別の場所に置き、
+  文言も別にする。混ぜると、diff が判定した数と画面が出している数が
+  同じものに見える。
+*/
+.shown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 効くキーの一覧。読み飛ばしてよいので、断り書きと同じ弱さで出す。 */
+.keys {
+  font-size: 12px;
 }
 
 .notice {
@@ -196,6 +303,15 @@ button {
   gap: 8px;
   padding: 4px 0;
   border-bottom: 1px solid var(--line);
+  /*
+    Enter で次の行を開くと、ブラウザーは焦点の入った欄を画面へ入れようとする。
+    余白を取っておかないと、その行が貼り付いた上の一帯の下へ潜り込んで見えない。
+    貼り付く一帯は見出しの列と絞り込みの列で、実測 120px 前後である。
+    vh で取ると、ほとんどの行が「はみ出している」ことになって毎回大きく
+    送られるので、一帯の高さに見合う固定値にする。
+  */
+  scroll-margin-top: 9em;
+  scroll-margin-bottom: 3em;
 }
 
 /*
