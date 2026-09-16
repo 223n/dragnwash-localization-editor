@@ -8,11 +8,32 @@
           - '**/*.md'
           - 'docs/**'
 
-依存関係:
+# 機能追加は、変えたファイルからは決められない。同じ cmd/ や internal/ を、
+# 足すときも直すときも触るためである。git-flow の枝の名前で決める
+機能追加:
+  - head-branch:
+      - '^feature/'
+
+# 保守は、リポジトリそのものの持ち物。ここに挙げたものは、機能でも文書でもない。
+# package.json と package-lock.json をここに置いたのは、依存関係から移したためである。
+# 依存の更新で触られるのと、名前や説明を直すために触られるのとを、ラベラーは
+# 見分けられない。依存の更新には Dependabot が自分で 依存関係 と npm を付ける
+# （.github/dependabot.yml の labels）ので、ラベラーがもう一度当てる必要は無い
+保守:
   - changed-files:
       - any-glob-to-any-file:
           - 'package.json'
           - 'package-lock.json'
+          - 'LICENSE'
+          - '.github/ISSUE_TEMPLATE/**'
+          - '.github/PULL_REQUEST_TEMPLATE.md'
+          - '.github/labels.yml'
+          - '.github/labeler.yml'
+          - '.github/dependabot.yml'
+          - '.editorconfig'
+          - '.gitattributes'
+          - '.gitignore'
+          - 'scripts/**'
 
 GitHub Actions:
   - changed-files:
