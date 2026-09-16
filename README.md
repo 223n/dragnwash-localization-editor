@@ -48,13 +48,148 @@ Go言語で実装します。
 | [docs/research.md](docs/research.md) | 事前調査レポートです。既存仕様の分析、`UI`方式の比較、推奨する構成があります |
 | [docs/port-spec.md](docs/port-spec.md) | 既存実装から抽出した移植仕様です。156件の規則と、敵対的な検証で見つかった42件の食い違いが入っています |
 
-## 使い方
+## 入手する
 
-翻訳リポジトリのルートで実行します。
+[Releases](https://github.com/223n/dragnwash-localization-editor/releases)から、お使いの環境向けの書庫をダウンロードします。
+Goのインストールは要りません。
+
+### どのファイルを落とすか
+
+ファイル名は`dwloc_<版>_<OS>_<CPU>`の形です。
+
+| 使っている環境 | 落とすファイル |
+| ---- | ---- |
+| Windows（ふつうのPC） | `dwloc_<版>_windows_amd64.zip` |
+| Windows（Snapdragonなどのarm64機） | `dwloc_<版>_windows_arm64.zip` |
+| macOS（M1以降のApple Silicon） | `dwloc_<版>_darwin_arm64.tar.gz` |
+| macOS（Intel） | `dwloc_<版>_darwin_amd64.tar.gz` |
+| Linux（64ビットのPC） | `dwloc_<版>_linux_amd64.tar.gz` |
+| Linux（Raspberry Piなどのarm64機） | `dwloc_<版>_linux_arm64.tar.gz` |
+
+`darwin`はmacOSのことです。
+`amd64`はIntelとAMDの64ビットのCPU、`arm64`はApple SiliconやSnapdragonなどのCPUを指します。
+
+どちらか分からないときは、その場で確かめられます。
+
+| 環境 | 確かめかた | 見かた |
+| ---- | ---- | ---- |
+| macOS | ターミナルで`uname -m`を実行します | `arm64`ならarm64、`x86_64`ならamd64です |
+| Linux | 端末で`uname -m`を実行します | `aarch64`ならarm64、`x86_64`ならamd64です |
+| Windows | 「設定」→「システム」→「バージョン情報」の「システムの種類」を見ます | 「ARMベース」と書いてあればarm64、そうでなければamd64です |
+
+間違えたものを落とすと、実行したときに起動しません。
+落とし直せば直ります。
+自動で付く「Source code」の2つはソースコードです。
+バイナリは入っていません。
+
+書庫の中身は3つです。
+
+| 中身 | 何か |
+| ---- | ---- |
+| `dwloc`（Windowsは`dwloc.exe`） | 本体です |
+| `LICENSE` | ライセンス（Apache License 2.0）です |
+| `README.txt` | 実行のしかたを短くまとめたものです |
+
+このバイナリには署名を付けていません。
+署名にはApple Developer Program（年99ドル）とWindowsの証明書が要るため、今のところ見送っています。
+そのため、macOSとWindowsでは初回に警告の出る場合があります。
+下に回避の手順を書きます。
+
+### Windowsで実行する
+
+1. ダウンロードしたzipを右クリックし、「すべて展開」を選びます
+1. PowerShellを開き、展開したフォルダーへ移動します
+1. `.\dwloc.exe version`を実行します。版が表示されれば動いています
+
+「WindowsによってPCが保護されました」と出た場合は、「詳細情報」を押してから「実行」を選びます。
+これはSmartScreenによる、署名の無いプログラムへの警告です。
+
+展開したフォルダーに`dwloc.exe`が見当たらない場合は、Microsoft Defenderによる隔離を疑ってください。
+何が隔離されたかは、Windowsセキュリティの「保護の履歴」で確認できます。
+元のリポジトリのREADMEには、配布物の`Install.exe`を`Trojan:Script/Wacatac.B!ml`として検出した事例が書かれています。
+そこでは、これは誤検知であり、末尾の`!ml`は機械学習による推定を表すと説明されています。
+署名の無いファイルは、このように検出されることがあります。
+隔離された場合は、まず下の「チェックサムを確かめる」で、**落とした`zip`が**配布物と同じかを確かめてください。
+公開しているチェックサムは書庫に対するもので、`dwloc.exe`単体のハッシュは載せていません。
+書庫が配布物と同じであれば、そこから出てきた`dwloc.exe`も同じものです。
+そのうえで「保護の履歴」から許可します。
+許可するのは、そのファイルだけにします。
+
+> [!NOTE]
+> Windowsでの実際の見え方は、このバイナリでは確かめていません。
+> 上の内容は[docs/research.md](docs/research.md)の5.3節と、元のリポジトリのREADMEの記述によるものです。
+
+### macOSで実行する
+
+ターミナルを開き、ダウンロードしたフォルダーで次を実行します。
 
 ```bash
-go build ./cmd/dwloc
+tar xzf dwloc_<版>_darwin_arm64.tar.gz
+cd dwloc_<版>_darwin_arm64
+xattr -d com.apple.quarantine ./dwloc
+./dwloc version
+```
 
+`xattr`の行は、ダウンロードしたファイルに付く隔離の印を外します。
+この印が残っていると、Gatekeeperが実行を止めます。
+`No such xattr`と出た場合は、印が付いていないので、そのまま次へ進みます。
+
+[docs/research.md](docs/research.md)の5.3節には、macOS 15のSequoia以降で右クリックからの「開く」による回避が廃止されたと書かれています。
+同じ節に、コマンドラインのバイナリであれば`xattr`の1行で済むとあります。
+
+> [!NOTE]
+> macOSでの実際の見え方も、このバイナリでは確かめていません。
+
+### Linuxで実行する
+
+```bash
+tar xzf dwloc_<版>_linux_amd64.tar.gz
+cd dwloc_<版>_linux_amd64
+./dwloc version
+```
+
+書庫の中の`dwloc`には実行権限を付けてあります。
+`Permission denied`と出る場合は、展開のしかたで権限が落ちています。
+`chmod +x ./dwloc`を実行してください。
+
+Linuxには署名の仕組みが事実上ありません（[docs/research.md](docs/research.md)の5.3節）。
+実行権限だけで動きます。
+
+### チェックサムを確かめる
+
+`dwloc_<版>_checksums.txt`に、6つの書庫それぞれのSHA-256を載せています。
+1行は「ハッシュ、スペース2つ、ファイル名」の形です。
+落とした書庫と同じフォルダーに置いて確かめます。
+
+macOSとLinuxでは、次のように確かめます。
+
+```bash
+sha256sum --check --ignore-missing dwloc_<版>_checksums.txt      # Linux
+shasum -a 256 --check --ignore-missing dwloc_<版>_checksums.txt  # macOS
+```
+
+`--ignore-missing`は、手元にある書庫だけを対象にします。
+これを付けないと、落としていない5つが見つからずに失敗します。
+
+WindowsではPowerShellで確かめます。
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\dwloc_<版>_windows_amd64.zip
+```
+
+表示された`Hash`と、`checksums.txt`の同じファイル名の行が一致すれば、配布しているものと同じファイルです。
+大文字と小文字の違いは無視してかまいません。
+一致は「配布しているファイルと同じもの」の確認であって、安全であることの証明ではありません。
+
+リリースをやり直すと、書庫に入る時刻が変わるため、チェックサムも変わります。
+書庫とチェックサムは、必ず同じReleaseのものを使ってください。
+
+## 使い方
+
+ダウンロードした`dwloc`を、翻訳リポジトリのルートを指して実行します。
+自分でビルドする場合は、下の「開発」を見てください。
+
+```bash
 ./dwloc validate --root ../dragnwash-localization
 ./dwloc diff     --root ../dragnwash-localization
 ./dwloc publish  --root ../dragnwash-localization --dry-run
@@ -120,6 +255,20 @@ go build ./cmd/dwloc
 | Node 22以上 | 日本語の文書の検査に使います |
 | Go 1.27.1以上 | 実装に使います。`go.mod`で指定しています |
 
+### 自分でビルドする
+
+```bash
+go build ./cmd/dwloc
+```
+
+版を埋め込む場合は、リリースと同じ形で指定します。
+
+```bash
+go build -trimpath -ldflags "-s -w -X main.version=1.2.3" ./cmd/dwloc
+```
+
+指定しない場合、`dwloc version`は`dev`と表示します。
+
 ### Goのコードを検査する
 
 ```bash
@@ -176,7 +325,14 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 1. `version`にリリースする版を入れます。`v`は付けません（例: `1.2.0`、`1.2.0-rc.1`）
 1. ワークフローが`develop`から`release/vX.Y.Z`ブランチを切り、`package.json`の版を上げ、`main`へのPull Requestを開きます
 1. Pull Requestの内容を確かめ、マージコミット（Create a merge commit）でマージします
-1. 「リリースを公開する」ワークフローが動き、タグ`vX.Y.Z`を打ち、GitHub Releaseを作り、`main`を`develop`に戻します
+1. 「リリースを公開する」ワークフローが動きます。タグ`vX.Y.Z`を打ち、6種類の書庫を添えたGitHub Releaseを作り、`main`を`develop`に戻します
+
+バイナリはタグを打つ前に作ります。
+1つでもビルドに失敗した場合は、タグとGitHub Releaseを作らずに止まります。
+6種類のうち一部だけが載ったReleaseを出さないためです。
+
+添付するのは、6つの書庫と`dwloc_<版>_checksums.txt`の7ファイルです。
+入れ直しのために再実行した場合は、同じ名前の添付を入れ替えます。
 
 版は`package.json`の`version`で管理します。
 `develop`と`main`の版、最新のタグのどれよりも大きい版だけを受け付けます。
@@ -212,7 +368,7 @@ npm version patch --no-git-tag-version
 | `labeler.yml` | Pull Requestを開いたとき、更新したとき | 変えたファイルとブランチ名からラベルを付けます |
 | `branch-guard.yml` | Pull Requestを開いたとき、更新したとき | headブランチが`main`か`develop`なら失敗します。マージは止めません |
 | `release.yml` | 手動 | `develop`からリリースブランチを切り、版を上げ、`main`へのPull Requestを開きます |
-| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき | タグを打ち、GitHub Releaseを作り、`main`を`develop`に戻します |
+| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき | 6種類のバイナリを作り、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します |
 
 ## ラベル
 

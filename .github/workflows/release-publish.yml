@@ -47,18 +47,24 @@ jobs:
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
     # 無ければ GitHub がホストする ubuntu-latest で動く
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    # 6つの対象をクロスビルドする分、タグと Release だけを作っていた頃より長くかかる
+    timeout-minutes: 25
     permissions:
-      contents: write        # タグを打ち、Release を作る
+      contents: write        # タグを打ち、Release を作り、書庫を添付する
       pull-requests: write   # main を develop へ戻す PR を開く
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: GitHub CLIがあることを確かめる
-        # GitHub がホストするランナーには入っている。セルフホストのランナーでは自分で入れる
+      - name: 要る道具があることを確かめる
+        # GitHub がホストするランナーには入っている。セルフホストのランナーでは自分で入れる。
+        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない
         run: |
           if ! command -v gh >/dev/null 2>&1; then
             echo "::error::gh（GitHub CLI）が無い。ランナーに入れてから実行する: https://cli.github.com/"
+            exit 1
+          fi
+          if ! command -v zip >/dev/null 2>&1; then
+            echo "::error::zip が無い。Windows 向けの書庫を作れない。ランナーに入れてから実行する（例: apt-get install zip）"
             exit 1
           fi
 
@@ -122,6 +128,136 @@ jobs:
             echo "::warning::PR がマージコミット以外でマージされた。リリースノートに PR が載らないことがある。次からは Create a merge commit を選ぶ"
           fi
 
+      - name: Goを用意
+        # 配布するバイナリを作るために要る。版は go.mod の go 行に従う
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # ここで作るものは配布物になる。他のブランチの実行が書き込めるキャッシュは持ち込まない。
+          # 依存は標準ライブラリだけなので、キャッシュを切っても伸びるのは1分ほどで済む
+          cache: false
+
+      - name: バイナリと書庫を作る
+        # タグを打つ前に作る。1つでもビルドに失敗したら、ここで止まってタグも Release も作らない。
+        # 6種のうち5種だけが載った Release は、足りない対象の利用者から見れば壊れた配布になる
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          # CGO を切ると、1台のランナーから6つの対象すべてを作れる（docs/research.md 5.4節）
+          CGO_ENABLED: '0'
+          # ジョブ全体の GH_TOKEN を、この段だけ空にする。ここはビルドした実行ファイルを
+          # 実際に走らせる唯一の段で、gh は使わない。書き込み権限つきのトークンを
+          # プロジェクト由来のコードから読める場所に置かない
+          GH_TOKEN: ''
+        run: |
+          if [ -z "${VERSION}" ]; then
+            echo "::error::版が空。書庫を作れない"
+            exit 1
+          fi
+
+          # 対象は ci.yml の「全対象向けにビルドする」と同じ6種
+          targets='linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64'
+
+          # 入れ直しのときに前回の残りが混ざらないよう、毎回まっさらにする
+          rm -rf dist
+          mkdir -p dist
+
+          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする
+          cat > dist/README.txt <<TXT
+          dwloc ${VERSION}
+
+          Drag'n Wash の翻訳リポジトリを扱うコマンドです。
+          この書庫には、実行ファイルと LICENSE とこの説明が入っています。
+
+          使い方:
+            dwloc validate --root <翻訳リポジトリのパス>
+            dwloc diff     --root <翻訳リポジトリのパス>
+            dwloc publish  --root <翻訳リポジトリのパス>
+            dwloc version
+
+          このバイナリには署名を付けていません。
+          macOS では、初回に Gatekeeper が実行を止めることがあります。次の1行で隔離の印を外せます。
+            xattr -d com.apple.quarantine ./dwloc
+          Windows では、SmartScreen の警告が出ることがあります。
+          「詳細情報」を押すと「実行」が出ます。
+          dwloc.exe が見当たらないときは、Microsoft Defender による隔離を疑ってください。
+          Windows セキュリティの「保護の履歴」で確認し、そこから許可します。
+          macOS と Linux で Permission denied と出たときは、実行権限を付けます。
+            chmod +x ./dwloc
+
+          詳しい手順とチェックサムの確かめ方は、次のページにあります。
+          https://github.com/223n/dragnwash-localization-editor
+          TXT
+
+          host_os="$(go env GOOS)"
+          host_arch="$(go env GOARCH)"
+          ran_one=false
+
+          for target in ${targets}; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="dwloc_${VERSION}_${goos}_${goarch}"
+            dir="dist/${name}"
+            bin='dwloc'
+            if [ "${goos}" = 'windows' ]; then
+              bin='dwloc.exe'
+            fi
+            mkdir -p "${dir}"
+
+            # -trimpath         作った人のパスをバイナリに残さない
+            # -s -w             記号表とデバッグ情報を落とす。落とすと1つあたり3割ほど小さくなる
+            # -X main.version   dwloc version が出す版。入れないと dev のままになり、
+            #                   不具合報告でどの版か分からなくなる
+            GOOS="${goos}" GOARCH="${goarch}" go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "${dir}/${bin}" \
+              ./cmd/dwloc
+
+            cp LICENSE "${dir}/LICENSE"
+            cp dist/README.txt "${dir}/README.txt"
+
+            # tar.gz は権限をそのまま保つ。ランナーの umask に左右されないよう、ここで明示する。
+            # これが落ちると、展開した翻訳者の手元で Permission denied になる
+            if [ "${goos}" != 'windows' ]; then
+              chmod 755 "${dir}/${bin}"
+            fi
+
+            # ランナーと同じ対象のものは、実際に動かして版が埋め込めたかを確かめる。
+            # 6つとも同じ ldflags で作っているので、1つ動けば埋め込み自体は効いている。
+            # -trimpath を付けると go version -m に ldflags が残らないため、
+            # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）
+            if [ "${goos}" = "${host_os}" ] && [ "${goarch}" = "${host_arch}" ]; then
+              got="$("${dir}/${bin}" version)"
+              if [ "${got}" != "dwloc ${VERSION}" ]; then
+                echo "::error::版が埋め込めていない。dwloc version が「${got}」と出た（期待: dwloc ${VERSION}）"
+                exit 1
+              fi
+              echo "版を確かめた: ${got}（${goos}/${goarch}）"
+              ran_one=true
+            fi
+
+            # Windows は zip、それ以外は tar.gz。展開の道具がその環境の標準で足りるようにする。
+            # 書庫の中は name のディレクトリ1つにまとめ、展開先に中身が散らばらないようにする
+            if [ "${goos}" = 'windows' ]; then
+              (cd dist && zip -q -r -X "${name}.zip" "${name}")
+            else
+              (cd dist && tar -czf "${name}.tar.gz" "${name}")
+            fi
+            rm -rf "${dir}"
+            echo "できた: ${name}"
+          done
+
+          rm -f dist/README.txt
+
+          if [ "${ran_one}" != 'true' ]; then
+            echo "::warning::ランナーが ${host_os}/${host_arch} のため、作ったバイナリを動かして版を確かめられなかった"
+          fi
+
+          # 添付するのは6つの書庫と、この1ファイルだけ。
+          # sha256sum -c と shasum -a 256 -c がそのまま読める形式にする
+          (cd dist && sha256sum dwloc_*.tar.gz dwloc_*.zip > "dwloc_${VERSION}_checksums.txt")
+          cat "dist/dwloc_${VERSION}_checksums.txt"
+
       - name: タグを打つ
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -151,12 +287,45 @@ jobs:
             exit 0
           fi
           # 本文は PR のタイトルとラベルから自動で作る。分類は .github/release.yml で決める
+          # 本文の頭に「どれを落とせばよいか」を置く。Release の画面にはファイル名しか
+          # 並ばず、darwin が macOS のことだと分からない。README へ戻らないと選べない
+          # 状態にしない。GitHub は --generate-notes の内容をこの後ろに足す
           args=(--verify-tag --title "${TAG}" --generate-notes)
+          header='.github/release-notes-header.md'
+          if [ -f "${header}" ]; then
+            args+=(--notes-file "${header}")
+          else
+            echo "::warning::${header} が無い。Release の本文に入手の案内が載らない"
+          fi
           if [ "${PRERELEASE}" = 'true' ]; then
             args+=(--prerelease)
           fi
           gh release create "${TAG}" "${args[@]}"
           echo "- Release: $(gh release view "${TAG}" --json url --jq '.url')" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 書庫をReleaseに載せる
+        # Release を作る段とは分ける。Release がすでにあるときも、ここは必ず通す。
+        # --clobber は同じ名前の添付を入れ替える。前の実行が途中で落ちて半端に載っていても、
+        # 入れ直せば6つとチェックサムが揃う。
+        # 書庫の中身は同じでも、tar.gz と zip に入る時刻が実行ごとに変わるため、
+        # 入れ直すとチェックサムも変わる。6つの書庫とチェックサムは必ず一緒に載せ替える
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release upload "${TAG}" \
+            dist/dwloc_"${VERSION}"_*.tar.gz \
+            dist/dwloc_"${VERSION}"_*.zip \
+            "dist/dwloc_${VERSION}_checksums.txt" \
+            --clobber
+          # ls をパイプすると shellcheck の SC2012 に当たり、actionlint を掛ける
+          # CI（lint-workflows）が落ちる。for でファイル名を直に回す
+          {
+            echo '- 添付したもの:'
+            for f in dist/*; do
+              echo "  - $(basename "${f}")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: mainをdevelopへ戻す
         # 版の更新を develop にも届ける。まず直接押し、保護されていて押せなければ PR を開く。
