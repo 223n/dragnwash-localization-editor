@@ -87,7 +87,7 @@ func DiscoverTargetsWithGame(root, game string) ([]Target, error) {
 //   - ディレクトリだけを見る。Translations/ignore.txt のようなファイルは対象外
 //   - 名前が '_' で始まるディレクトリは飛ばす（_discovered を対象にしない）
 //   - 作業コピー（<ロケール>.working.csv）があればそれを入力にする。
-//     探す順はリポジトリ、ゲームの順（[workingCopy]）
+//     探す順はゲーム、リポジトリの順（[workingCopy]）
 //   - 入力が存在しないロケールは対象にしない
 //
 // ロケールの列挙はリポジトリ側だけで行う。ゲーム側にしか無いロケールは対象に
@@ -130,31 +130,39 @@ func discover(root, game string) ([]Target, error) {
 	return targets, nil
 }
 
-// workingCopy は locale の作業コピーを探す。探す順はリポジトリ、ゲームの順。
+// workingCopy は locale の作業コピーを探す。探す順はゲーム、リポジトリの順。
 // 第2戻り値は、当たったのがゲーム側かどうか。
 //
-// リポジトリを先に見るのは、ゲーム側を足したことで、いままで通っていた入力が
-// 別のファイルへ入れ替わらないようにするためである。リポジトリの
-// Translations/_discovered は .gitignore で外してあり、ふつうは存在しない。
-// そこにファイルがあるのは翻訳者が自分で置いたときだけなので、置いた人の意図を、
-// あとから足した自動の探し先で黙って上書きしない。
+// ゲーム側を先に見るのは、Modが書き出した生のファイルを常に入力にするためである。
+// 考え方が1つで済み、どちらが入力になるかが、リポジトリに置き忘れたファイルの
+// 有無で変わらない。ゲーム側はModのホットリロードが読み書きするファイルで、
+// 翻訳者がゲームの前で直しているのはそちらである。
 //
-// ゲーム側はModのホットリロードが読み書きするファイルで、そちらのほうが新しい。
-// それでも後ろに置いたのは、「新しいほうを採る」を規則にすると、どちらが入力に
-// なるかが更新時刻で決まり、実行のたびに入れ替わりうるからである。
+// 代わりに、自分で <ルート>/Translations/_discovered へ置いたファイルは、
+// ゲーム側に同じロケールの作業コピーがあるかぎり読まれなくなった。黙ったままには
+// ならない。どのファイルを読んだかは、画面の「ファイル」の欄と、dwloc diff の
+// 「作業コピー」の行と、dwloc publish の "<出力> <- <入力>" の行に必ず出る。
+//
+// 更新時刻は見ない。「新しいほうを採る」を規則にすると、どちらが入力になるかが
+// 実行のたびに入れ替わりうる。
+//
+// この順は publish と edit で同じでなければならない。両方ともここを通っている。
+// それは「edit が書く先は publish が入力に選ぶファイルと同じ」という約束の
+// 土台である。片方だけ順を変えると、edit で入れた訳が publish に拾われず、
+// コミットする側へ1行も届かない（internal/web の
+// TestEditAndPublishPickTheSameInput で押さえてある）。
 func workingCopy(root, game, locale string) (path string, inGame, ok bool) {
 	name := locale + WorkingSuffix
 
+	if game != "" {
+		fromGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
+		if fileExists(fromGame) {
+			return fromGame, true, true
+		}
+	}
 	inRepo := filepath.Join(root, TranslationsDir, DiscoveredDir, name)
 	if fileExists(inRepo) {
 		return inRepo, false, true
-	}
-	if game == "" {
-		return "", false, false
-	}
-	fromGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
-	if fileExists(fromGame) {
-		return fromGame, true, true
 	}
 	return "", false, false
 }

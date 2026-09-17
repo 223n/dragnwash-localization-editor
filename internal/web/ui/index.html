@@ -160,10 +160,15 @@
   開閉は覚えない。この道具は画面の状態をどこにも残さないと決めてある。
 
   目録が届くまでは hidden で出さない。summary は焦点を受ける要素なので、文言の
-  入っていない開閉要素が2つ、名前を持たないまま焦点の順に並ぶことになる（実測:
-  空でも高さ 36.19px、tabIndex 0、focus() が通る）。畳みの中身は告知する欄では
-  ないので、ここは hidden で構わない（#message と #empty は role="status" なので
-  hidden にしない。app.js の showMessage と applyView の注記を見よ）。
+  入っていない開閉要素が、名前を持たないまま焦点の順に並ぶことになる（実測:
+  空でも高さ 36.19px、tabIndex 0、focus() が通る）。この画面の畳みは3つとも
+  hidden で始める。出すのは、この2つは目録が届いたとき、一帯（#panel-fold）だけは
+  「ファイル」の欄に名前が入ったとき（app.js の render）である。あの summary に
+  入るのは目録の文ではなく値なので、目録だけでは名前が入らない。
+
+  畳みの中身は告知する欄ではないので、ここは hidden で構わない
+  （#message と #empty は role="status" なので hidden にしない。app.js の
+  showMessage と applyView の注記を見よ）。
 -->
 <details id="keys-fold" class="fold" hidden>
   <summary id="keys-title"></summary>
@@ -193,23 +198,64 @@
 
 <section class="panel">
   <!--
-    --game で作業コピーを探しているゲームのフォルダー。指定が無いときは
-    空のまま隠れる。いま直しているのがリポジトリの中なのかゲームのフォルダーなのかを、
-    画面からそのまま読めるようにしておく。
+    この一帯も畳む。起動したときに1回だけ決まる値を並べる場所で、読むのは1度で
+    足りるのに、開いたままだと一覧より上を占める。近道の一覧と絞り込みの
+    断り書きを畳んだのと同じ理由である（#keys-fold の注記を見よ）。
+
+    実測（実データのリポジトリの ja、--game auto で当てた実機のゲームの
+    フォルダー、その作業コピー1753行。「ファイル」の欄に出るパスは
+    C:/Program Files (x86)/…/_discovered/ja.working.csv）で、この一帯の高さは、
+    開いたときと閉じたときで 1280幅が 417.7px → 69.8px、375幅（root を 375px に
+    絞っての実測）が 899.9px → 137.0px になる。375幅では、開いていると一帯だけで
+    画面（812px）を超えていた。
+
+    どのパスで測ったかを書いておくのは、閉じたときの高さがファイル名の長さで
+    動くからである（375幅ではファイル名が4行に折り返す。app.css の .path を見よ）。
+    一時ディレクトリの下に写して測ると、写した先のパスのぶんだけ高くなる。
+
+    ただし畳みきらない。「いま直しているのがどのファイルか」は、この画面で
+    いちばん大事な1行である。リポジトリの公開ファイルを直しているのか、
+    ゲーム側の作業コピーを直しているのかが、そこにしか出ていない。だから
+    #file-path だけは summary の中に置き、畳んだままでも読めるようにする。
+    絞り込みの断り書き（#finder-fold）で「閉じたままでも読めるのは summary
+    だけ」としたのと同じ手で、あちらは文、こちらは値を入れてある。
+
+    #file-path は p ではなく span にする。summary が受け付けるのは語句
+    （phrasing content）で、p は入れられない。中身を入れる先（app.js の el.path）
+    は id のままなので、書き込む側は変わらない。
+
+    hidden を外すのも、名前が入ったとき（app.js の render）である。ほかの2つと
+    違って目録だけでは名前が入らないので、目録の時点で外すと、--locale を省いた
+    起動では添え字だけの畳みが焦点の順に残る。
+
+    残り（ゲームのフォルダー、断り書き、件数、数えたもの）は中に入れる。
+    どれも起動したときの状態で、開いたときに読めれば足りる。中に見張り
+    （aria-live / role="status"）は入れない。閉じた details は中身を支援技術の
+    木から外すので、閉じているあいだ告知されない。
   -->
-  <p id="game-path" class="path" hidden></p>
-  <p id="file-path" class="path"></p>
-  <ul id="notes" class="notes"></ul>
-  <div class="panel-cols">
-    <div>
-      <h2 id="counts-title"></h2>
-      <ul id="counts" class="counts"></ul>
+  <details id="panel-fold" class="fold" hidden>
+    <summary>
+      <span id="file-path" class="path"></span>
+      <span id="panel-more" class="panel-more"></span>
+    </summary>
+    <!--
+      作業コピーを探しているゲームのフォルダー。探し先が無いときは空のまま隠れる。
+      どのファイルを読んだかは上の #file-path に出るので、こちらは「どこを
+      探したか」だけを言う欄である。
+    -->
+    <p id="game-path" class="path" hidden></p>
+    <ul id="notes" class="notes"></ul>
+    <div class="panel-cols">
+      <div>
+        <h2 id="counts-title"></h2>
+        <ul id="counts" class="counts"></ul>
+      </div>
+      <div>
+        <h2 id="stats-title"></h2>
+        <ul id="stats" class="stats"></ul>
+      </div>
     </div>
-    <div>
-      <h2 id="stats-title"></h2>
-      <ul id="stats" class="stats"></ul>
-    </div>
-  </div>
+  </details>
 </section>
 
 <!--

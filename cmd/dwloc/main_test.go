@@ -7,7 +7,46 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/gamedir"
 )
+
+// TestMain は、この package の試験が実機の Steam を見に行かないようにする。
+//
+// edit は --game を省いてもゲームのフォルダーを探す（[resolveGameForEdit]）。
+// 素のままにしておくと、ゲームを入れている PC では試験がそのフォルダーを読み、
+// 入れていない PC では読まない。同じ試験が PC ごとに別のことを確かめる形になる。
+// 探す穴（[findGame]）をここで塞いでおき、探させたい試験だけが
+// [stubFindGame] で入れ替える。
+//
+// 塞げるのは --game を省いた道だけである。--game auto は [resolveGame] から
+// gamedir.Resolve → gamedir.Find へ直に入るので、ここを差し替えても止まらない。
+// いま auto を渡す試験は [TestValidateAcceptsButIgnoresGame] だけで、validate は
+// ゲームを解決しないため実機を読まない。publish / diff / edit に auto の試験を
+// 足すときは、この穴を先に塞ぐこと。塞がないと、ゲームを入れている PC でだけ
+// 通る試験になる。
+func TestMain(m *testing.M) {
+	findGame = func() []gamedir.Plugin { return nil }
+	os.Exit(m.Run())
+}
+
+// stubFindGame は自動検出の結果を paths に差し替える。試験が終わると元へ戻す。
+//
+// 実機の Steam を当てにしないのは [TestMain] と同じ理由である。見つかった
+// ときの道は、一時ディレクトリに作ったフォルダーで確かめる。
+func stubFindGame(t *testing.T, paths ...string) {
+	t.Helper()
+
+	was := findGame
+	t.Cleanup(func() { findGame = was })
+	findGame = func() []gamedir.Plugin {
+		found := make([]gamedir.Plugin, 0, len(paths))
+		for _, p := range paths {
+			found = append(found, gamedir.Plugin{Path: p})
+		}
+		return found
+	}
+}
 
 // runCLI は run を呼んで終了コードと出力を返す。
 // テストはすべてこの入口を通す。main は os.Exit を呼ぶだけなので、

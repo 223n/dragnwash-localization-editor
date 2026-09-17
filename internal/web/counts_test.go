@@ -542,12 +542,16 @@ func TestDuplicateKeyRowsLoseTheBadgeTogether(t *testing.T) {
 	}
 }
 
-// TestNoticesStartFolded は、近道の一覧と絞り込みの断り書きが畳んだ状態で
-// 始まることを見る。
+// TestNoticesStartFolded は、近道の一覧・絞り込みの断り書き・起動したときの
+// 状態の一帯が、どれも畳んだ状態で始まることを見る。
 //
 // 実測（実データの ja、1721行）で、2つとも開くと一覧の始まりが 1280幅で
 // 671.0px → 821.3px、375幅で 1212.6px → 1669.9px まで下がる。読むのは1度で
 // 足りるのに、一覧より上にずっと居座っていた。
+//
+// 一帯（#panel-fold）の中身は [TestPanelFoldKeepsTheFilePathReadable] が見る。
+// あちらは「畳んでもファイル名が読めること」を見る試験で、ここは「3つとも
+// 閉じて始まること」を見る試験である。
 func TestNoticesStartFolded(t *testing.T) {
 	html := uiSource(t, "ui/index.html")
 
@@ -561,17 +565,24 @@ func TestNoticesStartFolded(t *testing.T) {
 			t.Errorf("%s に見出し（summary）が無い。畳むと何が入っているか読めない", id)
 		}
 	}
-	if n := strings.Count(html, ` class="fold" hidden>`); n != 2 {
-		t.Errorf("畳みが %d 個。近道の一覧と絞り込みの断り書きの2つのはず", n)
+	if n := strings.Count(html, ` class="fold" hidden>`); n != 3 {
+		t.Errorf("畳みが %d 個。近道の一覧・絞り込みの断り書き・起動したときの状態の3つのはず", n)
 	}
 	if strings.Contains(html, `class="fold" open`) || strings.Contains(html, "<details open") {
 		t.Error("畳みが開いた状態で始まっている")
 	}
 	// 文言が入るまでは出さない。summary は焦点を受ける要素なので、目録が届く
-	// までのあいだ、名前を持たない開閉要素が2つ焦点の順に並ぶ（実測: 空でも
-	// 高さ 36.19px、tabIndex 0、focus() が通る）。出すのは app.js の applyCatalog。
+	// までのあいだ、名前を持たない開閉要素が並ぶ（実測: 空でも高さ 36.19px、
+	// tabIndex 0、focus() が通る）。出すのは、近道の一覧と絞り込みの断り書きが
+	// app.js の applyCatalog、一帯（#panel-fold）は render である。あれの
+	// summary に入るのは目録の文ではなく値なので、目録だけでは名前が入らない
+	// （[TestPanelFoldKeepsTheFilePathReadable] が並びを見る）。
 	js := uiSource(t, "ui/app.js")
-	for _, want := range []string{"el.keysFold.hidden = false;", "el.finderFold.hidden = false;"} {
+	for _, want := range []string{
+		"el.keysFold.hidden = false;",
+		"el.finderFold.hidden = false;",
+		"el.panelFold.hidden = false;",
+	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js に %q が無い。文言が入っても畳みが出てこない", want)
 		}
@@ -582,6 +593,134 @@ func TestNoticesStartFolded(t *testing.T) {
 		t.Error("条件の群の role と aria-labelledby が変わっている")
 	}
 	assertFoldsHoldNoLiveRegion(t, html)
+}
+
+// TestPanelFoldKeepsTheFilePathReadable は、起動したときの状態の一帯を畳んでも
+// 「ファイル」の欄が読めることを見る。
+//
+// 畳みきってはいけない一帯である。「いま直しているのがどのファイルか」は、
+// リポジトリの公開ファイルなのかゲーム側の作業コピーなのかを画面から読める
+// 唯一の場所で、閉じた details の中身は支援技術の木からも外れる（実測:
+// 閉じた畳みの中の p は checkVisibility() が false）。だから #file-path だけは
+// summary の中に置いてある。
+//
+// 畳めているかどうかは [TestNoticesStartFolded] が見る。ここは「畳んでも
+// ファイル名が残ること」だけを見る。
+func TestPanelFoldKeepsTheFilePathReadable(t *testing.T) {
+	html := uiSource(t, "ui/index.html")
+
+	fold := foldBody(t, html, "panel-fold")
+	summary := between(t, fold, "<summary>", "</summary>")
+
+	// ファイル名は summary の中。ここから出ると、畳んだ画面から消える。
+	if !strings.Contains(summary, `id="file-path"`) {
+		t.Error("#file-path が summary の中に無い。畳むとどのファイルを直しているか読めない")
+	}
+	// summary が受け付けるのは語句なので p は置けない。中身を入れる先の id は
+	// 変えていないので、app.js から見た書き込み先は今までどおりである。
+	if !strings.Contains(summary, `<span id="file-path" class="path">`) {
+		t.Error("#file-path が summary の中の span でない")
+	}
+	// 中に見張りを入れないこと。[assertFoldsHoldNoLiveRegion] が頁全体で同じことを
+	// 見ているが、あちらは畳みを字面で数えて回るので、この畳みが数えられている
+	// かどうかはここで直に押さえる。
+	for _, bad := range []string{"aria-live", `role="status"`, `role="alert"`} {
+		if strings.Contains(fold, bad) {
+			t.Errorf("一帯の畳みの中に %s がある。閉じているあいだ木から外れて告知されない", bad)
+		}
+	}
+
+	// 残りは畳みの中。summary の外にあること。
+	for _, id := range []string{"game-path", "notes", "counts", "stats"} {
+		if strings.Contains(summary, `id="`+id+`"`) {
+			t.Errorf("#%s が summary の中にある。畳んでも隠れない", id)
+		}
+		if !strings.Contains(fold, `id="`+id+`"`) {
+			t.Errorf("#%s が畳みの外にある。畳んでも残ってしまう", id)
+		}
+	}
+
+	// 画面側。ファイル名を書き込む先は el.path のまま。見出しに添える字は
+	// 目録から入れる（画面に文字列を直接書かない）。
+	js := uiSource(t, "ui/app.js")
+	for _, want := range []string{
+		`el.path.textContent = t("ui.file") + ": " + data.path;`,
+		`el.panelMore.textContent = t("ui.panel_more");`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js に %q が無い", want)
+		}
+	}
+
+	// 出すのは名前が入ったあと。目録が届いた時点（applyCatalog）で出すと、
+	// --locale を省いた起動ではロケールを選ぶまで /api/lines を叩かないので、
+	// 添え字だけの畳みが焦点の順に残る（実測: 1280幅で一帯の高さ 47.4px、
+	// tabIndex 0、#file-path と #notes と #counts はどれも空）。--locale の
+	// 既定は省略で、ダブルクリックで開いたときもこの経路である。
+	if body := functionBody(t, js, "applyCatalog"); strings.Contains(body, "el.panelFold.hidden") {
+		t.Error("一帯の畳みを applyCatalog で出している。ロケールを選ぶまで名前が入らない")
+	}
+	body := functionBody(t, js, "render")
+	pathAt := strings.Index(body, `el.path.textContent = t("ui.file")`)
+	showAt := strings.Index(body, "el.panelFold.hidden = false;")
+	if pathAt < 0 || showAt < 0 {
+		t.Fatalf("render がファイル名を入れて畳みを出していない（名前 %d、畳み %d）",
+			pathAt, showAt)
+	}
+	if showAt < pathAt {
+		t.Error("ファイル名を入れる前に一帯の畳みを出している")
+	}
+}
+
+// functionBody は app.js の関数1つの中身を返す。
+//
+// 名前で引き、2字下げの閉じ括弧までを切り出す。この頁の関数はすべて即時関数の
+// 中にあり、2字下げで書かれている。字面で追うのは、この試験集がブラウザーを
+// 起こさずに app.js を読む作りだからである。
+func functionBody(t *testing.T, js, name string) string {
+	t.Helper()
+
+	at := strings.Index(js, "function "+name+"(")
+	if at < 0 {
+		t.Fatalf("app.js に %s が無い", name)
+	}
+	rest := js[at:]
+	end := strings.Index(rest, "\n  }")
+	if end < 0 {
+		t.Fatalf("%s の終わりが分からない", name)
+	}
+	return rest[:end]
+}
+
+// foldBody は id の畳みの中身（<details> から </details> まで）を返す。
+func foldBody(t *testing.T, html, id string) string {
+	t.Helper()
+
+	at := strings.Index(html, `<details id="`+id+`"`)
+	if at < 0 {
+		t.Fatalf("#%s が畳み（details）でない", id)
+	}
+	end := strings.Index(html[at:], "</details>")
+	if end < 0 {
+		t.Fatalf("#%s の畳みの終わりが分からない", id)
+	}
+	return html[at : at+end]
+}
+
+// between は開きと閉じに挟まれた部分を返す。
+func between(t *testing.T, body, opening, closing string) string {
+	t.Helper()
+
+	at := strings.Index(body, opening)
+	if at < 0 {
+		t.Fatalf("%s が無い", opening)
+	}
+	rest := body[at+len(opening):]
+	end := strings.Index(rest, closing)
+	if end < 0 {
+		t.Fatalf("%s が閉じていない", opening)
+	}
+	return rest[:end]
 }
 
 // assertFoldsHoldNoLiveRegion は、畳みの中に見張り（aria-live / role="status" /

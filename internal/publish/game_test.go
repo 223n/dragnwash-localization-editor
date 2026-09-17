@@ -55,7 +55,9 @@ func TestDiscoverTargetsWithGame(t *testing.T) {
 		}
 	})
 
-	t.Run("リポジトリの作業コピーが先に当たる", func(t *testing.T) {
+	// 両方にあるときはゲーム側を採る。以前はリポジトリ側が先だった。順を覆した
+	// のは、Modが書き出した生のファイルを常に入力にするためである（[workingCopy]）。
+	t.Run("両方にあればゲーム側の作業コピーが先に当たる", func(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, filepath.Join(root, TranslationsDir, "ja", StringsFile), "key\n")
 		writeFile(t, filepath.Join(root, TranslationsDir, DiscoveredDir, "ja"+WorkingSuffix), "in repo\n")
@@ -67,9 +69,41 @@ func TestDiscoverTargetsWithGame(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
+		want := filepath.Join(game, TranslationsDir, DiscoveredDir, "ja"+WorkingSuffix)
+		if targets[0].Input != want {
+			t.Errorf("ゲーム側が先でない: got %q, want %q", targets[0].Input, want)
+		}
+		// 土台の欄は、入力がゲームから来たときだけ埋まる。順を入れ替えてもそこは
+		// 変わらない。埋まらないと [CheckBase] が「翻訳者の編集」と「ゲーム側が
+		// 古いための巻き戻り」を見分けられない。
+		wantBase := filepath.Join(game, TranslationsDir, "ja", StringsFile)
+		if targets[0].GameBase != wantBase {
+			t.Errorf("土台が違う: got %q, want %q", targets[0].GameBase, wantBase)
+		}
+	})
+
+	// ゲーム側にそのロケールが無ければリポジトリ側へ落ちる。自分で置いた
+	// ファイルが読まれる道は、ゲーム側に同じロケールが無いかぎり残っている。
+	t.Run("ゲーム側に無ければリポジトリの作業コピーを採る", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, TranslationsDir, "ja", StringsFile), "key\n")
+		writeFile(t, filepath.Join(root, TranslationsDir, DiscoveredDir, "ja"+WorkingSuffix), "in repo\n")
+		game := gameTree(t, map[string]string{
+			"Translations/_discovered/ko.working.csv": "in game\n",
+		})
+
+		targets, err := DiscoverTargetsWithGame(root, game)
+		if err != nil {
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
+		}
 		want := filepath.Join(root, TranslationsDir, DiscoveredDir, "ja"+WorkingSuffix)
 		if targets[0].Input != want {
-			t.Errorf("リポジトリ側が先でない: got %q, want %q", targets[0].Input, want)
+			t.Errorf("リポジトリ側へ落ちていない: got %q, want %q", targets[0].Input, want)
+		}
+		// リポジトリ側を採ったときは土台を持たない。ゲームから来ていないので、
+		// 3点目に当たるものが無い。
+		if targets[0].GameBase != "" {
+			t.Errorf("土台が入っている: %q", targets[0].GameBase)
 		}
 	})
 
