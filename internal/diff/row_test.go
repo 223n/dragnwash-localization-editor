@@ -2,6 +2,7 @@ package diff
 
 import (
 	"errors"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
@@ -138,6 +139,7 @@ func TestDroppedReason(t *testing.T) {
 		row         Row
 		wantDropped bool
 		wantNote    string
+		wantID      string
 	}{
 		{
 			name: "原文とキーが一致する行は残る",
@@ -146,7 +148,7 @@ func TestDroppedReason(t *testing.T) {
 		{
 			name:        "原文とキーが食い違う行は捨てられる",
 			row:         Row{Key: other, Kind: KindHash, SourceEn: "Hello"},
-			wantDropped: true, wantNote: noteDroppedMismatch,
+			wantDropped: true, wantNote: noteDroppedMismatch, wantID: reason.NoteDroppedMismatch,
 		},
 		{
 			name: "キーが空で原文がある行は捨てられない",
@@ -157,12 +159,12 @@ func TestDroppedReason(t *testing.T) {
 		{
 			name:        "キーが形を成さず原文も無い行は捨てられる",
 			row:         Row{Key: "english", Kind: KindBroken},
-			wantDropped: true, wantNote: noteDroppedBroken,
+			wantDropped: true, wantNote: noteDroppedBroken, wantID: reason.NoteDroppedBroken,
 		},
 		{
 			name:        "キーが空で原文も無い行は捨てられる",
 			row:         Row{Key: "", Kind: KindBroken},
-			wantDropped: true, wantNote: noteDroppedBroken,
+			wantDropped: true, wantNote: noteDroppedBroken, wantID: reason.NoteDroppedBroken,
 		},
 		{
 			name: "原文の無いハッシュ行は残る",
@@ -175,18 +177,23 @@ func TestDroppedReason(t *testing.T) {
 		{
 			name:        "形を成さないキーに原文が付いていれば不一致として捨てられる",
 			row:         Row{Key: "english", Kind: KindBroken, SourceEn: "Hello"},
-			wantDropped: true, wantNote: noteDroppedMismatch,
+			wantDropped: true, wantNote: noteDroppedMismatch, wantID: reason.NoteDroppedMismatch,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			note, dropped := droppedReason(tt.row)
+			cause, dropped := droppedCause(tt.row)
 			if dropped != tt.wantDropped {
 				t.Fatalf("捨てるかの判定が違う: got %v, want %v", dropped, tt.wantDropped)
 			}
-			if note != tt.wantNote {
-				t.Errorf("理由が違う: got %q, want %q", note, tt.wantNote)
+			if cause.Text != tt.wantNote {
+				t.Errorf("理由が違う: got %q, want %q", cause.Text, tt.wantNote)
+			}
+			// 識別子も見る。文面だけを見ていると、識別子を取り違えても落ちない。
+			// 取り違えると、英語の画面に別の理由の英文が出て、翻訳者は違う対処をする。
+			if cause.ID != tt.wantID {
+				t.Errorf("識別子が違う: got %q, want %q", cause.ID, tt.wantID)
 			}
 		})
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // 画面に出す行の種類。ファイルの物理行の種類（edit.Kind）を、描き方の違いだけに
@@ -101,6 +102,47 @@ type countView struct {
 	Judged bool   `json:"judged"`
 	Count  int    `json:"count"`
 	Reason string `json:"reason,omitempty"`
+
+	// Rows は、いま返している Lines のうち、このカテゴリのバッジが付いている
+	// データ行の数。条件のチップに添えるのはこの数である。
+	//
+	// Count と別に持つのは、2つが同じ数にならないためである。「どのロケールにも
+	// 訳が無い行」と「他のロケールにあって無い行」は、そのキーがこのロケールの
+	// ファイルに無いからこそ見つかったものなので、いま並べているファイルには
+	// 行として1つも出せない（[diff] の compareLocale を見よ）。条件のチップに
+	// Count を書いて押させると、32 と書いてあるのに1行も出ない。チップに添えて
+	// よい数はこちらしかない。
+	//
+	// 「そのチップを押したときに並ぶ行数」ではない。並ぶ行はこの数と3つの点で
+	// ずれる。どれも待ち受けが知らない画面の状態が理由で、数に入れようとした
+	// 時点で画面が数える側に回る（実測は app.js の buildFilters の注記にある）。
+	//
+	//   - 保存すると、訳が入ったキーのバッジは落ちてこの数は減るが、一覧は
+	//     組み直さない（打っている最中に行が消えないようにするため）。
+	//   - 未保存・保存できない・入力欄が開いている・競合で抱えている行は、
+	//     条件に当たらなくても隠さない。そのぶん多く並ぶ。
+	//   - 検索語は入っていない。打つとそのぶん少なく並ぶ。
+	//
+	// いま何行並んでいるかを言うのは画面の帯（「表示中 N 行」）だけである。
+	Rows int `json:"rows"`
+	// RowsDiffer は Count と Rows が食い違っているか。
+	//
+	// 画面に Count != Rows を比べさせないために、ここで済ませて渡す。画面が
+	// 比べて書き分けると、それが待ち受けとは別の判断になる（buildFilters の
+	// 注記を見よ）。Judged が false のときは Count に意味が無いので常に false。
+	RowsDiffer bool `json:"rowsDiffer"`
+	// NoRowHere は、判定はできているのに、いま並べているファイルにその
+	// カテゴリの行が1つも無いか。
+	//
+	// チップに「（0 行）」と書かせないために持つ。0 と書くと「もう何も残って
+	// いない」と読まれる（internal/diff の doc.go）。件数も0の0行はそのとおり
+	// 「何も無い」だが、件数が立っているのに0行なのは「この一覧には出せない」
+	// であって、読み手に渡る意味が逆になる。実データで公開ファイルを並べている
+	// ロケールでは、「どのロケールにも訳が無い行」が 32件／0行 でこれになる。
+	//
+	// これも画面に Count > 0 && Rows == 0 を比べさせないための欄である
+	// （RowsDiffer と同じ理由）。
+	NoRowHere bool `json:"noRowHere"`
 }
 
 // statView は「数えたもの」1つぶん。
@@ -119,8 +161,8 @@ type linesResponse struct {
 	// 画面はこれを覚えておき、保存要求の baseVersion に載せる。手前でファイルが
 	// 変わっていれば待ち受けが照合で弾くので、黙って上書きすることがない。
 	Version string `json:"version"`
-	// Path は表示用のパス。ルートからの相対で、スラッシュ区切り。
-	// クライアントはこれを受け取るだけで、要求に載せることはない。
+	// Path は画面が並べているファイルの表示用パス。ルートからの相対で、
+	// スラッシュ区切り。クライアントはこれを受け取るだけで、要求に載せることはない。
 	Path string `json:"path"`
 	// Columns はファイルのヘッダー行の列名。そのまま出す（データ側の語彙なので訳さない）。
 	Columns []string `json:"columns"`
@@ -155,19 +197,20 @@ var statusOrder = []diff.Status{diff.StatusTodo, diff.StatusReview, diff.StatusI
 // 行の並びと見出しは file（＝ファイルの物理行）から、状態バッジと件数は
 // sum / findings（＝internal/diff）から取る。この2つを混ぜないことがこの関数の
 // 役目で、画面に新しい判断を置かないという約束はここで守られる。
-func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit.File,
+func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.File,
 	sum diff.Summary, findings []diff.Finding) *linesResponse {
 
+	locale := target.Locale
 	columns := file.Header()
 	idx := columnIndex(columns)
 
 	resp := &linesResponse{
 		Locale:         locale,
 		Version:        file.Version(),
-		Path:           displayPath,
+		Path:           s.displayPath(target.Input),
 		Columns:        columns,
 		SourceColumn:   idx.source >= 0,
-		ReadOnlyReason: file.ReadOnlyReason(),
+		ReadOnlyReason: s.reasonText(cat, file.ReadOnlyCause()),
 	}
 
 	// 起動後に訳が入ったキーは「未翻訳」のバッジを外す。局所更新はここだけで、
@@ -184,7 +227,7 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 			resp.Lines = append(resp.Lines, headingView(line))
 		case edit.KindData:
 			dataRows++
-			resp.Lines = append(resp.Lines, dataView(line, idx, badges))
+			resp.Lines = append(resp.Lines, s.dataView(cat, line, idx, badges))
 		default:
 			// 空行とヘッダー行は出さない。空行はファイルの間隔で、ヘッダー行は
 			// 列名として Columns に入れてある。どちらも1行として並べると、
@@ -193,9 +236,9 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 	}
 
 	resp.Rows = dataRows
-	resp.Counts = s.buildCounts(cat, locale, sum)
+	resp.Counts = s.buildCounts(cat, locale, sum, rowsByCategory(lines, badges))
 	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
-	resp.Notes = s.buildNotes(cat, locale, sum, idx.source >= 0)
+	resp.Notes = s.buildNotes(cat, target, sum, idx.source >= 0)
 	return resp
 }
 
@@ -223,7 +266,10 @@ func headingLevel(body string) string {
 }
 
 // dataView はデータ行を画面の1行にする。
-func dataView(line edit.Line, idx columns, badges map[string][]badgeView) lineView {
+//
+// 編集できない理由は目録から引く。internal/edit が持つ日本語をそのまま出すと、
+// 英語の画面でその行だけ日本語になる。
+func (s *server) dataView(cat *Catalog, line edit.Line, idx columns, badges map[string][]badgeView) lineView {
 	v := lineView{
 		Number:      line.Number,
 		Kind:        lineKindData,
@@ -232,7 +278,7 @@ func dataView(line edit.Line, idx columns, badges map[string][]badgeView) lineVi
 		Source:      idx.at(line.Fields, idx.source),
 		Translation: line.Translation(),
 		Editable:    line.Editable,
-		Reason:      line.Reason,
+		Reason:      s.reasonText(cat, line.Cause),
 	}
 	if !line.Editable {
 		// 訳として出せない行は、生の行を渡して読めるようにする。
@@ -291,8 +337,39 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
 			Category: id,
 			Label:    s.categoryLabel(cat, f.Category),
 			Status:   f.Category.Status().ID(),
-			Note:     f.Note,
+			// 識別子が入っていなければ Note をそのまま出す。
+			//
+			// NoteReason.Text には Note と同じ文字列が入る決まりだが、両方を
+			// 別々の欄で持つ以上、片方を入れ忘れる書き方ができてしまう。その
+			// とき reasonText は空を返すので、注記が日本語へ落ちるのではなく
+			// 画面から消える。消えるのは落ちるより悪いので、ここで拾う。
+			// 入れ忘れそのものは TestFindingNotesCarryTheirReason が落とす。
+			Note: s.findingNote(cat, f),
 		})
+	}
+	return out
+}
+
+// rowsByCategory はカテゴリごとに、バッジの付くデータ行が何行あるかを数える。
+//
+// 数えるのは待ち受けの仕事にする。画面で数えると、待ち受けが決めた出し入れとは
+// 別の数え方が画面に生まれる（[TestUIDoesNotCount]）。
+//
+// badgesByKey がキーとカテゴリで重複を消したあとを数えるので、1行を同じカテゴリで
+// 2回数えることはない。逆に、同じキーの行がファイルに2行あれば2行とも一覧へ
+// 並ぶので、2と数えるのが正しい。
+//
+// 数えるのはデータ行だけである。見出し（コメント行）にバッジは付かず、空行と
+// ヘッダー行は buildLines が一覧へ出していない。
+func rowsByCategory(lines []edit.Line, badges map[string][]badgeView) map[string]int {
+	out := make(map[string]int)
+	for _, line := range lines {
+		if line.Kind != edit.KindData {
+			continue
+		}
+		for _, b := range badges[line.Key()] {
+			out[b.Category] = out[b.Category] + 1
+		}
 	}
 	return out
 }
@@ -301,7 +378,12 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
 //
 // 判定できていないカテゴリは Judged を false にして理由を入れる。0 件と書くと
 // 「もう何も残っていない」と読まれる（internal/diff の doc.go）。
-func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []countView {
+//
+// rows は [rowsByCategory] が数えた「いま並べているファイルの中の行数」。件数
+// （internal/diff 由来）と行数（ファイル由来）は別の数なので、混ぜずに両方渡す。
+func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary,
+	rows map[string]int) []countView {
+
 	// [diff.Summary.Counts] には全カテゴリが入っている。並びは Category の値の順が
 	// そのまま internal/diff の表示順なので、値で並べ替えるだけでよい。
 	all := make([]diff.Category, 0, len(sum.Counts))
@@ -323,9 +405,10 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []co
 				StatusLabel: s.statusLabel(cat, status),
 				Judged:      sum.CanJudge(c),
 				Count:       sum.Counts[c],
+				Rows:        rows[c.ID()],
 			}
 			if !view.Judged {
-				view.Reason = sum.JudgeBlockReason(c)
+				view.Reason = s.reasonText(cat, sum.JudgeBlockReason(c))
 			}
 			if view.Judged && c == diff.CatUntranslated {
 				// 起動後に訳が入ったぶんだけ引く。引くだけで、カテゴリの
@@ -337,6 +420,11 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []co
 					view.Count = 0
 				}
 			}
+			// 引いたあとで比べる。badgesByKey も訳が入ったキーのバッジを落として
+			// いるので、局所更新のあいだも2つの数は同じだけ減る。ここを引く前に
+			// 置くと、1行訳すたびに「食い違っている」と言い出す。
+			view.RowsDiffer = view.Judged && view.Count != view.Rows
+			view.NoRowHere = view.Judged && view.Count > 0 && view.Rows == 0
 			out = append(out, view)
 		}
 	}
@@ -370,8 +458,16 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 //
 // 件数の欄に出る「判定していません（理由）」と重ならないよう、ここには
 // 読んだものと読めなかったものだけを書く。
-func (s *server) buildNotes(cat *Catalog, locale string, sum diff.Summary, hasSource bool) []string {
+func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summary, hasSource bool) []string {
+	locale := target.Locale
 	var notes []string
+	if target.Input != target.Output {
+		// いま並べているのが作業コピーだということは、ここでしか言わない。
+		// 保存はこのファイルにしか書かないので、コミットする側へ入るのは
+		// publish を回したときである。出さないと、翻訳者は画面で直した訳が
+		// そのままコミットされると思う。
+		notes = append(notes, s.cat.T(cat, "note.via_publish", "path", s.displayPath(target.Output)))
+	}
 	if s.untranslatedFilled(locale) > 0 {
 		// 件数を局所更新したことを断る。できないこと（カテゴリの再判定）を
 		// 黙っていると、翻訳者は画面の数字を publish 後の状態だと読む。
@@ -395,10 +491,45 @@ func (s *server) buildNotes(cat *Catalog, locale string, sum diff.Summary, hasSo
 		notes = append(notes, s.cat.T(cat, "note.order_unreadable"))
 	}
 	if !sum.OldOrder || sum.OldOrderStale {
-		reason := sum.JudgeBlockReason(diff.CatCarryover)
-		notes = append(notes, s.cat.T(cat, "note.old_order_held", "reason", reason))
+		// 断り書きの外枠も、その中に入る理由も、どちらも目録から引く。
+		// 内側だけ日本語のまま差し込むと、英語の文の途中に日本語が挟まる。
+		why := s.reasonText(cat, sum.JudgeBlockReason(diff.CatCarryover))
+		notes = append(notes, s.cat.T(cat, "note.old_order_held", "reason", why))
 	}
 	return notes
+}
+
+// reasonText は internal/diff と internal/edit が返した理由を、画面に出す文面にする。
+//
+// 識別子があれば目録を引き、無ければ元の日本語をそのまま返す。目録に鍵が無い
+// ときも同じで、鍵をそのまま画面に出すことはしない。訳されていない文が出るほうが、
+// 何も出ないよりよい。
+//
+// 落ちたことに人が気づく必要は無い。鍵の抜けは [reason.All] をなぞる試験が
+// 見つけるし、識別子を持たない理由（[diff.OldOrderSource] を差し替えた
+// 呼び出し側が作る誤り）はそもそも訳しようがない。
+// findingNote は行に添える注記を返す。
+//
+// [diff.Finding] は日本語の Note と識別子つきの NoteReason を別々に持つ。
+// 目録を引けるのは後者だが、前者しか入っていない Finding が作られても
+// 注記を失わないようにする。
+func (s *server) findingNote(cat *Catalog, f diff.Finding) string {
+	if f.NoteReason.Empty() {
+		return f.Note
+	}
+	return s.reasonText(cat, f.NoteReason)
+}
+
+func (s *server) reasonText(cat *Catalog, why reason.Reason) string {
+	if why.ID == "" {
+		return why.Text
+	}
+	// 局所変数に key という名前を使わない。このファイルは internal/key を
+	// 取り込んでいて、隠すとあとで1行足したときに解決先が変わる。
+	if text := s.cat.T(cat, "reason."+why.ID, why.Args...); text != "reason."+why.ID {
+		return text
+	}
+	return why.Text
 }
 
 // categoryLabel はカテゴリの表示名を返す。

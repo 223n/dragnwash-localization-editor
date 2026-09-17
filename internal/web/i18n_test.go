@@ -66,6 +66,29 @@ func TestCatalogsHaveTheSameKeys(t *testing.T) {
 	}
 }
 
+// TestTranslatedCatalogsHaveNoJapanese は、原典以外の目録に日本語が
+// 1文字も残っていないことを見る。
+//
+// [TestEnglishScreenHasNoJapanese] は待ち受けが組み立てた欄を見るので、応答に
+// 載らない文言（畳んだ断り書き、条件のチップに添える数）までは届かない。鍵を
+// 足すときに日本語をそのまま貼って訳し忘れるのは、ここでしか見つからない。
+func TestTranslatedCatalogsHaveNoJapanese(t *testing.T) {
+	c, err := loadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lang := range c.langs {
+		if lang == originLang {
+			continue
+		}
+		for key, text := range c.byLang[lang].Messages {
+			if hasJapanese(text) {
+				t.Errorf("%s.json の %s に日本語が残っている: %q", lang, key, text)
+			}
+		}
+	}
+}
+
 // TestPlaceholdersMatch は、同じ鍵の置換名が言語間でそろっていることを見る。
 //
 // 片方だけ {count} を落とすと、その言語でだけ数が出ない画面になる。

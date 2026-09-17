@@ -239,11 +239,16 @@ func TestDefaultStartsTheEditor(t *testing.T) {
 	var gotRoot string
 	called := 0
 	orig := startEdit
-	startEdit = func(args []string, root string, stdout, stderr io.Writer) int {
+	startEdit = func(args []string, root, game string, stdout, stderr io.Writer) int {
 		called++
 		gotRoot = root
 		if args != nil {
 			t.Errorf("edit に引数を渡している: %q", args)
+		}
+		if game != "" {
+			// --game を打っていないのでゲームのフォルダーは空で来る。埋まって
+			// いたら、指定していない人が黙ってゲーム側を読む経路ができている。
+			t.Errorf("--game を指定していないのに渡っている: %q", game)
 		}
 		return exitOK
 	}

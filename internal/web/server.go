@@ -50,6 +50,15 @@ const (
 type Options struct {
 	// Root は翻訳リポジトリのルート。
 	Root string
+	// Game はゲーム側のプラグインフォルダー。空なら見に行かない。
+	//
+	// ここが入っていると、作業コピーの探し先にゲーム側が加わる。原文の欄が
+	// 埋まり、「未翻訳」を判定できるようになる。画面が並べるのも保存するのも
+	// その作業コピーで、コミットする側へ入るのは publish を回したときである。
+	//
+	// 値は internal/gamedir で目印まで確かめ終わったパスであること。確かめは
+	// 呼び出し側（cmd/dwloc）が済ませる。
+	Game string
 	// Locale は最初に出すロケール。空なら選ばせる。
 	//
 	// ここへ渡すのは publish.DiscoverTargets が返した名前そのものであること。
@@ -73,6 +82,14 @@ type Options struct {
 	Stdout io.Writer
 	// Stderr は記録の行き先。nil なら os.Stderr。
 	Stderr io.Writer
+
+	// oldOrder は1つ前の版の再生順を返す関数。nil なら [diff.GitOldOrder]。
+	//
+	// 試験で引き継ぎ候補を出すための穴である。固定にすると、引き継ぎ候補が
+	// バッジとして画面に載るところまでを見るのに git リポジトリが要る。
+	// 見本が git でない以上、その経路は端から端まで一度も通らない。
+	// internal/diff が同じ理由で Options.OldOrder を開けているのに合わせる。
+	oldOrder diff.OldOrderSource
 
 	// openBrowser はブラウザーを開く関数。nil なら [openBrowser]。
 	// テストで差し替えるための穴で、外からは触れない。
@@ -166,10 +183,11 @@ func newServer(opt Options) (*server, error) {
 		stop:      make(chan struct{}),
 	}
 
-	// ロケールの列挙は publish.DiscoverTargets に委ねる。publish が入力に選ぶ
-	// ファイルと、この画面が開くファイルが食い違うと、画面で見ている行と
-	// publish が書き出す行が別物になる。
-	targets, err := publish.DiscoverTargets(opt.Root)
+	// ロケールの列挙は publish.DiscoverTargetsWithGame に委ねる。走査の規則を
+	// 2か所に持つと、publish が対象にするロケールと、この画面が開くロケールが
+	// 食い違う。publish も同じ関数を通るので、画面で直したファイルが publish の
+	// 入力になることが、呼び先の一致で保たれる。
+	targets, err := publish.DiscoverTargetsWithGame(opt.Root, opt.Game)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +205,9 @@ func newServer(opt Options) (*server, error) {
 	// この値は変わらない。ファイルの中身は開くたびに読み直すが、突き合わせは
 	// 起動時のもので、両者がずれうることは承知のうえで固定してある
 	// （比較は13ロケール全部を読むので、1行開くたびにやり直す種類の処理ではない）。
-	repo, err := diff.LoadWith(opt.Root, diff.Options{Working: true})
+	repo, err := diff.LoadWith(opt.Root, diff.Options{
+		Working: true, Game: opt.Game, OldOrder: opt.oldOrder,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +338,12 @@ func (s *server) announce(url string) {
 	fmt.Fprintln(s.stdout, s.t("server.url", "url", url))
 	fmt.Fprintln(s.stdout, s.t("server.editing"))
 	fmt.Fprintln(s.stdout, s.t("server.save_target"))
+	if s.hasWorkingCopy() {
+		// 作業コピーを開いているロケールが1つでもあれば、そこへの保存だけでは
+		// コミットする側へ入らないことを端末にも出す。ロケールごとの正確な
+		// 行き先は画面の断り書きに出るが、そこまで読まずに打ち始める人がいる。
+		fmt.Fprintln(s.stdout, s.t("server.publish_hint"))
+	}
 	fmt.Fprintln(s.stdout, s.t("server.locales", "locales", strings.Join(localeNames(s.targets), ", ")))
 	if s.opt.IdleTimeout > 0 {
 		fmt.Fprintln(s.stdout, s.t("server.idle_hint", "duration", s.opt.IdleTimeout.String()))
@@ -404,6 +430,20 @@ func (s *server) displayPath(path string) string {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(rel)
+}
+
+// hasWorkingCopy は、作業コピーを開くロケールが1つでもあるかを返す。
+//
+// 作業コピーがあるかはロケールごとに決まるが、起動時の1行はロケールを選ぶ前に
+// 出すので、1つでもあれば出す。ロケールごとの正確な行き先は画面に出る
+// （「ファイル」の欄と note.via_publish の断り書き）。
+func (s *server) hasWorkingCopy() bool {
+	for _, t := range s.targets {
+		if t.Input != t.Output {
+			return true
+		}
+	}
+	return false
 }
 
 // localeNames は対象のロケール名を並び順のまま取り出す。

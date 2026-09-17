@@ -10,6 +10,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // Locale は1ロケール分の読み込み結果。
@@ -53,6 +54,13 @@ type Repo struct {
 	// 「0 件」と書けない場面を利用者に伝えるために持つ。旧版が取れないのに
 	// 引き継ぎ候補を 0 件と書くと、「移すべき訳は無い」と読まれてしまう。
 	OldOrderReason string
+	// OldOrderReasonID は [Repo.OldOrderReason] に対応する安定した識別子
+	// （internal/reason）。名前を付けていない理由のときは空。
+	//
+	// 文面と別に持つのは、画面（internal/web）がこれを鍵にして目録から訳された
+	// 文面を引くためである。[OldOrderSource] を差し替えた呼び出し側が返す誤りには
+	// 名前を当てられないので、そのときは空のまま文面へ落ちる。
+	OldOrderReasonID string
 	// Locales はディレクトリ名順。--locale で絞っても、ここには全ロケールが入る。
 	Locales []Locale
 	// EmptyLocales は Translations 直下にディレクトリだけがあり、公開ファイルも
@@ -71,6 +79,13 @@ type Repo struct {
 type Options struct {
 	// Working が true なら作業コピーも読む。
 	Working bool
+	// Game はゲーム側のプラグインフォルダー。空なら見に行かない。
+	//
+	// 作業コピーの探し先を1つ増やすだけで、再生順は常にリポジトリ側から読む
+	// （publish パッケージの doc コメントを参照）。引き継ぎ候補は git の
+	// 履歴にある1つ前の再生順が根拠なので、履歴の無いゲーム側へ替えると
+	// 判定そのものが消える。
+	Game string
 	// OldOrder は1つ前の版の再生順を返す関数。nil なら [GitOldOrder]。
 	//
 	// テストで旧再生順を直に渡すための穴でもある。ここを固定にすると、
@@ -80,10 +95,14 @@ type Options struct {
 
 // Load は root 配下を読む。旧再生順の取り方は [GitOldOrder]。
 //
-// ロケールの列挙と作業コピーの有無の判定は publish.DiscoverTargets に委ねる。
-// publish が入力に選ぶファイルと、この道具が「作業コピー」と呼ぶファイルが
-// 食い違うと、「publish を回すとどうなるか」という主張が成り立たなくなる。
-// Target.Input != Target.Output であることが、作業コピーがある状態そのものになる。
+// ロケールの列挙と作業コピーの有無の判定は publish.DiscoverTargetsWithGame に
+// 委ねる。走査の規則を2か所に持つと、publish が対象にするロケールと、この道具が
+// 報告するロケールが食い違う。Target.Input != Target.Output であることが、
+// 作業コピーがある状態そのものになる。
+//
+// --game を渡したときの探し先も publish と同じになる。publish もゲーム側の
+// 作業コピーを入力にするので、この道具の「publish を回すとこうなる」という
+// 読み方は、ゲーム側の作業コピーを読んだときにも成り立つ。
 //
 // useWorking が false のときは作業コピーを読まない。公開ファイルだけで何が
 // 言えるかを再現したいとき（作業コピーが古いときを含む）に使う。
@@ -102,7 +121,7 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("再生順のデータを読めません: %w", err)
 	}
-	targets, err := publish.DiscoverTargets(root)
+	targets, err := publish.DiscoverTargetsWithGame(root, opt.Game)
 	if err != nil {
 		return nil, fmt.Errorf("%s を読めません: %w", publish.TranslationsDir, err)
 	}
@@ -116,13 +135,15 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	// 旧再生順が取れなくてもエラーにはしない。引き継ぎ候補1カテゴリだけが
 	// 判定できなくなる話で、残り8カテゴリは旧版が無くても成り立つ。
 	// git の無い環境で道具そのものが動かなくなるほうが困る。
-	repo.OldOrder, repo.OldOrderReason = loadOldOrder(root, repo.OrderPath, opt.OldOrder)
+	var oldOrderWhy reason.Reason
+	repo.OldOrder, oldOrderWhy = loadOldOrder(root, repo.OrderPath, opt.OldOrder)
+	repo.OldOrderReason, repo.OldOrderReasonID = oldOrderWhy.Text, oldOrderWhy.ID
 
 	for _, t := range targets {
 		loc := Locale{
 			Name:          t.Locale,
 			PublishedPath: t.Output,
-			WorkingPath:   workingPath(root, t.Locale),
+			WorkingPath:   publish.WorkingPath(root, opt.Game, t.Locale),
 		}
 
 		published, err := readRowsFile(t.Output)
@@ -131,12 +152,12 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		}
 		loc.Published = published
 
-		// 作業コピーの有無は publish と同じ根拠で決める。
-		// Input と Output が違えば、publish はそのファイルを入力にする。
+		// 作業コピーの有無は走査と同じ根拠で決める。
+		// Input と Output が違えば、そのロケールには作業コピーがある。
 		if t.Input != t.Output {
 			loc.WorkingExists = true
-			// publish が実際に読むパスを覚えておく。_discovered 以外の場所を
-			// 入力にする将来の変更があっても、表示が嘘にならないようにする。
+			// 実際に読むパスを覚えておく。_discovered 以外の場所を入力にする
+			// 将来の変更があっても、表示が嘘にならないようにする。
 			loc.WorkingPath = t.Input
 			if opt.Working {
 				working, err := readRowsFile(t.Input)
@@ -158,30 +179,53 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	return repo, nil
 }
 
-// loadOldOrder は1つ前の版の再生順を読む。読めなかったときは理由を日本語で返す。
+// loadOldOrder は1つ前の版の再生順を読む。読めなかったときは理由を返す。
 //
-// 理由を error のまま持ち回らずに文字列にするのは、そのまま画面に出す文面だから。
-// 呼び出し側（表示）で種類ごとに場合分けする予定が無いのに型を残すと、
-// 「どの理由なら何を書くか」の分岐が表示側へ漏れる。
-func loadOldOrder(root, orderPath string, src OldOrderSource) (*order.Data, string) {
+// 理由を error のまま持ち回らないのは、呼び出し側（表示）で種類ごとに場合分けする
+// 予定が無いのに型を残すと、「どの理由なら何を書くか」の分岐が表示側へ漏れるから。
+// 文面に識別子を添えても、その性質は変わらない。表示側は識別子を目録の鍵にする
+// だけで、どの理由かを見て書き分けることはしない。
+func loadOldOrder(root, orderPath string, src OldOrderSource) (*order.Data, reason.Reason) {
 	if src == nil {
 		src = GitOldOrder
 	}
 	raw, err := src(root, orderPath)
 	if err != nil {
-		return nil, err.Error()
+		return nil, reason.New(oldOrderReasonID(err), err.Error())
 	}
 	data, err := order.LoadPowerShell(raw, nil)
 	if err != nil {
-		return nil, "1つ前の再生順を読めません"
+		return nil, reason.New(reason.OldOrderUnreadable, "1つ前の再生順を読めません")
 	}
 	if !hasLineIDKeys(data) {
 		// 取り出せはしたが、台詞IDとキーの組が1つも無い。列名が変わった古い版か、
 		// 取り違えた別のファイル。突き合わせる手がかりが無いので判定しない。
 		// ここで 0 件と書くと「移すべき訳は無い」と読まれる。
-		return nil, "1つ前の再生順に台詞IDとキーの組がありません"
+		return nil, reason.New(reason.OldOrderNoLineIDs, "1つ前の再生順に台詞IDとキーの組がありません")
 	}
-	return data, ""
+	return data, reason.Reason{}
+}
+
+// oldOrderReasonID は [OldOrderSource] が返した誤りに識別子を当てる。
+//
+// 当てるのはこのパッケージが定義した番兵だけである。差し替えた呼び出し側が返す
+// 誤りには名前が無いので空を返し、画面はその文面をそのまま出す。当てずっぽうで
+// 近い識別子を付けると、画面には関係のない英文が出る。日本語が1行残るほうが、
+// 別の理由に読み替えられるよりよい。
+func oldOrderReasonID(err error) string {
+	switch {
+	case errors.Is(err, ErrNoGit):
+		return reason.OldOrderNoGit
+	case errors.Is(err, ErrNoRepository):
+		return reason.OldOrderNoRepository
+	case errors.Is(err, ErrNotTracked):
+		return reason.OldOrderNotTracked
+	case errors.Is(err, ErrOnlyOneVersion):
+		return reason.OldOrderOnlyOneVersion
+	case errors.Is(err, ErrGitFailed):
+		return reason.OldOrderGitFailed
+	}
+	return ""
 }
 
 // hasLineIDKeys は台詞IDとキーがそろった行が1つでもあるかを返す。
@@ -230,11 +274,6 @@ func emptyLocales(root string, targets []publish.Target) ([]string, error) {
 		out = append(out, name)
 	}
 	return out, nil
-}
-
-// workingPath は作業コピーの既定の置き場を返す。ファイルが無くても値を返す。
-func workingPath(root, locale string) string {
-	return filepath.Join(root, publish.TranslationsDir, publish.DiscoveredDir, locale+publish.WorkingSuffix)
 }
 
 // readRowsFile はCSVファイルを読んで [Row] に直す。

@@ -3,10 +3,12 @@ package diff
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // Finding は報告する1行。
@@ -27,6 +29,13 @@ type Finding struct {
 	Translation string
 	// Note は短い日本語の理由。CSV の最終列に入る。
 	Note string
+	// NoteReason は [Finding.Note] と同じ理由を、識別子と置換の組で持つ。
+	//
+	// Note と別に持つのは、CLI（text と CSV）が日本語の文面をそのまま出す一方で、
+	// 画面（internal/web）は目録で差し替えるためである。NoteReason.Text は常に
+	// Note と同じ文字列になる。CSV に列は足さない。11列という出力の形は
+	// 使い方の説明にも書いてある約束で、列を増やすと表計算に貼る側の手順が変わる。
+	NoteReason reason.Reason
 	// CarryTo は訳の引き継ぎ先の新しいキー（[CatCarryover] のときだけ入る）。
 	//
 	// CSV には列を足さず、同じ内容を Note の文面にも入れてある。11列という
@@ -70,6 +79,9 @@ type Summary struct {
 	// OldOrderReason は旧再生順を読めなかった理由（[Repo.OldOrderReason]）。
 	// 読めたときは空。
 	OldOrderReason string
+	// OldOrderReasonID は [Summary.OldOrderReason] に対応する識別子
+	// （[Repo.OldOrderReasonID]）。名前を付けていない理由のときは空。
+	OldOrderReasonID string
 
 	// CarryMoved は引き継ぎ候補のうち「移動」の件数。
 	// 旧キーがもう再生順に無いので、これらは「台本から消えた行」にも出る。
@@ -359,17 +371,18 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 	mine map[string]struct{}, owners map[string]int, union map[string]struct{}) (Summary, []Finding) {
 
 	sum := Summary{
-		Locale:         loc.Name,
-		PublishedPath:  loc.PublishedPath,
-		WorkingPath:    loc.WorkingPath,
-		HasWorking:     loc.HasWorking,
-		WorkingExists:  loc.WorkingExists,
-		OrderKeys:      len(idx.first) > 0,
-		OrderLineIDs:   len(idx.lineIDs) > 0,
-		OldOrder:       r.OldOrder != nil,
-		OldOrderReason: r.OldOrderReason,
-		WorkingRows:    len(loc.Working),
-		Counts:         make(map[Category]int, len(categories)),
+		Locale:           loc.Name,
+		PublishedPath:    loc.PublishedPath,
+		WorkingPath:      loc.WorkingPath,
+		HasWorking:       loc.HasWorking,
+		WorkingExists:    loc.WorkingExists,
+		OrderKeys:        len(idx.first) > 0,
+		OrderLineIDs:     len(idx.lineIDs) > 0,
+		OldOrder:         r.OldOrder != nil,
+		OldOrderReason:   r.OldOrderReason,
+		OldOrderReasonID: r.OldOrderReasonID,
+		WorkingRows:      len(loc.Working),
+		Counts:           make(map[Category]int, len(categories)),
 	}
 	for _, c := range categories {
 		sum.Counts[c] = 0
@@ -385,6 +398,7 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 		f.Category = c
 		if f.Note == "" {
 			f.Note = c.note()
+			f.NoteReason = c.noteReason()
 		}
 		found[c] = append(found[c], f)
 	}
@@ -436,6 +450,7 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 		// 台本から消えた行があるのにキーの変化が1つも見えないのは辻褄が合わない。
 		sum.OldOrderStale = true
 		sum.OldOrderReason = staleOldOrderReason
+		sum.OldOrderReasonID = reason.OldOrderStale
 	}
 	if sum.canJudge(CatCarryover) {
 		for _, row := range loc.Published {
@@ -454,7 +469,8 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 			f := publishedFinding(row)
 			f.CarryTo = target.key
 			f.CarryKind = target.kind
-			f.Note = target.note()
+			cause := target.cause()
+			f.Note, f.NoteReason = cause.Text, cause
 			switch target.kind {
 			case CarryCopied:
 				sum.CarryCopied++
@@ -468,14 +484,14 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 	work := foldWorking(loc.Working)
 	sum.SourceMissing = work.sourceMissing
 	for _, row := range loc.Working {
-		note, dropped := droppedReason(row)
+		cause, dropped := droppedCause(row)
 		if !dropped {
 			continue
 		}
 		// publish に捨てられる行は、未翻訳かどうかを論じる前に消える。
 		// 両方に出すと同じ行を2回直すように見えるので、捨てられる側だけを出す。
 		f := workingFinding(idx, row)
-		f.Note = note
+		f.Note, f.NoteReason = cause.Text, cause
 		add(CatDropped, f)
 	}
 	for _, k := range work.untranslatedOrder {
@@ -505,6 +521,7 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 				borrowPosition(r, k, &f)
 			}
 			f.Note = fmt.Sprintf("他の %d ロケールにあります", others)
+			f.NoteReason = reason.New(reason.NoteLocaleGap, f.Note, "count", strconv.Itoa(others))
 			add(CatLocaleGap, f)
 			continue
 		}

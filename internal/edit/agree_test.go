@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -147,27 +148,36 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// 読み取り専用にすると、Windows では rename が失敗する。
-		// 版の照合は通るので、再試行の経路まで届く。
-		if err := os.Chmod(path, 0o444); err != nil {
+		// 書けない状態にする。閉じる相手が OS で違う。[publish.WriteBytes] は
+		// 同じディレクトリに一時ファイルを作ってから rename で置き換えるので、
+		// Windows はファイルの読み取り専用属性で止まり、POSIX はディレクトリの
+		// 書き込み権で止まる。ファイルだけを 0444 にしていたころは、POSIX では
+		// 置き換えが通ってしまい、この節は毎回飛ばされていた。
+		// 版の照合は読むだけなので、どちらでも通って再試行の経路まで届く。
+		closed, open := path, path
+		var closedMode, openMode os.FileMode = 0o444, 0o644
+		if runtime.GOOS != "windows" {
+			closed, open = dir, dir
+			closedMode, openMode = 0o555, 0o755
+		}
+		if err := os.Chmod(closed, closedMode); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+		t.Cleanup(func() { _ = os.Chmod(open, openMode) })
 
 		start := time.Now()
 		saveErr := f.Save()
 		elapsed := time.Since(start)
 
 		if saveErr == nil {
-			// 環境によっては読み取り専用でも rename が通る。そのときは
-			// 再試行の経路を確かめられないので飛ばす。
-			t.Skip("この環境では読み取り専用のファイルへ書けたので飛ばす")
+			// root で走るとどちらの手も効かない。再試行の経路を確かめられないので飛ばす。
+			t.Skip("この環境では書けない状態にできなかったので飛ばす")
 		}
 		// 10ms + 30ms + 100ms を空けて4回試す。
 		if elapsed < 140*time.Millisecond {
 			t.Errorf("再試行していない: %v しか掛かっていない（誤り: %v）", elapsed, saveErr)
 		}
-		if err := os.Chmod(path, 0o644); err != nil {
+		if err := os.Chmod(open, openMode); err != nil {
 			t.Fatal(err)
 		}
 		got, readErr := os.ReadFile(path)

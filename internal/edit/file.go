@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // Kind は物理行の種類。
@@ -60,6 +62,19 @@ type Line struct {
 	Editable bool
 	// Reason は Editable が false のときの理由。
 	Reason string
+	// Cause は [Line.Reason] と同じ理由を、識別子と置換の組で持つ。
+	//
+	// 文面と別に持つのは、画面（internal/web）が目録で差し替えるためである。
+	// Cause.Text は常に Reason と同じ文字列になる。
+	Cause reason.Reason
+}
+
+// setReason は編集できない理由を、文面と識別子の両方へ一度に入れる。
+//
+// 別々に代入できる形にすると、片方だけ書き換えた行がいずれ現れる。そのとき
+// 画面は古い理由を英語で出し、CLI は新しい理由を日本語で出す。入口を1つにする。
+func (l *Line) setReason(why reason.Reason) {
+	l.Reason, l.Cause = why.Text, why
 }
 
 // Translation は最終フィールド（訳）を返す。
@@ -97,6 +112,9 @@ type File struct {
 	dirty          bool
 	readOnly       bool
 	readOnlyReason string
+	// readOnlyCause は readOnlyReason と同じ理由を、識別子と置換の組で持つ。
+	// 画面が目録から訳された文面を引くための鍵になる。
+	readOnlyCause reason.Reason
 }
 
 // Parse はバイト列を編集モデルにする。壊れた入力でも誤りは返さない。
@@ -136,18 +154,23 @@ func Parse(data []byte) *File {
 	}
 
 	if headerIndex < 0 {
-		f.markReadOnly("ヘッダー行が無い（空のファイルか、コメントと空行だけのファイル）")
+		f.markReadOnly(reason.New(reason.EditNoHeader,
+			"ヘッダー行が無い（空のファイルか、コメントと空行だけのファイル）"))
 		return f
 	}
 
 	headerBody, _ := splitTerminator(f.lines[headerIndex].Text)
 	header := matchHeader(headerBody)
 	if header == nil {
-		f.markReadOnly(fmt.Sprintf(
+		// ヘッダー行そのものは %q で引用してから渡す。引用を目録の側にやらせると、
+		// 言語ごとに引用符が変わり、同じファイルの同じ行が別の綴りで出る。
+		f.markReadOnly(reason.New(reason.EditBadHeader, fmt.Sprintf(
 			"%d行目のヘッダーが %q で、受理される4種のいずれでもない（"+
 				"key,section,node,order,speaker,translation / key,speaker,translation / key,translation / "+
 				"key,section,node,order,speaker,source_en,translation）",
-			f.lines[headerIndex].Number, headerBody))
+			f.lines[headerIndex].Number, headerBody),
+			"line", strconv.Itoa(f.lines[headerIndex].Number),
+			"text", fmt.Sprintf("%q", headerBody)))
 		return f
 	}
 	f.header = header
@@ -189,6 +212,10 @@ func (f *File) ReadOnly() bool { return f.readOnly }
 
 // ReadOnlyReason は読み取り専用にした理由。そうでなければ空。
 func (f *File) ReadOnlyReason() string { return f.readOnlyReason }
+
+// ReadOnlyCause は [File.ReadOnlyReason] と同じ理由を、識別子と置換の組で返す。
+// 読み取り専用でなければ空。
+func (f *File) ReadOnlyCause() reason.Reason { return f.readOnlyCause }
 
 // Dirty は読み込み後に1バイトでも変えたかを返す。
 func (f *File) Dirty() bool { return f.dirty }
@@ -238,28 +265,38 @@ func (f *File) SetTranslation(number int, value string) error {
 	}
 	i, ok := f.indexOf(number)
 	if !ok {
-		return &NotEditableError{Line: number, Reason: "そんな行番号は無い"}
+		return notEditable(number, reason.New(reason.EditNoSuchLine, "そんな行番号は無い"))
 	}
 	line := &f.lines[i]
 	if line.Kind != KindData {
-		return &NotEditableError{Line: number, Reason: "データ行ではない（" + line.Kind.String() + "）"}
+		// 種類の名前（comment / blank / header / data）は ASCII のまま渡す。
+		// ファイルの見え方を指す語で、[Kind.String] と doc コメントが同じ綴りを
+		// 使っている。訳すと、画面と説明が別の語で同じものを指すことになる。
+		return notEditable(number, reason.New(reason.EditNotDataLine,
+			"データ行ではない（"+line.Kind.String()+"）", "kind", line.Kind.String()))
 	}
 	if !line.Editable {
-		return &NotEditableError{Line: number, Reason: line.Reason}
+		return notEditable(number, line.Cause)
 	}
 	if strings.ContainsAny(value, "\r\n") {
-		return &InvalidValueError{Line: number, Reason: "訳に改行は入れられない"}
+		return invalidValue(number, reason.New(reason.EditNoNewline, "訳に改行は入れられない"))
 	}
 	if strings.ContainsRune(value, 0) {
 		// NUL は Python の csv.reader が _csv.Error にする値だが、
 		// internal/validate はその再現をしていない。ここで止めないと
 		// 誰も気づかないまま公開ファイルまで届く。
-		return &InvalidValueError{Line: number, Reason: "訳に NUL は入れられない"}
+		return invalidValue(number, reason.New(reason.EditNoNUL, "訳に NUL は入れられない"))
 	}
 	if !utf8.ValidString(value) {
 		// 不正なUTF-8も後段のどこも検出しない（validate の doc コメント参照）。
 		// 書けない値は書かせない、という CR/LF と同じ扱いにする。
-		return &InvalidValueError{Line: number, Reason: "訳が正しいUTF-8ではない"}
+		//
+		// HTTP の経路からここは立たない。[encoding/json] が不正なバイトを
+		// U+FFFD へ置き換えてしまい、届く文字列はもう正しい UTF-8 だからである。
+		// そちらは internal/web が復号する前に本文のバイト列を見て止めている
+		// （handleRows の "error.bad_utf8"）。だからここを消してよい、とは
+		// ならない。このパッケージを直に使う側には、まだここしか無い。
+		return invalidValue(number, reason.New(reason.EditBadUTF8, "訳が正しいUTF-8ではない"))
 	}
 
 	body, term := splitTerminator(line.Text)
@@ -337,7 +374,7 @@ func (f *File) refresh(i int) {
 		line.Kind = KindBlank
 		line.Fields = nil
 		line.Editable = false
-		line.Reason = "この行はレコードとして読まれない"
+		line.setReason(reason.New(reason.EditNotRecord, "この行はレコードとして読まれない"))
 		return
 	}
 	line.Kind = KindData
@@ -356,12 +393,14 @@ func (f *File) refresh(i int) {
 		// 壊す。列が少ない行は別の列を訳だと思って書き換える。どちらも直せない
 		// 壊し方なので、編集させずに翻訳者へ見せる。
 		line.Editable = false
-		line.Reason = fmt.Sprintf("フィールド数がヘッダーと合わない（ヘッダーは%d列、この行は%d列）",
-			len(f.header), len(offsets))
+		line.setReason(reason.New(reason.EditFieldCount,
+			fmt.Sprintf("フィールド数がヘッダーと合わない（ヘッダーは%d列、この行は%d列）",
+				len(f.header), len(offsets)),
+			"header", strconv.Itoa(len(f.header)), "row", strconv.Itoa(len(offsets))))
 		return
 	}
 	line.Editable = true
-	line.Reason = ""
+	line.setReason(reason.Reason{})
 }
 
 // indexOf は物理行番号から f.lines の添字を引く。
@@ -377,12 +416,13 @@ func (f *File) indexOf(number int) (int, bool) {
 
 // markReadOnly はファイル全体を読み取り専用にする。
 // データ行の Editable は false のまま、理由だけ入れておく。
-func (f *File) markReadOnly(reason string) {
+func (f *File) markReadOnly(why reason.Reason) {
 	f.readOnly = true
-	f.readOnlyReason = reason
+	f.readOnlyReason = why.Text
+	f.readOnlyCause = why
 	for i := range f.lines {
 		if f.lines[i].Kind == KindData {
-			f.lines[i].Reason = reason
+			f.lines[i].setReason(why)
 		}
 	}
 }

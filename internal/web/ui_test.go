@@ -3,6 +3,7 @@ package web
 import (
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1041,5 +1042,23 @@ func TestOpenEditorReviewsTheRowItLeft(t *testing.T) {
 	// 差し込まれる（焦点は入っているのに欄が見えない）。
 	if strings.Index(body, "editor.focus()") > strings.Index(body, "reviewClosed(leaving)") {
 		t.Error("照らし直しが、行を開く前に走っている")
+	}
+}
+
+// TestScreenElementsExist は、app.js が探す id が index.html にあることを見る。
+//
+// getElementById は無い id に null を返すだけで、その場では落ちない。落ちるのは
+// そこへ書き込む段になってからで、画面のどこか1か所が黙って出なくなる。
+// ゲームのフォルダーを出す行（game-path）のように、ふだんは隠れている要素ほど
+// 気づけない。
+func TestScreenElementsExist(t *testing.T) {
+	html := uiSource(t, "ui/index.html")
+	js := uiSource(t, "ui/app.js")
+
+	for _, id := range regexp.MustCompile(`getElementById\("([a-z0-9-]+)"\)`).
+		FindAllStringSubmatch(js, -1) {
+		if !strings.Contains(html, `id="`+id[1]+`"`) {
+			t.Errorf("app.js が探す id が index.html に無い: %s", id[1])
+		}
 	}
 }

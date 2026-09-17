@@ -22,7 +22,8 @@ func editTree(t *testing.T) string {
 func runEditArgs(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := runEdit(args, ".", &stdout, &stderr)
+	// 第3引数は共通オプションで受けた --game の既定値。空なら見に行かない。
+	code := runEdit(args, ".", "", &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 

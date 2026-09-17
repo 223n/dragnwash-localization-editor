@@ -1,10 +1,13 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
@@ -65,7 +68,10 @@ type rowResult struct {
 	Translation string `json:"translation"`
 	// Error は保存できなかった理由。Saved が false のときだけ入る。
 	Error string `json:"error,omitempty"`
-	// Warning は保存はできたが、書いた値と読み直した値が違うときの断り。
+	// Warning は保存はできたが、そのまま受け取ってほしくないときの断り。
+	//
+	// 1つの欄に連ねる形にしてあるのは、画面がこれを行の下に1行で出すためである
+	// （app.js の setRowNote）。欄を増やすたびに画面の描き方を決め直すことになる。
 	Warning string `json:"warning,omitempty"`
 	// Badges は局所更新後の状態バッジ。訳が入った行から「未翻訳」が消える。
 	Badges []badgeView `json:"badges"`
@@ -105,19 +111,51 @@ type errorResponse struct {
 
 // handleRows は訳を保存する。
 //
-// 経路はこれ1つで、書き出す先は publish.DiscoverTargets が返した Target.Input。
-// 作業コピーがあればそれ、無ければ公開ファイル自身。画面が編集するファイルと
-// publish が入力に選ぶファイルを同じにしておくと、画面の内容と公開結果が
-// 食い違う余地が無い。
+// 経路はこれ1つで、書き出す先は Target.Input の1つだけである。作業コピーが
+// あればそれ、無ければ公開ファイル自身で、publish が入力に選ぶファイルと同じ。
+// 新しい訳がコミットする側へ入るのは publish を回したときである。
 //
-// publish は回さない。保存は「触った行の最終フィールドだけを差し替える」であって
-// 再生成ではない。再生成すると並びと見出しが作り直され、訳を打ち直す途中の
-// 自動保存で「訳が空になった行」が丸ごと消える。
+// publish はここでは回さない。保存は「触った行の最終フィールドだけを差し替える」
+// であって再生成ではない。再生成すると並びと見出しが作り直され、訳を打ち直す
+// 途中の自動保存で「訳が空になった行」が丸ごと消える。
 func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	cat := s.cat.forRequest(s.opt.UILang, r.Header.Get("Accept-Language"))
 
+	// 本文を先に丸ごと読む。復号しながら流さないのは、復号する前にバイト列が
+	// UTF-8 かを見たいからである。
+	//
+	// [encoding/json] は不正なバイトを U+FFFD へ黙って置き換える。置き換わった
+	// あとの文字列はもう「正しい UTF-8」なので、[edit.File.SetTranslation] の
+	// UTF-8 の検査（[reason.EditBadUTF8]）はこの経路では1度も立たない。実測
+	// （この開発機）では、CP932 の 4 バイト "82 C6 82 EA" を訳に入れて送ると、
+	// 断りも警告も出ずに saved で返り、作業コピーには "EF BF BD C6 82 EF BF BD"
+	// が書かれた。U+FFFD は正しい UTF-8 なので、この先のどの検査も止めない。
+	// publish はそれをコミットする側へ運ぶ。
+	//
+	// 止めるのは本文のバイト列である。U+FFFD そのものを禁じる形は採らない。
+	// 元から U+FFFD を含む訳（壊れた原文をそのまま写した訳など）を拒むことになる。
+	// 「送られたバイト列が UTF-8 ではない」は、それ自体がまぎれもない誤りである。
+	//
+	// ブラウザーは必ず UTF-8 で送るので、画面から使っているかぎりここは立たない。
+	// それでも見るのは、この守りが「壊れた値をファイルへ入れない」ために
+	// 書かれたものだからである。立たない守りは無い守りと同じである。
+	//
+	// POST を足すときは、その経路でも同じことをすること。ここに置いてあるのは、
+	// 本文の上限（[maxRowsBody]）を持っているのがこの経路だからである。
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRowsBody))
+	if err != nil {
+		// 誤りの中身は返さない。本文には訳が入っている。
+		s.writeError(w, cat, http.StatusBadRequest, "error.bad_request")
+		return
+	}
+	if !utf8.Valid(body) {
+		// 何バイト目が壊れていたかも返さない。位置は訳の長さを漏らす。
+		s.writeError(w, cat, http.StatusBadRequest, "error.bad_utf8")
+		return
+	}
+
 	var req rowsRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRowsBody))
+	dec := json.NewDecoder(bytes.NewReader(body))
 	// 知らない鍵を拒む。画面と待ち受けが別の版になったとき、送ったつもりの
 	// 値が黙って落ちる形にしない。
 	dec.DisallowUnknownFields()
@@ -183,8 +221,11 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 		Locale:  target.Locale,
 		Version: out.file.Version(),
 		Results: out.results,
-		Counts:  s.buildCounts(cat, target.Locale, sum),
-		Notes: s.buildNotes(cat, target.Locale, sum,
+		// 行数も数え直す。件数だけ返してチップの数を置いていくと、訳を入れた
+		// 直後に「32 行」と書いたチップが31行しか出さなくなる。
+		Counts: s.buildCounts(cat, target.Locale, sum,
+			rowsByCategory(out.file.Lines(), badges)),
+		Notes: s.buildNotes(cat, target, sum,
 			out.file.Header() != nil && hasSourceColumn(out.file.Header())),
 	})
 }
@@ -200,7 +241,7 @@ type saveOutcome struct {
 	results []rowResult
 	// applied は実際にモデルへ入れた行数。
 	applied int
-	// conflict が true なら 409。1バイトも書いていない。
+	// conflict が true なら 409。ファイルには1バイトも書いていない。
 	conflict bool
 	// status と errKey は誤りのとき。errKey が空なら成功。
 	status int
@@ -214,6 +255,14 @@ type saveOutcome struct {
 //
 // 保存を直列にするのは、同じファイルへ同時に2つ書くと、片方の版の照合が
 // 通ったあとにもう片方が書き終える、という並びが起きうるためである。
+//
+// 書く先は Target.Input の1つだけである。以前はここで、ゲーム側の作業コピーと
+// コミットする側の公開ファイルの両方へ書いていたが、それは成り立たなかった。
+// 公開ファイルには未翻訳の行が存在しない（publish が訳の空の行を書かない、
+// 移植仕様 R20）ので、翻訳者がいちばんやりたいこと——未訳の行を訳す——は、
+// キーで引いても書き戻す先の行が無く、1行も入らない。それでも画面は saved=true を
+// 返すので、入ったように見えるぶん黙って落とすより悪い。新しい訳がコミットする側へ
+// 入るのは publish を回したときである。
 func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest) saveOutcome {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
@@ -253,7 +302,7 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 					// CSV として書き戻して読み直すと値が変わる場合
 					// （internal/edit の doc.go が挙げている前後の空白など）。
 					// 画面の値をこちらで上書きするので、変えたことを断る。
-					res.Warning = s.cat.T(cat, "warn.value_normalized")
+					addWarning(&res, s.cat.T(cat, "warn.value_normalized"))
 				}
 			}
 		case errors.Is(err, edit.ErrReadOnly):
@@ -262,8 +311,8 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 			return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 		default:
 			// 編集できない行と、書けない値（改行・NUL・不正なUTF-8）。
-			// 理由は internal/edit が持つ文面をそのまま出す。行の中身は含まない。
-			res.Error = err.Error()
+			// 理由は目録から組み直す。行の中身は含まない。
+			res.Error = s.editErrorText(cat, err)
 		}
 		results = append(results, res)
 	}
@@ -271,6 +320,7 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	if applied == 0 {
 		// 1行も書けなかった。書いていないことを状態コードでも示す。
 		// 画面はこの結果を見て、その行を「保存できていない行」として残す。
+		// ここまででファイルへは1バイトも書いていない（モデルを触っただけ）。
 		return saveOutcome{
 			results: results,
 			status:  http.StatusUnprocessableEntity,
@@ -281,7 +331,8 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	if err := file.Save(); err != nil {
 		if errors.Is(err, edit.ErrConflict) {
 			// Save は書く直前にもう一度版を照合する。ここで弾かれたときも
-			// 1バイトも書いていない。手元の File はもう古いので読み直す。
+			// このファイルには1バイトも書いていない。手元の File はもう古いので
+			// 読み直す。
 			fresh, err := edit.Open(target.Input)
 			if err != nil {
 				s.logf("open failed locale=%s", target.Locale)
@@ -313,6 +364,43 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	return saveOutcome{file: file, results: results, applied: applied}
 }
 
+// addWarning は行の断りを1つ足す。既にあれば後ろに連ねる。
+//
+// 上書きしないのは、先に付いた断り（値を正規化した、など）が消えるためである。
+// 区切りを空白1つにしてあるのは、画面が1行で出すのに合わせてある。
+func addWarning(res *rowResult, text string) {
+	if text == "" {
+		return
+	}
+	if res.Warning == "" {
+		res.Warning = text
+		return
+	}
+	res.Warning += " " + text
+}
+
+// editErrorText は internal/edit が返した誤りを、画面に出す文面にする。
+//
+// 外枠（「12行目は編集できない: …」）も、その中に入る理由も目録から引く。
+// err.Error() をそのまま返すと、英語の画面でその行だけ日本語になる。
+//
+// 知らない型の誤りは Error() をそのまま返す。訳されていない文が出るほうが、
+// 何も出ないよりよい。internal/edit の文面に行の中身は入っていないので、
+// そのまま返しても訳や原文が漏れることはない。
+func (s *server) editErrorText(cat *Catalog, err error) string {
+	var notEditable *edit.NotEditableError
+	if errors.As(err, &notEditable) {
+		return s.cat.T(cat, "error.not_editable",
+			"line", itoa(notEditable.Line), "reason", s.reasonText(cat, notEditable.Cause))
+	}
+	var invalid *edit.InvalidValueError
+	if errors.As(err, &invalid) {
+		return s.cat.T(cat, "error.invalid_value",
+			"line", itoa(invalid.Line), "reason", s.reasonText(cat, invalid.Cause))
+	}
+	return err.Error()
+}
+
 // keyMatches は、要求が指す行がクライアントの思っているキーの行かを返す。
 //
 // キーを送ってこない要求（キー列が空の行）は照合しない。行が無いときも通す。
@@ -328,11 +416,12 @@ func keyMatches(file *edit.File, e rowEdit) bool {
 	return line.Key() == e.Key
 }
 
-// writeConflict は 409 といまの行一覧を返す。1バイトも書いていない。
-func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publish.Target, file *edit.File) {
+// writeConflict は 409 といまの行一覧を返す。ファイルには1バイトも書いていない。
+func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publish.Target,
+	file *edit.File) {
+
 	sum := s.summary(target.Locale)
-	current := s.buildLines(cat, target.Locale, s.displayPath(target.Input), file,
-		sum, s.findings[target.Locale])
+	current := s.buildLines(cat, target, file, sum, s.findings[target.Locale])
 	noteRequest(w, " locale=%s conflict", target.Locale)
 	s.writeJSONStatus(w, http.StatusConflict, conflictResponse{
 		Conflict: true,

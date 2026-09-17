@@ -146,15 +146,58 @@
 <!--
   効くキーを画面から読めるようにする。覚えていないと使えない近道は、
   無いのと同じである。文言は目録から入れる。
+
+  畳んだ状態で始める（open を付けない）。読むのは1度で足りるのに、開いたままだと
+  一覧より上にずっと居座る。実測（実データの ja、1721行）で、2つとも開くと
+  一覧の始まりが 1280幅で 671.0px → 821.3px、375幅で 1212.6px → 1669.9px まで
+  下がる。狭い画面では、一覧に届くまで2画面ぶんスクロールすることになる。
+
+  details/summary にするのは、開閉そのものをブラウザーに任せるためである。
+  自前でボタンと hidden を組むと、開閉の状態を読み上げへ伝える仕掛けを自分で
+  持つことになる。中の p は id も class もそのまま残す。app.js が書き込む先は
+  この p のままで、summary には別の id を当てる。
+
+  開閉は覚えない。この道具は画面の状態をどこにも残さないと決めてある。
+
+  目録が届くまでは hidden で出さない。summary は焦点を受ける要素なので、文言の
+  入っていない開閉要素が2つ、名前を持たないまま焦点の順に並ぶことになる（実測:
+  空でも高さ 36.19px、tabIndex 0、focus() が通る）。畳みの中身は告知する欄では
+  ないので、ここは hidden で構わない（#message と #empty は role="status" なので
+  hidden にしない。app.js の showMessage と applyView の注記を見よ）。
 -->
-<p id="keys" class="notice keys"></p>
+<details id="keys-fold" class="fold" hidden>
+  <summary id="keys-title"></summary>
+  <p id="keys" class="notice keys"></p>
+</details>
 <!--
-  絞り込みと検索の断り書き。貼り付く一帯の外に置く。読むのは1度で足りるのに、
-  貼り付けると1839行のあいだずっと画面の1割を占める。
+  絞り込みと検索の断り書き。貼り付く一帯の外に置き、これも畳んでおく。
+
+  畳むと読まれなくなる文がある。閉じたままでも読めるのは summary だけなので、
+  そこには「無条件に本当のこと」を入れる。いまは検索がブラウザーの中だけで
+  完結すること（＝打った語がどこにも残らないこと）を入れてある。
+
+  チップに添えた数が何の数かは、ここではなく .finder の見出し（#filter-label、
+  目録の ui.filter）に置いた。畳める場所に置くと、既定では読めない。見出しは
+  1280幅でも375幅でもそれだけで1行を占めているので、そこへ字を足しても一帯は
+  高くならなかった（実測: 1280幅 151.3px、375幅 327.7px、いずれも増減なし）。
+  ただし 375幅では 23字を超えると折り返し、一帯が 22.4px 高くなる。
+
+  .finder の中へは移さない。あの一帯は 375px で既に 327.7px あり、高くすると
+  競合の決断ボタンが押せなくなる（app.css の .finder の注記を見よ）。ここは
+  もともと .finder の外の兄弟なので、条件の群（role="group"）の関係にも関わらない。
 -->
-<p id="finder-note" class="notice keys"></p>
+<details id="finder-fold" class="fold" hidden>
+  <summary id="finder-note-title"></summary>
+  <p id="finder-note" class="notice keys"></p>
+</details>
 
 <section class="panel">
+  <!--
+    --game で作業コピーを探しているゲームのフォルダー。指定が無いときは
+    空のまま隠れる。いま直しているのがリポジトリの中なのかゲームのフォルダーなのかを、
+    画面からそのまま読めるようにしておく。
+  -->
+  <p id="game-path" class="path" hidden></p>
   <p id="file-path" class="path"></p>
   <ul id="notes" class="notes"></ul>
   <div class="panel-cols">

@@ -9,8 +9,9 @@
 //	dwloc version    版を表示する
 //
 // 終了コードは 0 が成功、1 が「実行はできたが、人が見るべきものが残っている」、
-// 2 が実行時のエラーです。1 を返すのは validate が問題を見つけたときと、
-// diff が要確認を見つけたとき（--strict なら要作業も）です。
+// 2 が実行時のエラーです。1 を返すのは validate が問題を見つけたとき、
+// diff が要確認を見つけたとき（--strict なら要作業も）、そして publish が
+// 「書くと訳が失われる」と判断して1バイトも書かずに止まったときです。
 // この3段に分けているのは、CIが「検証に落ちた」と「そもそも実行できなかった」を
 // 区別できるようにするためです。元実装の check-translations.py は前者だけを1で返し、
 // 後者はトレースバックで落ちていました（移植仕様「形式検証 / 未決の点」）。
@@ -23,7 +24,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/223n/dragnwash-localization-editor/internal/gamedir"
 )
 
 // version は表示する版。既定は "dev" で、リリース時は次のように差し替えます。
@@ -65,10 +69,16 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）。
         サブコマンドの前後どちらに置いてもかまいません。
+  --game <フォルダー>|auto
+        作業コピーを探すゲームのプラグインフォルダー（publish / diff / edit）。
+        auto と書くと Steam のライブラリから探します。
+        指定しないとゲームのフォルダーは見に行きません。
+        validate は受け取りますが使いません。
 
 終了コード:
   0   成功
-  1   validate が問題を見つけた、または diff が要確認を見つけた
+  1   validate が問題を見つけた、diff が要確認を見つけた、または publish が
+      「書くと訳が失われる」「ゲームに入っている翻訳が古い」と判断して止まった
       （diff --strict では要作業でも 1 になります）
   2   実行時のエラー（引数の誤り、ファイルが読めない、など）
 
@@ -89,6 +99,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// "dwloc --root X validate --locale ja" のような並びが素直に通る。
 	global := newFlagSet("dwloc", stderr)
 	root := global.String("root", ".", "翻訳リポジトリのルート")
+	game := global.String("game", "", gameFlagUsage)
 
 	if code, ok := parseFlags(global, args, usageText, stdout, stderr); !ok {
 		return code
@@ -96,18 +107,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	rest := global.Args()
 	if len(rest) == 0 {
-		return runDefault(args, *root, stdout, stderr)
+		return runDefault(args, *root, *game, stdout, stderr)
 	}
 
 	switch name := rest[0]; name {
 	case "validate":
 		return runValidate(rest[1:], *root, stdout, stderr)
 	case "publish":
-		return runPublish(rest[1:], *root, stdout, stderr)
+		return runPublish(rest[1:], *root, *game, stdout, stderr)
 	case "diff":
-		return runDiff(rest[1:], *root, stdout, stderr)
+		return runDiff(rest[1:], *root, *game, stdout, stderr)
 	case "edit":
-		return runEdit(rest[1:], *root, stdout, stderr)
+		return runEdit(rest[1:], *root, *game, stdout, stderr)
 	case "version":
 		return runVersion(rest[1:], stdout, stderr)
 	case "help":
@@ -136,7 +147,7 @@ var startEdit = runEdit
 //
 // 使い方の表示をここから外したのは、翻訳者にとって最初の1回がいちばん脱落しやすい
 // ためです。使い方は dwloc help と dwloc --help で今までどおり出ます。
-func runDefault(args []string, root string, stdout, stderr io.Writer) int {
+func runDefault(args []string, root, game string, stdout, stderr io.Writer) int {
 	if !looksLikeRepo(root) {
 		where, err := filepath.Abs(root)
 		if err != nil {
@@ -154,7 +165,7 @@ func runDefault(args []string, root string, stdout, stderr io.Writer) int {
 	// 画面を始める前に、ほかのこともできると伝える。使い方を出さなくなったぶん、
 	// ここが唯一の手掛かりになる。
 	fmt.Fprintln(stdout, "サブコマンドを指定すると、検証や公開もできます（dwloc help）。")
-	return startEdit(nil, root, stdout, stderr)
+	return startEdit(nil, root, game, stdout, stderr)
 }
 
 // notARepoText は、翻訳リポジトリではない場所で起動されたときの案内です。
@@ -177,6 +188,131 @@ Translations フォルダーと同じ場所へ dwloc を移してから、もう
 
 ほかの使い方は dwloc help で表示します。
 `
+
+// gameFlagUsage は --game の1行説明。共通の入口とサブコマンドで同じ文を使います。
+// 何か所も言い回しが割れると、同じ指定が別のものに見えます。
+const gameFlagUsage = "作業コピーを探すゲームのプラグインフォルダー（auto で自動検出）"
+
+// gameFoundText は、どのフォルダーを探し先にするかを伝える文です。
+//
+// 「使います」と書かないのは、決めた時点ではまだ1バイトも読んでいないからです。
+// リポジトリ側に作業コピーがあるロケールでは、そちらが先に当たるのでゲーム側は
+// 読みません。そのロケールの作業コピーがゲーム側に無いときも読みません。
+// 実際に読んだファイルは、ロケールごとに別の場所で出します（dwloc diff の
+// 「作業コピー」の行、画面の「ファイル」の欄）。
+//
+// 標準エラーへ書きます。標準出力にしないのは dwloc diff --format csv のためで、
+// あちらの標準出力は表計算へそのまま貼る前提なので、1行足すと列がずれます。
+// 標準エラーなら、端末には出て、リダイレクトしたCSVには入りません。
+//
+// 実際に読んだファイルは、ロケールごとに別の場所で出します（dwloc diff の
+// 「作業コピー」の行、dwloc publish の "<出力> <- <入力>" の行、画面の
+// 「ファイル」の欄）。
+const gameFoundText = `dwloc: ゲームのフォルダーを作業コピーの探し先にします: %s
+dwloc:       実際に読むのは、そのロケールの作業コピーがここにあるときだけです。再生順は翻訳リポジトリのままです。
+`
+
+// gameNotFoundText は自動検出が空振りしたときの案内です。
+const gameNotFoundText = `dwloc: ゲームのフォルダーが見つかりません。
+dwloc:       Steam のライブラリを探しましたが、Translations/_discovered を持つプラグインがありませんでした。
+dwloc:       ゲームを1度起動して、ゲーム内で Export game flow を実行してください。
+dwloc:       場所が分かっているときは --game <フォルダー> で直に指定できます。
+`
+
+// gameNotFoundMacText は、macOS で自動検出が空振りしたときの案内です。
+//
+// 文面を分けるのは、macOS では「ゲームを1度起動して Export game flow を実行して
+// ください」が実行できない案内だからです。Drag'n Wash Localization は macOS で
+// 動きません。BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに
+// 割り込めず、Mod が読み込まれないためです（元リポジトリの README による）。
+// Mod が動かない以上、プラグインのフォルダーも作業コピーも作られません。
+//
+// dwloc 自身は macOS でも動きます。動かないのはゲームと繋がる部分だけなので、
+// 何ができるかも並べて、道具ごと諦めさせないようにします。
+const gameNotFoundMacText = `dwloc: ゲームのフォルダーが見つかりません。
+dwloc:       macOS では Drag'n Wash Localization（ゲーム内のMod）がまだ動きません。
+dwloc:       BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに割り込めないためです。
+dwloc:       Mod が動かないので、プラグインのフォルダーも作業コピーも作られません。
+dwloc:       dwloc 自身は動きます。publish / validate / diff と、原文の欄が空のままの edit は使えます。
+dwloc:       ほかのPCで書き出した作業コピーがあるときは --game <フォルダー> で指定できます。
+`
+
+// gameNotPluginText は --game に指定された場所が外れていたときの案内です。
+const gameNotPluginText = `dwloc: 指定された場所に Translations/_discovered がありません: %s
+dwloc:       ゲームのフォルダーか、その中の BepInEx/plugins/<プラグイン> を指定してください。
+dwloc:       そのフォルダーは、ゲーム内で Export game flow を1度実行するとできます。
+`
+
+// gameAmbiguousText は候補が複数あったときの案内です。
+//
+// どれかを選んで進めません。選んだ根拠は翻訳者から見えないので、黙って別の
+// ゲームのファイルを直させることになります。
+const gameAmbiguousText = `dwloc: ゲームのフォルダーが%d個見つかりました。どれを使うかを --game <フォルダー> で指定してください。
+`
+
+// resolveGame は --game の値からゲームのプラグインフォルダーを決めます。
+//
+// 値が空なら何もしません。自動検出が走るのは --game auto と書かれたときだけです。
+// 既定で走らせないことにしたのは、2つの理由によります。
+//
+//  1. 指定が無いときの出力を、この変更の前後で1バイトも変えないためです。
+//     作業コピーが見つかるかどうかで原文の欄と「未翻訳」の件数が変わるので、
+//     自動検出が既定で効くと、同じコマンドの結果が実行する PC ごとに変わります。
+//     CI と手元で違う答えが出る道具は、根拠として使えません。
+//  2. 黙って別のフォルダーを読み始めないためです。ゲーム側の作業コピーは
+//     コミットしないファイルで、リポジトリの中だけを見ているときと画面の
+//     見た目が変わりません。読む先が増えたことに気づかないまま直していると、
+//     直したものがどこへ入ったのかを追えなくなります。
+//
+// 決まったときは必ず1行書きます。書かないと、上の2つ目が守れません。
+func resolveGame(value string, stderr io.Writer) (string, bool) {
+	if value == "" {
+		return "", true
+	}
+
+	plugin, err := gamedir.Resolve(value)
+	if err != nil {
+		writeGameError(err, stderr)
+		return "", false
+	}
+	fmt.Fprintf(stderr, gameFoundText, filepath.ToSlash(plugin.Path))
+	return plugin.Path, true
+}
+
+// writeGameError は、ゲームのフォルダーを決められなかった理由を書きます。
+//
+// 理由ごとに次にやることが違うので、1つの文面にまとめません。自動検出が
+// 空振りしたときは書き出しがまだ、指定が外れているときは場所の取り違え、
+// 候補が複数あるときは人が選ぶ番、と別のことをしてもらう必要があります。
+func writeGameError(err error, stderr io.Writer) {
+	var ambiguous *gamedir.AmbiguousError
+	if errors.As(err, &ambiguous) {
+		fmt.Fprintf(stderr, gameAmbiguousText, len(ambiguous.Candidates))
+		for _, c := range ambiguous.Candidates {
+			fmt.Fprintf(stderr, "dwloc:         %s\n", filepath.ToSlash(c.Path))
+		}
+		return
+	}
+	var notPlugin *gamedir.NotPluginError
+	if errors.As(err, &notPlugin) {
+		fmt.Fprintf(stderr, gameNotPluginText, filepath.ToSlash(notPlugin.Path))
+		return
+	}
+	if errors.Is(err, gamedir.ErrNotFound) {
+		// 見つからない理由が OS ごとに違うので、次にやることも分けます。
+		// 検出そのものは macOS でも走らせたままにしてあります。BepInEx が
+		// 直れば、コードを足さずにそのまま見つかるようになるためです。
+		if runtime.GOOS == "darwin" {
+			fmt.Fprint(stderr, gameNotFoundMacText)
+			return
+		}
+		fmt.Fprint(stderr, gameNotFoundText)
+		return
+	}
+	// ここへ来るのは internal/gamedir が新しい誤りを増やしたとき。
+	// 名前の付いていない理由でも、黙って終わらせない。
+	fmt.Fprintf(stderr, "dwloc: ゲームのフォルダーを決められません: %v\n", err)
+}
 
 // looksLikeRepo は、そこが翻訳リポジトリらしいかを返します。
 //
@@ -218,9 +354,10 @@ dwloc の版を1行で表示します。ビルド時に版を埋め込んでい�
 // runVersion は版を表示します。
 func runVersion(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("dwloc version", stderr)
-	// --root は使わないが、共通オプションのつもりで打たれても止まらないように受ける。
-	// 版の表示に根拠となるディレクトリは要らないので、値は読まない。
+	// --root と --game は使わないが、共通オプションのつもりで打たれても止まらない
+	// ように受ける。版の表示に根拠となるフォルダーは要らないので、値は読まない。
 	fs.String("root", "", "（version では使いません）")
+	fs.String("game", "", "（version では使いません）")
 	if code, ok := parseFlags(fs, args, versionUsage, stdout, stderr); !ok {
 		return code
 	}
