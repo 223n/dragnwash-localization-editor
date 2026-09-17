@@ -13,6 +13,7 @@
     "server.locales": "ロケール: {locales}",
     "server.editing": "訳を書き換えられます。入力が止まると自動で保存します。publish は回しません。",
     "server.save_target": "保存先: 作業コピーがあればそれ、無ければ公開ファイルです。",
+    "server.publish_hint": "作業コピーを開いています。訳をコミットする側へ入れるには dwloc publish を回してください。",
     "server.stop_hint": "止めるには Ctrl+C を押してください。",
     "server.idle_hint": "操作がないまま {duration} たつと、自分で終わります。",
     "server.idle_off": "操作が絶えても自分では終わりません（--idle-timeout 0）。",
@@ -65,6 +66,8 @@
     "ui.orphans_title": "行き先が見つからない訳があります。ファイルからその行が無くなったか、同じキーの行が増えました。控えてから読み直してください。",
     "ui.orphan_lost": "この訳の行がファイルにありません。",
     "ui.file": "ファイル",
+    "ui.game_folder": "作業コピーを探すゲームのフォルダー",
+    "note.via_publish": "いま並べているのは作業コピーです。保存はこのファイルにだけ書きます。訳がコミットする側の {path} へ入るのは、dwloc publish を回したときです。",
     "note.no_source": "作業コピーが無いので、原文の欄は空のままです。",
     "ui.file_readonly": "このファイルは読み取り専用です: {reason}",
     "ui.counts": "件数",
@@ -150,6 +153,9 @@
     "reason.edit_not_data_line": "データ行ではない（{kind}）",
     "reason.edit_no_newline": "訳に改行は入れられない",
     "reason.edit_no_nul": "訳に NUL は入れられない",
-    "reason.edit_bad_utf8": "訳が正しいUTF-8ではない"
+    "reason.edit_bad_utf8": "訳が正しいUTF-8ではない",
+    "reason.publish_row_gone": "この行が新しい出力に無い",
+    "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる",
+    "reason.publish_base_drift": "ゲームに入っている訳が {locale} で {count} 件ちがう"
   }
 }

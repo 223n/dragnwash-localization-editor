@@ -13,6 +13,7 @@
     "server.locales": "Locales: {locales}",
     "server.editing": "You can edit translations. They are saved when you stop typing. publish is not run.",
     "server.save_target": "Saved to the working copy when there is one, otherwise to the published file.",
+    "server.publish_hint": "You are editing a working copy. Run dwloc publish to carry your translations into the files you commit.",
     "server.stop_hint": "Press Ctrl+C to stop.",
     "server.idle_hint": "Stops by itself after {duration} without activity.",
     "server.idle_off": "Will not stop by itself when idle (--idle-timeout 0).",
@@ -65,6 +66,8 @@
     "ui.orphans_title": "Some translations no longer have a row to go to. The row left the file, or more rows now share its key. Copy them down, then reload.",
     "ui.orphan_lost": "There is no row for this translation in the file.",
     "ui.file": "File",
+    "ui.game_folder": "Game folder searched for working copies",
+    "note.via_publish": "What you see is a working copy. Saving writes to this file only. Your translations reach {path}, the file you commit, when you run dwloc publish.",
     "note.no_source": "There is no working copy, so the source column stays empty.",
     "ui.file_readonly": "This file is read-only: {reason}",
     "ui.counts": "Counts",
@@ -150,6 +153,9 @@
     "reason.edit_not_data_line": "Not a data row ({kind})",
     "reason.edit_no_newline": "A translation cannot contain a line break",
     "reason.edit_no_nul": "A translation cannot contain NUL",
-    "reason.edit_bad_utf8": "The translation is not valid UTF-8"
+    "reason.edit_bad_utf8": "The translation is not valid UTF-8",
+    "reason.publish_row_gone": "This row is not in the new output",
+    "reason.publish_translation_cleared": "The new output leaves this row with an empty translation",
+    "reason.publish_base_drift": "The game has {count} different translations for {locale}"
   }
 }

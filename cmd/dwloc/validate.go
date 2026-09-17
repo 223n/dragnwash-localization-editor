@@ -21,6 +21,9 @@ tools/check-translations.py と同じ検査を行い、同じ文面を標準出�
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
+  --game <フォルダー>|auto
+        受け取りますが、validate では使いません。検証するのはコミットする側の
+        形なので、ゲームのフォルダーは判断に関わりません。
 
 終了コード:
   0   問題なし
@@ -38,6 +41,10 @@ func runValidate(args []string, defaultRoot string, stdout, stderr io.Writer) in
 	// 既定値には共通オプションで受けた値を入れる。サブコマンド側でも指定されたら
 	// そちらが後から上書きするので、後ろに書いた方が勝つ。
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
+	// --game は受けるだけで使わない。検証するのはコミットする側（リポジトリ）の
+	// 形で、ゲームのフォルダーはその判断に関わらない。それでも受けるのは、ほかの
+	// 3つに付けて回っている指定をここだけ弾くと、打ち直しを強いることになるため。
+	fs.String("game", "", "（validate では使いません）")
 	if code, ok := parseFlags(fs, args, validateUsage, stdout, stderr); !ok {
 		return code
 	}

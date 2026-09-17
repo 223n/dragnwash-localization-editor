@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
@@ -28,6 +29,21 @@ type bootstrapResponse struct {
 	Locales []string `json:"locales"`
 	// Selected は最初に出すロケール。--locale が無ければ空。
 	Selected string `json:"selected"`
+	// Game は作業コピーを探しているゲーム側のプラグインフォルダー。
+	// --game が無ければ空。
+	//
+	// 「使っているフォルダー」ではない。ロケールによっては、そこに作業コピーが
+	// 無くて1バイトも読まない。実際に読み書きするファイルはロケールごとに決まり、
+	// linesResponse.Path に出る。
+	//
+	// それでも探し先を出すのは、いまどのファイルを直しているのかを取り違えさせない
+	// ため。リポジトリの中だけを見ているときと、ゲームのフォルダーを読んでいるときで、
+	// 出てくる行の見た目は変わらない。黙って別の場所を読み始めると、翻訳者は
+	// 直したものがどこへ入ったのかを追えなくなる。
+	//
+	// 出すのはパスだけである。ゲーム側の作業コピーには原文（英語の台本）が
+	// 入っているが、その中身は行の一覧と同じ道でしか出さない。
+	Game string `json:"game,omitempty"`
 	// CanEdit は訳を書き換えて保存できるか。画面はこれを見て入力欄を出す。
 	//
 	// ファイル単位で編集できない場合（ヘッダーが受理できない）は、行を読む
@@ -86,6 +102,7 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		},
 		Locales:         localeNames(s.targets),
 		Selected:        s.opt.Locale,
+		Game:            gamePath(s.opt.Game),
 		CanEdit:         true,
 		AutosaveDelayMs: int(autosaveDelay.Milliseconds()),
 	})
@@ -129,10 +146,21 @@ func (s *server) handleLines(w http.ResponseWriter, r *http.Request) {
 		sum = diff.Summary{Locale: target.Locale}
 	}
 
-	resp := s.buildLines(cat, target.Locale, s.displayPath(target.Input), file,
-		sum, s.findings[target.Locale])
+	resp := s.buildLines(cat, target, file, sum, s.findings[target.Locale])
 	noteRequest(w, " locale=%s lines=%d", target.Locale, len(resp.Lines))
 	s.writeJSON(w, resp)
+}
+
+// gamePath は画面へ渡すゲームのフォルダーを整える。指定が無ければ空。
+//
+// [server.displayPath] を通さないのは、ゲームのフォルダーがルートの外にあるのが
+// ふつうだからである。displayPath はルートの外を絶対パスのまま返すので、
+// 結果は同じになるが、「相対にできるかもしれない」という読み方を残さない。
+func gamePath(game string) string {
+	if game == "" {
+		return ""
+	}
+	return filepath.ToSlash(game)
 }
 
 // autosaveDelay は入力が止まってから自動保存するまでの待ち時間。

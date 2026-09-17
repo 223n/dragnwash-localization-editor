@@ -11,6 +11,7 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -139,6 +140,12 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	}
 	for _, why := range editReasons(t) {
 		check("edit", why)
+	}
+	for _, why := range publishLossReasons(t) {
+		check("publish", why)
+	}
+	for _, why := range publishBaseReasons(t) {
+		check("publish", why)
 	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
@@ -287,6 +294,46 @@ func editReasons(t *testing.T) []reason.Reason {
 		t.Error("列数の合わない行が書けてしまった")
 	} else {
 		out = append(out, causeOf(t, err))
+	}
+
+	return out
+}
+
+// publishLossReasons は internal/publish が作る理由の見本を集める。
+//
+// 守りは「いまの公開ファイル」と「これから書く中身」を突き合わせて立つので、
+// 2つのバイト列をそのまま渡す。[publish.Build] を通さずに組み立てているのは、
+// 「行はあるが訳が空になる」ほうを Build では作れないためである（訳が空の行は
+// 出力しない、移植仕様 R20）。
+func publishLossReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	current := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		"aaaaaaaaaaaaaaaa,UI,,,UI,きえるやく",
+		"bbbbbbbbbbbbbbbb,UI,,,UI,からになるやく",
+		"",
+	}, "\n")
+	next := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		"bbbbbbbbbbbbbbbb,UI,,,UI,",
+		"",
+	}, "\n")
+
+	losses, err := publish.CheckLoss("ja", []byte(current), []byte(next))
+	if err != nil {
+		t.Fatalf("CheckLoss: %v", err)
+	}
+	if len(losses) != 2 {
+		t.Fatalf("失われる訳が2件でない: %+v", losses)
+	}
+	out := make([]reason.Reason, 0, len(losses))
+	for i, l := range losses {
+		if l.Why.Empty() {
+			t.Errorf("%d 件目に理由が無い: %+v", i, l)
+			continue
+		}
+		out = append(out, l.Why)
 	}
 	return out
 }
@@ -588,4 +635,59 @@ func TestSaveErrorIsTranslated(t *testing.T) {
 			}
 		}
 	}
+}
+
+// publishBaseReasons は「ゲームに入っている訳が古い」理由の見本を集める。
+//
+// [publish.BaseReason] を直に呼ばず、実際に判定を走らせるのは、件数の置換が
+// 合っていることまで見たいからである。手で組むと、数を書き写すことになる。
+func publishBaseReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	root := t.TempDir()
+	game := t.TempDir()
+
+	// コミット済み。2件とも訳が入っている。
+	write := func(dir, rel, body string) {
+		t.Helper()
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	header := "key,section,node,order,speaker,translation\n"
+	write(root, "Translations/ja/strings.csv", header+
+		"aaaaaaaaaaaaaaaa,UI,,,UI,あたらしいやく\n"+
+		"bbbbbbbbbbbbbbbb,UI,,,UI,そのままのやく\n")
+	// ゲームに入っているほう。1件だけ古い。
+	write(game, "Translations/ja/strings.csv", header+
+		"aaaaaaaaaaaaaaaa,UI,,,UI,ふるいやく\n"+
+		"bbbbbbbbbbbbbbbb,UI,,,UI,そのままのやく\n")
+	// 作業コピーが無いと、入力がゲーム側にならず GameBase が埋まらない。
+	write(game, "Translations/_discovered/ja.working.csv",
+		"key,section,node,order,speaker,source_en,translation\n"+
+			"aaaaaaaaaaaaaaaa,UI,,,UI,,ふるいやく\n")
+
+	targets, err := publish.DiscoverTargetsWithGame(root, game)
+	if err != nil {
+		t.Fatalf("DiscoverTargetsWithGame: %v", err)
+	}
+	if len(targets) != 1 || targets[0].GameBase == "" {
+		t.Fatalf("入力がゲーム側になっていない: %+v", targets)
+	}
+	current, err := os.ReadFile(targets[0].Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := publish.CheckBase(targets[0], current)
+	if err != nil {
+		t.Fatalf("CheckBase: %v", err)
+	}
+	if res.Count != 1 {
+		t.Fatalf("食い違いが1件でない: %+v", res)
+	}
+	return []reason.Reason{publish.BaseReason(res.Locale, res.Count)}
 }

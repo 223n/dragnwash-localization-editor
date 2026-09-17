@@ -90,38 +90,20 @@ func collect(inputCSV []byte) (*collected, error) {
 		lines: newLineTable(),
 	}
 	for _, rec := range records {
-		// key 列だけトリムする。source_en / translation / speaker はトリムしない
-		// （移植仕様 R11 / 境界条件「トリムの非対称性」）。
-		// 列が無い場合は空文字になるが、この先で空文字を key.For へ渡す経路は
-		// 無いので key.HashOfEmpty が紛れ込むことはない。
-		rawKey := strings.TrimSpace(rec.Get(colKey))
-
-		// 台詞ID行はハッシュ処理へ進まず、どのカウンタにも入らない（R12）。
-		if key.LooksLikeLineID(rawKey) {
+		k, how := rowKey(rec)
+		switch how {
+		case keyLineID:
+			// 台詞ID行はどのカウンタにも入らない（R12）。
 			if tr := rec.Get(colTranslation); tr != "" {
-				c.lines.Add(rawKey, tr)
+				c.lines.Add(k, tr)
 			}
 			continue
-		}
-
-		k := strings.ToLower(rawKey) // R13
-		src := rec.Get(colSourceEn)  // R14。トリムしない
-		switch {
-		case src != "":
-			// R15。不一致は「ハッシュで上書き」ではなく「行を捨てる」。
-			// source_en が書き換えられたのに古いキーが残っている行を見つけるための仕掛け。
-			hashed := key.For(src)
-			if k != "" && k != hashed {
-				c.stats.Dropped++
-				continue
-			}
-			k = hashed
+		case keyConverted:
 			c.stats.Converted++
-		case key.LooksLike(k):
-			// R16。元実装の `-match '^[0-9a-f]{16}$'` と同じ判定。
+		case keyKept:
 			c.stats.Kept++
 		default:
-			c.stats.Dropped++ // R17
+			c.stats.Dropped++ // R15 / R17
 			continue
 		}
 
@@ -144,6 +126,58 @@ func collect(inputCSV []byte) (*collected, error) {
 		c.inputOrder = append(c.inputOrder, k)
 	}
 	return c, nil
+}
+
+// keyOutcome は入力の1行のキーをどう決めたか。集計の加算はこの値で分ける。
+type keyOutcome int
+
+const (
+	// keyDropped は形式が合わずに捨てる行（移植仕様 R15 / R17）。
+	keyDropped keyOutcome = iota
+	// keyLineID は台詞ID行（R12）。キーは入力にあった綴りのまま。
+	keyLineID
+	// keyConverted は source_en からキーを計算した行（R14 / R15）。
+	keyConverted
+	// keyKept は source_en が無く、key が既に16桁キーだった行（R16）。
+	keyKept
+)
+
+// rowKey は入力の1行からキーを決める（移植仕様 R11〜R17）。
+//
+// 判定の順は元実装のとおりで、入れ替えてはいけない。台詞ID判定が先にあるので、
+// 台詞ID行はハッシュ処理へ進まない。
+//
+// [collect] から切り出してあるのは、同じ規則を [CheckLoss] も使うためである。
+// いまの公開ファイルのどの行がどのキーで引かれるかは、この関数が決めたとおりで
+// なければならない。2か所に書くと、守りが見ているキーと publish が書くキーが
+// 食い違い、「失われないはずのものが失われた」と報せる側へも、その逆へもずれる。
+func rowKey(rec csvfile.Row) (string, keyOutcome) {
+	// key 列だけトリムする。source_en / translation / speaker はトリムしない
+	// （移植仕様 R11 / 境界条件「トリムの非対称性」）。
+	// 列が無い場合は空文字になるが、この先で空文字を key.For へ渡す経路は
+	// 無いので key.HashOfEmpty が紛れ込むことはない。
+	rawKey := strings.TrimSpace(rec.Get(colKey))
+	if key.LooksLikeLineID(rawKey) {
+		return rawKey, keyLineID // R12
+	}
+
+	k := strings.ToLower(rawKey) // R13
+	src := rec.Get(colSourceEn)  // R14。トリムしない
+	switch {
+	case src != "":
+		// R15。不一致は「ハッシュで上書き」ではなく「行を捨てる」。
+		// source_en が書き換えられたのに古いキーが残っている行を見つけるための仕掛け。
+		hashed := key.For(src)
+		if k != "" && k != hashed {
+			return "", keyDropped
+		}
+		return hashed, keyConverted
+	case key.LooksLike(k):
+		// R16。元実装の `-match '^[0-9a-f]{16}$'` と同じ判定。
+		return k, keyKept
+	default:
+		return "", keyDropped // R17
+	}
 }
 
 // Build は公開CSVのバイト列を1ファイル分組み立てる。

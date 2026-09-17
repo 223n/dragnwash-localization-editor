@@ -9,21 +9,36 @@ import (
 )
 
 // editUsage は edit の説明。
-const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--locale <ロケール>] [--port <番号>] [--ui-lang <言語タグ>] [--idle-timeout <時間>] [--no-browser] [--verbose]
+const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--port <番号>] [--ui-lang <言語タグ>] [--idle-timeout <時間>] [--no-browser] [--verbose]
 
 手元だけで待ち受けを始め、1ロケールの全行を1画面に並べます。
 並びも見出しも、ファイルにあるとおりです。
 
 訳の欄を選ぶと書き換えられます。入力が止まると自動で保存します。
 
-保存先は publish が入力に選ぶファイルと同じです（作業コピーがあればそれ、
-無ければ公開ファイル）。作業コピーへ書くと、ゲームが約2秒でホットリロードします。
+保存先は1つで、publish が入力に選ぶファイルと同じです。作業コピーがあればそれ、
+無ければ公開ファイル自身です。--game を指定すると、ゲーム側の作業コピーも探します。
+
+  <ゲーム>/Translations/_discovered/<ロケール>.working.csv   作業コピー
+  <ルート>/Translations/<ロケール>/strings.csv               コミットする側（publish が作る）
+
+作業コピーを直しているときは、その訳がコミットする側へ入るのは dwloc publish を
+回したときです。ここでは公開ファイルを書き換えません。訳の入っていない行は
+公開ファイルに存在しない（publish が訳の空の行を書かない）ので、ここから書き戻す
+すべがありません。
+
+作業コピーへ書くと、ゲームが約2秒でホットリロードします。
+
+原文の欄が埋まるのは、作業コピーを読めたときだけです。作業コピーはふつう、
+ゲームのフォルダーにしかありません（リポジトリの Translations/_discovered は
+.gitignore で外してあります）。--game を指定すると、そちらも探します。
+読み書きするファイルは、画面の上に出します。
 
 publish は回しません。保存は「触った行の最終フィールドだけを差し替える」処理で、
 再生成ではありません。触っていない行は1バイトも変わりません。
 
-保存の前にファイルの版を照合します。手前でファイルが変わっていたら1バイトも
-書かず、画面に読み直させて、どちらの編集を残すかを選ばせます。
+保存の前にファイルの版を照合します。手前でファイルが変わっていたら書かず、
+画面に読み直させて、どちらの編集を残すかを選ばせます。
 
 待ち受けるのは 127.0.0.1 だけです。--port を指定しても変わりません。
 起動のたびに使い捨てのトークンを作り、URL に載せて標準出力へ出します。
@@ -36,6 +51,12 @@ publish は回しません。保存は「触った行の最終フィールドだ
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
+  --game <フォルダー>|auto
+        作業コピーを探すゲームのプラグインフォルダー。auto と書くと Steam の
+        ライブラリから探します。指定しないと見に行きません。
+        原文の欄と「未翻訳」の判定は、ここが読めるかどうかで決まります。
+        ここに作業コピーがあるロケールでは、保存先がその作業コピーになります。
+        書いた訳をコミットする側へ入れるには dwloc publish --game を回します。
   --locale <ロケール>
         最初に出すロケール。省略すると画面で選びます。
   --port <番号>
@@ -70,9 +91,10 @@ publish は回しません。保存は「触った行の最終フィールドだ
 const editPortMax = 65535
 
 // runEdit は待ち受けを始めます。
-func runEdit(args []string, defaultRoot string, stdout, stderr io.Writer) int {
+func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("dwloc edit", stderr)
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
+	game := fs.String("game", defaultGame, gameFlagUsage)
 	// diff や publish と違い、--locale は1つだけ受けます。画面に出せるのは
 	// 1ロケールで、複数を受けても最初の1つしか使えません。使わない指定を
 	// 受け取れる形にすると、指定したつもりで効いていない事故になります。
@@ -99,13 +121,20 @@ func runEdit(args []string, defaultRoot string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
+	// ゲームのフォルダーは、ロケールを照合する前に決めます。ゲーム側にしか
+	// 作業コピーが無いロケールは、決めてからでないと対象に入りません。
+	gamePath, ok := resolveGame(*game, stderr)
+	if !ok {
+		return exitError
+	}
+
 	// ロケール名の表記ゆれは、待ち受けを始める前にここで吸収します。
 	// publish と diff が使っている selectLocales に通すので、当たらない名前の
 	// 文面も「対象にできるのは …」の形でそろいます。待ち受け側は、こうして
 	// 確かめた名前の完全一致しか受け付けません。
 	selected := ""
 	if *locale != "" {
-		targets, err := publish.DiscoverTargets(*root)
+		targets, err := publish.DiscoverTargetsWithGame(*root, gamePath)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: Translations を読めません: %v\n", err)
 			return exitError
@@ -124,6 +153,7 @@ func runEdit(args []string, defaultRoot string, stdout, stderr io.Writer) int {
 
 	err := web.Run(web.Options{
 		Root:        *root,
+		Game:        gamePath,
 		Locale:      selected,
 		Port:        *port,
 		UILang:      *uiLang,

@@ -65,7 +65,10 @@ type rowResult struct {
 	Translation string `json:"translation"`
 	// Error は保存できなかった理由。Saved が false のときだけ入る。
 	Error string `json:"error,omitempty"`
-	// Warning は保存はできたが、書いた値と読み直した値が違うときの断り。
+	// Warning は保存はできたが、そのまま受け取ってほしくないときの断り。
+	//
+	// 1つの欄に連ねる形にしてあるのは、画面がこれを行の下に1行で出すためである
+	// （app.js の setRowNote）。欄を増やすたびに画面の描き方を決め直すことになる。
 	Warning string `json:"warning,omitempty"`
 	// Badges は局所更新後の状態バッジ。訳が入った行から「未翻訳」が消える。
 	Badges []badgeView `json:"badges"`
@@ -105,14 +108,13 @@ type errorResponse struct {
 
 // handleRows は訳を保存する。
 //
-// 経路はこれ1つで、書き出す先は publish.DiscoverTargets が返した Target.Input。
-// 作業コピーがあればそれ、無ければ公開ファイル自身。画面が編集するファイルと
-// publish が入力に選ぶファイルを同じにしておくと、画面の内容と公開結果が
-// 食い違う余地が無い。
+// 経路はこれ1つで、書き出す先は Target.Input の1つだけである。作業コピーが
+// あればそれ、無ければ公開ファイル自身で、publish が入力に選ぶファイルと同じ。
+// 新しい訳がコミットする側へ入るのは publish を回したときである。
 //
-// publish は回さない。保存は「触った行の最終フィールドだけを差し替える」であって
-// 再生成ではない。再生成すると並びと見出しが作り直され、訳を打ち直す途中の
-// 自動保存で「訳が空になった行」が丸ごと消える。
+// publish はここでは回さない。保存は「触った行の最終フィールドだけを差し替える」
+// であって再生成ではない。再生成すると並びと見出しが作り直され、訳を打ち直す
+// 途中の自動保存で「訳が空になった行」が丸ごと消える。
 func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	cat := s.cat.forRequest(s.opt.UILang, r.Header.Get("Accept-Language"))
 
@@ -184,7 +186,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 		Version: out.file.Version(),
 		Results: out.results,
 		Counts:  s.buildCounts(cat, target.Locale, sum),
-		Notes: s.buildNotes(cat, target.Locale, sum,
+		Notes: s.buildNotes(cat, target, sum,
 			out.file.Header() != nil && hasSourceColumn(out.file.Header())),
 	})
 }
@@ -200,7 +202,7 @@ type saveOutcome struct {
 	results []rowResult
 	// applied は実際にモデルへ入れた行数。
 	applied int
-	// conflict が true なら 409。1バイトも書いていない。
+	// conflict が true なら 409。ファイルには1バイトも書いていない。
 	conflict bool
 	// status と errKey は誤りのとき。errKey が空なら成功。
 	status int
@@ -214,6 +216,14 @@ type saveOutcome struct {
 //
 // 保存を直列にするのは、同じファイルへ同時に2つ書くと、片方の版の照合が
 // 通ったあとにもう片方が書き終える、という並びが起きうるためである。
+//
+// 書く先は Target.Input の1つだけである。以前はここで、ゲーム側の作業コピーと
+// コミットする側の公開ファイルの両方へ書いていたが、それは成り立たなかった。
+// 公開ファイルには未翻訳の行が存在しない（publish が訳の空の行を書かない、
+// 移植仕様 R20）ので、翻訳者がいちばんやりたいこと——未訳の行を訳す——は、
+// キーで引いても書き戻す先の行が無く、1行も入らない。それでも画面は saved=true を
+// 返すので、入ったように見えるぶん黙って落とすより悪い。新しい訳がコミットする側へ
+// 入るのは publish を回したときである。
 func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest) saveOutcome {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
@@ -253,7 +263,7 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 					// CSV として書き戻して読み直すと値が変わる場合
 					// （internal/edit の doc.go が挙げている前後の空白など）。
 					// 画面の値をこちらで上書きするので、変えたことを断る。
-					res.Warning = s.cat.T(cat, "warn.value_normalized")
+					addWarning(&res, s.cat.T(cat, "warn.value_normalized"))
 				}
 			}
 		case errors.Is(err, edit.ErrReadOnly):
@@ -271,6 +281,7 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	if applied == 0 {
 		// 1行も書けなかった。書いていないことを状態コードでも示す。
 		// 画面はこの結果を見て、その行を「保存できていない行」として残す。
+		// ここまででファイルへは1バイトも書いていない（モデルを触っただけ）。
 		return saveOutcome{
 			results: results,
 			status:  http.StatusUnprocessableEntity,
@@ -281,7 +292,8 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	if err := file.Save(); err != nil {
 		if errors.Is(err, edit.ErrConflict) {
 			// Save は書く直前にもう一度版を照合する。ここで弾かれたときも
-			// 1バイトも書いていない。手元の File はもう古いので読み直す。
+			// このファイルには1バイトも書いていない。手元の File はもう古いので
+			// 読み直す。
 			fresh, err := edit.Open(target.Input)
 			if err != nil {
 				s.logf("open failed locale=%s", target.Locale)
@@ -311,6 +323,21 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	return saveOutcome{file: file, results: results, applied: applied}
+}
+
+// addWarning は行の断りを1つ足す。既にあれば後ろに連ねる。
+//
+// 上書きしないのは、先に付いた断り（値を正規化した、など）が消えるためである。
+// 区切りを空白1つにしてあるのは、画面が1行で出すのに合わせてある。
+func addWarning(res *rowResult, text string) {
+	if text == "" {
+		return
+	}
+	if res.Warning == "" {
+		res.Warning = text
+		return
+	}
+	res.Warning += " " + text
 }
 
 // editErrorText は internal/edit が返した誤りを、画面に出す文面にする。
@@ -350,11 +377,12 @@ func keyMatches(file *edit.File, e rowEdit) bool {
 	return line.Key() == e.Key
 }
 
-// writeConflict は 409 といまの行一覧を返す。1バイトも書いていない。
-func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publish.Target, file *edit.File) {
+// writeConflict は 409 といまの行一覧を返す。ファイルには1バイトも書いていない。
+func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publish.Target,
+	file *edit.File) {
+
 	sum := s.summary(target.Locale)
-	current := s.buildLines(cat, target.Locale, s.displayPath(target.Input), file,
-		sum, s.findings[target.Locale])
+	current := s.buildLines(cat, target, file, sum, s.findings[target.Locale])
 	noteRequest(w, " locale=%s conflict", target.Locale)
 	s.writeJSONStatus(w, http.StatusConflict, conflictResponse{
 		Conflict: true,

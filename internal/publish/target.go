@@ -41,20 +41,61 @@ type Target struct {
 	Input string
 	// Output は書き出し先。常に Translations/<ロケール>/strings.csv。
 	Output string
+	// GameBase は Input の土台になっているゲーム側の公開ファイルの場所。
+	//
+	// 埋まるのは、Input がゲーム側の作業コピーになったときだけである。
+	// リポジトリの作業コピーを採ったときも、公開ファイル自身を採ったときも空になる。
+	// つまりこの欄は「入力がゲームから来たか」と「その土台はどこか」を同時に持つ。
+	//
+	// 要るのは、作業コピーの訳がコミット済みと違っていたときに、それが翻訳者の
+	// 編集なのか、ゲーム側が古いための巻き戻りなのかを見分けるためである。
+	// 2つを見比べるだけでは区別できない。土台（Modがその作業コピーを書き出した
+	// ときに読んでいた公開ファイル）が3点目になる（[CheckBase]）。
+	GameBase string
 }
 
 // DiscoverTargets は root 配下の Translations を走査して対象を列挙する
-// （移植仕様 R8）。
+// （移植仕様 R8）。探し先はリポジトリの中だけである。
+//
+// [DiscoverTargetsWithGame] に空のゲームを渡したのと同じ結果になる。ゲームの
+// フォルダーを持ち出す用の無い呼び出し側（試験、元リポジトリとの突き合わせ）の
+// ために残してある。
+func DiscoverTargets(root string) ([]Target, error) {
+	return discover(root, "")
+}
+
+// DiscoverTargetsWithGame は [DiscoverTargets] と同じ列挙を、ゲーム側の作業コピーも
+// 探し先に加えて行う。publish / diff / edit のいずれもこちらを使う。
+//
+// game が空なら [DiscoverTargets] と同じ結果を返す。--game を指定しないときの
+// 振る舞いが、この探し先を足す前と1バイトも変わらないことの根拠になる。
+//
+// publish もここを通る。以前はこの関数を publish から呼ばせない作りにしていたが、
+// それは誤りだった。publish が訳の空の行を書かない（R20）ため、未翻訳の行は
+// 公開ファイルに存在しない。ゲーム側の作業コピーを publish が読まないかぎり、
+// ゲームで入れた新しい訳はコミットする側へ1行も届かない。危ないのは作業コピーを
+// 読むことではなく、作業コピーが不完全なときに訳が消えることなので、守りは
+// 入力の探し方ではなく書き出す直前に置いてある（[CheckLoss]）。
+func DiscoverTargetsWithGame(root, game string) ([]Target, error) {
+	return discover(root, game)
+}
+
+// discover は Translations を走査して対象を列挙する。
 //
 // 規則:
 //
 //   - ディレクトリだけを見る。Translations/ignore.txt のようなファイルは対象外
 //   - 名前が '_' で始まるディレクトリは飛ばす（_discovered を対象にしない）
-//   - Translations/_discovered/<ロケール>.working.csv があればそれを入力にする
+//   - 作業コピー（<ロケール>.working.csv）があればそれを入力にする。
+//     探す順はリポジトリ、ゲームの順（[workingCopy]）
 //   - 入力が存在しないロケールは対象にしない
 //
+// ロケールの列挙はリポジトリ側だけで行う。ゲーム側にしか無いロケールは対象に
+// しない。出力は常にリポジトリの Translations/<ロケール>/strings.csv なので、
+// ゲーム側から列挙すると、コミットする気の無いディレクトリを作ることになる。
+//
 // 並びはディレクトリ名順。元実装の Get-ChildItem も名前順で返す。
-func DiscoverTargets(root string) ([]Target, error) {
+func discover(root, game string) ([]Target, error) {
 	dir := filepath.Join(root, TranslationsDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -71,18 +112,64 @@ func DiscoverTargets(root string) ([]Target, error) {
 			continue
 		}
 		output := filepath.Join(dir, locale, StringsFile)
-		working := filepath.Join(dir, DiscoveredDir, locale+WorkingSuffix)
 
-		input := output
-		if fileExists(working) {
+		input, base := output, ""
+		if working, inGame, ok := workingCopy(root, game, locale); ok {
 			input = working
+			if inGame {
+				base = filepath.Join(game, TranslationsDir, locale, StringsFile)
+			}
 		}
 		if !fileExists(input) {
 			continue
 		}
-		targets = append(targets, Target{Locale: locale, Input: input, Output: output})
+		targets = append(targets, Target{
+			Locale: locale, Input: input, Output: output, GameBase: base,
+		})
 	}
 	return targets, nil
+}
+
+// workingCopy は locale の作業コピーを探す。探す順はリポジトリ、ゲームの順。
+// 第2戻り値は、当たったのがゲーム側かどうか。
+//
+// リポジトリを先に見るのは、ゲーム側を足したことで、いままで通っていた入力が
+// 別のファイルへ入れ替わらないようにするためである。リポジトリの
+// Translations/_discovered は .gitignore で外してあり、ふつうは存在しない。
+// そこにファイルがあるのは翻訳者が自分で置いたときだけなので、置いた人の意図を、
+// あとから足した自動の探し先で黙って上書きしない。
+//
+// ゲーム側はModのホットリロードが読み書きするファイルで、そちらのほうが新しい。
+// それでも後ろに置いたのは、「新しいほうを採る」を規則にすると、どちらが入力に
+// なるかが更新時刻で決まり、実行のたびに入れ替わりうるからである。
+func workingCopy(root, game, locale string) (path string, inGame, ok bool) {
+	name := locale + WorkingSuffix
+
+	inRepo := filepath.Join(root, TranslationsDir, DiscoveredDir, name)
+	if fileExists(inRepo) {
+		return inRepo, false, true
+	}
+	if game == "" {
+		return "", false, false
+	}
+	fromGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
+	if fileExists(fromGame) {
+		return fromGame, true, true
+	}
+	return "", false, false
+}
+
+// WorkingPath は locale の作業コピーの置き場を返す。ファイルが無くても値を返す。
+//
+// game が空ならリポジトリ側、そうでなければゲーム側を返す。「作業コピーが
+// ありません。ゲーム内で書き出してください」と伝えるための道なので、伝える先は
+// Modが実際に書き出す場所でなければ案内にならない。
+func WorkingPath(root, game, locale string) string {
+	base := root
+	if game != "" {
+		base = game
+	}
+	return filepath.Join(base, TranslationsDir, DiscoveredDir, locale+WorkingSuffix)
 }
 
 // LoadOrder は root 配下の data/script_order.csv と data/level_flow.csv を、

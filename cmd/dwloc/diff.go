@@ -12,17 +12,28 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
 
 作業コピー（Translations/_discovered/<ロケール>.working.csv）があれば、
 未翻訳の行も出します。無ければ、その判定だけを「判定できません」と伝えます。
+作業コピーはふつう、ゲームのフォルダーにしかありません。--game を指定すると
+そちらも探します。
 
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
+  --game <フォルダー>|auto
+        ゲームに入れたプラグインのフォルダー。auto と書くと Steam の
+        ライブラリから探します。指定しないと見に行きません。
+        探し先は標準エラーへ1行出します（--format csv の
+        標準出力を汚さないためです）。実際にそこから読んだかどうかは、
+        ロケールごとの「作業コピー」の行に出るパスで分かります。
+        ここから読むのは作業コピーだけで、再生順は常にリポジトリ側から
+        読みます。引き継ぎ候補は git の履歴にある1つ前の再生順が根拠なので、
+        履歴の無いゲーム側へ替えると、その判定そのものが消えます。
   --locale <ロケール>
         報告するロケール。複数回指定するか、カンマ区切りで並べられます。
         省略すると全ロケールを報告します。
@@ -86,9 +97,10 @@ const (
 )
 
 // runDiff は公開ファイルと再生順を突き合わせて報告します。
-func runDiff(args []string, defaultRoot string, stdout, stderr io.Writer) int {
+func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("dwloc diff", stderr)
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
+	game := fs.String("game", defaultGame, gameFlagUsage)
 	var locales localeList
 	fs.Var(&locales, "locale", "報告するロケール")
 	noWorking := fs.Bool("no-working", false, "作業コピーを読まない")
@@ -113,7 +125,12 @@ func runDiff(args []string, defaultRoot string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
-	repo, err := diff.Load(*root, !*noWorking)
+	gamePath, ok := resolveGame(*game, stderr)
+	if !ok {
+		return exitError
+	}
+
+	repo, err := diff.LoadWith(*root, diff.Options{Working: !*noWorking, Game: gamePath})
 	if err != nil {
 		fmt.Fprintf(stderr, "dwloc: %s\n", diffErrorText(*root, err))
 		return exitError

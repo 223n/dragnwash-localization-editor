@@ -54,6 +54,7 @@
     notice: document.getElementById("edit-notice"),
     message: document.getElementById("message"),
     path: document.getElementById("file-path"),
+    gamePath: document.getElementById("game-path"),
     notes: document.getElementById("notes"),
     countsTitle: document.getElementById("counts-title"),
     counts: document.getElementById("counts"),
@@ -384,6 +385,25 @@
       ここで入れてしまうと読み込み中からずっと出たままになる。
     */
     el.keys.textContent = t("ui.keys_help");
+  }
+
+  /*
+    作業コピーを探しているゲームのフォルダーを画面に出す。--game が無ければ隠す。
+
+    「読んでいます」とは書かない。ロケールによっては、そこに作業コピーが無くて
+    1バイトも読まないためである。実際に読んだファイルは「ファイル」の欄に出る。
+
+    ロケールを切り替えても消さない。探し先は待ち受けを起動したときに決まっていて、
+    画面の操作では変わらないためである。
+  */
+  function showGamePath(game) {
+    if (!game) {
+      el.gamePath.hidden = true;
+      el.gamePath.textContent = "";
+      return;
+    }
+    el.gamePath.textContent = t("ui.game_folder") + ": " + game;
+    el.gamePath.hidden = false;
   }
 
   function fillLocales(selected) {
@@ -2035,6 +2055,7 @@
           state.autosaveDelay = data.autosaveDelayMs;
         }
         applyCatalog();
+        showGamePath(data.game);
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
           if (!confirmDiscard()) {
