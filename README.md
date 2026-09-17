@@ -40,9 +40,10 @@ Go言語で実装します。
 | `dwloc diff` | 対応するものはありません |
 | `dwloc edit` | 対応するものはありません |
 
-`edit`の画面は、実際の`IME`での変換と、`Chromium`系以外のブラウザーでは
-まだ確かめていません。
-日本語・韓国語・中国語を打ってみて、おかしなところがあれば
+`edit`の画面は、Windowsの実機で、実際の`IME`を通した入力を確かめています
+（`dwloc 0.4.1`、2026年9月17日）。
+`Chromium`系以外のブラウザーと、韓国語・中国語の`IME`はまだ確かめていません。
+打ってみておかしなところがあれば、
 [Issue](https://github.com/223n/dragnwash-localization-editor/issues)で教えてください。
 
 移植が正しいことは、元リポジトリの`Translations/<locale>/strings.csv`を入力にして`dwloc publish`を通し、入力とバイト単位で一致するかで確かめます。
