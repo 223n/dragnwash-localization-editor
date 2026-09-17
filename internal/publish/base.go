@@ -81,11 +81,11 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 		return res, nil
 	}
 
-	repo, err := translationsByKey(repoCurrent)
+	repo, err := readTranslations(repoCurrent)
 	if err != nil {
 		return res, err
 	}
-	game, err := translationsByKey(gameBytes)
+	game, err := readTranslations(gameBytes)
 	if err != nil {
 		return res, err
 	}
@@ -93,8 +93,11 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 	// 片方にしか無いキーは数えない。ゲームの版が古ければ、行そのものの
 	// 増減は当たり前に起きる。ここで見たいのは「同じ行の訳が違う」ことだけで、
 	// 行の増減で実際に訳が消えるなら [CheckLoss] が捕まえる。
-	for folded, mine := range repo {
-		theirs, both := game[folded]
+	//
+	// なぞるのは order（公開ファイルに現れた順）である。map を直になぞると、
+	// 見本に入る5件とその並びが実行のたびに変わる。
+	for _, mine := range repo.order {
+		theirs, both := game.at[mine.folded]
 		if !both || mine.text == theirs.text {
 			continue
 		}
@@ -162,16 +165,33 @@ func BaseReason(locale string, count int) reason.Reason {
 		"locale", locale, "count", n)
 }
 
-// translationsByKey は公開ファイルから「畳んだキー→（元の綴り, 訳）」を作る。
+// translations は公開ファイルの「訳のある行」を2通りに持つ。
+//
+// order はファイルに現れた順、at は畳んだキーで引く表である。両方持つのは、
+// 突き合わせでは引き当てが要るのに、報告では順が要るからである。map だけに
+// すると、報告に並ぶ見本が実行のたびに入れ替わる（Go の map の反復順は
+// わざと毎回違う）。同じ入力で違う報告が出る道具は、貼られた報告から元の
+// 状態を読み取れない。
+type translations struct {
+	// order はファイルに現れた順。重複したキーは先勝ちで、2件目以降は入らない。
+	order []keyedText
+	// at は畳んだキーで引く表。中身は order と同じものを指す。
+	at map[string]keyedText
+}
+
+// readTranslations は公開ファイルから [translations] を作る。
 //
 // 引き当ては [survivors] と同じく [csvfile.FoldASCII] で畳む。訳の入っていない
 // 行は入れない。土台がそろっているかは、訳のある行だけで決まる。
-func translationsByKey(data []byte) (map[string]keyedText, error) {
+func readTranslations(data []byte) (translations, error) {
 	rows, err := csvfile.ReadPowerShellRows(data)
 	if err != nil {
-		return nil, err
+		return translations{}, err
 	}
-	out := make(map[string]keyedText, len(rows))
+	out := translations{
+		order: make([]keyedText, 0, len(rows)),
+		at:    make(map[string]keyedText, len(rows)),
+	}
 	for _, row := range rows {
 		k := strings.TrimSpace(row.Get(colKey))
 		if k == "" {
@@ -182,16 +202,22 @@ func translationsByKey(data []byte) (map[string]keyedText, error) {
 			continue
 		}
 		folded := csvfile.FoldASCII(k)
-		if _, dup := out[folded]; dup {
+		if _, dup := out.at[folded]; dup {
 			continue // 先勝ち（R18）
 		}
-		out[folded] = keyedText{key: k, text: tr}
+		entry := keyedText{key: k, folded: folded, text: tr}
+		out.order = append(out.order, entry)
+		out.at[folded] = entry
 	}
 	return out, nil
 }
 
-// keyedText は畳む前のキーの綴りと、その行の訳。
+// keyedText は1行ぶんのキーと訳。
 type keyedText struct {
-	key  string
+	// key はファイルにあった綴りのまま。報告に出すのはこちらである。
+	key string
+	// folded は引き当て用に畳んだキー（[csvfile.FoldASCII]）。
+	folded string
+	// text はその行の訳。
 	text string
 }
