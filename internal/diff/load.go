@@ -79,6 +79,13 @@ type Repo struct {
 type Options struct {
 	// Working が true なら作業コピーも読む。
 	Working bool
+	// Game はゲーム側のプラグインフォルダー。空なら見に行かない。
+	//
+	// 作業コピーの探し先を1つ増やすだけで、再生順は常にリポジトリ側から読む
+	// （publish パッケージの doc コメントを参照）。引き継ぎ候補は git の
+	// 履歴にある1つ前の再生順が根拠なので、履歴の無いゲーム側へ替えると
+	// 判定そのものが消える。
+	Game string
 	// OldOrder は1つ前の版の再生順を返す関数。nil なら [GitOldOrder]。
 	//
 	// テストで旧再生順を直に渡すための穴でもある。ここを固定にすると、
@@ -88,10 +95,15 @@ type Options struct {
 
 // Load は root 配下を読む。旧再生順の取り方は [GitOldOrder]。
 //
-// ロケールの列挙と作業コピーの有無の判定は publish.DiscoverTargets に委ねる。
-// publish が入力に選ぶファイルと、この道具が「作業コピー」と呼ぶファイルが
-// 食い違うと、「publish を回すとどうなるか」という主張が成り立たなくなる。
-// Target.Input != Target.Output であることが、作業コピーがある状態そのものになる。
+// ロケールの列挙と作業コピーの有無の判定は publish.DiscoverEditTargets に委ねる。
+// 走査の規則を2か所に持つと、publish が対象にするロケールと、この道具が報告する
+// ロケールが食い違う。Target.Input != Target.Output であることが、作業コピーが
+// ある状態そのものになる。
+//
+// ゲーム側の作業コピーは publish が読まない（publish パッケージの doc コメント）。
+// この道具が読むのは未翻訳を数えるためで、publish が何を入力にするかとは別の話
+// である。「publish を回すとこうなる」と読めるのは、作業コピーがリポジトリ側に
+// あるときだけになる。
 //
 // useWorking が false のときは作業コピーを読まない。公開ファイルだけで何が
 // 言えるかを再現したいとき（作業コピーが古いときを含む）に使う。
@@ -110,7 +122,7 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("再生順のデータを読めません: %w", err)
 	}
-	targets, err := publish.DiscoverTargets(root)
+	targets, err := publish.DiscoverEditTargets(root, opt.Game)
 	if err != nil {
 		return nil, fmt.Errorf("%s を読めません: %w", publish.TranslationsDir, err)
 	}
@@ -132,7 +144,7 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		loc := Locale{
 			Name:          t.Locale,
 			PublishedPath: t.Output,
-			WorkingPath:   workingPath(root, t.Locale),
+			WorkingPath:   publish.WorkingPath(root, opt.Game, t.Locale),
 		}
 
 		published, err := readRowsFile(t.Output)
@@ -141,12 +153,12 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		}
 		loc.Published = published
 
-		// 作業コピーの有無は publish と同じ根拠で決める。
-		// Input と Output が違えば、publish はそのファイルを入力にする。
+		// 作業コピーの有無は走査と同じ根拠で決める。
+		// Input と Output が違えば、そのロケールには作業コピーがある。
 		if t.Input != t.Output {
 			loc.WorkingExists = true
-			// publish が実際に読むパスを覚えておく。_discovered 以外の場所を
-			// 入力にする将来の変更があっても、表示が嘘にならないようにする。
+			// 実際に読むパスを覚えておく。_discovered 以外の場所を入力にする
+			// 将来の変更があっても、表示が嘘にならないようにする。
 			loc.WorkingPath = t.Input
 			if opt.Working {
 				working, err := readRowsFile(t.Input)
@@ -263,11 +275,6 @@ func emptyLocales(root string, targets []publish.Target) ([]string, error) {
 		out = append(out, name)
 	}
 	return out, nil
-}
-
-// workingPath は作業コピーの既定の置き場を返す。ファイルが無くても値を返す。
-func workingPath(root, locale string) string {
-	return filepath.Join(root, publish.TranslationsDir, publish.DiscoveredDir, locale+publish.WorkingSuffix)
 }
 
 // readRowsFile はCSVファイルを読んで [Row] に直す。

@@ -65,7 +65,12 @@ type rowResult struct {
 	Translation string `json:"translation"`
 	// Error は保存できなかった理由。Saved が false のときだけ入る。
 	Error string `json:"error,omitempty"`
-	// Warning は保存はできたが、書いた値と読み直した値が違うときの断り。
+	// Warning は保存はできたが、そのまま受け取ってほしくないときの断り。
+	//
+	// 2つ書きでは1行に2つ以上の断りが付きうる（値が正規化された、かつ
+	// コミットする側には入らなかった、など）。欄を増やさず1つに連ねるのは、
+	// 画面がこれを行の下に1行で出すためである（app.js の setRowNote）。
+	// 欄が増えるたびに画面の描き方を決め直すことになる。
 	Warning string `json:"warning,omitempty"`
 	// Badges は局所更新後の状態バッジ。訳が入った行から「未翻訳」が消える。
 	Badges []badgeView `json:"badges"`
@@ -105,10 +110,9 @@ type errorResponse struct {
 
 // handleRows は訳を保存する。
 //
-// 経路はこれ1つで、書き出す先は publish.DiscoverTargets が返した Target.Input。
-// 作業コピーがあればそれ、無ければ公開ファイル自身。画面が編集するファイルと
-// publish が入力に選ぶファイルを同じにしておくと、画面の内容と公開結果が
-// 食い違う余地が無い。
+// 経路はこれ1つである。書き出す先は Target.Input で、--game でゲーム側の
+// 作業コピーを開いているときは Target.Output（コミットする側の公開ファイル）にも
+// 同じ訳を書く。2つ書きの作りと順は [server.saveRows] にある。
 //
 // publish は回さない。保存は「触った行の最終フィールドだけを差し替える」であって
 // 再生成ではない。再生成すると並びと見出しが作り直され、訳を打ち直す途中の
@@ -149,7 +153,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	// ここから先はファイルに触らない。錠はもう放してある。
 	switch {
 	case out.conflict:
-		s.writeConflict(w, cat, target, out.file)
+		s.writeConflict(w, cat, target, out.file, out.commitWritten)
 		return
 	case out.errKey != "":
 		s.writeErrorResults(w, cat, out.status, out.errKey, out.results)
@@ -184,7 +188,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 		Version: out.file.Version(),
 		Results: out.results,
 		Counts:  s.buildCounts(cat, target.Locale, sum),
-		Notes: s.buildNotes(cat, target.Locale, sum,
+		Notes: s.buildNotes(cat, target, sum,
 			out.file.Header() != nil && hasSourceColumn(out.file.Header())),
 	})
 }
@@ -200,8 +204,15 @@ type saveOutcome struct {
 	results []rowResult
 	// applied は実際にモデルへ入れた行数。
 	applied int
-	// conflict が true なら 409。1バイトも書いていない。
+	// conflict が true なら 409。画面が並べているファイルには1バイトも書いていない。
 	conflict bool
+	// commitWritten は、コミットする側の公開ファイルへは書いたかどうか。
+	//
+	// conflict のときに文面を分けるために持つ。「1バイトも書いていません」と
+	// 「ゲーム側へは書いていません（訳はコミットする側に入っています）」は、
+	// 翻訳者が次にやることが違う。前者は送り直すだけ、後者は送り直さなくても
+	// 訳は残っている。
+	commitWritten bool
 	// status と errKey は誤りのとき。errKey が空なら成功。
 	status int
 	errKey string
@@ -214,6 +225,29 @@ type saveOutcome struct {
 //
 // 保存を直列にするのは、同じファイルへ同時に2つ書くと、片方の版の照合が
 // 通ったあとにもう片方が書き終える、という並びが起きうるためである。
+//
+// # 2つ書き
+//
+// Target.FromGame が立っているとき（--game でゲーム側の作業コピーを開いている
+// とき）は、2つのファイルへ書く。どちらも「最終フィールドの差し替え」で、
+// 作り直しではない。
+//
+//  1. Target.Output   コミットする側の公開ファイル。キーで行を引く
+//  2. Target.Input    ゲーム側の作業コピー。画面が並べている、行番号で引く
+//
+// 順は 1 → 2 である。1 は失われてはいけないもの（コミットされる訳）で、2 は
+// 失っても「ゲームがホットリロードしない」で済む。逆順にすると、2 が書けて
+// 1 が書けなかったときに、コミットされない場所にだけ訳がある状態になる。
+//
+//   - 1 が失敗したら 503 を返し、2 は書かない。画面は未保存のまま抱えて送り直す
+//   - 1 が成功して 2 が失敗したら、その行は saved=true で返し、ゲームへ届いて
+//     いないことを行ごとに断る。訳はコミットする側に入っているので失われていない
+//   - 1 にその行が無いときは 2 だけに書き、行ごとに断る
+//
+// 行の対応はキー（先頭フィールド）で取る。作業コピーと公開ファイルは別々に
+// 作られたファイルで、見出しの数も並びも違うので行番号は一致しない。
+// 版（baseVersion）の照合と 409 の判定は、いままでどおり画面が並べている
+// ファイル（2）だけで行う。1 の版の照合は [edit.WriteByKey] が中でやる。
 func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest) saveOutcome {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
@@ -234,6 +268,9 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 
 	results := make([]rowResult, 0, len(req.Edits))
 	applied := 0
+	// commit はコミットする側へ渡す分。at はその結果を戻す results の添字。
+	var commit []edit.KeyEdit
+	var at []int
 	for _, e := range req.Edits {
 		res := rowResult{Line: e.Line}
 		if !keyMatches(file, e) {
@@ -253,8 +290,12 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 					// CSV として書き戻して読み直すと値が変わる場合
 					// （internal/edit の doc.go が挙げている前後の空白など）。
 					// 画面の値をこちらで上書きするので、変えたことを断る。
-					res.Warning = s.cat.T(cat, "warn.value_normalized")
+					addWarning(&res, s.cat.T(cat, "warn.value_normalized"))
 				}
+				// コミットする側へ渡すのは、読み直した値のほうである。
+				// 画面から来た値を渡すと、正規化で2つのファイルの訳が割れる。
+				commit = append(commit, edit.KeyEdit{Key: line.Key(), Translation: res.Translation})
+				at = append(at, len(results))
 			}
 		case errors.Is(err, edit.ErrReadOnly):
 			// ファイル全体が読み取り専用。上で弾いているのでここへは来ないが、
@@ -271,6 +312,7 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	if applied == 0 {
 		// 1行も書けなかった。書いていないことを状態コードでも示す。
 		// 画面はこの結果を見て、その行を「保存できていない行」として残す。
+		// ここまででファイルへは1バイトも書いていない（モデルを触っただけ）。
 		return saveOutcome{
 			results: results,
 			status:  http.StatusUnprocessableEntity,
@@ -278,16 +320,39 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		}
 	}
 
+	// (1) コミットする側。ここで失敗したら (2) は書かない。
+	if target.FromGame {
+		if out, ok := s.saveCommitSide(cat, target, commit, at, results); !ok {
+			return out
+		}
+	}
+
+	// (2) 画面が並べている側。
 	if err := file.Save(); err != nil {
 		if errors.Is(err, edit.ErrConflict) {
 			// Save は書く直前にもう一度版を照合する。ここで弾かれたときも
-			// 1バイトも書いていない。手元の File はもう古いので読み直す。
+			// このファイルには1バイトも書いていない。手元の File はもう古いので
+			// 読み直す。コミットする側には既に入っているので、そのことも伝える。
 			fresh, err := edit.Open(target.Input)
 			if err != nil {
 				s.logf("open failed locale=%s", target.Locale)
 				return saveOutcome{status: http.StatusInternalServerError, errKey: "error.read_failed"}
 			}
-			return saveOutcome{file: fresh, conflict: true}
+			return saveOutcome{file: fresh, conflict: true, commitWritten: target.FromGame}
+		}
+		if target.FromGame {
+			// (1) は書けている。訳はコミットする側に入っているので失われて
+			// いない。ゲームがホットリロードしないことだけを行ごとに断る。
+			//
+			// 版は動いていない（Save は書く前に失敗した）ので、画面はそのまま
+			// 次の保存を送れる。送り直せば、この行はもう一度両方へ書かれる。
+			s.logf("game copy save failed locale=%s", target.Locale)
+			for i := range results {
+				if results[i].Saved {
+					addWarning(&results[i], s.cat.T(cat, "warn.game_not_written"))
+				}
+			}
+			return saveOutcome{file: file, results: results, applied: applied}
 		}
 		// 書けなかった。誤りの中身（パスを含む）は返さない。
 		//
@@ -311,6 +376,66 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	return saveOutcome{file: file, results: results, applied: applied}
+}
+
+// saveCommitSide はコミットする側の公開ファイルへ書く（2つ書きの 1）。
+//
+// 書けたときは results に行ごとの断りを足して ok=true を返す。書けなかったときは
+// そのまま返す応答（503）を第1戻り値に入れて ok=false を返す。呼び出し側は
+// ゲーム側（2）へ進まない。
+//
+// results を書き換えるのは呼び出し側の並びそのものである。写しを作らないのは、
+// 断りを足す先が1か所しかないためで、写すとどちらを返すかという選択が生まれる。
+func (s *server) saveCommitSide(cat *Catalog, target *publish.Target,
+	commit []edit.KeyEdit, at []int, results []rowResult) (saveOutcome, bool) {
+
+	notes, err := edit.WriteByKey(target.Output, commit)
+	if err != nil {
+		// 誤りの中身（パスを含む）は返さない。記録にも中身は書かない。
+		//
+		// Saved を全部倒す。ゲーム側へはこれから書かないので、この要求は
+		// どちらのファイルにも1バイトも入れていない。倒さずに返すと、画面が
+		// 未保存の控えを捨てて訳が消える。
+		s.logf("commit copy save failed locale=%s", target.Locale)
+		for i := range results {
+			results[i].Saved = false
+			results[i].Translation = ""
+		}
+		return saveOutcome{
+			results: results,
+			status:  http.StatusServiceUnavailable,
+			errKey:  "error.commit_save_failed",
+		}, false
+	}
+
+	for i, note := range notes {
+		if note.Why.Empty() {
+			continue
+		}
+		// 外枠は「入らなかった」と「入れたうえでの断り」で分ける。中の理由は
+		// どちらも internal/edit が付けた識別子から目録で引く。
+		key := "warn.commit_note"
+		if note.Rows == 0 {
+			key = "warn.commit_not_written"
+		}
+		addWarning(&results[at[i]], s.cat.T(cat, key, "reason", s.reasonText(cat, note.Why)))
+	}
+	return saveOutcome{}, true
+}
+
+// addWarning は行の断りを1つ足す。既にあれば後ろに連ねる。
+//
+// 上書きしないのは、先に付いた断り（値を正規化した、など）が消えるためである。
+// 区切りを空白1つにしてあるのは、画面が1行で出すのに合わせてある。
+func addWarning(res *rowResult, text string) {
+	if text == "" {
+		return
+	}
+	if res.Warning == "" {
+		res.Warning = text
+		return
+	}
+	res.Warning += " " + text
 }
 
 // editErrorText は internal/edit が返した誤りを、画面に出す文面にする。
@@ -350,15 +475,24 @@ func keyMatches(file *edit.File, e rowEdit) bool {
 	return line.Key() == e.Key
 }
 
-// writeConflict は 409 といまの行一覧を返す。1バイトも書いていない。
-func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publish.Target, file *edit.File) {
+// writeConflict は 409 といまの行一覧を返す。
+// 画面が並べているファイルには1バイトも書いていない。
+//
+// commitWritten が立っているときは、コミットする側には既に訳が入っている。
+// そのまま「1バイトも書いていません」と出すと嘘になるので、文面を分ける。
+func (s *server) writeConflict(w http.ResponseWriter, cat *Catalog, target *publish.Target,
+	file *edit.File, commitWritten bool) {
+
 	sum := s.summary(target.Locale)
-	current := s.buildLines(cat, target.Locale, s.displayPath(target.Input), file,
-		sum, s.findings[target.Locale])
+	current := s.buildLines(cat, target, file, sum, s.findings[target.Locale])
+	message := "error.conflict"
+	if commitWritten {
+		message = "error.conflict_commit_written"
+	}
 	noteRequest(w, " locale=%s conflict", target.Locale)
 	s.writeJSONStatus(w, http.StatusConflict, conflictResponse{
 		Conflict: true,
-		Message:  s.cat.T(cat, "error.conflict"),
+		Message:  s.cat.T(cat, message),
 		Current:  current,
 	})
 }

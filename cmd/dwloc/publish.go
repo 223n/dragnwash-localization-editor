@@ -19,18 +19,26 @@ tools/hash-strings.ps1 と同じ出力です。
 
 入力は、Translations/_discovered/<ロケール>.working.csv があればそれ、
 無ければ Translations/<ロケール>/strings.csv 自身です。
-出力は常に Translations/<ロケール>/strings.csv です。
+出力は常に <ルート>/Translations/<ロケール>/strings.csv です。
+ゲームのフォルダーは読みません。
 
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
+  --game <フォルダー>|auto
+        publish では受け付けません。指定があると、何も書かずに終わります。
+        受け取るだけ受け取って断るのは、共通オプションとしてサブコマンドの前に
+        置かれても黙って無視しないためです。
+        断る理由は、publish が入力から公開ファイルを作り直す処理だからです。
+        ゲーム側の作業コピーを入力にすると、そこに無い行と訳が空の行が、
+        コミット済みの公開ファイルから消えます。
   --locale <ロケール>
         対象のロケール。複数回指定するか、カンマ区切りで並べられます。
         省略すると Translations 配下のすべてが対象になります。
   --path <ファイル>
         Translations の走査をやめて、指定したファイルだけを変換します。
         入力と出力が同じファイルになります。複数回指定できます。
-        --locale とは同時に使えません。
+        --locale と同時には使えません。
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
 
@@ -39,6 +47,19 @@ tools/hash-strings.ps1 と同じ出力です。
 終了コード:
   0   成功
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、など）
+`
+
+// publishGameRefusedText は publish が --game を断るときの案内です。
+//
+// 断るだけで終わらせず、やりたかったこと（ゲームで直した訳をコミットする側へ
+// 入れる）への道を1行で示します。示さないと、翻訳者は「では手で写すのか」で
+// 止まります。
+const publishGameRefusedText = `dwloc: publish は --game を受け付けません。ゲームのフォルダーは読みません。
+dwloc:       publish は入力から公開ファイルを作り直す処理です。ゲーム側の作業コピーを入力にすると、
+dwloc:       そこに無い行と訳が空の行が、コミット済みの公開ファイルから消えます。
+dwloc:       ゲームで直した訳をコミットする側へ入れるには dwloc edit --game を使ってください。
+dwloc:       保存のたびに、公開ファイルとゲーム側の作業コピーの両方の「その行」を差し替えます。
+dwloc:       publish は --game を付けずに実行してください。
 `
 
 // localeList は --locale の値を集める flag.Value です。
@@ -100,9 +121,10 @@ func (l *pathList) Set(value string) error {
 }
 
 // runPublish は公開用CSVを生成します。
-func runPublish(args []string, defaultRoot string, stdout, stderr io.Writer) int {
+func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("dwloc publish", stderr)
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
+	game := fs.String("game", defaultGame, gameFlagUsage)
 	var locales localeList
 	fs.Var(&locales, "locale", "対象のロケール")
 	var paths pathList
@@ -113,6 +135,17 @@ func runPublish(args []string, defaultRoot string, stdout, stderr io.Writer) int
 	}
 	if fs.NArg() > 0 {
 		return unexpectedArg(fs.Arg(0), publishUsage, stderr)
+	}
+	if *game != "" {
+		// 受け取るだけ受け取って、ここで断ります。黙って無視すると、
+		// 「ゲーム側の作業コピーから公開ファイルを作った」と読まれます。
+		// 実際には読んでいないので、訳が入っていないことに気づけません。
+		//
+		// 弾かずに使うともっと悪い。publish は入力から作り直す処理なので、
+		// ゲーム側の作業コピーを入力にすると、そこに無い行がコミット済みの
+		// 公開ファイルから消えます（internal/publish の doc コメントに実測値）。
+		fmt.Fprint(stderr, publishGameRefusedText)
+		return exitError
 	}
 	if len(paths) > 0 && len(locales) > 0 {
 		// 元実装の -Path は走査そのものを置き換えるので、絞り込みと重ねる意味が

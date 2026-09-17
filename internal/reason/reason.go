@@ -168,6 +168,20 @@ const (
 	EditBadUTF8 = "edit_bad_utf8"
 )
 
+// キーで引いて書き戻すときの断り（internal/edit の bykey.go）。
+//
+// dwloc edit --game は保存のたびに2つのファイルを書く。画面が並べているのは
+// ゲーム側の作業コピーで、コミットする側の公開ファイルは行番号が違うため、
+// キー（先頭フィールド）で行を引く。引けなかったときの断りがここに入る。
+const (
+	// SaveNoKey はその行にキーが無くて、もう一方のファイルを引けないこと。
+	SaveNoKey = "save_no_key"
+	// SaveKeyMissing はそのキーの行が、書き戻す先のファイルに無いこと。
+	SaveKeyMissing = "save_key_missing"
+	// SaveKeyDuplicated は同じキーの行が複数あったこと。置換は count。
+	SaveKeyDuplicated = "save_key_duplicated"
+)
+
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOldOrderUnreadable,
@@ -186,6 +200,8 @@ var all = []string{
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
+
+	SaveNoKey, SaveKeyMissing, SaveKeyDuplicated,
 }
 
 // All はこのパッケージが名前を付けた識別子を全部返す。

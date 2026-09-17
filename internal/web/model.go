@@ -120,9 +120,16 @@ type linesResponse struct {
 	// 画面はこれを覚えておき、保存要求の baseVersion に載せる。手前でファイルが
 	// 変わっていれば待ち受けが照合で弾くので、黙って上書きすることがない。
 	Version string `json:"version"`
-	// Path は表示用のパス。ルートからの相対で、スラッシュ区切り。
-	// クライアントはこれを受け取るだけで、要求に載せることはない。
+	// Path は画面が並べているファイルの表示用パス。ルートからの相対で、
+	// スラッシュ区切り。クライアントはこれを受け取るだけで、要求に載せることはない。
 	Path string `json:"path"`
+	// CommitPath は、保存のたびに同じ行を差し替えるもう1つのファイル
+	// （コミットする側の公開ファイル）。2つ書きでないときは空。
+	//
+	// 分けて出すのは、画面に並んでいるのが作業コピーで、コミットされるのは
+	// 別のファイルだからである。1つしか出さないと、翻訳者は「いま直しているのは
+	// コミットされる側か」を画面から確かめられない。
+	CommitPath string `json:"commitPath,omitempty"`
 	// Columns はファイルのヘッダー行の列名。そのまま出す（データ側の語彙なので訳さない）。
 	Columns []string `json:"columns"`
 	// SourceColumn は source_en 列があるか。無ければ原文の欄は常に空になる。
@@ -156,16 +163,18 @@ var statusOrder = []diff.Status{diff.StatusTodo, diff.StatusReview, diff.StatusI
 // 行の並びと見出しは file（＝ファイルの物理行）から、状態バッジと件数は
 // sum / findings（＝internal/diff）から取る。この2つを混ぜないことがこの関数の
 // 役目で、画面に新しい判断を置かないという約束はここで守られる。
-func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit.File,
+func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.File,
 	sum diff.Summary, findings []diff.Finding) *linesResponse {
 
+	locale := target.Locale
 	columns := file.Header()
 	idx := columnIndex(columns)
 
 	resp := &linesResponse{
 		Locale:         locale,
 		Version:        file.Version(),
-		Path:           displayPath,
+		Path:           s.displayPath(target.Input),
+		CommitPath:     s.commitPath(target),
 		Columns:        columns,
 		SourceColumn:   idx.source >= 0,
 		ReadOnlyReason: s.reasonText(cat, file.ReadOnlyCause()),
@@ -196,8 +205,17 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 	resp.Rows = dataRows
 	resp.Counts = s.buildCounts(cat, locale, sum)
 	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
-	resp.Notes = s.buildNotes(cat, locale, sum, idx.source >= 0)
+	resp.Notes = s.buildNotes(cat, target, sum, idx.source >= 0)
 	return resp
+}
+
+// commitPath は2つ書きのもう1つの行き先を、表示用のパスで返す。
+// 2つ書きでなければ空を返し、画面はその行を出さない。
+func (s *server) commitPath(target *publish.Target) string {
+	if !target.FromGame {
+		return ""
+	}
+	return s.displayPath(target.Output)
 }
 
 // headingView はコメント行を見出しにする。中身は書き換えない。
@@ -381,8 +399,15 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 //
 // 件数の欄に出る「判定していません（理由）」と重ならないよう、ここには
 // 読んだものと読めなかったものだけを書く。
-func (s *server) buildNotes(cat *Catalog, locale string, sum diff.Summary, hasSource bool) []string {
+func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summary, hasSource bool) []string {
+	locale := target.Locale
 	var notes []string
+	if target.FromGame {
+		// 保存が2つのファイルへ行くことは、ここでしか言わない。行ごとの断りは
+		// 「入らなかった行」にしか出ないので、ふだんの保存では何も出ない。
+		// 出さないと、翻訳者は画面に並んでいる作業コピーだけを直していると思う。
+		notes = append(notes, s.cat.T(cat, "note.dual_write", "path", s.displayPath(target.Output)))
+	}
 	if s.untranslatedFilled(locale) > 0 {
 		// 件数を局所更新したことを断る。できないこと（カテゴリの再判定）を
 		// 黙っていると、翻訳者は画面の数字を publish 後の状態だと読む。

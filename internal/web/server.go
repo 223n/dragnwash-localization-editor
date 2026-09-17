@@ -50,6 +50,16 @@ const (
 type Options struct {
 	// Root は翻訳リポジトリのルート。
 	Root string
+	// Game はゲーム側のプラグインフォルダー。空なら見に行かない。
+	//
+	// ここが入っていると、作業コピーの探し先にゲーム側が加わる。原文の欄が
+	// 埋まり、「未翻訳」を判定できるようになる。画面が並べるのはその作業コピーで、
+	// 保存はそこと、コミットする側の公開ファイルの両方へ書く
+	// （[server.saveRows] の「2つ書き」）。
+	//
+	// 値は internal/gamedir で目印まで確かめ終わったパスであること。確かめは
+	// 呼び出し側（cmd/dwloc）が済ませる。
+	Game string
 	// Locale は最初に出すロケール。空なら選ばせる。
 	//
 	// ここへ渡すのは publish.DiscoverTargets が返した名前そのものであること。
@@ -174,10 +184,10 @@ func newServer(opt Options) (*server, error) {
 		stop:      make(chan struct{}),
 	}
 
-	// ロケールの列挙は publish.DiscoverTargets に委ねる。publish が入力に選ぶ
-	// ファイルと、この画面が開くファイルが食い違うと、画面で見ている行と
-	// publish が書き出す行が別物になる。
-	targets, err := publish.DiscoverTargets(opt.Root)
+	// ロケールの列挙は publish.DiscoverEditTargets に委ねる。走査の規則を
+	// 2か所に持つと、publish が対象にするロケールと、この画面が開くロケールが
+	// 食い違う。
+	targets, err := publish.DiscoverEditTargets(opt.Root, opt.Game)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +205,9 @@ func newServer(opt Options) (*server, error) {
 	// この値は変わらない。ファイルの中身は開くたびに読み直すが、突き合わせは
 	// 起動時のもので、両者がずれうることは承知のうえで固定してある
 	// （比較は13ロケール全部を読むので、1行開くたびにやり直す種類の処理ではない）。
-	repo, err := diff.LoadWith(opt.Root, diff.Options{Working: true, OldOrder: opt.oldOrder})
+	repo, err := diff.LoadWith(opt.Root, diff.Options{
+		Working: true, Game: opt.Game, OldOrder: opt.oldOrder,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +337,14 @@ func (s *server) announce(url string) {
 	fmt.Fprintln(s.stdout, s.t("server.listening"))
 	fmt.Fprintln(s.stdout, s.t("server.url", "url", url))
 	fmt.Fprintln(s.stdout, s.t("server.editing"))
-	fmt.Fprintln(s.stdout, s.t("server.save_target"))
+	// 保存先の案内は、2つ書きになるロケールが1つでもあれば入れ替える。
+	// 「作業コピーがあればそれ」とだけ出すと、コミットする側の公開ファイルも
+	// 書き換わることが端末のどこにも出ない。
+	if s.hasCommitSide() {
+		fmt.Fprintln(s.stdout, s.t("server.save_target_both"))
+	} else {
+		fmt.Fprintln(s.stdout, s.t("server.save_target"))
+	}
 	fmt.Fprintln(s.stdout, s.t("server.locales", "locales", strings.Join(localeNames(s.targets), ", ")))
 	if s.opt.IdleTimeout > 0 {
 		fmt.Fprintln(s.stdout, s.t("server.idle_hint", "duration", s.opt.IdleTimeout.String()))
@@ -412,6 +431,20 @@ func (s *server) displayPath(path string) string {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(rel)
+}
+
+// hasCommitSide は、保存が2つのファイルへ行くロケールが1つでもあるかを返す。
+//
+// ロケールごとに決まる（ゲーム側に作業コピーがあるロケールだけが2つ書きになる）
+// が、起動時の1行はロケールを選ぶ前に出すので、1つでもあれば出す。
+// ロケールごとの正確な行き先は、画面の「ファイル」と「コミットする側」に出る。
+func (s *server) hasCommitSide() bool {
+	for _, t := range s.targets {
+		if t.FromGame {
+			return true
+		}
+	}
+	return false
 }
 
 // localeNames は対象のロケール名を並び順のまま取り出す。

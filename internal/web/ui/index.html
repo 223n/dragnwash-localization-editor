@@ -155,7 +155,19 @@
 <p id="finder-note" class="notice keys"></p>
 
 <section class="panel">
+  <!--
+    --game で作業コピーを探しているゲームのフォルダー。指定が無いときは
+    空のまま隠れる。いま直しているのがリポジトリの中なのかゲームのフォルダーなのかを、
+    画面からそのまま読めるようにしておく。
+  -->
+  <p id="game-path" class="path" hidden></p>
   <p id="file-path" class="path"></p>
+  <!--
+    2つ書きのもう1つの行き先（コミットする側の公開ファイル）。
+    2つ書きでないときは空のまま隠れる。並んでいるのは作業コピーなので、
+    コミットされるファイルの名前をここに出しておかないと、画面から確かめられない。
+  -->
+  <p id="commit-path" class="path" hidden></p>
   <ul id="notes" class="notes"></ul>
   <div class="panel-cols">
     <div>

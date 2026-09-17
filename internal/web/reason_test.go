@@ -288,6 +288,48 @@ func editReasons(t *testing.T) []reason.Reason {
 	} else {
 		out = append(out, causeOf(t, err))
 	}
+
+	out = append(out, writeByKeyReasons(t)...)
+	return out
+}
+
+// writeByKeyReasons はキーで引いて書き戻すときの断りの見本を集める。
+//
+// 2つ書き（dwloc edit --game）でしか出ない理由なので、実ファイルを1つ作って
+// [edit.WriteByKey] をそのまま通す。手で reason.New を組むと、Go 側の文面を
+// 書き写すことになって、ずれを見つけられなくなる。
+func writeByKeyReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	// 公開ファイルを模したファイル。同じキーの行を2つ置いてある。
+	path := filepath.Join(t.TempDir(), "strings.csv")
+	body := strings.Join([]string{
+		"key,translation",
+		"aaaaaaaaaaaaaaaa,ひとつめ",
+		"aaaaaaaaaaaaaaaa,ふたつめ",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := edit.WriteByKey(path, []edit.KeyEdit{
+		{Key: "aaaaaaaaaaaaaaaa", Translation: "あたらしい訳"}, // 同じキーが2行
+		{Key: "bbbbbbbbbbbbbbbb", Translation: "行き先が無い"}, // そのキーの行が無い
+		{Key: "", Translation: "キーが無い"},                  // キーが空
+	})
+	if err != nil {
+		t.Fatalf("WriteByKey: %v", err)
+	}
+
+	out := make([]reason.Reason, 0, len(got))
+	for i, res := range got {
+		if res.Why.Empty() {
+			t.Errorf("%d 件目に断りが無い: %+v", i, res)
+			continue
+		}
+		out = append(out, res.Why)
+	}
 	return out
 }
 
