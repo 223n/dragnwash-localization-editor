@@ -102,6 +102,47 @@ type countView struct {
 	Judged bool   `json:"judged"`
 	Count  int    `json:"count"`
 	Reason string `json:"reason,omitempty"`
+
+	// Rows は、いま返している Lines のうち、このカテゴリのバッジが付いている
+	// データ行の数。条件のチップに添えるのはこの数である。
+	//
+	// Count と別に持つのは、2つが同じ数にならないためである。「どのロケールにも
+	// 訳が無い行」と「他のロケールにあって無い行」は、そのキーがこのロケールの
+	// ファイルに無いからこそ見つかったものなので、いま並べているファイルには
+	// 行として1つも出せない（[diff] の compareLocale を見よ）。条件のチップに
+	// Count を書いて押させると、32 と書いてあるのに1行も出ない。チップに添えて
+	// よい数はこちらしかない。
+	//
+	// 「そのチップを押したときに並ぶ行数」ではない。並ぶ行はこの数と3つの点で
+	// ずれる。どれも待ち受けが知らない画面の状態が理由で、数に入れようとした
+	// 時点で画面が数える側に回る（実測は app.js の buildFilters の注記にある）。
+	//
+	//   - 保存すると、訳が入ったキーのバッジは落ちてこの数は減るが、一覧は
+	//     組み直さない（打っている最中に行が消えないようにするため）。
+	//   - 未保存・保存できない・入力欄が開いている・競合で抱えている行は、
+	//     条件に当たらなくても隠さない。そのぶん多く並ぶ。
+	//   - 検索語は入っていない。打つとそのぶん少なく並ぶ。
+	//
+	// いま何行並んでいるかを言うのは画面の帯（「表示中 N 行」）だけである。
+	Rows int `json:"rows"`
+	// RowsDiffer は Count と Rows が食い違っているか。
+	//
+	// 画面に Count != Rows を比べさせないために、ここで済ませて渡す。画面が
+	// 比べて書き分けると、それが待ち受けとは別の判断になる（buildFilters の
+	// 注記を見よ）。Judged が false のときは Count に意味が無いので常に false。
+	RowsDiffer bool `json:"rowsDiffer"`
+	// NoRowHere は、判定はできているのに、いま並べているファイルにその
+	// カテゴリの行が1つも無いか。
+	//
+	// チップに「（0 行）」と書かせないために持つ。0 と書くと「もう何も残って
+	// いない」と読まれる（internal/diff の doc.go）。件数も0の0行はそのとおり
+	// 「何も無い」だが、件数が立っているのに0行なのは「この一覧には出せない」
+	// であって、読み手に渡る意味が逆になる。実データで公開ファイルを並べている
+	// ロケールでは、「どのロケールにも訳が無い行」が 32件／0行 でこれになる。
+	//
+	// これも画面に Count > 0 && Rows == 0 を比べさせないための欄である
+	// （RowsDiffer と同じ理由）。
+	NoRowHere bool `json:"noRowHere"`
 }
 
 // statView は「数えたもの」1つぶん。
@@ -195,7 +236,7 @@ func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.Fil
 	}
 
 	resp.Rows = dataRows
-	resp.Counts = s.buildCounts(cat, locale, sum)
+	resp.Counts = s.buildCounts(cat, locale, sum, rowsByCategory(lines, badges))
 	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
 	resp.Notes = s.buildNotes(cat, target, sum, idx.source >= 0)
 	return resp
@@ -309,11 +350,40 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
 	return out
 }
 
+// rowsByCategory はカテゴリごとに、バッジの付くデータ行が何行あるかを数える。
+//
+// 数えるのは待ち受けの仕事にする。画面で数えると、待ち受けが決めた出し入れとは
+// 別の数え方が画面に生まれる（[TestUIDoesNotCount]）。
+//
+// badgesByKey がキーとカテゴリで重複を消したあとを数えるので、1行を同じカテゴリで
+// 2回数えることはない。逆に、同じキーの行がファイルに2行あれば2行とも一覧へ
+// 並ぶので、2と数えるのが正しい。
+//
+// 数えるのはデータ行だけである。見出し（コメント行）にバッジは付かず、空行と
+// ヘッダー行は buildLines が一覧へ出していない。
+func rowsByCategory(lines []edit.Line, badges map[string][]badgeView) map[string]int {
+	out := make(map[string]int)
+	for _, line := range lines {
+		if line.Kind != edit.KindData {
+			continue
+		}
+		for _, b := range badges[line.Key()] {
+			out[b.Category] = out[b.Category] + 1
+		}
+	}
+	return out
+}
+
 // buildCounts はカテゴリごとの件数を、要作業 → 要確認 → 参考 の順に並べる。
 //
 // 判定できていないカテゴリは Judged を false にして理由を入れる。0 件と書くと
 // 「もう何も残っていない」と読まれる（internal/diff の doc.go）。
-func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []countView {
+//
+// rows は [rowsByCategory] が数えた「いま並べているファイルの中の行数」。件数
+// （internal/diff 由来）と行数（ファイル由来）は別の数なので、混ぜずに両方渡す。
+func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary,
+	rows map[string]int) []countView {
+
 	// [diff.Summary.Counts] には全カテゴリが入っている。並びは Category の値の順が
 	// そのまま internal/diff の表示順なので、値で並べ替えるだけでよい。
 	all := make([]diff.Category, 0, len(sum.Counts))
@@ -335,6 +405,7 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []co
 				StatusLabel: s.statusLabel(cat, status),
 				Judged:      sum.CanJudge(c),
 				Count:       sum.Counts[c],
+				Rows:        rows[c.ID()],
 			}
 			if !view.Judged {
 				view.Reason = s.reasonText(cat, sum.JudgeBlockReason(c))
@@ -349,6 +420,11 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []co
 					view.Count = 0
 				}
 			}
+			// 引いたあとで比べる。badgesByKey も訳が入ったキーのバッジを落として
+			// いるので、局所更新のあいだも2つの数は同じだけ減る。ここを引く前に
+			// 置くと、1行訳すたびに「食い違っている」と言い出す。
+			view.RowsDiffer = view.Judged && view.Count != view.Rows
+			view.NoRowHere = view.Judged && view.Count > 0 && view.Rows == 0
 			out = append(out, view)
 		}
 	}
