@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,10 +69,12 @@ func TestRunArguments(t *testing.T) {
 		wantStderr []string
 	}{
 		{
-			name:       "引数なしは使い方を標準エラーへ出してエラーにする",
+			// 引数なしは画面を始める。翻訳リポジトリでない場所では、どこへ
+			// 置けばよいかを案内して終わる。使い方は help で出す。
+			name:       "引数なしで翻訳リポジトリでなければ置き場所を案内する",
 			args:       nil,
 			wantCode:   exitError,
-			wantStderr: []string{"使い方:", "validate", "publish", "version"},
+			wantStderr: []string{"翻訳リポジトリではないようです", "Translations", "dwloc help"},
 		},
 		{
 			name:       "help は使い方を標準出力へ出して成功する",
@@ -219,5 +222,111 @@ func TestDisplayPath(t *testing.T) {
 				t.Errorf("displayPath = %q, 期待 %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestDefaultStartsTheEditor は、サブコマンドを省くと画面が始まることを見る。
+//
+// 翻訳者はコマンドプロンプトに慣れていないことが多い。翻訳リポジトリへ dwloc を
+// 置いてダブルクリックするだけで開ける、というのがこの経路の狙いである。
+// ここが使い方の表示に戻ると、最初の1回で脱落する。
+func TestDefaultStartsTheEditor(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "Translations", "ja"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotRoot string
+	called := 0
+	orig := startEdit
+	startEdit = func(args []string, root string, stdout, stderr io.Writer) int {
+		called++
+		gotRoot = root
+		if args != nil {
+			t.Errorf("edit に引数を渡している: %q", args)
+		}
+		return exitOK
+	}
+	t.Cleanup(func() { startEdit = orig })
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--root", repo}, &out, &errOut); code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, errOut.String())
+	}
+	if called != 1 {
+		t.Fatalf("edit を %d 回呼んだ、1回を期待", called)
+	}
+	if gotRoot != repo {
+		t.Errorf("root = %q, 期待 %q", gotRoot, repo)
+	}
+	// 使い方を出さなくなったぶん、ほかのこともできると伝える手掛かりを残す。
+	if !strings.Contains(out.String(), "dwloc help") {
+		t.Errorf("ほかの使い方への案内が出ていない:\n%s", out.String())
+	}
+}
+
+// TestDefaultWaitsForEnterOnlyWhenBare は、引数を1つも受け取っていないときだけ
+// Enter を待つことを見る。
+//
+// ダブルクリックで開いた窓は、終わると同時に閉じる。案内を読む間も無く消えるので
+// 待つ。一方、--root を付けて端末から呼んだ人を待たせる理由は無い。
+func TestDefaultWaitsForEnterOnlyWhenBare(t *testing.T) {
+	notRepo := t.TempDir()
+
+	origIn := stdin
+	t.Cleanup(func() { stdin = origIn })
+
+	t.Run("素で呼ばれたら待つ", func(t *testing.T) {
+		stdin = strings.NewReader("\n")
+		var out, errOut bytes.Buffer
+		// カレントディレクトリを翻訳リポジトリでない場所にして、素の呼び出しを作る。
+		t.Chdir(notRepo)
+		if code := run(nil, &out, &errOut); code != exitError {
+			t.Fatalf("終了コード = %d", code)
+		}
+		// 「Enter」の3文字で見ると、t.TempDir が作る道（テスト名を含む）に当たる。
+		// 実際に出す文そのもので見る。
+		if !strings.Contains(errOut.String(), enterPrompt) {
+			t.Errorf("Enter を待っていない:\n%s", errOut.String())
+		}
+	})
+
+	t.Run("引数があれば待たない", func(t *testing.T) {
+		stdin = strings.NewReader("")
+		var out, errOut bytes.Buffer
+		if code := run([]string{"--root", notRepo}, &out, &errOut); code != exitError {
+			t.Fatalf("終了コード = %d", code)
+		}
+		if strings.Contains(errOut.String(), enterPrompt) {
+			t.Errorf("引数があるのに Enter を待っている:\n%s", errOut.String())
+		}
+	})
+}
+
+// TestLooksLikeRepo は、翻訳リポジトリらしさの見方を確かめる。
+//
+// 見るのは Translations ディレクトリの有無だけである。中身まで確かめないのは、
+// ロケールの数え方を publish.DiscoverTargets と2か所に持たないためである。
+func TestLooksLikeRepo(t *testing.T) {
+	empty := t.TempDir()
+	if looksLikeRepo(empty) {
+		t.Error("Translations が無いのに翻訳リポジトリだと言っている")
+	}
+
+	withDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(withDir, "Translations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !looksLikeRepo(withDir) {
+		t.Error("Translations があるのに翻訳リポジトリでないと言っている")
+	}
+
+	// 同じ名前のファイルはディレクトリではない。
+	withFile := t.TempDir()
+	if err := os.WriteFile(filepath.Join(withFile, "Translations"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if looksLikeRepo(withFile) {
+		t.Error("Translations がファイルなのに翻訳リポジトリだと言っている")
 	}
 }

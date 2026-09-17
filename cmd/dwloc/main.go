@@ -4,7 +4,7 @@
 //
 //	dwloc validate   公開ファイルを検証する（tools/check-translations.py の移植）
 //	dwloc diff       公開ファイルと再生順を突き合わせ、次にやることを並べる
-//	dwloc edit       ブラウザーで行を読む（いまは読み取り専用）
+//	dwloc edit       ブラウザーで訳を書き換える（サブコマンドを省くとこれになる）
 //	dwloc publish    公開用CSVを生成する（tools/hash-strings.ps1 の移植）
 //	dwloc version    版を表示する
 //
@@ -52,12 +52,13 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
 
 使い方:
   dwloc <サブコマンド> [オプション]
+  dwloc                      サブコマンドを省くと edit を始めます
 
 サブコマンド:
   validate   公開ファイル（Translations/<ロケール>/strings.csv）を検証する
   publish    公開用CSVを生成し直す
   diff       公開ファイルと再生順を突き合わせ、次にやることを並べる
-  edit       手元だけで待ち受けを始め、1ロケールの全行を1画面に出す（読み取り専用）
+  edit       手元だけで待ち受けを始め、ブラウザーで訳を書き換える
   version    版を表示する
 
 共通のオプション:
@@ -95,8 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	rest := global.Args()
 	if len(rest) == 0 {
-		fmt.Fprint(stderr, usageText)
-		return exitError
+		return runDefault(args, *root, stdout, stderr)
 	}
 
 	switch name := rest[0]; name {
@@ -117,6 +117,95 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "dwloc: 知らないサブコマンドです: %s\n\n", name)
 		fmt.Fprint(stderr, usageText)
 		return exitError
+	}
+}
+
+// stdin は Enter を待つときの読み取り先。テストが差し替えられるように変数にしてある。
+var stdin io.Reader = os.Stdin
+
+// startEdit は画面を始める関数。ここも変数にしてあるのは、引数なしの経路を
+// 試すときに実際の待ち受けとブラウザーを起こさないためである。
+var startEdit = runEdit
+
+// runDefault はサブコマンドを省いて起動されたときの入口です。
+//
+// 翻訳者はコマンドプロンプトに慣れていないことが多いので、翻訳リポジトリの
+// フォルダーへ dwloc を置いてダブルクリックするだけで画面が開くようにしてあります。
+// ダブルクリックで開いた窓の作業ディレクトリは実行ファイルのある場所になるので、
+// --root の既定（カレントディレクトリ）がそのまま効きます。
+//
+// 使い方の表示をここから外したのは、翻訳者にとって最初の1回がいちばん脱落しやすい
+// ためです。使い方は dwloc help と dwloc --help で今までどおり出ます。
+func runDefault(args []string, root string, stdout, stderr io.Writer) int {
+	if !looksLikeRepo(root) {
+		where, err := filepath.Abs(root)
+		if err != nil {
+			where = root
+		}
+		fmt.Fprintf(stderr, notARepoText, where)
+		// ダブルクリックで開いた窓は、終わると同時に閉じる。理由を読む間も無く
+		// 消えるので、引数を1つも受け取っていないときだけ Enter を待つ。
+		// 端末から素の dwloc を打った場合もここを通るが、Enter を1回押すだけで済む。
+		if len(args) == 0 {
+			waitForEnter(stderr)
+		}
+		return exitError
+	}
+	// 画面を始める前に、ほかのこともできると伝える。使い方を出さなくなったぶん、
+	// ここが唯一の手掛かりになる。
+	fmt.Fprintln(stdout, "サブコマンドを指定すると、検証や公開もできます（dwloc help）。")
+	return startEdit(nil, root, stdout, stderr)
+}
+
+// notARepoText は、翻訳リポジトリではない場所で起動されたときの案内です。
+//
+// 「見つかりません」だけで終わらせず、どこへ置けばよいかを図で示します。
+// ここで詰まると、翻訳者は道具そのものを諦めます。
+const notARepoText = `dwloc: ここは翻訳リポジトリではないようです。
+  探した場所: %s
+
+dwloc は、翻訳リポジトリのフォルダーに置いて実行します。
+Translations フォルダーと同じ場所へ dwloc を移してから、もう一度開いてください。
+
+  <翻訳リポジトリ>/
+    Translations/    ← これと同じ場所に
+    data/
+    dwloc            ← これを置く
+
+置き場所を変えずに使うときは、--root でフォルダーを指定します。
+  dwloc edit --root <翻訳リポジトリのパス>
+
+ほかの使い方は dwloc help で表示します。
+`
+
+// looksLikeRepo は、そこが翻訳リポジトリらしいかを返します。
+//
+// 見るのは Translations ディレクトリの有無だけです。中身まで確かめないのは、
+// ロケールの数え方を publish.DiscoverTargets と2か所に持たないためです。
+// Translations はあるがロケールが1つも無い、という場合は待ち受け側が断ります。
+func looksLikeRepo(root string) bool {
+	info, err := os.Stat(filepath.Join(root, "Translations"))
+	return err == nil && info.IsDir()
+}
+
+// enterPrompt は Enter を待つときに出す文。試験が同じ文で見張る。
+const enterPrompt = "Enter キーを押すと閉じます。"
+
+// waitForEnter は Enter が押されるまで待ちます。
+//
+// 読めない（標準入力が閉じている）ときはすぐ戻ります。待ち続けると、
+// 入力の無い場所から呼ばれたときに止まったままになります。
+func waitForEnter(stdout io.Writer) {
+	fmt.Fprintln(stdout, "\nEnter キーを押すと閉じます。")
+	buf := make([]byte, 1)
+	for {
+		n, err := stdin.Read(buf)
+		if err != nil {
+			return
+		}
+		if n > 0 && buf[0] == '\n' {
+			return
+		}
 	}
 }
 
