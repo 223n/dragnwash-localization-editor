@@ -1,8 +1,10 @@
 package publish
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -224,5 +226,67 @@ func TestDriftHeadsShowsTheDifference(t *testing.T) {
 				t.Errorf("ゲーム側の切り出しが元の訳に含まれない: %q", b)
 			}
 		})
+	}
+}
+
+// TestCheckBaseReportsInFileOrder は、報告の見本が公開ファイルの順に並び、
+// 何度呼んでも同じであることを見る。
+//
+// Go の map の反復順はわざと毎回違う。[CheckBase] が map を直になぞっていた
+// ころは、同じ入力で6回走らせると見本の並びが4通り出た（実機で確認）。
+// 件数と「書かない」判断は変わらないので、害は報告の読みにくさだけである。
+// それでも直すのは、この報告が不具合の報せとして貼られる先が手元とはかぎらず、
+// 貼られた報告から元の状態を読み取れなくなるからである。
+//
+// 見本の上限（[baseDriftListMax]）を超える数の食い違いを置く。上限以下だと
+// 「どの5件が入るか」が揺れる余地が無く、並びの揺れしか見られない。
+func TestCheckBaseReportsInFileOrder(t *testing.T) {
+	const drifts = baseDriftListMax + 4
+
+	var repo, game, working strings.Builder
+	repo.WriteString(baseHeader)
+	game.WriteString(baseHeader)
+	working.WriteString(baseWorkingHeader)
+	var want []string
+	for i := 0; i < drifts; i++ {
+		// キーは16桁。i を末尾に埋めて、ファイルの順と辞書順を別にしておく。
+		// 同じにすると、たまたま辞書順で並んだだけでも通ってしまう。
+		key := fmt.Sprintf("%016x", (drifts-i)*0x1000+i)
+		want = append(want, key)
+		fmt.Fprintf(&repo, "%s,UI,,,UI,新しい訳%02d\n", key, i)
+		fmt.Fprintf(&game, "%s,UI,,,UI,古い訳%02d\n", key, i)
+		fmt.Fprintf(&working, "%s,UI,,,UI,,古い訳%02d\n", key, i)
+	}
+
+	target, current := newBaseTree(t, repo.String(), game.String(), working.String())
+
+	var first []string
+	for run := 0; run < 8; run++ {
+		res, err := CheckBase(target, current)
+		if err != nil {
+			t.Fatalf("CheckBase: %v", err)
+		}
+		if res.Count != drifts {
+			t.Fatalf("%d 回目: 食い違いが %d 件、%d 件を期待", run+1, res.Count, drifts)
+		}
+		var got []string
+		for _, d := range res.Sample {
+			got = append(got, d.Key)
+		}
+		if len(got) != baseDriftListMax {
+			t.Fatalf("%d 回目: 見本が %d 件、%d 件を期待", run+1, len(got), baseDriftListMax)
+		}
+		if run == 0 {
+			first = got
+			// ファイルに現れた順の先頭から採ること。辞書順でも map 順でもない。
+			if !slices.Equal(got, want[:baseDriftListMax]) {
+				t.Fatalf("見本がファイルの順で並んでいない\n  出た順:   %v\n  期待した順: %v",
+					got, want[:baseDriftListMax])
+			}
+			continue
+		}
+		if !slices.Equal(got, first) {
+			t.Fatalf("%d 回目で並びが変わった\n  1回目: %v\n  今回:   %v", run+1, first, got)
+		}
 	}
 }
