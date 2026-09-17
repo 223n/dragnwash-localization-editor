@@ -4,8 +4,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
 
 // keyOnlyInWorking は作業コピーにあって公開ファイルに無いキー。
@@ -317,16 +320,46 @@ func keyOf(t *testing.T, s *server, line int) string {
 	return ""
 }
 
-// makeReadOnly はファイルを読み取り専用にする。
+// makeReadOnly は path への保存が失敗するようにする。
 //
-// Windows では読み取り専用の属性が付き、[os.Rename] での置き換えが拒まれる。
-// 保存が失敗する経路を、権限をいじらずに作れる。
+// 閉じる相手が OS で違う。[publish.WriteBytes] は同じディレクトリに一時ファイルを
+// 作ってから [os.Rename] で置き換えるので、止まる場所が違うためである。
+//
+//   - Windows … ファイルに読み取り専用の属性が付くと、その置き換えが拒まれる
+//   - POSIX … rename の可否はディレクトリの書き込み権で決まる。ファイルの
+//     モードを落としても、同じディレクトリに作った一時ファイルからの置き換えは
+//     通ってしまうので、ディレクトリのほうを閉じる
+//
+// ファイルだけを 0444 にしていたころは、Windows で通り Linux の CI で落ちていた。
+// 落ちたのは保存が失敗しなかったからで、製品側は正しく保存できていた。
+// 「書けない状態」を作れていないのに、書けなかったときの振る舞いを見ていた。
+//
+// 実際に書けなくなったことを確かめてから返す。root で走るとどちらの手も効かず、
+// 同じことがまた起きるためである。効かないときは試験を飛ばす。
 func makeReadOnly(t *testing.T, path string) {
 	t.Helper()
 
-	if err := os.Chmod(path, 0o444); err != nil {
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := path
+	var closed, open os.FileMode = 0o444, 0o644
+	if runtime.GOOS != "windows" {
+		target, closed, open = filepath.Dir(path), 0o555, 0o755
+	}
+	if err := os.Chmod(target, closed); err != nil {
 		t.Fatal(err)
 	}
 	// 後始末で消せるように戻す。t.TempDir の削除は読み取り専用で失敗しうる。
-	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	// t.Cleanup は後入れ先出しなので、ここは TempDir の削除より先に走る。
+	t.Cleanup(func() { _ = os.Chmod(target, open) })
+
+	// 確かめ方は、製品が保存に使う経路そのものである。判定を書き写すと、
+	// 書き方が変わったときにここだけ古いままになる。
+	// 書くのはいま入っている中身なので、通ってしまってもファイルは変わらない。
+	if err := publish.WriteBytes(path, before); err == nil {
+		t.Skipf("%s を書けない状態にできない。root で走っていると効かない", target)
+	}
 }
