@@ -66,8 +66,8 @@ Goのインストールは要りません。
 ### Windowsで実行する
 
 1. ダウンロードしたzipを右クリックし、「すべて展開」を選びます
-2. PowerShellを開き、展開したフォルダーへ移動します
-3. `.\dwloc.exe version`を実行します。版が表示されれば動いています
+1. PowerShellを開き、展開したフォルダーへ移動します
+1. `.\dwloc.exe version`を実行します。版が表示されれば動いています
 
 「WindowsによってPCが保護されました」と出た場合は、「詳細情報」を押してから「実行」を選びます。  
 これはSmartScreenによる、署名の無いプログラムへの警告です。
@@ -322,9 +322,9 @@ macOSとLinuxのファイルマネージャーからの起動は確かめてい�
 
 1. `#`で始まるコメント行と空行が混ざります。
    Excelなどで開いて保存すると、見出しが失われます
-2. 保存は書き戻しではありません。
+1. 保存は書き戻しではありません。
    行の並び順と見出しを、ゲームの台本の順に生成し直す必要があります
-3. 既存のツールはWindows専用のPowerShellと、Pythonに依存するスクリプトです。
+1. 既存のツールはWindows専用のPowerShellと、Pythonに依存するスクリプトです。
    macOSやLinuxの翻訳者は実行できません
 
 くわしくは、[事前調査レポート](docs/research.md)にあります。
@@ -455,11 +455,11 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 ### リリースする
 
 1. Actionsの「リリース」を開き、「Run workflow」を選びます
-2. `version`にリリースする版を入れます。
+1. `version`にリリースする版を入れます。
    `v`は付けません（例: `1.2.0`、`1.2.0-rc.1`）
-3. ワークフローが`develop`から`release/vX.Y.Z`ブランチを切り、`package.json`の版を上げ、`main`へのPull Requestを開きます
-4. Pull Requestの内容を確かめ、マージコミット（Create a merge commit）でマージします
-5. 「リリースを公開する」ワークフローが動きます。
+1. ワークフローが`develop`から`release/vX.Y.Z`ブランチを切り、`package.json`の版を上げ、`main`へのPull Requestを開きます
+1. Pull Requestの内容を確かめ、マージコミット（Create a merge commit）でマージします
+1. 「リリースを公開する」ワークフローが動きます。
    タグ`vX.Y.Z`を打ち、6種類の書庫を添えたGitHub Releaseを作り、`main`を`develop`に戻します
 
 バイナリはタグを打つ前に作ります。  
