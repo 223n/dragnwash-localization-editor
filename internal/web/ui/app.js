@@ -76,9 +76,14 @@
     searchLabel: document.getElementById("search-label"),
     search: document.getElementById("search"),
     finderNote: document.getElementById("finder-note"),
+    finderNoteTitle: document.getElementById("finder-note-title"),
+    /* 畳みそのもの。文言が入るまで出さないために持つ（applyCatalog を見よ）。 */
+    finderFold: document.getElementById("finder-fold"),
     shown: document.getElementById("shown"),
     empty: document.getElementById("empty"),
     keys: document.getElementById("keys"),
+    keysTitle: document.getElementById("keys-title"),
+    keysFold: document.getElementById("keys-fold"),
     orphans: document.getElementById("orphans"),
     orphansTitle: document.getElementById("orphans-title"),
     orphansList: document.getElementById("orphans-list")
@@ -95,6 +100,8 @@
     state.mine      競合のあいだ抱えている自分の編集。選ばせるまで捨てない。
     state.orphans   載せる先の行がファイルから無くなった訳。捨てずに画面へ出す。
     state.rows      行番号 → 描いた要素。保存の結果を差し込むために持つ。
+    state.byKey     キー → そのキーの行（描いた要素の並び）。待ち受けはバッジを
+                    キー単位で付け直すので、描き直す先もキーで引く。
     state.items     描いた順そのまま（見出しと行）。絞り込みは この並びを
                     上から1回なぞるだけで済ませる。
     state.filter    選ばれている絞り込みの条件。"cat:<識別子>" が待ち受けから
@@ -116,8 +123,15 @@
     mine: null,
     orphans: [],
     rows: new Map(),
+    byKey: new Map(),
     items: [],
     filter: new Set(),
+    /*
+      条件のチップ。カテゴリ識別子 → { rows: 数の欄, chip: チップそのもの }。
+      保存のあとに、条件を組み直さずに数と添え書きだけ書き換えるために持つ
+      （updateChipRows を見よ）。
+    */
+    chipRows: new Map(),
     gen: 0,
     editing: null,
     composing: false,
@@ -380,6 +394,20 @@
     el.search.setAttribute("aria-label", t("ui.search"));
     el.finderNote.textContent = t("ui.finder_note");
     /*
+      畳んである2つの見出し。畳んだままでも読まれるのはここだけなので、
+      絞り込みのほうには「無条件に本当のこと」（検索がブラウザーの中だけで
+      完結すること）を入れてある。条件つきでしか本当でないことを入れると、
+      いちばん読まれる1文がいちばん当てにならない1文になる。
+    */
+    el.finderNoteTitle.textContent = t("ui.finder_note_title");
+    el.keysTitle.textContent = t("ui.keys_title");
+    /*
+      文言が入ったので出す。入るまでは hidden にしてある（index.html）。
+      空の summary は、名前を持たない焦点の止まり場になる。
+    */
+    el.keysFold.hidden = false;
+    el.finderFold.hidden = false;
+    /*
       「1行もありません」はここでは入れない。applyView が、出す行が0のときだけ
       入れて、そうでないときは空にする。中身の入れ替えで出し入れするので、
       ここで入れてしまうと読み込み中からずっと出たままになる。
@@ -445,16 +473,30 @@
       var item = document.createElement("li");
       item.className = c.status + (c.judged ? "" : " held");
       item.appendChild(span(null, c.statusLabel + " / " + c.label + " "));
-      item.appendChild(
-        span(
-          null,
-          c.judged
-            ? t("ui.count_value", { count: c.count })
-            : t("ui.not_judged", { reason: c.reason })
-        )
-      );
+      item.appendChild(span(null, countText(c)));
       el.counts.appendChild(item);
     });
+  }
+
+  /*
+    件数の欄に出す1つぶんの文。
+
+    判定できていないカテゴリは数を出さず、理由を出す。
+
+    件数（diff が見つけた数）と、この一覧に並べられる行数が食い違うカテゴリでは、
+    その場で両方を言う。言わないと、同じカテゴリ名の隣に別の数が2か所（件数の欄と
+    条件のチップ）出たまま、どちらが何なのかは畳んだ断り書きの中にしか無くなる。
+    食い違っているかどうかを決めたのは待ち受けである（countView.rowsDiffer）。
+    ここで c.count と c.rows を比べると、それが画面の独自判断になる。
+  */
+  function countText(c) {
+    if (!c.judged) {
+      return t("ui.not_judged", { reason: c.reason });
+    }
+    if (c.rowsDiffer) {
+      return t("ui.count_and_rows", { count: c.count, rows: c.rows });
+    }
+    return t("ui.count_value", { count: c.count });
   }
 
   /*
@@ -471,25 +513,124 @@
     判定できていないカテゴリも条件として出す。選んでも1行も出ないが、その
     理由は件数の欄が「判定していません（…）」と言っている。ここで
     「行が無いから外す」と決めると、それが画面の独自判断になる。
+
+    数（countView.rows）は待ち受けが数えたもので、そのまま添える。押す前に、
+    その条件の行がこの一覧に何行あるかを読めるようにするためである。実データ
+    （ja、公開ファイル）では9つのうち7つが押しても0行で、どれがそうなのかは
+    押すまで分からなかった。
+
+    この数は「押したときに並ぶ行数」ではない。3つの点でずれる。どれも実機で
+    測ってある（実データの写し、ja）。
+
+      保存 … 訳を1行入れると、チップは「32 行」→「31 行」になるが、一覧は
+              組み直さないので 32 行のまま並び続ける。27 行まで訳し進めると、
+              チップ「未翻訳（0 行）」の下に 27 行が並ぶ。行のバッジはその場で
+              消えるので、並んでいるのが「もう当たらない行」だとは読める。
+              組み直さないのは、打っている最中に行が目の前から消えないように
+              するためである（applyView の注記）。
+      keepAlways … 入力欄が開いている行・未保存・保存できない・競合の行は
+              条件に当たらなくても隠さない。入力欄を1つ開いたまま「台本に無い
+              台詞行（17 行）」を押すと 18 行出た（18行目にそのバッジは無い）。
+      検索 … 検索語は数に入っていない。「未翻訳（27 行）」のまま kobold と
+              打つと 4 行になった。
+
+    どの数がいま画面に出ている行数かを言うのは、上の帯の「表示中 N 行」だけに
+    する。ずれる3つは断り書き（目録の ui.finder_note）に書いてある。数が何の数
+    なのかは、畳めない見出し（目録の ui.filter）のほうに置いてある。畳みの中に
+    置くと、既定では読めない。
   */
   function buildFilters(counts) {
     clear(el.filters);
+    /*
+      数を入れた欄を控えておく。保存のあとは、条件を組み直さずにここだけ
+      書き換える（updateChipRows）。組み直すと、触っている最中の選択が跳ねる。
+    */
+    state.chipRows = new Map();
     (counts || []).forEach(function (c) {
-      el.filters.appendChild(
-        filterChip("cat:" + c.category, c.label, c.status, c.statusLabel)
-      );
+      var rows = span("chip-rows", chipRowsText(c));
+      /*
+        件数の欄の同じ行を、そのまま添え書き（title）にする。件数（件）と
+        チップの数（行）は別のものを数えた別の数で、画面の離れた2か所に出る。
+        375px 幅では、条件の一帯から件数の欄まで数百px離れている。押す手の下で、
+        もう一方の数も読めるようにしておく。判定できていないカテゴリでは、その
+        理由（作業コピーがありません、など）がここに出る。押したあとに「条件に
+        合う行がありません」としか出ないのでは、なぜ出ないのかが押した場所の
+        どこにも無い。文は countText が組んだもので、新しい判断はしていない。
+      */
+      var chip = filterChip("cat:" + c.category, c.label, c.status, c.statusLabel, rows, countText(c));
+      state.chipRows.set(c.category, { rows: rows, chip: chip });
+      el.filters.appendChild(chip);
     });
     /*
       画面の状態の2つ。重さの名前は待ち受けが持っていないので、目録から入れる。
       internal/diff の重さ（要作業／要確認／参考）とは別のものなので、同じ名前を
       当てずに「画面の状態」と呼ぶ。
+
+      この2つには数を添えない。数えるのは待ち受けの仕事だが、未保存と保存できない
+      は待ち受けが知らない画面の状態なので、添えるなら画面が数えることになる。
+      量は上の帯が既に出している（「未保存 N 件」）ので、二重に持たせない。
     */
     el.filters.appendChild(
-      filterChip("state:pending", t("ui.filter_pending"), "pending", t("ui.filter_state"))
+      filterChip("state:pending", t("ui.filter_pending"), "pending", t("ui.filter_state"), null, "")
     );
     el.filters.appendChild(
-      filterChip("state:failed", t("ui.filter_failed"), "failed", t("ui.filter_state"))
+      filterChip("state:failed", t("ui.filter_failed"), "failed", t("ui.filter_state"), null, "")
     );
+  }
+
+  /*
+    チップに添える数の文。
+
+    判定できていないカテゴリには数を出さず、「未判定」と書く。0 と書くと
+    「もう何も残っていない」と読まれる（internal/diff の doc.go と buildCounts が
+    名指ししている約束）。実データの16ロケールでは、作業コピーが無いあいだ
+    「未翻訳」がこれになる。ここで「（0 行）」と出すと、訳が1行も入っていない
+    ロケールのチップが「訳し終わった」と読める。
+
+    件数が立っているのに、この一覧には1行も出せないカテゴリにも数を出さない
+    （countView.noRowHere）。0 行なのは本当だが、「（0 行）」と書くと上と同じ
+    読み違いをされる。実データで公開ファイルを並べているロケールでは、「どの
+    ロケールにも訳が無い行」が 32件／0行 でこれになる。行として出せないのは、
+    そのキーがこのロケールのファイルに無いからこそ見つかったカテゴリだからで、
+    「片付いた」の逆である。件数の欄はこの食い違いを「32 件（この一覧には 0 行）」
+    と書くが、そこは離れた場所にある。押す前に、押した手の下で読めるようにする。
+
+    どちらを書くかは待ち受けが決めている（judged と noRowHere）。ここで
+    c.count と c.rows を比べると、それが画面の独自判断になる。
+
+    単位を「行」にして、件数の欄の「件」と語を分ける。同じ数の言い換えではなく、
+    別のものを数えた別の数だからである。
+  */
+  function chipRowsText(c) {
+    if (!c.judged) {
+      return t("ui.chip_not_judged");
+    }
+    if (c.noRowHere) {
+      return t("ui.chip_no_row_here");
+    }
+    return t("ui.chip_rows", { count: c.rows });
+  }
+
+  /*
+    チップの数と添え書きを書き換える。保存の応答から呼ぶ。
+
+    条件そのものは組み直さない。組み直すと、触っている最中の選択が跳ねる
+    （render の注記を見よ）。数を置いていくと、訳を1行入れた直後のチップが
+    「この一覧にあるその条件の行数」ではなくなる。
+
+    添え書き（件数の欄の同じ行）も一緒に書き換える。片方だけ写すと、押した
+    ときに出る2つの数が別の時点のものになる。
+
+    ここで数えてはいない。待ち受けが数え直した countView.rows を写すだけである。
+  */
+  function updateChipRows(counts) {
+    (counts || []).forEach(function (c) {
+      var node = state.chipRows.get(c.category);
+      if (node) {
+        node.rows.textContent = chipRowsText(c);
+        node.chip.title = countText(c);
+      }
+    });
   }
 
   /*
@@ -499,10 +640,17 @@
     いたが、--todo #8a4b00 と --review #9a1c1c は色覚によっては近く、app.css の
     冒頭に書いた「色だけで意味を伝えない」に反していた。件数の欄は最初から
     名前を出している。名前は待ち受けが返したものをそのまま使う。
+
+    rows は数を入れた欄。画面の状態の2つには添えないので、null が来る。
+    note は添え書き（件数の欄の同じ行）。画面の状態の2つには無いので空が来る。
   */
-  function filterChip(id, label, status, statusLabel) {
+  function filterChip(id, label, status, statusLabel, rows, note) {
     var wrap = document.createElement("label");
     wrap.className = "chip " + status;
+    if (note) {
+      /* 文は待ち受けが返した件数から組んだもの。行の中身ではない。 */
+      wrap.title = note;
+    }
     var box = document.createElement("input");
     box.type = "checkbox";
     box.checked = state.filter.has(id);
@@ -519,6 +667,9 @@
       wrap.appendChild(span("chip-status", statusLabel));
     }
     wrap.appendChild(span(null, label));
+    if (rows) {
+      wrap.appendChild(rows);
+    }
     return wrap;
   }
 
@@ -550,6 +701,31 @@
     (badges || []).forEach(function (b) {
       entry.cats.add(b.category);
       entry.badges.appendChild(badgeNode(b));
+    });
+  }
+
+  /*
+    保存できた行のバッジを描き直す。同じキーの行がほかにもあれば、そちらも
+    描き直す。
+
+    待ち受けはキー単位でバッジを付け直す（internal/web の badgesByKey）。訳が
+    入ったキーのバッジは、そのキーのどの行からも落ちる。応答に入っている行だけを
+    描き直すと、もう一方の行が古いバッジを付けたまま残り、チップの数（待ち受けが
+    数え直したもの）だけが2つぶん減る。そのバッジでしか選べない条件を押すと、
+    数に入っていない行が一覧に混ざる。
+
+    実データの16ロケールと ja の作業コピーに重複キーは1件も無いが、作業コピーは
+    Mod が書き出す CSV で、dwloc validate も公開ファイルしか見ない。実際に
+    1174行目を複製して試すと、チップ31に対して32行出た。
+  */
+  function renderBadgesForKey(entry, badges) {
+    var same = entry.key ? state.byKey.get(entry.key) : null;
+    if (!same) {
+      renderBadges(entry, badges);
+      return;
+    }
+    same.forEach(function (e) {
+      renderBadges(e, badges);
     });
   }
 
@@ -783,9 +959,24 @@
       hidden ではなく中身の入れ替えで出し入れする。hidden の要素は支援技術の
       木から外れるので、文字が変わる瞬間に role="status" が木に居らず、
       告知しない実装があり得る（showMessage も同じ形にしてある）。
+
+      検索の欄に字が入っているときは、別の文言にする。「条件を外すと全部出ます」
+      は、検索語のせいで0行になったときには嘘になる。実データの de で
+      zzzznotfound と打つと、条件を1つも選んでいないのに0行になり、外す条件が
+      無いのに「条件を外せ」と言われる（外しても0行のままである）。まず検索の欄を
+      空にすれば戻る、と言うほうが次の一手になる。空にしてなお0行なら、そのときに
+      条件のほうの文言が出る。
+
+      ここで見ているのは検索の欄に字があるかどうかだけで、数は数えていない。
     */
     var nothing = shown === 0 && state.items.length > 0;
-    el.empty.textContent = nothing ? t("ui.no_rows") : "";
+    if (!nothing) {
+      el.empty.textContent = "";
+    } else if (q) {
+      el.empty.textContent = t("ui.no_rows_search");
+    } else {
+      el.empty.textContent = t("ui.no_rows");
+    }
   }
 
   /* いま関わっている見出しを出す。節と節点の両方を出さないと、上が欠ける。 */
@@ -1297,6 +1488,12 @@
       state.version = body.version;
       showMessage("");
       renderCounts(body.counts);
+      /*
+        条件は組み直さず、チップの数だけ写す。組み直すと、触っている最中の
+        選択が跳ねる。写さないと、訳を入れた行のバッジだけが消えて、チップの
+        数は入れる前のままになる。
+      */
+      updateChipRows(body.counts);
       renderNotes(body.notes);
       updateStatus();
       if (state.pending.size) {
@@ -1376,7 +1573,7 @@
             /* ファイルから読み直した値を出す。画面とファイルを同じにする。 */
             setShownText(entry, r.translation);
           }
-          renderBadges(entry, r.badges);
+          renderBadgesForKey(entry, r.badges);
           setRowNote(entry, r.warning ? r.warning : "");
         }
       } else {
@@ -1825,6 +2022,12 @@
       どうかも、同じ1回で分かる。
     */
     state.items = [];
+    /*
+      キー → その キーの行。保存のあとにバッジを描き直す先を引くために持つ
+      （renderBadgesForKey）。ふつうは1キー1行だが、作業コピーは Mod が書き
+      出す CSV なので、同じキーが2行あることを止める仕掛けはどこにも無い。
+    */
+    state.byKey = new Map();
     var fragment = document.createDocumentFragment();
     (data.lines || []).forEach(function (line) {
       if (line.kind === "heading") {
@@ -1834,7 +2037,16 @@
         return;
       }
       fragment.appendChild(rowNode(line, data.locale));
-      state.items.push({ entry: state.rows.get(line.n) });
+      var entry = state.rows.get(line.n);
+      state.items.push({ entry: entry });
+      if (entry.key) {
+        var same = state.byKey.get(entry.key);
+        if (!same) {
+          same = [];
+          state.byKey.set(entry.key, same);
+        }
+        same.push(entry);
+      }
     });
     el.list.replaceChildren(fragment);
     /* 行数は待ち受けが数えたもの。ここでは数えない。 */

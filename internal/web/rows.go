@@ -185,7 +185,10 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 		Locale:  target.Locale,
 		Version: out.file.Version(),
 		Results: out.results,
-		Counts:  s.buildCounts(cat, target.Locale, sum),
+		// 行数も数え直す。件数だけ返してチップの数を置いていくと、訳を入れた
+		// 直後に「32 行」と書いたチップが31行しか出さなくなる。
+		Counts: s.buildCounts(cat, target.Locale, sum,
+			rowsByCategory(out.file.Lines(), badges)),
 		Notes: s.buildNotes(cat, target, sum,
 			out.file.Header() != nil && hasSourceColumn(out.file.Header())),
 	})
