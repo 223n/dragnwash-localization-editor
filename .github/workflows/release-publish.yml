@@ -168,10 +168,17 @@ jobs:
           Drag'n Wash の翻訳リポジトリを扱うコマンドです。
           この書庫には、実行ファイルと LICENSE とこの説明が入っています。
 
-          使い方:
-            dwloc validate --root <翻訳リポジトリのパス>
-            dwloc diff     --root <翻訳リポジトリのパス>
-            dwloc publish  --root <翻訳リポジトリのパス>
+          いちばん簡単な始め方:
+            dwloc を翻訳リポジトリのフォルダー（Translations と同じ場所）へ置いて、
+            ダブルクリックします。訳を書き換える画面がブラウザーで開きます。
+            止めるときは Ctrl+C を押すか、開いた窓を閉じます。
+            Windows で確かめています。macOS と Linux は下のコマンドを使ってください。
+
+          コマンドから使うとき:
+            dwloc edit     --root <翻訳リポジトリのパス>   ブラウザーで訳を書き換える
+            dwloc diff     --root <翻訳リポジトリのパス>   次にやることを並べる
+            dwloc validate --root <翻訳リポジトリのパス>   公開ファイルを検証する
+            dwloc publish  --root <翻訳リポジトリのパス>   公開用CSVを作り直す
             dwloc version
 
           このバイナリには署名を付けていません。
