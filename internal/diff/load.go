@@ -95,15 +95,14 @@ type Options struct {
 
 // Load は root 配下を読む。旧再生順の取り方は [GitOldOrder]。
 //
-// ロケールの列挙と作業コピーの有無の判定は publish.DiscoverEditTargets に委ねる。
-// 走査の規則を2か所に持つと、publish が対象にするロケールと、この道具が報告する
-// ロケールが食い違う。Target.Input != Target.Output であることが、作業コピーが
-// ある状態そのものになる。
+// ロケールの列挙と作業コピーの有無の判定は publish.DiscoverTargetsWithGame に
+// 委ねる。走査の規則を2か所に持つと、publish が対象にするロケールと、この道具が
+// 報告するロケールが食い違う。Target.Input != Target.Output であることが、
+// 作業コピーがある状態そのものになる。
 //
-// ゲーム側の作業コピーは publish が読まない（publish パッケージの doc コメント）。
-// この道具が読むのは未翻訳を数えるためで、publish が何を入力にするかとは別の話
-// である。「publish を回すとこうなる」と読めるのは、作業コピーがリポジトリ側に
-// あるときだけになる。
+// --game を渡したときの探し先も publish と同じになる。publish もゲーム側の
+// 作業コピーを入力にするので、この道具の「publish を回すとこうなる」という
+// 読み方は、ゲーム側の作業コピーを読んだときにも成り立つ。
 //
 // useWorking が false のときは作業コピーを読まない。公開ファイルだけで何が
 // 言えるかを再現したいとき（作業コピーが古いときを含む）に使う。
@@ -122,7 +121,7 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("再生順のデータを読めません: %w", err)
 	}
-	targets, err := publish.DiscoverEditTargets(root, opt.Game)
+	targets, err := publish.DiscoverTargetsWithGame(root, opt.Game)
 	if err != nil {
 		return nil, fmt.Errorf("%s を読めません: %w", publish.TranslationsDir, err)
 	}

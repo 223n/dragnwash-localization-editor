@@ -99,47 +99,6 @@ func TestRunDiffCSVKeepsStdoutClean(t *testing.T) {
 	}
 }
 
-// TestPublishRefusesGame は、publish が --game を受け取って断ることを見る。
-//
-// 黙って無視すると「ゲーム側の作業コピーから作り直した」と読まれる。使って
-// しまえばもっと悪く、作業コピーに無い行がコミット済みの公開ファイルから消える。
-// どちらも起こさないために、ここで止めて何も書かない。
-func TestPublishRefusesGame(t *testing.T) {
-	root := gameRepo(t)
-	game := makeGame(t, map[string]string{
-		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
-	})
-	before := readFile(t, root, "Translations/ja/strings.csv")
-
-	for _, args := range [][]string{
-		{"publish", "--root", root, "--game", game},
-		// 共通オプションとしてサブコマンドの前に置かれた場合も同じ。
-		{"--root", root, "--game", game, "publish"},
-		// 自動検出も走らせない。断るのは値を見る前である。
-		{"publish", "--root", root, "--game", "auto"},
-		// 書かないことは --dry-run でも変わらない。
-		{"publish", "--root", root, "--game", game, "--dry-run"},
-	} {
-		code, stdout, stderr := runCLI(args...)
-		if code != exitError {
-			t.Fatalf("%v: 終了コード = %d\n%s", args, code, stderr)
-		}
-		checkContains(t, "標準エラー", stderr, []string{
-			"publish は --game を受け付けません",
-			"dwloc edit --game",
-		})
-		if strings.Contains(stderr, "作業コピーの探し先にします") {
-			t.Errorf("%v: 断ったのに探しにいっている:\n%s", args, stderr)
-		}
-		if stdout != "" {
-			t.Errorf("%v: 標準出力に何か出ている:\n%s", args, stdout)
-		}
-		if after := readFile(t, root, "Translations/ja/strings.csv"); after != before {
-			t.Fatalf("%v: 断ったのに公開ファイルが変わっている", args)
-		}
-	}
-}
-
 // TestPublishWithoutGameKeepsUsingTheRepository は、--game を付けない publish が
 // ゲーム側を読まないことを見る。
 //
@@ -271,13 +230,4 @@ func TestGameAppearsInUsage(t *testing.T) {
 		_, stdout, _ := runCLI(args...)
 		checkContains(t, strings.Join(args, " ")+" の説明", stdout, []string{"--game"})
 	}
-}
-
-// TestPublishUsageSaysItRefusesGame は、publish の説明が「受け付けない」と
-// 書いてあることを見る。
-//
-// 一覧に --game が出ているだけだと、使える指定に見える。
-func TestPublishUsageSaysItRefusesGame(t *testing.T) {
-	_, stdout, _ := runCLI("publish", "--help")
-	checkContains(t, "publish の説明", stdout, []string{"受け付けません"})
 }

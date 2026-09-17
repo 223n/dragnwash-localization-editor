@@ -123,13 +123,6 @@ type linesResponse struct {
 	// Path は画面が並べているファイルの表示用パス。ルートからの相対で、
 	// スラッシュ区切り。クライアントはこれを受け取るだけで、要求に載せることはない。
 	Path string `json:"path"`
-	// CommitPath は、保存のたびに同じ行を差し替えるもう1つのファイル
-	// （コミットする側の公開ファイル）。2つ書きでないときは空。
-	//
-	// 分けて出すのは、画面に並んでいるのが作業コピーで、コミットされるのは
-	// 別のファイルだからである。1つしか出さないと、翻訳者は「いま直しているのは
-	// コミットされる側か」を画面から確かめられない。
-	CommitPath string `json:"commitPath,omitempty"`
 	// Columns はファイルのヘッダー行の列名。そのまま出す（データ側の語彙なので訳さない）。
 	Columns []string `json:"columns"`
 	// SourceColumn は source_en 列があるか。無ければ原文の欄は常に空になる。
@@ -174,7 +167,6 @@ func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.Fil
 		Locale:         locale,
 		Version:        file.Version(),
 		Path:           s.displayPath(target.Input),
-		CommitPath:     s.commitPath(target),
 		Columns:        columns,
 		SourceColumn:   idx.source >= 0,
 		ReadOnlyReason: s.reasonText(cat, file.ReadOnlyCause()),
@@ -207,15 +199,6 @@ func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.Fil
 	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
 	resp.Notes = s.buildNotes(cat, target, sum, idx.source >= 0)
 	return resp
-}
-
-// commitPath は2つ書きのもう1つの行き先を、表示用のパスで返す。
-// 2つ書きでなければ空を返し、画面はその行を出さない。
-func (s *server) commitPath(target *publish.Target) string {
-	if !target.FromGame {
-		return ""
-	}
-	return s.displayPath(target.Output)
 }
 
 // headingView はコメント行を見出しにする。中身は書き換えない。
@@ -402,11 +385,12 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summary, hasSource bool) []string {
 	locale := target.Locale
 	var notes []string
-	if target.FromGame {
-		// 保存が2つのファイルへ行くことは、ここでしか言わない。行ごとの断りは
-		// 「入らなかった行」にしか出ないので、ふだんの保存では何も出ない。
-		// 出さないと、翻訳者は画面に並んでいる作業コピーだけを直していると思う。
-		notes = append(notes, s.cat.T(cat, "note.dual_write", "path", s.displayPath(target.Output)))
+	if target.Input != target.Output {
+		// いま並べているのが作業コピーだということは、ここでしか言わない。
+		// 保存はこのファイルにしか書かないので、コミットする側へ入るのは
+		// publish を回したときである。出さないと、翻訳者は画面で直した訳が
+		// そのままコミットされると思う。
+		notes = append(notes, s.cat.T(cat, "note.via_publish", "path", s.displayPath(target.Output)))
 	}
 	if s.untranslatedFilled(locale) > 0 {
 		// 件数を局所更新したことを断る。できないこと（カテゴリの再判定）を

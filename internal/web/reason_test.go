@@ -11,6 +11,7 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -139,6 +140,9 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	}
 	for _, why := range editReasons(t) {
 		check("edit", why)
+	}
+	for _, why := range publishLossReasons(t) {
+		check("publish", why)
 	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
@@ -289,46 +293,44 @@ func editReasons(t *testing.T) []reason.Reason {
 		out = append(out, causeOf(t, err))
 	}
 
-	out = append(out, writeByKeyReasons(t)...)
 	return out
 }
 
-// writeByKeyReasons はキーで引いて書き戻すときの断りの見本を集める。
+// publishLossReasons は internal/publish が作る理由の見本を集める。
 //
-// 2つ書き（dwloc edit --game）でしか出ない理由なので、実ファイルを1つ作って
-// [edit.WriteByKey] をそのまま通す。手で reason.New を組むと、Go 側の文面を
-// 書き写すことになって、ずれを見つけられなくなる。
-func writeByKeyReasons(t *testing.T) []reason.Reason {
+// 守りは「いまの公開ファイル」と「これから書く中身」を突き合わせて立つので、
+// 2つのバイト列をそのまま渡す。[publish.Build] を通さずに組み立てているのは、
+// 「行はあるが訳が空になる」ほうを Build では作れないためである（訳が空の行は
+// 出力しない、移植仕様 R20）。
+func publishLossReasons(t *testing.T) []reason.Reason {
 	t.Helper()
 
-	// 公開ファイルを模したファイル。同じキーの行を2つ置いてある。
-	path := filepath.Join(t.TempDir(), "strings.csv")
-	body := strings.Join([]string{
-		"key,translation",
-		"aaaaaaaaaaaaaaaa,ひとつめ",
-		"aaaaaaaaaaaaaaaa,ふたつめ",
+	current := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		"aaaaaaaaaaaaaaaa,UI,,,UI,きえるやく",
+		"bbbbbbbbbbbbbbbb,UI,,,UI,からになるやく",
 		"",
 	}, "\n")
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	next := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		"bbbbbbbbbbbbbbbb,UI,,,UI,",
+		"",
+	}, "\n")
 
-	got, err := edit.WriteByKey(path, []edit.KeyEdit{
-		{Key: "aaaaaaaaaaaaaaaa", Translation: "あたらしい訳"}, // 同じキーが2行
-		{Key: "bbbbbbbbbbbbbbbb", Translation: "行き先が無い"}, // そのキーの行が無い
-		{Key: "", Translation: "キーが無い"},                  // キーが空
-	})
+	losses, err := publish.CheckLoss("ja", []byte(current), []byte(next))
 	if err != nil {
-		t.Fatalf("WriteByKey: %v", err)
+		t.Fatalf("CheckLoss: %v", err)
 	}
-
-	out := make([]reason.Reason, 0, len(got))
-	for i, res := range got {
-		if res.Why.Empty() {
-			t.Errorf("%d 件目に断りが無い: %+v", i, res)
+	if len(losses) != 2 {
+		t.Fatalf("失われる訳が2件でない: %+v", losses)
+	}
+	out := make([]reason.Reason, 0, len(losses))
+	for i, l := range losses {
+		if l.Why.Empty() {
+			t.Errorf("%d 件目に理由が無い: %+v", i, l)
 			continue
 		}
-		out = append(out, res.Why)
+		out = append(out, l.Why)
 	}
 	return out
 }

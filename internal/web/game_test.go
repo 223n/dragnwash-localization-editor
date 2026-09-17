@@ -10,8 +10,9 @@ import (
 
 // keyOnlyInWorking は作業コピーにあって公開ファイルに無いキー。
 //
-// 公開ファイルは publish が作るので、まだ回していない新しい行がこの形になる。
-// 2つ書きでは、この行はゲーム側にだけ入り、行ごとに断りが付く。
+// 公開ファイルは publish が作り、訳が空の行を書かない（移植仕様 R20）ので、
+// まだ訳していない行はすべてこの形になる。画面で訳を入れても公開ファイルは
+// 変わらず、入るのは publish を回したときである。
 const keyOnlyInWorking = "1234567890abcdef"
 
 // newTestGame はゲーム側のプラグインフォルダーを作り、そのパスを返す。
@@ -126,33 +127,42 @@ func TestLinesUseGameWorkingCopy(t *testing.T) {
 	if filepath.ToSlash(got.Path) != filepath.ToSlash(workingCopyPath(game)) {
 		t.Errorf("並べているファイルが %q", got.Path)
 	}
-	// もう1つの行き先（コミットする側）も画面から読める。
-	if got.CommitPath != s.displayPath(publishedPath(root)) {
-		t.Errorf("コミットする側が %q、期待 %q", got.CommitPath, s.displayPath(publishedPath(root)))
-	}
-	// 2つ書きであることは、行ごとの断りが出ないふだんの保存でも分かるように、
-	// 画面の断り書きに入れる。
-	if !hasNote(got.Notes, got.CommitPath) {
-		t.Errorf("2つ書きの断りが無い: %q", got.Notes)
+	// 並べているのが作業コピーで、コミットする側へは publish で入ることを断る。
+	// 出さないと、翻訳者は画面で直した訳がそのままコミットされると読む。
+	//
+	// 文面は目録から組み立てて突き合わせる。試験に日本語を書き写すと、
+	// 目録を直したときにこちらだけが古いまま通る。
+	if want := viaPublishNote(s, root); !hasNote(got.Notes, want) {
+		t.Errorf("publish の断りが無い\n--- 期待 ---\n%s\n--- 断り書き ---\n%q", want, got.Notes)
 	}
 }
 
-func TestLinesHaveNoCommitPathWithoutGame(t *testing.T) {
-	// --game が無ければ保存先は1つ。もう1つの行き先は出さない。
-	s := newTestServer(t, Options{UILang: "ja"})
+func TestLinesHaveNoPublishNoteWithoutWorkingCopy(t *testing.T) {
+	// 作業コピーが無ければ、並べているのは公開ファイル自身。コミットする側は
+	// いま直しているファイルそのものなので、publish の断りは出さない。
+	root := newTestRoot(t)
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
 
 	rec := do(t, s, http.MethodGet, "/api/lines?locale=ja", true, nil)
 	got := decode[linesResponse](t, rec.Body.Bytes())
-	if got.CommitPath != "" {
-		t.Errorf("コミットする側が %q。2つ書きではない", got.CommitPath)
+	if want := viaPublishNote(s, root); hasNote(got.Notes, want) {
+		t.Errorf("作業コピーが無いのに publish の断りが出ている: %q", got.Notes)
 	}
 }
 
-func TestSaveWritesBothFiles(t *testing.T) {
-	// 2つ書きの本体。ゲーム側の作業コピーと、コミットする側の公開ファイルの
-	// 両方の「その行」が差し替わる。
+// viaPublishNote は「コミットする側へは publish で入る」という断り書きを、
+// 目録から組み立てて返す。
+func viaPublishNote(s *server, root string) string {
+	return s.cat.T(s.cat.lookup("ja"), "note.via_publish",
+		"path", s.displayPath(publishedPath(root)))
+}
+
+func TestSaveWritesOnlyTheWorkingCopy(t *testing.T) {
+	// 保存先は1つ。画面が並べているゲーム側の作業コピーだけが変わり、
+	// コミットする側の公開ファイルは1バイトも変わらない。
 	s, root, game := gamePair(t)
 	version := currentVersion(t, s)
+	before := readFile(t, publishedPath(root))
 
 	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: "やあ！"})
 	if rec.Code != http.StatusOK {
@@ -168,29 +178,26 @@ func TestSaveWritesBothFiles(t *testing.T) {
 
 	working := readFile(t, workingCopyPath(game))
 	if !strings.Contains(working, "やあ！") {
-		t.Errorf("ゲーム側に入っていない:\n%s", working)
+		t.Errorf("作業コピーに入っていない:\n%s", working)
 	}
-	published := readFile(t, publishedPath(root))
-	if !strings.Contains(published, "やあ！") {
-		t.Errorf("コミットする側に入っていない:\n%s", published)
-	}
-	// 差し替えたのはその行だけ。公開ファイルの行数も見出しも変わらない。
-	before := newTestRoot(t)
-	if got, want := countLines(published), countLines(readFile(t, publishedPath(before))); got != want {
-		t.Errorf("公開ファイルの行数が %d。%d のまま変わらないはず", got, want)
-	}
-	// 触っていない行は1バイトも変わらない。
-	if !strings.Contains(published, jaVanished) {
-		t.Errorf("触っていない行が消えている:\n%s", published)
+	// 公開ファイルへ書くのは publish の仕事。ここでは触らない。
+	if after := readFile(t, publishedPath(root)); after != before {
+		t.Errorf("公開ファイルが変わっている\n--- 前 ---\n%s\n--- 後 ---\n%s", before, after)
 	}
 }
 
-func TestSaveRowMissingFromPublishedGoesToTheGameOnly(t *testing.T) {
-	// 公開ファイルにまだ無い行。ゲーム側にだけ入れて、行ごとに断る。
-	// 黙って saved=true だけを返すと、翻訳者は「コミットすれば入る」と読む。
+func TestSaveUntranslatedRowGoesToTheWorkingCopy(t *testing.T) {
+	// 未訳の行。公開ファイルにその行は無い（publish が訳の空の行を書かないため）。
+	//
+	// ここが2つ書きを取り下げた理由そのものである。キーで公開ファイルへ書き戻そうと
+	// しても書き戻す先の行が無く、翻訳者がいちばんやりたいことが1行も入らない。
+	// 作業コピーへ入れておいて publish で作り直すのが本来の道である。
 	s, root, game := gamePair(t)
 	version := currentVersion(t, s)
 	before := readFile(t, publishedPath(root))
+	if strings.Contains(before, keyOnlyInWorking) {
+		t.Fatalf("前提が崩れている。公開ファイルに未訳の行がある:\n%s", before)
+	}
 
 	rec := save(t, s, "ja", version,
 		rowEdit{Line: 4, Key: keyOnlyInWorking, Translation: "あたらしい訳"})
@@ -201,26 +208,27 @@ func TestSaveRowMissingFromPublishedGoesToTheGameOnly(t *testing.T) {
 	if !got.Results[0].Saved {
 		t.Fatalf("保存できていない: %+v", got.Results[0])
 	}
-	if got.Results[0].Warning == "" {
-		t.Error("断りが無い")
+	// 行ごとの断りは出ない。行き先が1つしか無いので、断ることが無い。
+	if got.Results[0].Warning != "" {
+		t.Errorf("断りが出ている: %q", got.Results[0].Warning)
 	}
 
 	if working := readFile(t, workingCopyPath(game)); !strings.Contains(working, "あたらしい訳") {
-		t.Errorf("ゲーム側に入っていない:\n%s", working)
+		t.Errorf("作業コピーに入っていない:\n%s", working)
 	}
-	// 公開ファイルは1バイトも変わらない。行を足したりしない。
 	if after := readFile(t, publishedPath(root)); after != before {
 		t.Errorf("公開ファイルが変わっている\n--- 前 ---\n%s\n--- 後 ---\n%s", before, after)
 	}
 }
 
-func TestSaveStopsWhenTheCommitSideCannotBeWritten(t *testing.T) {
-	// 1 が書けなければ 2 は書かない。画面は未保存のまま抱えて送り直す。
+func TestSaveFailsWhenTheWorkingCopyCannotBeWritten(t *testing.T) {
+	// 書けなければ 503 で、saved も倒す。画面は未保存の控えを捨てずに送り直す。
+	// ゲームは C:/Program Files (x86)/ の下に入ることが多く、拒まれうる。
 	s, root, game := gamePair(t)
 	version := currentVersion(t, s)
-	beforeWorking := readFile(t, workingCopyPath(game))
+	before := readFile(t, publishedPath(root))
 
-	makeReadOnly(t, publishedPath(root))
+	makeReadOnly(t, workingCopyPath(game))
 
 	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: "やあ！"})
 	if rec.Code != http.StatusServiceUnavailable {
@@ -233,43 +241,15 @@ func TestSaveStopsWhenTheCommitSideCannotBeWritten(t *testing.T) {
 	if got.Results[0].Translation != "" {
 		t.Errorf("保存した値を返している: %q", got.Results[0].Translation)
 	}
-	// ゲーム側へは書いていない。片方にだけ入った状態を作らない。
-	if after := readFile(t, workingCopyPath(game)); after != beforeWorking {
-		t.Errorf("ゲーム側が変わっている:\n%s", after)
-	}
-}
-
-func TestSaveKeepsTheTranslationWhenTheGameCopyCannotBeWritten(t *testing.T) {
-	// 1 が書けて 2 が書けなかったとき。訳はコミットする側に入っているので
-	// 失われていない。saved=true で返し、ゲームへ届いていないことを断る。
-	s, root, game := gamePair(t)
-	version := currentVersion(t, s)
-
-	makeReadOnly(t, workingCopyPath(game))
-
-	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: "やあ！"})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
-	}
-	got := decode[rowsResponse](t, rec.Body.Bytes())
-	if !got.Results[0].Saved {
-		t.Fatalf("saved=false で返している: %+v", got.Results[0])
-	}
-	if got.Results[0].Warning == "" {
-		t.Error("ゲームへ届いていないことを断っていない")
-	}
-	if published := readFile(t, publishedPath(root)); !strings.Contains(published, "やあ！") {
-		t.Errorf("コミットする側に入っていない:\n%s", published)
-	}
-	// 版は動いていない。画面はそのまま送り直せる。
-	if got.Version != version {
-		t.Errorf("版が動いている: got %q, want %q", got.Version, version)
+	// 公開ファイルにも入らない。どこにも中途半端に入った状態を作らない。
+	if after := readFile(t, publishedPath(root)); after != before {
+		t.Errorf("公開ファイルが変わっている:\n%s", after)
 	}
 }
 
 func TestSaveWithoutGameWritesOnlyOneFile(t *testing.T) {
-	// --game が無いときは、この変更の前と同じ。保存先は1つで、publish が
-	// 入力に選ぶファイル（リポジトリの作業コピー）だけが変わる。
+	// --game が無いときも保存先は1つ。publish が入力に選ぶファイル
+	// （リポジトリの作業コピー）だけが変わる。
 	root := newEditRoot(t)
 	s := newTestServer(t, Options{Root: root, UILang: "ja"})
 	version := currentVersion(t, s)
@@ -289,8 +269,8 @@ func TestSaveWithoutGameWritesOnlyOneFile(t *testing.T) {
 }
 
 func TestGameSaveLogHasNoRowContent(t *testing.T) {
-	// --verbose の記録に原文と訳を出さない。2つ書きで記録を1行増やしたので、
-	// そちらにも中身が混じっていないことを見る。
+	// --verbose の記録に原文と訳を出さない。ゲーム側の作業コピーには原文
+	// （英語の台本）が入っているので、そちらを開いているときも確かめる。
 	root := newTestRoot(t)
 	game := newTestGame(t)
 	var log strings.Builder
@@ -301,6 +281,7 @@ func TestGameSaveLogHasNoRowContent(t *testing.T) {
 		rowEdit{Line: 3, Key: keyKept2, Translation: jaTyped}); rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
+	// 書けなかったときの記録にも中身を出さない。
 	makeReadOnly(t, workingCopyPath(game))
 	version = currentVersion(t, s)
 	save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: jaTyped})
@@ -320,11 +301,6 @@ func hasNote(notes []string, text string) bool {
 		}
 	}
 	return false
-}
-
-// countLines は行数を数える。
-func countLines(body string) int {
-	return strings.Count(body, "\n")
 }
 
 // keyOf は行番号からその行のキーを引く。

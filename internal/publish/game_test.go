@@ -28,7 +28,7 @@ func gameTree(t *testing.T, files map[string]string) string {
 	return game
 }
 
-func TestDiscoverEditTargets(t *testing.T) {
+func TestDiscoverTargetsWithGame(t *testing.T) {
 	t.Run("リポジトリに無ければゲーム側の作業コピーを入力にする", func(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, filepath.Join(root, TranslationsDir, "ja", StringsFile), "key\n")
@@ -36,9 +36,9 @@ func TestDiscoverEditTargets(t *testing.T) {
 			"Translations/_discovered/ja.working.csv": "source_en\n",
 		})
 
-		targets, err := DiscoverEditTargets(root, game)
+		targets, err := DiscoverTargetsWithGame(root, game)
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		if len(targets) != 1 {
 			t.Fatalf("対象が1件でない: %+v", targets)
@@ -47,12 +47,8 @@ func TestDiscoverEditTargets(t *testing.T) {
 		if targets[0].Input != want {
 			t.Errorf("入力が違う: got %q, want %q", targets[0].Input, want)
 		}
-		// ゲーム側から採ったことは印で分かるようにする。internal/web は
-		// これを見て、保存を2つのファイルへ分けるかどうかを決める。
-		if !targets[0].FromGame {
-			t.Error("FromGame が立っていない")
-		}
-		// 書き出す先はリポジトリのまま。ゲーム側へは publish しない。
+		// 書き出す先はリポジトリのまま。ゲーム側の作業コピーは入力にするだけで、
+		// そこへ書き戻すことはない。
 		wantOut := filepath.Join(root, TranslationsDir, "ja", StringsFile)
 		if targets[0].Output != wantOut {
 			t.Errorf("出力が違う: got %q, want %q", targets[0].Output, wantOut)
@@ -67,18 +63,13 @@ func TestDiscoverEditTargets(t *testing.T) {
 			"Translations/_discovered/ja.working.csv": "in game\n",
 		})
 
-		targets, err := DiscoverEditTargets(root, game)
+		targets, err := DiscoverTargetsWithGame(root, game)
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		want := filepath.Join(root, TranslationsDir, DiscoveredDir, "ja"+WorkingSuffix)
 		if targets[0].Input != want {
 			t.Errorf("リポジトリ側が先でない: got %q, want %q", targets[0].Input, want)
-		}
-		// リポジトリ側の作業コピーは publish が入力として拾うので、
-		// 2つ書きにしない。印も立てない。
-		if targets[0].FromGame {
-			t.Error("リポジトリ側なのに FromGame が立っている")
 		}
 	})
 
@@ -91,9 +82,9 @@ func TestDiscoverEditTargets(t *testing.T) {
 			"Translations/_discovered/ko.working.csv": "in game\n",
 		})
 
-		targets, err := DiscoverEditTargets(root, game)
+		targets, err := DiscoverTargetsWithGame(root, game)
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		got := make(map[string]string, len(targets))
 		for _, target := range targets {
@@ -116,9 +107,9 @@ func TestDiscoverEditTargets(t *testing.T) {
 			"Translations/_discovered/de.working.csv": "source_en\n",
 		})
 
-		targets, err := DiscoverEditTargets(root, game)
+		targets, err := DiscoverTargetsWithGame(root, game)
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		var names []string
 		for _, target := range targets {
@@ -136,9 +127,9 @@ func TestDiscoverEditTargets(t *testing.T) {
 			"Translations/_discovered/ko.working.csv": "source_en\n",
 		})
 
-		targets, err := DiscoverEditTargets(root, game)
+		targets, err := DiscoverTargetsWithGame(root, game)
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		if len(targets) != 0 {
 			t.Errorf("対象にしてはいけない: %+v", targets)
@@ -152,9 +143,9 @@ func TestDiscoverEditTargets(t *testing.T) {
 			"Translations/_discovered/ja.working.csv": "source_en\n",
 		})
 
-		with, err := DiscoverEditTargets(root, "")
+		with, err := DiscoverTargetsWithGame(root, "")
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		plain, err := DiscoverTargets(root)
 		if err != nil {
@@ -174,9 +165,9 @@ func TestDiscoverEditTargets(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, filepath.Join(root, TranslationsDir, "ja", StringsFile), "key\n")
 
-		targets, err := DiscoverEditTargets(root, filepath.Join(t.TempDir(), "nope"))
+		targets, err := DiscoverTargetsWithGame(root, filepath.Join(t.TempDir(), "nope"))
 		if err != nil {
-			t.Fatalf("DiscoverEditTargets がエラーを返した: %v", err)
+			t.Fatalf("DiscoverTargetsWithGame がエラーを返した: %v", err)
 		}
 		want := filepath.Join(root, TranslationsDir, "ja", StringsFile)
 		if len(targets) != 1 || targets[0].Input != want {
@@ -207,10 +198,11 @@ func TestWorkingPath(t *testing.T) {
 }
 
 func TestDiscoverTargetsNeverLooksAtTheGame(t *testing.T) {
-	// publish が使うのはこちら。ゲームのフォルダーを渡す道が無いことを、
-	// 引数の形（第2引数が無い）だけでなく振る舞いでも書き留めておく。
+	// ゲームのフォルダーを渡す道が無い側。目の前にゲームのフォルダーがあっても、
+	// 入力は公開ファイル自身のままになる。
 	//
-	// 目の前にゲームのフォルダーがあっても、入力は公開ファイル自身のままになる。
+	// --game を指定しないときの publish がこれと同じ結果になることは、
+	// 「ゲームの指定が空なら DiscoverTargets と同じ」が押さえている。
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, TranslationsDir, "ja", StringsFile), "key\n")
 	gameTree(t, map[string]string{
@@ -226,8 +218,5 @@ func TestDiscoverTargetsNeverLooksAtTheGame(t *testing.T) {
 	}
 	if targets[0].Input != targets[0].Output {
 		t.Errorf("入力が公開ファイル自身でない: %+v", targets[0])
-	}
-	if targets[0].FromGame {
-		t.Error("FromGame が立っている")
 	}
 }

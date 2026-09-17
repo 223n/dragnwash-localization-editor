@@ -40,10 +40,45 @@ func (e *DuplicateColumnError) Error() string {
 // ヘッダー名の重複だけは [DuplicateColumnError] を返す。それ以外の壊れ方
 // （列数の過不足、閉じない引用符、裸の二重引用符）はエラーにしない。
 func ReadPowerShellRows(data []byte) ([]Row, error) {
+	numbered, err := ReadPowerShellRowsNumbered(data)
+	if err != nil {
+		return nil, err
+	}
+	if numbered == nil {
+		return nil, nil
+	}
+	rows := make([]Row, len(numbered))
+	for i, n := range numbered {
+		rows[i] = n.Row
+	}
+	return rows, nil
+}
+
+// NumberedRow は [Row] に、それがどの物理行から来たかを添えたもの。
+type NumberedRow struct {
+	Row
+	// Line は1始まりの物理行番号。[SplitNetLines] が分けた並びでの位置なので、
+	// '#' で始まる行も空行も数に入る。人に「何行目か」を伝えるための値である。
+	Line int
+}
+
+// ReadPowerShellRowsNumbered は [ReadPowerShellRows] と同じ読み方をしたうえで、
+// 各行がファイルの何行目から来たかも返す。
+//
+// 行番号が要るのは、読んだ結果を人へ示す側だけである（internal/publish が
+// 「どの行の訳が失われるか」を出すときに使う）。読み方そのものは1つでよいので、
+// [ReadPowerShellRows] はこちらへ委ねてある。両方に書くと、'#' の落とし方や
+// ヘッダーの選び方といった規則が2か所に散り、片方だけが直る形になる。
+func ReadPowerShellRowsNumbered(data []byte) ([]NumberedRow, error) {
 	lines := SplitNetLines(TrimBOMString(string(data)))
 
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
+	// 落とした行があっても元の行番号を言えるように、行と番号を組で持つ。
+	type numberedLine struct {
+		text   string
+		number int
+	}
+	kept := make([]numberedLine, 0, len(lines))
+	for i, line := range lines {
 		// 生の先頭1文字だけを見る前方一致。トリムしないので " #x" はデータ行。
 		//
 		// 元実装の $_.StartsWith('#') は .NET の文字列版 StartsWith で、既定では
@@ -55,7 +90,7 @@ func ReadPowerShellRows(data []byte) ([]Row, error) {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
-		kept = append(kept, line)
+		kept = append(kept, numberedLine{text: line, number: i + 1})
 	}
 	// 元実装の `if ($lines.Count -lt 2) { return @() }`。数えるのは空行を落とす前の行数。
 	if len(kept) < 2 {
@@ -68,7 +103,7 @@ func ReadPowerShellRows(data []byte) ([]Row, error) {
 	// （[ParsePowerShellRecord] の第2戻り値）をここへ持ち込むと、先頭に空白だけの
 	// 行が1本あるファイルで本物のヘッダーがデータ行へずれ、全行が捨てられる。
 	next := 0
-	for next < len(kept) && kept[next] == "" {
+	for next < len(kept) && kept[next].text == "" {
 		next++
 	}
 	if next >= len(kept) {
@@ -77,19 +112,19 @@ func ReadPowerShellRows(data []byte) ([]Row, error) {
 	// 列が0個のヘッダー（"   " など）もそのまま採る。その場合どの列も引けず、
 	// 全データ行が「列なし」の [Row] になる。元実装も同じで、空の列名には
 	// H1 のような既定名が付くが、名前で引くかぎり結果は変わらない。
-	header := parsePowerShellFields(kept[next])
+	header := parsePowerShellFields(kept[next].text)
 	next++
 	if err := checkDuplicateColumns(header); err != nil {
 		return nil, err
 	}
 
-	var rows []Row
+	var rows []NumberedRow
 	for ; next < len(kept); next++ {
-		fields, ok := ParsePowerShellRecord(kept[next])
+		fields, ok := ParsePowerShellRecord(kept[next].text)
 		if !ok {
 			continue
 		}
-		rows = append(rows, NewRow(header, fields))
+		rows = append(rows, NumberedRow{Row: NewRow(header, fields), Line: kept[next].number})
 	}
 	return rows, nil
 }

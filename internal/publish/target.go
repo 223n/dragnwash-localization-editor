@@ -41,39 +41,31 @@ type Target struct {
 	Input string
 	// Output は書き出し先。常に Translations/<ロケール>/strings.csv。
 	Output string
-	// FromGame は Input がゲーム側の作業コピーかどうか。
-	//
-	// 立つのは [DiscoverEditTargets] にゲームのフォルダーを渡したときだけで、
-	// [DiscoverTargets] は必ず false のまま返す。publish はこの欄を読まない
-	// （publish はゲームのフォルダーを1バイトも読まない）。
-	//
-	// 読むのは internal/web で、保存を2つのファイルへ分けるかどうかをここで
-	// 決める。「作業コピーがある」だけでは足りない。リポジトリ側の
-	// Translations/_discovered にある作業コピーは publish が入力として拾うので、
-	// そこへ書いておけば publish でコミットする側へ入る。ゲーム側は publish が
-	// 読まないので、コミットする側へも同時に書かなければ入らない。
-	FromGame bool
 }
 
 // DiscoverTargets は root 配下の Translations を走査して対象を列挙する
 // （移植仕様 R8）。探し先はリポジトリの中だけである。
 //
-// publish が使うのはこちらである。ゲームのフォルダーを混ぜてはいけない理由は
-// doc.go の「publish はゲームのフォルダーを読まない」に実測値つきで書いてある。
+// [DiscoverTargetsWithGame] に空のゲームを渡したのと同じ結果になる。ゲームの
+// フォルダーを持ち出す用の無い呼び出し側（試験、元リポジトリとの突き合わせ）の
+// ために残してある。
 func DiscoverTargets(root string) ([]Target, error) {
 	return discover(root, "")
 }
 
-// DiscoverEditTargets は [DiscoverTargets] と同じ列挙を、ゲーム側の作業コピーも
-// 探し先に加えて行う。使うのは internal/diff と internal/web だけである。
+// DiscoverTargetsWithGame は [DiscoverTargets] と同じ列挙を、ゲーム側の作業コピーも
+// 探し先に加えて行う。publish / diff / edit のいずれもこちらを使う。
 //
 // game が空なら [DiscoverTargets] と同じ結果を返す。--game を指定しないときの
 // 振る舞いが、この探し先を足す前と1バイトも変わらないことの根拠になる。
 //
-// publish から呼んではいけない。名前を分けてあるのは、呼び分けを「引数に何を
-// 渡すか」ではなく「どの関数を呼ぶか」にしておくためである。指定の形で分けると、
-// publish の経路にゲームのフォルダーを1つ渡すだけで公開ファイルが削れる。
-func DiscoverEditTargets(root, game string) ([]Target, error) {
+// publish もここを通る。以前はこの関数を publish から呼ばせない作りにしていたが、
+// それは誤りだった。publish が訳の空の行を書かない（R20）ため、未翻訳の行は
+// 公開ファイルに存在しない。ゲーム側の作業コピーを publish が読まないかぎり、
+// ゲームで入れた新しい訳はコミットする側へ1行も届かない。危ないのは作業コピーを
+// 読むことではなく、作業コピーが不完全なときに訳が消えることなので、守りは
+// 入力の探し方ではなく書き出す直前に置いてある（[CheckLoss]）。
+func DiscoverTargetsWithGame(root, game string) ([]Target, error) {
 	return discover(root, game)
 }
 
@@ -110,22 +102,19 @@ func discover(root, game string) ([]Target, error) {
 		}
 		output := filepath.Join(dir, locale, StringsFile)
 
-		input, fromGame := output, false
-		if working, inGame, ok := workingCopy(root, game, locale); ok {
-			input, fromGame = working, inGame
+		input := output
+		if working, ok := workingCopy(root, game, locale); ok {
+			input = working
 		}
 		if !fileExists(input) {
 			continue
 		}
-		targets = append(targets, Target{
-			Locale: locale, Input: input, Output: output, FromGame: fromGame,
-		})
+		targets = append(targets, Target{Locale: locale, Input: input, Output: output})
 	}
 	return targets, nil
 }
 
 // workingCopy は locale の作業コピーを探す。探す順はリポジトリ、ゲームの順。
-// 第2戻り値は、当たったのがゲーム側かどうか。
 //
 // リポジトリを先に見るのは、ゲーム側を足したことで、いままで通っていた入力が
 // 別のファイルへ入れ替わらないようにするためである。リポジトリの
@@ -136,21 +125,21 @@ func discover(root, game string) ([]Target, error) {
 // ゲーム側はModのホットリロードが読み書きするファイルで、そちらのほうが新しい。
 // それでも後ろに置いたのは、「新しいほうを採る」を規則にすると、どちらが入力に
 // なるかが更新時刻で決まり、実行のたびに入れ替わりうるからである。
-func workingCopy(root, game, locale string) (path string, inGame, ok bool) {
+func workingCopy(root, game, locale string) (path string, ok bool) {
 	name := locale + WorkingSuffix
 
 	inRepo := filepath.Join(root, TranslationsDir, DiscoveredDir, name)
 	if fileExists(inRepo) {
-		return inRepo, false, true
+		return inRepo, true
 	}
 	if game == "" {
-		return "", false, false
+		return "", false
 	}
-	fromGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
-	if fileExists(fromGame) {
-		return fromGame, true, true
+	inGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
+	if fileExists(inGame) {
+		return inGame, true
 	}
-	return "", false, false
+	return "", false
 }
 
 // WorkingPath は locale の作業コピーの置き場を返す。ファイルが無くても値を返す。

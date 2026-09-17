@@ -13,7 +13,7 @@
     "server.locales": "ロケール: {locales}",
     "server.editing": "訳を書き換えられます。入力が止まると自動で保存します。publish は回しません。",
     "server.save_target": "保存先: 作業コピーがあればそれ、無ければ公開ファイルです。",
-    "server.save_target_both": "保存先: コミットする側の公開ファイルと、ゲーム側の作業コピーの両方です。その行だけを差し替えます。",
+    "server.publish_hint": "作業コピーを開いています。訳をコミットする側へ入れるには dwloc publish を回してください。",
     "server.stop_hint": "止めるには Ctrl+C を押してください。",
     "server.idle_hint": "操作がないまま {duration} たつと、自分で終わります。",
     "server.idle_off": "操作が絶えても自分では終わりません（--idle-timeout 0）。",
@@ -30,9 +30,7 @@
     "error.not_json": "本文は application/json で送ってください。",
     "error.version_required": "版（baseVersion）を指定してください。",
     "error.conflict": "手前でファイルが変わっています。1バイトも書いていません。",
-    "error.conflict_commit_written": "手前でファイルが変わっています。ゲーム側へは書いていません。訳はコミットする側に入っているので、失われていません。読み直してください。",
     "error.save_failed": "保存できませんでした。ファイルは書き換えていません。",
-    "error.commit_save_failed": "コミットする側の公開ファイルを保存できませんでした。ゲーム側にも書いていません。",
     "error.file_readonly": "このファイルは読み取り専用です。保存できません。",
     "error.no_row_saved": "1行も保存できませんでした。",
     "error.not_editable": "{line}行目は編集できない: {reason}",
@@ -40,9 +38,6 @@
     "error.row_moved": "この行はずれています。同じ行番号にいま別のキーの行があるので、書きませんでした。読み直してください。",
 
     "warn.value_normalized": "保存した値が入力と違います。ファイルにある値を出しています。",
-    "warn.game_not_written": "ゲーム側の作業コピーへは書けませんでした。訳はコミットする側に入っています（ゲームはホットリロードしません）。",
-    "warn.commit_not_written": "コミットする側の公開ファイルには入っていません（{reason}）。",
-    "warn.commit_note": "コミットする側の公開ファイル: {reason}",
 
     "ui.locale": "ロケール",
     "ui.reload": "読み直す",
@@ -72,8 +67,7 @@
     "ui.orphan_lost": "この訳の行がファイルにありません。",
     "ui.file": "ファイル",
     "ui.game_folder": "作業コピーを探すゲームのフォルダー",
-    "ui.commit_file": "コミットする側",
-    "note.dual_write": "保存は2つのファイルへ書きます。この作業コピーと、コミットする側の {path} です。どちらも、その行だけを差し替えます。公開ファイルに無い行は作業コピーにだけ入り、その行ごとに断ります。",
+    "note.via_publish": "いま並べているのは作業コピーです。保存はこのファイルにだけ書きます。訳がコミットする側の {path} へ入るのは、dwloc publish を回したときです。",
     "note.no_source": "作業コピーが無いので、原文の欄は空のままです。",
     "ui.file_readonly": "このファイルは読み取り専用です: {reason}",
     "ui.counts": "件数",
@@ -160,8 +154,7 @@
     "reason.edit_no_newline": "訳に改行は入れられない",
     "reason.edit_no_nul": "訳に NUL は入れられない",
     "reason.edit_bad_utf8": "訳が正しいUTF-8ではない",
-    "reason.save_no_key": "キーが空の行は、もう一方のファイルから引けない",
-    "reason.save_key_missing": "このキーの行が書き戻す先に無い",
-    "reason.save_key_duplicated": "書き戻す先に同じキーの行が{count}行あり、どれも同じ訳にした"
+    "reason.publish_row_gone": "この行が新しい出力に無い",
+    "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる"
   }
 }

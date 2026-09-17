@@ -1049,7 +1049,8 @@ func TestOpenEditorReviewsTheRowItLeft(t *testing.T) {
 //
 // getElementById は無い id に null を返すだけで、その場では落ちない。落ちるのは
 // そこへ書き込む段になってからで、画面のどこか1か所が黙って出なくなる。
-// 2つ書きの行き先（commit-path）のように、ふだんは隠れている要素ほど気づけない。
+// ゲームのフォルダーを出す行（game-path）のように、ふだんは隠れている要素ほど
+// 気づけない。
 func TestScreenElementsExist(t *testing.T) {
 	html := uiSource(t, "ui/index.html")
 	js := uiSource(t, "ui/app.js")

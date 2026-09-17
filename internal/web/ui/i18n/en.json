@@ -13,7 +13,7 @@
     "server.locales": "Locales: {locales}",
     "server.editing": "You can edit translations. They are saved when you stop typing. publish is not run.",
     "server.save_target": "Saved to the working copy when there is one, otherwise to the published file.",
-    "server.save_target_both": "Saved to both the published file you commit and the game's working copy. Only the row you touched is replaced.",
+    "server.publish_hint": "You are editing a working copy. Run dwloc publish to carry your translations into the files you commit.",
     "server.stop_hint": "Press Ctrl+C to stop.",
     "server.idle_hint": "Stops by itself after {duration} without activity.",
     "server.idle_off": "Will not stop by itself when idle (--idle-timeout 0).",
@@ -30,9 +30,7 @@
     "error.not_json": "Send the body as application/json.",
     "error.version_required": "Name the version (baseVersion).",
     "error.conflict": "The file changed underneath. Nothing was written.",
-    "error.conflict_commit_written": "The file changed underneath. Nothing was written to the game's working copy. Your translation is in the file you commit, so it is not lost. Please reload.",
     "error.save_failed": "Could not save. The file was not changed.",
-    "error.commit_save_failed": "Could not save the published file you commit. Nothing was written to the game's working copy either.",
     "error.file_readonly": "This file is read-only. It cannot be saved.",
     "error.no_row_saved": "Not one row could be saved.",
     "error.not_editable": "Line {line} cannot be edited: {reason}",
@@ -40,9 +38,6 @@
     "error.row_moved": "This row has shifted. A different key now sits on that line number, so nothing was written. Please reload.",
 
     "warn.value_normalized": "The saved value differs from what you typed. The value in the file is shown.",
-    "warn.game_not_written": "Could not write the game's working copy. Your translation is in the file you commit (the game will not hot-reload it).",
-    "warn.commit_not_written": "Not in the published file you commit ({reason}).",
-    "warn.commit_note": "Published file you commit: {reason}",
 
     "ui.locale": "Locale",
     "ui.reload": "Reload",
@@ -72,8 +67,7 @@
     "ui.orphan_lost": "There is no row for this translation in the file.",
     "ui.file": "File",
     "ui.game_folder": "Game folder searched for working copies",
-    "ui.commit_file": "File you commit",
-    "note.dual_write": "Saving writes two files: this working copy and {path}, the one you commit. Both have only the row you touched replaced. A row the published file does not have goes to the working copy only, and that row says so.",
+    "note.via_publish": "What you see is a working copy. Saving writes to this file only. Your translations reach {path}, the file you commit, when you run dwloc publish.",
     "note.no_source": "There is no working copy, so the source column stays empty.",
     "ui.file_readonly": "This file is read-only: {reason}",
     "ui.counts": "Counts",
@@ -160,8 +154,7 @@
     "reason.edit_no_newline": "A translation cannot contain a line break",
     "reason.edit_no_nul": "A translation cannot contain NUL",
     "reason.edit_bad_utf8": "The translation is not valid UTF-8",
-    "reason.save_no_key": "A row with an empty key cannot be matched in the other file",
-    "reason.save_key_missing": "The file being written back has no row with this key",
-    "reason.save_key_duplicated": "The file being written back has {count} rows with this key; all of them got the same translation"
+    "reason.publish_row_gone": "This row is not in the new output",
+    "reason.publish_translation_cleared": "The new output leaves this row with an empty translation"
   }
 }

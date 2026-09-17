@@ -9,8 +9,9 @@
 //	dwloc version    版を表示する
 //
 // 終了コードは 0 が成功、1 が「実行はできたが、人が見るべきものが残っている」、
-// 2 が実行時のエラーです。1 を返すのは validate が問題を見つけたときと、
-// diff が要確認を見つけたとき（--strict なら要作業も）です。
+// 2 が実行時のエラーです。1 を返すのは validate が問題を見つけたとき、
+// diff が要確認を見つけたとき（--strict なら要作業も）、そして publish が
+// 「書くと訳が失われる」と判断して1バイトも書かずに止まったときです。
 // この3段に分けているのは、CIが「検証に落ちた」と「そもそも実行できなかった」を
 // 区別できるようにするためです。元実装の check-translations.py は前者だけを1で返し、
 // 後者はトレースバックで落ちていました（移植仕様「形式検証 / 未決の点」）。
@@ -23,6 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/gamedir"
@@ -68,15 +70,15 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
         翻訳リポジトリのルート（既定: カレントディレクトリ）。
         サブコマンドの前後どちらに置いてもかまいません。
   --game <フォルダー>|auto
-        作業コピーを探すゲームのプラグインフォルダー（diff / edit）。
+        作業コピーを探すゲームのプラグインフォルダー（publish / diff / edit）。
         auto と書くと Steam のライブラリから探します。
         指定しないとゲームのフォルダーは見に行きません。
-        publish は受け付けません（指定があると何も書かずに終わります）。
         validate は受け取りますが使いません。
 
 終了コード:
   0   成功
-  1   validate が問題を見つけた、または diff が要確認を見つけた
+  1   validate が問題を見つけた、diff が要確認を見つけた、または publish が
+      「書くと訳が失われる」と判断して止まった
       （diff --strict では要作業でも 1 になります）
   2   実行時のエラー（引数の誤り、ファイルが読めない、など）
 
@@ -202,6 +204,10 @@ const gameFlagUsage = "作業コピーを探すゲームのプラグインフォ
 // 標準エラーへ書きます。標準出力にしないのは dwloc diff --format csv のためで、
 // あちらの標準出力は表計算へそのまま貼る前提なので、1行足すと列がずれます。
 // 標準エラーなら、端末には出て、リダイレクトしたCSVには入りません。
+//
+// 実際に読んだファイルは、ロケールごとに別の場所で出します（dwloc diff の
+// 「作業コピー」の行、dwloc publish の "<出力> <- <入力>" の行、画面の
+// 「ファイル」の欄）。
 const gameFoundText = `dwloc: ゲームのフォルダーを作業コピーの探し先にします: %s
 dwloc:       実際に読むのは、そのロケールの作業コピーがここにあるときだけです。再生順は翻訳リポジトリのままです。
 `
@@ -211,6 +217,24 @@ const gameNotFoundText = `dwloc: ゲームのフォルダーが見つかりま�
 dwloc:       Steam のライブラリを探しましたが、Translations/_discovered を持つプラグインがありませんでした。
 dwloc:       ゲームを1度起動して、ゲーム内で Export game flow を実行してください。
 dwloc:       場所が分かっているときは --game <フォルダー> で直に指定できます。
+`
+
+// gameNotFoundMacText は、macOS で自動検出が空振りしたときの案内です。
+//
+// 文面を分けるのは、macOS では「ゲームを1度起動して Export game flow を実行して
+// ください」が実行できない案内だからです。Drag'n Wash Localization は macOS で
+// 動きません。BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに
+// 割り込めず、Mod が読み込まれないためです（元リポジトリの README による）。
+// Mod が動かない以上、プラグインのフォルダーも作業コピーも作られません。
+//
+// dwloc 自身は macOS でも動きます。動かないのはゲームと繋がる部分だけなので、
+// 何ができるかも並べて、道具ごと諦めさせないようにします。
+const gameNotFoundMacText = `dwloc: ゲームのフォルダーが見つかりません。
+dwloc:       macOS では Drag'n Wash Localization（ゲーム内のMod）がまだ動きません。
+dwloc:       BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに割り込めないためです。
+dwloc:       Mod が動かないので、プラグインのフォルダーも作業コピーも作られません。
+dwloc:       dwloc 自身は動きます。publish / validate / diff と、原文の欄が空のままの edit は使えます。
+dwloc:       ほかのPCで書き出した作業コピーがあるときは --game <フォルダー> で指定できます。
 `
 
 // gameNotPluginText は --game に指定された場所が外れていたときの案内です。
@@ -275,6 +299,13 @@ func writeGameError(err error, stderr io.Writer) {
 		return
 	}
 	if errors.Is(err, gamedir.ErrNotFound) {
+		// 見つからない理由が OS ごとに違うので、次にやることも分けます。
+		// 検出そのものは macOS でも走らせたままにしてあります。BepInEx が
+		// 直れば、コードを足さずにそのまま見つかるようになるためです。
+		if runtime.GOOS == "darwin" {
+			fmt.Fprint(stderr, gameNotFoundMacText)
+			return
+		}
 		fmt.Fprint(stderr, gameNotFoundText)
 		return
 	}

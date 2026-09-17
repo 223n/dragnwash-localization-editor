@@ -55,7 +55,6 @@
     message: document.getElementById("message"),
     path: document.getElementById("file-path"),
     gamePath: document.getElementById("game-path"),
-    commitPath: document.getElementById("commit-path"),
     notes: document.getElementById("notes"),
     countsTitle: document.getElementById("counts-title"),
     counts: document.getElementById("counts"),
@@ -405,24 +404,6 @@
     }
     el.gamePath.textContent = t("ui.game_folder") + ": " + game;
     el.gamePath.hidden = false;
-  }
-
-  /*
-    2つ書きのもう1つの行き先を出す。2つ書きでなければ隠す。
-
-    ロケールを切り替えると変わる（ゲーム側に作業コピーがあるロケールだけが
-    2つ書きになる）ので、行を読み込むたびに出し直す。--game のフォルダーを
-    出す行とは別に置くのは、あちらが「探し先」、こちらが「実際に書く先」で、
-    別のことを言っているからである。
-  */
-  function showCommitPath(path) {
-    if (!path) {
-      el.commitPath.hidden = true;
-      el.commitPath.textContent = "";
-      return;
-    }
-    el.commitPath.textContent = t("ui.commit_file") + ": " + path;
-    el.commitPath.hidden = false;
   }
 
   function fillLocales(selected) {
@@ -1878,7 +1859,6 @@
     el.search.dir = "auto";
     el.search.lang = data.locale;
     el.path.textContent = t("ui.file") + ": " + data.path;
-    showCommitPath(data.commitPath);
     renderNotes(collectNotes(data));
     renderCounts(data.counts);
     /*

@@ -12,26 +12,28 @@ import (
 )
 
 // publishUsage は publish の説明。
-const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--locale <ロケール>] [--path <ファイル>] [--dry-run]
+const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--path <ファイル>] [--dry-run]
 
 <ルート>/Translations 配下の各ロケールについて、公開用の strings.csv を作り直します。
 tools/hash-strings.ps1 と同じ出力です。
 
-入力は、Translations/_discovered/<ロケール>.working.csv があればそれ、
-無ければ Translations/<ロケール>/strings.csv 自身です。
+入力は、<ロケール>.working.csv があればそれ、無ければ
+Translations/<ロケール>/strings.csv 自身です。作業コピーはリポジトリの
+Translations/_discovered を先に見て、--game があればゲームのフォルダーも見ます。
 出力は常に <ルート>/Translations/<ロケール>/strings.csv です。
-ゲームのフォルダーは読みません。
+
+書き出す前に、いまの公開ファイルに入っている訳が新しい出力に残るかを確かめます。
+1つでも失われるなら、どのロケールも書かずに止まり、何が失われるかを表示します
+（終了コード 1）。--dry-run でも同じ判定をします。この確認は外せません。
 
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
-        publish では受け付けません。指定があると、何も書かずに終わります。
-        受け取るだけ受け取って断るのは、共通オプションとしてサブコマンドの前に
-        置かれても黙って無視しないためです。
-        断る理由は、publish が入力から公開ファイルを作り直す処理だからです。
-        ゲーム側の作業コピーを入力にすると、そこに無い行と訳が空の行が、
-        コミット済みの公開ファイルから消えます。
+        作業コピーを探すゲームのプラグインフォルダー。auto と書くと Steam の
+        ライブラリから探します。指定しないと見に行きません。
+        ゲーム内で直した訳をコミットする側へ入れるのは、この指定を付けた
+        publish です。読むのは作業コピーだけで、再生順は常にリポジトリ側です。
   --locale <ロケール>
         対象のロケール。複数回指定するか、カンマ区切りで並べられます。
         省略すると Translations 配下のすべてが対象になります。
@@ -46,21 +48,28 @@ tools/hash-strings.ps1 と同じ出力です。
 
 終了コード:
   0   成功
+  1   書くと訳が失われるので止めた（1バイトも書いていません）
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、など）
 `
 
-// publishGameRefusedText は publish が --game を断るときの案内です。
+// publishLossText は、書くと訳が失われると分かったときの見出しです。
 //
-// 断るだけで終わらせず、やりたかったこと（ゲームで直した訳をコミットする側へ
-// 入れる）への道を1行で示します。示さないと、翻訳者は「では手で写すのか」で
-// 止まります。
-const publishGameRefusedText = `dwloc: publish は --game を受け付けません。ゲームのフォルダーは読みません。
-dwloc:       publish は入力から公開ファイルを作り直す処理です。ゲーム側の作業コピーを入力にすると、
-dwloc:       そこに無い行と訳が空の行が、コミット済みの公開ファイルから消えます。
-dwloc:       ゲームで直した訳をコミットする側へ入れるには dwloc edit --game を使ってください。
-dwloc:       保存のたびに、公開ファイルとゲーム側の作業コピーの両方の「その行」を差し替えます。
-dwloc:       publish は --game を付けずに実行してください。
+// 「止めました」だけで終わらせず、何を確かめればよいかを添えます。この守りが
+// 立つのは、たいてい入力にした作業コピーが途中までか壊れているときで、
+// 見てもらう先は書き出し側ではなく入力のほうだからです。
+const publishLossText = `dwloc: 訳が失われるので、1バイトも書きませんでした。
+dwloc:       いまの公開ファイルに入っている訳が、新しい出力に残りません。
+dwloc:       入力にした作業コピーが途中までになっていないか、壊れていないかを確かめてください。
+dwloc:       ゲーム内で Export game flow をやり直すと、作業コピーを作り直せます。
 `
+
+// publishLossListMax は、失われる行を何件まで並べるかです。
+//
+// 全部は並べません。実測（この開発機）では、実機の ja.working.csv の先頭400行だけを
+// 入力にすると1,367件が失われ、端末がその一覧で埋まります。埋まると、先に出した
+// 「なぜ止めたか」が流れて消えます。件数は最後にまとめて出すので、ここは
+// 「どんな行が失われるのか」を見るための見本として足ります。
+const publishLossListMax = 20
 
 // localeList は --locale の値を集める flag.Value です。
 //
@@ -136,23 +145,30 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	if fs.NArg() > 0 {
 		return unexpectedArg(fs.Arg(0), publishUsage, stderr)
 	}
-	if *game != "" {
-		// 受け取るだけ受け取って、ここで断ります。黙って無視すると、
-		// 「ゲーム側の作業コピーから公開ファイルを作った」と読まれます。
-		// 実際には読んでいないので、訳が入っていないことに気づけません。
-		//
-		// 弾かずに使うともっと悪い。publish は入力から作り直す処理なので、
-		// ゲーム側の作業コピーを入力にすると、そこに無い行がコミット済みの
-		// 公開ファイルから消えます（internal/publish の doc コメントに実測値）。
-		fmt.Fprint(stderr, publishGameRefusedText)
-		return exitError
-	}
 	if len(paths) > 0 && len(locales) > 0 {
 		// 元実装の -Path は走査そのものを置き換えるので、絞り込みと重ねる意味が
 		// ありません。黙ってどちらかを無視すると、絞ったつもりの指定が効かない
 		// 事故になります。
 		fmt.Fprintln(stderr, "dwloc: --path と --locale は同時に指定できません")
 		return exitError
+	}
+
+	// ゲームのフォルダーは、何かを読み始める前に決めます。ゲーム側にしか
+	// 作業コピーが無いロケールは、決めてからでないと入力が入れ替わりません。
+	//
+	// --path のときは決めません。あちらは走査そのものを置き換えるので、
+	// 作業コピーを探す先がありません。それでも決めにいくと、「探し先にします」の
+	// 1行だけが出て何にも効かない、という嘘になります。
+	gamePath := ""
+	if len(paths) == 0 {
+		resolved, ok := resolveGame(*game, stderr)
+		if !ok {
+			return exitError
+		}
+		gamePath = resolved
+	} else if *game != "" {
+		fmt.Fprintln(stderr,
+			"dwloc: --path を指定したので --game は使いません。走査をしないため、作業コピーを探す先がありません。")
 	}
 
 	// 再生順は全ロケールで共通なので1回だけ読む。
@@ -177,7 +193,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 			targets = append(targets, publish.Target{Input: path, Output: path})
 		}
 	} else {
-		found, err := publish.DiscoverTargets(*root)
+		found, err := publish.DiscoverTargetsWithGame(*root, gamePath)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: Translations を読めません: %v\n", err)
 			return exitError
@@ -212,6 +228,14 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		built[i], stats[i] = out, st
 	}
 
+	// 組み立てたものを書くと訳が消えるなら、ここで止める。1件でもあれば
+	// どのロケールも書きません。--dry-run でも同じ判定をします。書かないことは
+	// どちらでも変わらないので、判定だけ変えると「dry-run では通ったのに
+	// 本番で止まる」という食い違いが生まれます。
+	if code := reportLosses(*root, targets, built, stderr); code != exitOK {
+		return code
+	}
+
 	if *dryRun {
 		changed := 0
 		for i, t := range targets {
@@ -240,6 +264,68 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	}
 	fmt.Fprintf(stdout, "%d 件を書き出しました。\n", len(targets))
 	return exitOK
+}
+
+// reportLosses は、書き出すと失われる訳を数えて報告します。
+// 1件も無ければ exitOK を返し、呼び出し側はそのまま書き出しへ進みます。
+//
+// 1件でもあれば exitProblems（1）です。2 ではないのは、実行そのものは
+// できているからで、validate が問題を見つけたときと同じ意味にそろえています。
+// 読めなくて確かめられなかったときだけが 2 です。「失われないと分かった」と
+// 「確かめられなかった」を同じ扱いにすると、確かめられないほうが素通りします。
+//
+// 報告に出すのは、ロケール・ファイル・行番号・キー・いまの訳の先頭だけです。
+// 訳を丸ごと並べないのは internal/publish の Loss に書いた理由によります。
+func reportLosses(root string, targets []publish.Target, built [][]byte, stderr io.Writer) int {
+	found := make([][]publish.Loss, len(targets))
+	total := 0
+	for i, t := range targets {
+		losses, err := publish.CheckTargetLoss(t, built[i])
+		if err != nil {
+			// いまの公開ファイルを読めない。失われないことを確かめられていないので、
+			// 書かずに終わります。
+			fmt.Fprintf(stderr,
+				"dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
+				displayPath(root, t.Output), err)
+			return exitError
+		}
+		found[i] = losses
+		total += len(losses)
+	}
+	if total == 0 {
+		return exitOK
+	}
+
+	fmt.Fprint(stderr, publishLossText)
+	shown := 0
+	for i, t := range targets {
+		if len(found[i]) == 0 {
+			continue
+		}
+		fmt.Fprintf(stderr, "dwloc:   %s%s（%d 件）\n",
+			localePrefix(t.Locale), displayPath(root, t.Output), len(found[i]))
+		for _, l := range found[i] {
+			if shown >= publishLossListMax {
+				break
+			}
+			fmt.Fprintf(stderr, "dwloc:       %d行目 %s 「%s」 %s\n", l.Line, l.Key, l.Head, l.Why)
+			shown++
+		}
+	}
+	if total > shown {
+		fmt.Fprintf(stderr, "dwloc:       ほかに %d 件あります。\n", total-shown)
+	}
+	fmt.Fprintf(stderr, "dwloc: 失われる訳が %d 件あります。1件でもあるあいだは書きません。\n", total)
+	return exitProblems
+}
+
+// localePrefix はロケール名を報告の頭に付ける形にします。
+// --path で走らせたときはロケールが決まらないので、何も付けません。
+func localePrefix(locale string) string {
+	if locale == "" {
+		return ""
+	}
+	return locale + ": "
 }
 
 // selectLocales は --locale の指定で対象を絞ります。
