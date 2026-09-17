@@ -262,8 +262,8 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 			return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 		default:
 			// 編集できない行と、書けない値（改行・NUL・不正なUTF-8）。
-			// 理由は internal/edit が持つ文面をそのまま出す。行の中身は含まない。
-			res.Error = err.Error()
+			// 理由は目録から組み直す。行の中身は含まない。
+			res.Error = s.editErrorText(cat, err)
 		}
 		results = append(results, res)
 	}
@@ -311,6 +311,28 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	return saveOutcome{file: file, results: results, applied: applied}
+}
+
+// editErrorText は internal/edit が返した誤りを、画面に出す文面にする。
+//
+// 外枠（「12行目は編集できない: …」）も、その中に入る理由も目録から引く。
+// err.Error() をそのまま返すと、英語の画面でその行だけ日本語になる。
+//
+// 知らない型の誤りは Error() をそのまま返す。訳されていない文が出るほうが、
+// 何も出ないよりよい。internal/edit の文面に行の中身は入っていないので、
+// そのまま返しても訳や原文が漏れることはない。
+func (s *server) editErrorText(cat *Catalog, err error) string {
+	var notEditable *edit.NotEditableError
+	if errors.As(err, &notEditable) {
+		return s.cat.T(cat, "error.not_editable",
+			"line", itoa(notEditable.Line), "reason", s.reasonText(cat, notEditable.Cause))
+	}
+	var invalid *edit.InvalidValueError
+	if errors.As(err, &invalid) {
+		return s.cat.T(cat, "error.invalid_value",
+			"line", itoa(invalid.Line), "reason", s.reasonText(cat, invalid.Cause))
+	}
+	return err.Error()
 }
 
 // keyMatches は、要求が指す行がクライアントの思っているキーの行かを返す。

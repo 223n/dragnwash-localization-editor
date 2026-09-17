@@ -10,6 +10,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // Locale は1ロケール分の読み込み結果。
@@ -53,6 +54,13 @@ type Repo struct {
 	// 「0 件」と書けない場面を利用者に伝えるために持つ。旧版が取れないのに
 	// 引き継ぎ候補を 0 件と書くと、「移すべき訳は無い」と読まれてしまう。
 	OldOrderReason string
+	// OldOrderReasonID は [Repo.OldOrderReason] に対応する安定した識別子
+	// （internal/reason）。名前を付けていない理由のときは空。
+	//
+	// 文面と別に持つのは、画面（internal/web）がこれを鍵にして目録から訳された
+	// 文面を引くためである。[OldOrderSource] を差し替えた呼び出し側が返す誤りには
+	// 名前を当てられないので、そのときは空のまま文面へ落ちる。
+	OldOrderReasonID string
 	// Locales はディレクトリ名順。--locale で絞っても、ここには全ロケールが入る。
 	Locales []Locale
 	// EmptyLocales は Translations 直下にディレクトリだけがあり、公開ファイルも
@@ -116,7 +124,9 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	// 旧再生順が取れなくてもエラーにはしない。引き継ぎ候補1カテゴリだけが
 	// 判定できなくなる話で、残り8カテゴリは旧版が無くても成り立つ。
 	// git の無い環境で道具そのものが動かなくなるほうが困る。
-	repo.OldOrder, repo.OldOrderReason = loadOldOrder(root, repo.OrderPath, opt.OldOrder)
+	var oldOrderWhy reason.Reason
+	repo.OldOrder, oldOrderWhy = loadOldOrder(root, repo.OrderPath, opt.OldOrder)
+	repo.OldOrderReason, repo.OldOrderReasonID = oldOrderWhy.Text, oldOrderWhy.ID
 
 	for _, t := range targets {
 		loc := Locale{
@@ -158,30 +168,53 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	return repo, nil
 }
 
-// loadOldOrder は1つ前の版の再生順を読む。読めなかったときは理由を日本語で返す。
+// loadOldOrder は1つ前の版の再生順を読む。読めなかったときは理由を返す。
 //
-// 理由を error のまま持ち回らずに文字列にするのは、そのまま画面に出す文面だから。
-// 呼び出し側（表示）で種類ごとに場合分けする予定が無いのに型を残すと、
-// 「どの理由なら何を書くか」の分岐が表示側へ漏れる。
-func loadOldOrder(root, orderPath string, src OldOrderSource) (*order.Data, string) {
+// 理由を error のまま持ち回らないのは、呼び出し側（表示）で種類ごとに場合分けする
+// 予定が無いのに型を残すと、「どの理由なら何を書くか」の分岐が表示側へ漏れるから。
+// 文面に識別子を添えても、その性質は変わらない。表示側は識別子を目録の鍵にする
+// だけで、どの理由かを見て書き分けることはしない。
+func loadOldOrder(root, orderPath string, src OldOrderSource) (*order.Data, reason.Reason) {
 	if src == nil {
 		src = GitOldOrder
 	}
 	raw, err := src(root, orderPath)
 	if err != nil {
-		return nil, err.Error()
+		return nil, reason.New(oldOrderReasonID(err), err.Error())
 	}
 	data, err := order.LoadPowerShell(raw, nil)
 	if err != nil {
-		return nil, "1つ前の再生順を読めません"
+		return nil, reason.New(reason.OldOrderUnreadable, "1つ前の再生順を読めません")
 	}
 	if !hasLineIDKeys(data) {
 		// 取り出せはしたが、台詞IDとキーの組が1つも無い。列名が変わった古い版か、
 		// 取り違えた別のファイル。突き合わせる手がかりが無いので判定しない。
 		// ここで 0 件と書くと「移すべき訳は無い」と読まれる。
-		return nil, "1つ前の再生順に台詞IDとキーの組がありません"
+		return nil, reason.New(reason.OldOrderNoLineIDs, "1つ前の再生順に台詞IDとキーの組がありません")
 	}
-	return data, ""
+	return data, reason.Reason{}
+}
+
+// oldOrderReasonID は [OldOrderSource] が返した誤りに識別子を当てる。
+//
+// 当てるのはこのパッケージが定義した番兵だけである。差し替えた呼び出し側が返す
+// 誤りには名前が無いので空を返し、画面はその文面をそのまま出す。当てずっぽうで
+// 近い識別子を付けると、画面には関係のない英文が出る。日本語が1行残るほうが、
+// 別の理由に読み替えられるよりよい。
+func oldOrderReasonID(err error) string {
+	switch {
+	case errors.Is(err, ErrNoGit):
+		return reason.OldOrderNoGit
+	case errors.Is(err, ErrNoRepository):
+		return reason.OldOrderNoRepository
+	case errors.Is(err, ErrNotTracked):
+		return reason.OldOrderNotTracked
+	case errors.Is(err, ErrOnlyOneVersion):
+		return reason.OldOrderOnlyOneVersion
+	case errors.Is(err, ErrGitFailed):
+		return reason.OldOrderGitFailed
+	}
+	return ""
 }
 
 // hasLineIDKeys は台詞IDとキーがそろった行が1つでもあるかを返す。

@@ -5,6 +5,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // 入力の列名。照合は大文字小文字を区別しない（csvfile.Row の性質）。
@@ -133,21 +134,24 @@ func PublishKey(r Row) (string, bool) {
 	return "", false
 }
 
-// droppedReason は publish がこの行を捨てる理由を返す。捨てないなら第2戻り値が false。
+// droppedCause は publish がこの行を捨てる理由を返す。捨てないなら第2戻り値が false。
 //
 // [PublishKey] の裏返しだが、捨てた理由を分けて伝えるために別に持つ。
 // 台詞ID行は捨てられないので、ここでも対象外になる。
-func droppedReason(r Row) (string, bool) {
+//
+// 画面（internal/web）は識別子を鍵にして目録から英語の文面を引く。
+// 日本語の文面は Text に入ったまま残るので、CSV と text 出力は変わらない。
+func droppedCause(r Row) (reason.Reason, bool) {
 	if r.Kind == KindLineID {
-		return "", false
+		return reason.Reason{}, false
 	}
 	if _, adopted := PublishKey(r); adopted {
-		return "", false
+		return reason.Reason{}, false
 	}
 	if r.SourceEn != "" {
 		// key と source_en のハッシュが食い違う。source_en を書き換えたのに
 		// 古い key が残っている行で、publish はこれを黙って捨てる。
-		return noteDroppedMismatch, true
+		return reason.New(reason.NoteDroppedMismatch, noteDroppedMismatch), true
 	}
-	return noteDroppedBroken, true
+	return reason.New(reason.NoteDroppedBroken, noteDroppedBroken), true
 }

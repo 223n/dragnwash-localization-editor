@@ -3,6 +3,8 @@ package edit
 import (
 	"errors"
 	"fmt"
+
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // ErrReadOnly はファイル全体が読み取り専用であることを表す。
@@ -58,10 +60,24 @@ type NotEditableError struct {
 	Line int
 	// Reason は編集できない理由。そのまま画面に出せる日本語。
 	Reason string
+	// Cause は [NotEditableError.Reason] と同じ理由を、識別子と置換の組で持つ。
+	//
+	// 文面と別に持つのは、画面（internal/web）が目録で差し替えるためである。
+	// 「%d行目は編集できない: %s」という外枠にも目録の鍵があり、画面は Line と
+	// この Cause から組み直す。Cause.Text は常に Reason と同じ文字列になる。
+	Cause reason.Reason
 }
 
 func (e *NotEditableError) Error() string {
 	return fmt.Sprintf("%d行目は編集できない: %s", e.Line, e.Reason)
+}
+
+// notEditable は理由から [NotEditableError] を作る。
+//
+// 文面と識別子を別々に代入する場所を増やさないための入口である。片方だけ入った
+// 誤りを返すと、画面は英語で出せるのに CLI が黙る（あるいはその逆）行ができる。
+func notEditable(line int, why reason.Reason) *NotEditableError {
+	return &NotEditableError{Line: line, Reason: why.Text, Cause: why}
 }
 
 // InvalidValueError は訳の値そのものが受け付けられないことを表す。
@@ -70,10 +86,18 @@ type InvalidValueError struct {
 	Line int
 	// Reason は受け付けられない理由。
 	Reason string
+	// Cause は [InvalidValueError.Reason] と同じ理由を、識別子と置換の組で持つ。
+	// 意味は [NotEditableError.Cause] と同じ。
+	Cause reason.Reason
 }
 
 func (e *InvalidValueError) Error() string {
 	return fmt.Sprintf("%d行目に書けない値: %s", e.Line, e.Reason)
+}
+
+// invalidValue は理由から [InvalidValueError] を作る。
+func invalidValue(line int, why reason.Reason) *InvalidValueError {
+	return &InvalidValueError{Line: line, Reason: why.Text, Cause: why}
 }
 
 // short は版（SHA-256 の16進64桁）を画面向けに短く切る。
