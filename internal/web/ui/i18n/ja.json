@@ -27,6 +27,7 @@
     "error.read_failed": "ファイルを読めませんでした。",
     "error.internal": "内部の誤りです。",
     "error.bad_request": "要求の形が違います。",
+    "error.bad_utf8": "文字が壊れて届きました。何も書いていません。",
     "error.not_json": "本文は application/json で送ってください。",
     "error.version_required": "版（baseVersion）を指定してください。",
     "error.conflict": "手前でファイルが変わっています。1バイトも書いていません。",

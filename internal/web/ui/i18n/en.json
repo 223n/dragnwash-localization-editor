@@ -27,6 +27,7 @@
     "error.read_failed": "Could not read the file.",
     "error.internal": "Internal error.",
     "error.bad_request": "The request has the wrong shape.",
+    "error.bad_utf8": "The text arrived corrupted. Nothing was written.",
     "error.not_json": "Send the body as application/json.",
     "error.version_required": "Name the version (baseVersion).",
     "error.conflict": "The file changed underneath. Nothing was written.",

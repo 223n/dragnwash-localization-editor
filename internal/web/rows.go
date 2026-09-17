@@ -1,10 +1,13 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
@@ -118,8 +121,41 @@ type errorResponse struct {
 func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	cat := s.cat.forRequest(s.opt.UILang, r.Header.Get("Accept-Language"))
 
+	// 本文を先に丸ごと読む。復号しながら流さないのは、復号する前にバイト列が
+	// UTF-8 かを見たいからである。
+	//
+	// [encoding/json] は不正なバイトを U+FFFD へ黙って置き換える。置き換わった
+	// あとの文字列はもう「正しい UTF-8」なので、[edit.File.SetTranslation] の
+	// UTF-8 の検査（[reason.EditBadUTF8]）はこの経路では1度も立たない。実測
+	// （この開発機）では、CP932 の 4 バイト "82 C6 82 EA" を訳に入れて送ると、
+	// 断りも警告も出ずに saved で返り、作業コピーには "EF BF BD C6 82 EF BF BD"
+	// が書かれた。U+FFFD は正しい UTF-8 なので、この先のどの検査も止めない。
+	// publish はそれをコミットする側へ運ぶ。
+	//
+	// 止めるのは本文のバイト列である。U+FFFD そのものを禁じる形は採らない。
+	// 元から U+FFFD を含む訳（壊れた原文をそのまま写した訳など）を拒むことになる。
+	// 「送られたバイト列が UTF-8 ではない」は、それ自体がまぎれもない誤りである。
+	//
+	// ブラウザーは必ず UTF-8 で送るので、画面から使っているかぎりここは立たない。
+	// それでも見るのは、この守りが「壊れた値をファイルへ入れない」ために
+	// 書かれたものだからである。立たない守りは無い守りと同じである。
+	//
+	// POST を足すときは、その経路でも同じことをすること。ここに置いてあるのは、
+	// 本文の上限（[maxRowsBody]）を持っているのがこの経路だからである。
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRowsBody))
+	if err != nil {
+		// 誤りの中身は返さない。本文には訳が入っている。
+		s.writeError(w, cat, http.StatusBadRequest, "error.bad_request")
+		return
+	}
+	if !utf8.Valid(body) {
+		// 何バイト目が壊れていたかも返さない。位置は訳の長さを漏らす。
+		s.writeError(w, cat, http.StatusBadRequest, "error.bad_utf8")
+		return
+	}
+
 	var req rowsRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRowsBody))
+	dec := json.NewDecoder(bytes.NewReader(body))
 	// 知らない鍵を拒む。画面と待ち受けが別の版になったとき、送ったつもりの
 	// 値が黙って落ちる形にしない。
 	dec.DisallowUnknownFields()
