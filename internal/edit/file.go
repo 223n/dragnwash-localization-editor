@@ -290,6 +290,12 @@ func (f *File) SetTranslation(number int, value string) error {
 	if !utf8.ValidString(value) {
 		// 不正なUTF-8も後段のどこも検出しない（validate の doc コメント参照）。
 		// 書けない値は書かせない、という CR/LF と同じ扱いにする。
+		//
+		// HTTP の経路からここは立たない。[encoding/json] が不正なバイトを
+		// U+FFFD へ置き換えてしまい、届く文字列はもう正しい UTF-8 だからである。
+		// そちらは internal/web が復号する前に本文のバイト列を見て止めている
+		// （handleRows の "error.bad_utf8"）。だからここを消してよい、とは
+		// ならない。このパッケージを直に使う側には、まだここしか無い。
 		return invalidValue(number, reason.New(reason.EditBadUTF8, "訳が正しいUTF-8ではない"))
 	}
 
