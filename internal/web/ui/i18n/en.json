@@ -66,6 +66,7 @@
     "ui.conflict_locked": "Choose which one to keep before editing this row.",
     "ui.orphans_title": "Some translations no longer have a row to go to. The row left the file, or more rows now share its key. Copy them down, then reload.",
     "ui.orphan_lost": "There is no row for this translation in the file.",
+    "ui.panel_more": "(notes, counts, measured)",
     "ui.file": "File",
     "ui.game_folder": "Game folder searched for working copies",
     "note.via_publish": "What you see is a working copy. Saving writes to this file only. Your translations reach {path}, the file you commit, when you run dwloc publish.",

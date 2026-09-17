@@ -56,6 +56,14 @@
     path: document.getElementById("file-path"),
     gamePath: document.getElementById("game-path"),
     notes: document.getElementById("notes"),
+    /*
+      起動したときの状態の一帯そのものと、その見出しに添える字。畳みなので、
+      文言が入るまで出さないために持つ（applyCatalog を見よ）。書き込む先は
+      今までどおり el.path・el.gamePath・el.notes・el.counts・el.stats のままで、
+      畳みにしたことで変わったのは #file-path が summary の中に入ったことだけ。
+    */
+    panelFold: document.getElementById("panel-fold"),
+    panelMore: document.getElementById("panel-more"),
     countsTitle: document.getElementById("counts-title"),
     counts: document.getElementById("counts"),
     statsTitle: document.getElementById("stats-title"),
@@ -394,16 +402,26 @@
     el.search.setAttribute("aria-label", t("ui.search"));
     el.finderNote.textContent = t("ui.finder_note");
     /*
-      畳んである2つの見出し。畳んだままでも読まれるのはここだけなので、
+      畳んである3つの見出し。畳んだままでも読まれるのはここだけなので、
       絞り込みのほうには「無条件に本当のこと」（検索がブラウザーの中だけで
       完結すること）を入れてある。条件つきでしか本当でないことを入れると、
       いちばん読まれる1文がいちばん当てにならない1文になる。
+
+      一帯（#panel-fold）の見出しは文ではなく値である。いま読み書きしている
+      ファイルの名前（#file-path）が summary の中に入っていて、ここで入れる
+      のは、その後ろに添える「中に何が入っているか」だけ。畳んだままでも
+      ファイル名が読めることが、この畳みの条件だった。
     */
     el.finderNoteTitle.textContent = t("ui.finder_note_title");
     el.keysTitle.textContent = t("ui.keys_title");
+    el.panelMore.textContent = t("ui.panel_more");
     /*
       文言が入ったので出す。入るまでは hidden にしてある（index.html）。
       空の summary は、名前を持たない焦点の止まり場になる。
+
+      一帯（#panel-fold）はここでは出さない。あの summary の主役は目録の文では
+      なく、いま読み書きしているファイルの名前で、それが入るのは /api/lines を
+      受けた render である。出すのもあちらに置いてある。
     */
     el.keysFold.hidden = false;
     el.finderFold.hidden = false;
@@ -2071,6 +2089,20 @@
     el.search.dir = "auto";
     el.search.lang = data.locale;
     el.path.textContent = t("ui.file") + ": " + data.path;
+    /*
+      名前が入ったので、一帯の畳みを出す。ほかの2つ（近道の一覧、絞り込みの
+      断り書き）は目録が届いた時点で出すが、この1つだけは /api/lines を待つ。
+      畳んだままでも読めるのは summary だけで、そこに入るのは目録の文ではなく
+      ファイルの名前だからである。
+
+      applyCatalog で出すと、--locale を省いたときに名前の無い畳みが残る。
+      あの経路はロケールを選ぶまで /api/lines を叩かないので、summary が
+      添え字だけ（「（断り書き・件数・数えたもの）」）になり、それでも焦点は
+      受ける（実測: 1280幅で一帯の高さ 47.4px、tabIndex 0、#file-path と
+      #notes と #counts はどれも空）。--locale の既定は省略で、ダブルクリック
+      で開いたときもこの経路なので、いちばん多くの人が最初に見る画面になる。
+    */
+    el.panelFold.hidden = false;
     renderNotes(collectNotes(data));
     renderCounts(data.counts);
     /*

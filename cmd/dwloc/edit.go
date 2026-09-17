@@ -9,7 +9,7 @@ import (
 )
 
 // editUsage は edit の説明。
-const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--port <番号>] [--ui-lang <言語タグ>] [--idle-timeout <時間>] [--no-browser] [--verbose]
+const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--port <番号>] [--ui-lang <言語タグ>] [--idle-timeout <時間>] [--no-browser] [--verbose]
 
 手元だけで待ち受けを始め、1ロケールの全行を1画面に並べます。
 並びも見出しも、ファイルにあるとおりです。
@@ -17,9 +17,10 @@ const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <
 訳の欄を選ぶと書き換えられます。入力が止まると自動で保存します。
 
 保存先は1つで、publish が入力に選ぶファイルと同じです。作業コピーがあればそれ、
-無ければ公開ファイル自身です。--game を指定すると、ゲーム側の作業コピーも探します。
+無ければ公開ファイル自身です。作業コピーはゲーム側を先に探します。
 
-  <ゲーム>/Translations/_discovered/<ロケール>.working.csv   作業コピー
+  <ゲーム>/Translations/_discovered/<ロケール>.working.csv   作業コピー（先）
+  <ルート>/Translations/_discovered/<ロケール>.working.csv   作業コピー（後。自分で置いたとき）
   <ルート>/Translations/<ロケール>/strings.csv               コミットする側（publish が作る）
 
 作業コピーを直しているときは、その訳がコミットする側へ入るのは dwloc publish を
@@ -31,7 +32,12 @@ const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <
 
 原文の欄が埋まるのは、作業コピーを読めたときだけです。作業コピーはふつう、
 ゲームのフォルダーにしかありません（リポジトリの Translations/_discovered は
-.gitignore で外してあります）。--game を指定すると、そちらも探します。
+.gitignore で外してあります）。そのため edit は、--game を省いてもゲームの
+フォルダーを探します。見つからなければ、原文の欄が空のまま始めます。
+publish と diff は探しません（あちらは別の PC や機械と突き合わせる出力なので、
+同じリポジトリから同じ答えが出ることを崩しません）。
+探させたくないときは --no-game を付けます。読み書きするのは --root の中だけに
+なります。
 読み書きするファイルは、画面の上に出します。
 
 publish は回しません。保存は「触った行の最終フィールドだけを差し替える」処理で、
@@ -53,10 +59,17 @@ publish は回しません。保存は「触った行の最終フィールドだ
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
         作業コピーを探すゲームのプラグインフォルダー。auto と書くと Steam の
-        ライブラリから探します。指定しないと見に行きません。
+        ライブラリから探します。省略したときも探します（edit だけの扱いです。
+        publish と diff は省略すると見に行きません）。見つからないときや
+        候補が複数あるときは、作業コピー無しで始めます。止まりません。
         原文の欄と「未翻訳」の判定は、ここが読めるかどうかで決まります。
         ここに作業コピーがあるロケールでは、保存先がその作業コピーになります。
         書いた訳をコミットする側へ入れるには dwloc publish --game を回します。
+  --no-game
+        ゲームのフォルダーを探しも読みもしません。読み書きするのは --root の
+        中だけになります。リポジトリを写して試すとき、ゲームのフォルダーへ
+        書けない PC のとき、ゲーム側が古くて読ませたくないときに使います。
+        --game と一緒には指定できません。
   --locale <ロケール>
         最初に出すロケール。省略すると画面で選びます。
   --port <番号>
@@ -95,6 +108,9 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	fs := newFlagSet("dwloc edit", stderr)
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
+	// 打ち消しを置くのは edit だけです。publish と diff は --game を省いた
+	// ときに探さないので、打ち消す相手がありません。
+	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	// diff や publish と違い、--locale は1つだけ受けます。画面に出せるのは
 	// 1ロケールで、複数を受けても最初の1つしか使えません。使わない指定を
 	// 受け取れる形にすると、指定したつもりで効いていない事故になります。
@@ -123,7 +139,11 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 	// ゲームのフォルダーは、ロケールを照合する前に決めます。ゲーム側にしか
 	// 作業コピーが無いロケールは、決めてからでないと対象に入りません。
-	gamePath, ok := resolveGame(*game, stderr)
+	//
+	// --game を省いたときに探しに行くのは edit だけです（理由はあちらの
+	// doc コメント）。見つからなくても止まらないので、ここで exitError に
+	// なるのは --game に指定した場所が外れていたときだけです。
+	gamePath, ok := resolveGameAuto(*game, *noGame, true, stderr)
 	if !ok {
 		return exitError
 	}

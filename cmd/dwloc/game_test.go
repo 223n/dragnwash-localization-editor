@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/gamedir"
 )
 
 // makeGame はゲーム側のプラグインフォルダーを作り、そのパスを返す。
@@ -229,5 +231,330 @@ func TestGameAppearsInUsage(t *testing.T) {
 	} {
 		_, stdout, _ := runCLI(args...)
 		checkContains(t, strings.Join(args, " ")+" の説明", stdout, []string{"--game"})
+	}
+}
+
+// editNoGameArgs は --game を書かずに edit を1回回す。待ち受けはすぐ終わらせる。
+//
+// --idle-timeout 1ns にするのは、実際に待ち受けを立ててから終わらせるためである。
+// resolveGameForEdit の戻り値だけを見ると、決めたフォルダーが実際に入力として
+// 使われたかが分からない。作業コピーを開いたことは、待ち受けが標準出力へ出す
+// 1行（server.publish_hint）に出る。
+func editNoGameArgs(t *testing.T, root string) (int, string, string) {
+	t.Helper()
+
+	return runCLI("edit", "--root", root, "--no-browser", "--idle-timeout", "1ns")
+}
+
+// TestEditWithoutGameFindsTheGameFolder は、--game を省いた edit がゲームの
+// フォルダーを探し、見つけた作業コピーを入力にすることを見る。
+//
+// 実際に起きた: v0.5.0 を --game なしで起動すると、画面の「ファイル」は
+// Translations/ja/strings.csv（公開ファイル）で、原文の欄は空、「未翻訳」は
+// 「作業コピーがありません」だった。リポジトリの Translations/_discovered は
+// .gitignore で外してあり、ディレクトリ自体が無い。作業コピーはゲームの
+// フォルダーにしか無いので、探さなければ永久に当たらない。
+func TestEditWithoutGameFindsTheGameFolder(t *testing.T) {
+	root := gameRepo(t)
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	stubFindGame(t, game)
+
+	code, stdout, stderr := editNoGameArgs(t, root)
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	// 打っていない指定で読む先が増えたのだから、決めたことは必ず書く。
+	checkContains(t, "標準エラー", stderr,
+		[]string{"作業コピーの探し先にします", filepath.ToSlash(game)})
+	// 決めただけでなく、入力になっていること。作業コピーを開いたロケールが
+	// 1つでもあると、待ち受けはこの1行を出す。
+	checkContains(t, "標準出力", stdout, []string{"作業コピーを開いています"})
+}
+
+// TestEditWithoutGameKeepsGoingWhenNothingIsFound は、見つからなくても edit が
+// 止まらないことを見る。
+//
+// ここで止めると、ゲームを入れていない PC では公開ファイルの手直しすらできなく
+// なる。--game auto と違って、打っていない指定で画面が開かないのは通らない。
+func TestEditWithoutGameKeepsGoingWhenNothingIsFound(t *testing.T) {
+	root := gameRepo(t)
+	stubFindGame(t)
+
+	code, stdout, stderr := editNoGameArgs(t, root)
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	// 画面は開いている。公開ファイルを並べて続ける。
+	checkContains(t, "標準出力", stdout, []string{"http://127.0.0.1:", "?t="})
+	// 探して無かったことは伝える。原文の欄が空な理由がここにしか出ない。
+	checkContains(t, "標準エラー", stderr,
+		[]string{"探しましたが、見つかりませんでした", "--game"})
+	// 作業コピーは開いていない。開いていないのに開いたと言わない。
+	if strings.Contains(stdout, "作業コピーを開いています") {
+		t.Errorf("作業コピーを開いたことになっている:\n%s", stdout)
+	}
+	// --game auto のときの長い案内は出さない。打っていない人への字なので、
+	// 次にやること（ゲーム内の Export game flow）まで並べない。
+	if strings.Contains(stderr, "Export game flow") {
+		t.Errorf("--game auto の案内が出ている:\n%s", stderr)
+	}
+}
+
+// TestEditWithoutGameDoesNotPickAmongCandidates は、候補が複数あっても
+// どれかを選ばないことを見る。
+//
+// 選んだ根拠は翻訳者から見えないので、黙って別のゲームのファイルを直させる
+// ことになる。かわりに並べて見せ、作業コピー無しで始める。
+func TestEditWithoutGameDoesNotPickAmongCandidates(t *testing.T) {
+	root := gameRepo(t)
+	first := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	second := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	stubFindGame(t, first, second)
+
+	code, stdout, stderr := editNoGameArgs(t, root)
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{
+		"2個見つかりました", "作業コピー無しで始めます", "--game",
+		filepath.ToSlash(first), filepath.ToSlash(second),
+	})
+	// どちらも読んでいない。片方を選んでいたら、この1行が出る。
+	if strings.Contains(stdout, "作業コピーを開いています") {
+		t.Errorf("候補のどちらかを選んでいる:\n%s", stdout)
+	}
+	checkContains(t, "標準出力", stdout, []string{"http://127.0.0.1:"})
+}
+
+// TestEditWithGameIgnoresTheAutoSearch は、--game を書いたときに自動検出へ
+// 落ちないことを見る。
+//
+// 指定を書いた人は、その場所を読ませたいのである。書いたのに別の場所が混ざると、
+// どちらを直しているのか画面から追えなくなる。
+func TestEditWithGameIgnoresTheAutoSearch(t *testing.T) {
+	root := gameRepo(t)
+	asked := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	other := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	stubFindGame(t, other)
+
+	code, _, stderr := runCLI("edit", "--root", root, "--game", asked,
+		"--no-browser", "--idle-timeout", "1ns")
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{filepath.ToSlash(asked)})
+	if strings.Contains(stderr, filepath.ToSlash(other)) {
+		t.Errorf("自動検出の結果が混ざっている:\n%s", stderr)
+	}
+}
+
+// TestEveryCommandSearchesForTheGame は、publish と diff も自動検出を呼ぶことを見る。
+//
+// はじめは edit だけが探す形にしていた。publish の入力が実行する PC で変わるのを
+// 避けたかったためである。それは誤りだった。既定の edit はゲーム側の作業コピーへ
+// 保存するので、既定の publish がそれを読まないと訳が1行も届かない。しかも
+// publish は終了コード0で「書き出しました」と言うので、届かなかったことが
+// どこにも出ない。片方だけ探すのは、静かに壊れる道だった。
+//
+// 「呼ぶ」を数で見るのは、出力の突き合わせだけでは足りないからである。探しに
+// 行ったうえで結果を捨てていても、作業コピーの無いリポジトリでは出力が同じに見える。
+func TestEveryCommandSearchesForTheGame(t *testing.T) {
+	root := gameRepo(t)
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+
+	calls := 0
+	was := findGame
+	t.Cleanup(func() { findGame = was })
+	findGame = func() []gamedir.Plugin {
+		calls++
+		return []gamedir.Plugin{{Path: game}}
+	}
+
+	for _, args := range [][]string{
+		{"publish", "--root", root, "--dry-run"},
+		{"diff", "--root", root},
+		{"diff", "--root", root, "--format", "csv"},
+	} {
+		calls = 0
+		_, _, stderr := runCLI(args...)
+		if calls != 1 {
+			t.Errorf("%v: 自動検出を %d 回呼んでいる、1回を期待", args, calls)
+		}
+		// 読む先が増えたことは必ず伝える。黙って別のフォルダーを読み始めない。
+		if !strings.Contains(stderr, "作業コピーの探し先にします") {
+			t.Errorf("%v: 探し先を伝えていない\n%s", args, stderr)
+		}
+	}
+
+	// validate は --game を受け取るが使わない。探しにも行かない。
+	calls = 0
+	if _, _, stderr := runCLI("validate", "--root", root); calls != 0 {
+		t.Errorf("validate が自動検出を %d 回呼んでいる\n%s", calls, stderr)
+	}
+}
+
+// TestNoGameKeepsPublishAndDiffOutput は、--no-game を書いた publish と diff の
+// 出力が、目の前にゲームのフォルダーがあっても1バイト変わらないことを見る。
+//
+// 3つとも探すようにした代わりに、同じ答えが要るときの逃げ道がこれになった。
+// 機械と突き合わせる出力、コミットする中身を固定したいとき、そして develop との
+// 出力の突き合わせがここに乗っている。
+func TestNoGameKeepsPublishAndDiffOutput(t *testing.T) {
+	root := gameRepo(t)
+
+	type run struct {
+		stdout, stderr string
+	}
+	args := [][]string{
+		{"publish", "--root", root, "--dry-run", "--no-game"},
+		{"diff", "--root", root, "--no-game"},
+		{"diff", "--root", root, "--format", "csv", "--no-game"},
+		{"diff", "--root", root, "--all", "--no-game"},
+		{"validate", "--root", root},
+	}
+
+	// ゲームのフォルダーが無い状態で1回ずつ。
+	before := make([]run, len(args))
+	for i, a := range args {
+		_, stdout, stderr := runCLI(a...)
+		before[i] = run{stdout, stderr}
+	}
+
+	// 目の前にゲームのフォルダーを置き、自動検出もそこへ当たるようにする。
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	stubFindGame(t, game)
+
+	for i, a := range args {
+		_, stdout, stderr := runCLI(a...)
+		if stdout != before[i].stdout {
+			t.Errorf("%v: 標準出力が変わった\n--- 前 ---\n%s\n--- 後 ---\n%s",
+				a, before[i].stdout, stdout)
+		}
+		if stderr != before[i].stderr {
+			t.Errorf("%v: 標準エラーが変わった\n--- 前 ---\n%s\n--- 後 ---\n%s",
+				a, before[i].stderr, stderr)
+		}
+	}
+}
+
+// TestPublishAndDiffFindTheGameWorkingCopy は、--game を省いた publish と diff が
+// ゲーム側の作業コピーを実際に入力にすることを見る。
+//
+// これが通らないと、既定の edit で入れた訳が既定の publish に拾われない。
+func TestPublishAndDiffFindTheGameWorkingCopy(t *testing.T) {
+	root := gameRepo(t)
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	stubFindGame(t, game)
+
+	// publish は "<出力> <- <入力>" の行に、実際に読んだファイルを出す。
+	_, stdout, stderr := runCLI("publish", "--root", root, "--dry-run")
+	if !strings.Contains(stdout, "ja.working.csv") {
+		t.Errorf("publish がゲーム側の作業コピーを入力にしていない\n--- 標準出力 ---\n%s\n--- 標準エラー ---\n%s",
+			stdout, stderr)
+	}
+	// diff は「作業コピー」の行に出す。
+	_, stdout, stderr = runCLI("diff", "--root", root)
+	if !strings.Contains(stdout, "ja.working.csv") {
+		t.Errorf("diff がゲーム側の作業コピーを読んでいない\n--- 標準出力 ---\n%s\n--- 標準エラー ---\n%s",
+			stdout, stderr)
+	}
+}
+
+// TestEditNoGameStaysInsideTheRoot は、--no-game を書いた edit が探しも読みも
+// しないことを見る。
+//
+// 要るのは、探すのを既定にしたことで --root が edit の書き込み先を囲わなく
+// なったからである。保存先は見つかったゲームのフォルダーの作業コピーになるので、
+// リポジトリを写して試す人は自分の写しではなくゲームのフォルダーを直すことに
+// なる（実際に踏んだ: 写しを --root に渡した edit が、実機のゲームのフォルダーの
+// ja.working.csv を並べ、そこへ保存した）。ゲームのフォルダーへ書けない PC では、
+// 画面は開くのに保存が落ち続ける。どちらも、打ち消しが無いと逃げ道が無い。
+func TestEditNoGameStaysInsideTheRoot(t *testing.T) {
+	root := gameRepo(t)
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+	stubFindGame(t, game)
+
+	code, stdout, stderr := runCLI("edit", "--root", root, "--no-game",
+		"--no-browser", "--idle-timeout", "1ns")
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	// 画面は開く。公開ファイルの手直しはできる。
+	checkContains(t, "標準出力", stdout, []string{"http://127.0.0.1:", "?t="})
+	// 探し先の1行を出さない。打った人が減らした指定なので、断る字が要らない。
+	if strings.Contains(stderr, "作業コピーの探し先にします") ||
+		strings.Contains(stderr, filepath.ToSlash(game)) {
+		t.Errorf("--no-game なのにゲームのフォルダーを探している:\n%s", stderr)
+	}
+	// 読んでもいない。探していれば、この root には作業コピーが無いので
+	// ゲーム側が当たり、待ち受けがこの1行を出す
+	// （[TestEditWithoutGameFindsTheGameFolder] がその道を押さえている）。
+	if strings.Contains(stdout, "作業コピーを開いています") {
+		t.Errorf("ゲーム側の作業コピーを開いている:\n%s", stdout)
+	}
+}
+
+// TestEditRefusesGameAndNoGameTogether は、指定と打ち消しを両方書かれたときに
+// 止まることを見る。
+//
+// どちらかを勝たせない。「ここを読め」と「ゲームは見るな」のどちらを打ち
+// 間違えたのかは、こちらからは決められない。勝ち負けの決まりを作ると、
+// 打ち間違えた人は別の場所を直すことになる。
+func TestEditRefusesGameAndNoGameTogether(t *testing.T) {
+	root := gameRepo(t)
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+	})
+
+	code, stdout, stderr := runCLI("edit", "--root", root, "--game", game,
+		"--no-game", "--no-browser", "--idle-timeout", "1ns")
+	if code != exitError {
+		t.Fatalf("終了コード = %d、%d を期待\n%s", code, exitError, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--game", "--no-game"})
+	// 待ち受けを立てない。立ててから止めると、URL が出たあとに落ちる。
+	if strings.Contains(stdout, "http://127.0.0.1:") {
+		t.Errorf("待ち受けを始めている:\n%s", stdout)
+	}
+}
+
+// TestNoGameAppearsInEveryUsage は、打ち消しが使い方に出ていることを見る。
+//
+// 逃げ道は、あることが読めないと逃げ道にならない。publish / diff / edit の3つとも
+// --game を省くと探すので、3つとも打ち消しを受け、3つとも説明に出す。
+// 一度は edit だけに置いていたが、探すのを edit だけにしていたころの形である。
+func TestNoGameAppearsInEveryUsage(t *testing.T) {
+	for _, args := range [][]string{
+		{"help"},
+		{"edit", "--help"},
+		{"publish", "--help"},
+		{"diff", "--help"},
+	} {
+		_, stdout, _ := runCLI(args...)
+		checkContains(t, strings.Join(args, " ")+" の説明", stdout, []string{"--no-game"})
+	}
+
+	// validate は --game を受け取るが使わない。打ち消す相手が無いので置かない。
+	_, stdout, _ := runCLI("validate", "--help")
+	if strings.Contains(stdout, "--no-game") {
+		t.Errorf("validate --help に --no-game が出ている。あちらには無い指定である\n%s", stdout)
 	}
 }

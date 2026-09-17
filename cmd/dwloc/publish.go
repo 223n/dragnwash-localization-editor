@@ -18,8 +18,10 @@ const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--
 tools/hash-strings.ps1 と同じ出力です。
 
 入力は、<ロケール>.working.csv があればそれ、無ければ
-Translations/<ロケール>/strings.csv 自身です。作業コピーはリポジトリの
-Translations/_discovered を先に見て、--game があればゲームのフォルダーも見ます。
+Translations/<ロケール>/strings.csv 自身です。作業コピーはゲームのフォルダーを
+先に見て、そこに無ければリポジトリの Translations/_discovered を見ます。
+ゲームのフォルダーは、--game を省いても Steam のライブラリから探します。
+探させないときは --no-game です。
 出力は常に <ルート>/Translations/<ロケール>/strings.csv です。
 
 書き出す前に、いまの公開ファイルに入っている訳が新しい出力に残るかを確かめます。
@@ -36,7 +38,10 @@ Translations/_discovered を先に見て、--game があればゲームのフォ
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
         作業コピーを探すゲームのプラグインフォルダー。auto と書くと Steam の
-        ライブラリから探します。指定しないと見に行きません。
+        ライブラリから探します。指定しなくても探します。
+  --no-game
+        ゲームのフォルダーを探しも読みもしません。コミットする中身を
+        リポジトリの中だけで決めたいときに使います。
         ゲーム内で直した訳をコミットする側へ入れるのは、この指定を付けた
         publish です。読むのは作業コピーだけで、再生順は常にリポジトリ側です。
   --locale <ロケール>
@@ -144,6 +149,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	fs.Var(&locales, "locale", "対象のロケール")
 	var paths pathList
 	fs.Var(&paths, "path", "変換するファイル（入出力兼用）")
+	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	dryRun := fs.Bool("dry-run", false, "書き込まずに内容だけ表示する")
 	if code, ok := parseFlags(fs, args, publishUsage, stdout, stderr); !ok {
 		return code
@@ -167,14 +173,14 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 1行だけが出て何にも効かない、という嘘になります。
 	gamePath := ""
 	if len(paths) == 0 {
-		resolved, ok := resolveGame(*game, stderr)
+		resolved, ok := resolveGameAuto(*game, *noGame, false, stderr)
 		if !ok {
 			return exitError
 		}
 		gamePath = resolved
-	} else if *game != "" {
+	} else if *game != "" || *noGame {
 		fmt.Fprintln(stderr,
-			"dwloc: --path を指定したので --game は使いません。走査をしないため、作業コピーを探す先がありません。")
+			"dwloc: --path を指定したので --game と --no-game は使いません。走査をしないため、作業コピーを探す先がありません。")
 	}
 
 	// 再生順は全ロケールで共通なので1回だけ読む。

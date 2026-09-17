@@ -466,6 +466,12 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		// 保存はこのファイルにしか書かないので、コミットする側へ入るのは
 		// publish を回したときである。出さないと、翻訳者は画面で直した訳が
 		// そのままコミットされると思う。
+		//
+		// 「dwloc publish」と書けてよいのは、publish も --game を省いたときに
+		// ゲームのフォルダーを探すからである（[resolveGameAuto] と同じ入口）。
+		// 片方だけ探していたころは、この案内どおり打った publish が公開ファイル
+		// 自身を入力にして「変更なし」で終わり、訳が届かなかったことに気づく
+		// 手がかりが1バイトも出なかった。
 		notes = append(notes, s.cat.T(cat, "note.via_publish", "path", s.displayPath(target.Output)))
 	}
 	if s.untranslatedFilled(locale) > 0 {
