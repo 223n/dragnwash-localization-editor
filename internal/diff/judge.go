@@ -1,5 +1,7 @@
 package diff
 
+import "github.com/223n/dragnwash-localization-editor/internal/reason"
+
 // このファイルは判定を1つも足さない。すでにある [Summary.canJudge] と
 // judgeBlockReason と [Status.id] を、パッケージの外から読めるようにするだけである。
 //
@@ -27,7 +29,14 @@ func (s Summary) CanJudge(c Category) bool {
 // JudgeBlockReason は、そのカテゴリを判定しなかった理由を短く返す。
 //
 // [Summary.CanJudge] が true のときの戻り値に意味は無い。
-func (s Summary) JudgeBlockReason(c Category) string {
+//
+// 返すのは識別子と置換の組と、組み立て済みの日本語をまとめた [reason.Reason]。
+// 文面だけが要るなら String() を通せばよい（%s も %v もそれを使う）。画面は
+// 識別子を鍵にして目録から訳された文面を引き、鍵が無ければ文面へ落とす。
+//
+// 文面を返さずに識別子だけにすることはしない。ここが返す理由には、
+// [OldOrderSource] を差し替えた呼び出し側が作った、名前の無いものが混ざる。
+func (s Summary) JudgeBlockReason(c Category) reason.Reason {
 	return judgeBlockReason(s, c)
 }
 

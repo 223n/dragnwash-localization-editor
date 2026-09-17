@@ -1,9 +1,8 @@
 package diff
 
 import (
-	"fmt"
-
 	"github.com/223n/dragnwash-localization-editor/internal/order"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // CarryKind は引き継ぎ元の旧行をどう扱えばよいかの区別。
@@ -71,26 +70,38 @@ type carryTarget struct {
 	livePos string
 }
 
-// note は Finding.Note に入れる文面を組み立てる。
+// cause は Finding.Note と Finding.NoteReason に入れる理由を組み立てる。
 //
 // 位置まで書くのは、翻訳者が候補を確かめる手立てを1つでも増やすため。
 // キーだけでは16桁hexの見比べになり、正しさを自分で判断できない。
 // 移動か複製かも書くのは、旧行の訳を消してよいかがそこで決まるから。
-func (t carryTarget) note() string {
+//
+// 置換に渡すのは target（キーと位置を " / " で連ねたもの）、key、pos、live の4つ。
+// 目録の文面が使うのは target と live だが、key と pos も名前で引けるようにして
+// ある。文面が target を使うのは、位置が空のときに " / " を添えないという分岐を
+// 目録の側へ持ち込まないためである。言語が増えるたびにその分岐を書き写させると、
+// いずれどれかの言語で " / " だけが浮く。
+//
+// 旧キーがどこで生きているか分からない複製には、別の識別子を当てる。目録の
+// {live} に「別の行」のような語を流し込むと、その語だけが日本語のまま残る。
+func (t carryTarget) cause() reason.Reason {
 	pos := joinNonEmpty(" / ", t.section, t.node, t.orderText)
-	head := fmt.Sprintf("引き継ぎ先 %s", t.key)
+	target := t.key
 	if pos != "" {
-		head += " / " + pos
+		target += " / " + pos
 	}
-	switch t.kind {
-	case CarryCopied:
-		where := t.livePos
-		if where == "" {
-			where = "別の行"
-		}
-		return head + "（複製。旧キーは " + where + " で生きているので、この行の訳は残してください）"
+	head := "引き継ぎ先 " + target
+	args := []string{"target", target, "key", t.key, "pos", pos, "live", t.livePos}
+	switch {
+	case t.kind == CarryCopied && t.livePos != "":
+		return reason.New(reason.NoteCarryCopied,
+			head+"（複製。旧キーは "+t.livePos+" で生きているので、この行の訳は残してください）", args...)
+	case t.kind == CarryCopied:
+		return reason.New(reason.NoteCarryCopiedUnknown,
+			head+"（複製。旧キーは 別の行 で生きているので、この行の訳は残してください）", args...)
 	default:
-		return head + "（移動。旧キーはもう再生順にありません）"
+		return reason.New(reason.NoteCarryMoved,
+			head+"（移動。旧キーはもう再生順にありません）", args...)
 	}
 }
 

@@ -1,5 +1,7 @@
 package diff
 
+import "github.com/223n/dragnwash-localization-editor/internal/reason"
+
 // Status は報告の重さ。値が大きいほど重い。
 //
 // 3段にしてあるのは、翻訳者が「まず何を見ればいいか」を自分で決めなくて済む
@@ -100,6 +102,11 @@ type categoryInfo struct {
 	needsOldOrder bool
 	// note は Finding.Note の既定値。CSV の note 列に入る。
 	note string
+	// noteID は note に対応する安定した識別子（internal/reason）。
+	//
+	// 文面と別に持つのは、CLI が note をそのまま出す一方で、画面（internal/web）は
+	// 目録で差し替えるためである。文面を消して識別子だけにすると CLI が壊れる。
+	noteID string
 	// detail は一覧の前に出す説明。空なら出さない。
 	detail []string
 }
@@ -120,7 +127,7 @@ const (
 var categoryTable = map[Category]categoryInfo{
 	CatUntranslated: {
 		name: "未翻訳", id: "untranslated", status: StatusTodo, needsWorking: true,
-		note: noteUntranslated,
+		note: noteUntranslated, noteID: reason.NoteUntranslated,
 		detail: []string{
 			"作業コピーに原文があり、訳が空の行です。",
 		},
@@ -133,7 +140,7 @@ var categoryTable = map[Category]categoryInfo{
 	},
 	CatVanished: {
 		name: "台本から消えた行", id: "vanished", status: StatusReview, needsOrderKeys: true,
-		note: noteVanished,
+		note: noteVanished, noteID: reason.NoteVanished,
 		detail: []string{
 			"前回の公開時は再生順にありましたが、いまの再生順にありません。",
 			"原文が変わってキーが変わった可能性があります。",
@@ -157,22 +164,22 @@ var categoryTable = map[Category]categoryInfo{
 	},
 	CatStrayLineID: {
 		name: "台本に無い台詞ID行", id: "stray_line_id", status: StatusReview, needsOrderLineIDs: true,
-		note: noteStrayLineID,
+		note: noteStrayLineID, noteID: reason.NoteStrayLineID,
 		detail: []string{
 			"再生順に同じ台詞IDがありません。publish すると末尾のブロックへ回ります。",
 		},
 	},
 	CatNotPublished: {
 		name: "どのロケールにも訳が無い行", id: "not_published", status: StatusInfo,
-		note: noteNotPublished,
+		note: noteNotPublished, noteID: reason.NoteNotPublished,
 	},
 	CatScriptGap: {
 		name: "台本に無い台詞行", id: "script_gap", status: StatusInfo, needsOrderKeys: true,
-		note: noteScriptGap,
+		note: noteScriptGap, noteID: reason.NoteScriptGap,
 	},
 	CatUnknownOrigin: {
 		name: "由来を判定できない行", id: "unknown_origin", status: StatusInfo, needsOrderKeys: true,
-		note: noteUnknownOrigin,
+		note: noteUnknownOrigin, noteID: reason.NoteUnknownOrigin,
 		detail: []string{
 			"公開ファイルだけでは UI 文言と孤児を見分けられません。",
 		},
@@ -217,6 +224,18 @@ func (c Category) needsOldOrder() bool {
 // note は Finding.Note の既定値を返す。
 func (c Category) note() string {
 	return categoryTable[c].note
+}
+
+// noteReason は Finding.NoteReason の既定値を返す。
+//
+// 注記を持たないカテゴリ（引き継ぎ候補のように行ごとに違うもの）では空を返す。
+// 空の理由は画面にも CSV にも何も出さないので、note と同じ扱いになる。
+func (c Category) noteReason() reason.Reason {
+	info := categoryTable[c]
+	if info.note == "" {
+		return reason.Reason{}
+	}
+	return reason.New(info.noteID, info.note)
 }
 
 // detail は一覧の前に出す説明を返す。

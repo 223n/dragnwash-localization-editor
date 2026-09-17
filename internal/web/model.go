@@ -8,6 +8,7 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // 画面に出す行の種類。ファイルの物理行の種類（edit.Kind）を、描き方の違いだけに
@@ -167,7 +168,7 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 		Path:           displayPath,
 		Columns:        columns,
 		SourceColumn:   idx.source >= 0,
-		ReadOnlyReason: file.ReadOnlyReason(),
+		ReadOnlyReason: s.reasonText(cat, file.ReadOnlyCause()),
 	}
 
 	// 起動後に訳が入ったキーは「未翻訳」のバッジを外す。局所更新はここだけで、
@@ -184,7 +185,7 @@ func (s *server) buildLines(cat *Catalog, locale, displayPath string, file *edit
 			resp.Lines = append(resp.Lines, headingView(line))
 		case edit.KindData:
 			dataRows++
-			resp.Lines = append(resp.Lines, dataView(line, idx, badges))
+			resp.Lines = append(resp.Lines, s.dataView(cat, line, idx, badges))
 		default:
 			// 空行とヘッダー行は出さない。空行はファイルの間隔で、ヘッダー行は
 			// 列名として Columns に入れてある。どちらも1行として並べると、
@@ -223,7 +224,10 @@ func headingLevel(body string) string {
 }
 
 // dataView はデータ行を画面の1行にする。
-func dataView(line edit.Line, idx columns, badges map[string][]badgeView) lineView {
+//
+// 編集できない理由は目録から引く。internal/edit が持つ日本語をそのまま出すと、
+// 英語の画面でその行だけ日本語になる。
+func (s *server) dataView(cat *Catalog, line edit.Line, idx columns, badges map[string][]badgeView) lineView {
 	v := lineView{
 		Number:      line.Number,
 		Kind:        lineKindData,
@@ -232,7 +236,7 @@ func dataView(line edit.Line, idx columns, badges map[string][]badgeView) lineVi
 		Source:      idx.at(line.Fields, idx.source),
 		Translation: line.Translation(),
 		Editable:    line.Editable,
-		Reason:      line.Reason,
+		Reason:      s.reasonText(cat, line.Cause),
 	}
 	if !line.Editable {
 		// 訳として出せない行は、生の行を渡して読めるようにする。
@@ -291,7 +295,14 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
 			Category: id,
 			Label:    s.categoryLabel(cat, f.Category),
 			Status:   f.Category.Status().ID(),
-			Note:     f.Note,
+			// 識別子が入っていなければ Note をそのまま出す。
+			//
+			// NoteReason.Text には Note と同じ文字列が入る決まりだが、両方を
+			// 別々の欄で持つ以上、片方を入れ忘れる書き方ができてしまう。その
+			// とき reasonText は空を返すので、注記が日本語へ落ちるのではなく
+			// 画面から消える。消えるのは落ちるより悪いので、ここで拾う。
+			// 入れ忘れそのものは TestFindingNotesCarryTheirReason が落とす。
+			Note: s.findingNote(cat, f),
 		})
 	}
 	return out
@@ -325,7 +336,7 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary) []co
 				Count:       sum.Counts[c],
 			}
 			if !view.Judged {
-				view.Reason = sum.JudgeBlockReason(c)
+				view.Reason = s.reasonText(cat, sum.JudgeBlockReason(c))
 			}
 			if view.Judged && c == diff.CatUntranslated {
 				// 起動後に訳が入ったぶんだけ引く。引くだけで、カテゴリの
@@ -395,10 +406,45 @@ func (s *server) buildNotes(cat *Catalog, locale string, sum diff.Summary, hasSo
 		notes = append(notes, s.cat.T(cat, "note.order_unreadable"))
 	}
 	if !sum.OldOrder || sum.OldOrderStale {
-		reason := sum.JudgeBlockReason(diff.CatCarryover)
-		notes = append(notes, s.cat.T(cat, "note.old_order_held", "reason", reason))
+		// 断り書きの外枠も、その中に入る理由も、どちらも目録から引く。
+		// 内側だけ日本語のまま差し込むと、英語の文の途中に日本語が挟まる。
+		why := s.reasonText(cat, sum.JudgeBlockReason(diff.CatCarryover))
+		notes = append(notes, s.cat.T(cat, "note.old_order_held", "reason", why))
 	}
 	return notes
+}
+
+// reasonText は internal/diff と internal/edit が返した理由を、画面に出す文面にする。
+//
+// 識別子があれば目録を引き、無ければ元の日本語をそのまま返す。目録に鍵が無い
+// ときも同じで、鍵をそのまま画面に出すことはしない。訳されていない文が出るほうが、
+// 何も出ないよりよい。
+//
+// 落ちたことに人が気づく必要は無い。鍵の抜けは [reason.All] をなぞる試験が
+// 見つけるし、識別子を持たない理由（[diff.OldOrderSource] を差し替えた
+// 呼び出し側が作る誤り）はそもそも訳しようがない。
+// findingNote は行に添える注記を返す。
+//
+// [diff.Finding] は日本語の Note と識別子つきの NoteReason を別々に持つ。
+// 目録を引けるのは後者だが、前者しか入っていない Finding が作られても
+// 注記を失わないようにする。
+func (s *server) findingNote(cat *Catalog, f diff.Finding) string {
+	if f.NoteReason.Empty() {
+		return f.Note
+	}
+	return s.reasonText(cat, f.NoteReason)
+}
+
+func (s *server) reasonText(cat *Catalog, why reason.Reason) string {
+	if why.ID == "" {
+		return why.Text
+	}
+	// 局所変数に key という名前を使わない。このファイルは internal/key を
+	// 取り込んでいて、隠すとあとで1行足したときに解決先が変わる。
+	if text := s.cat.T(cat, "reason."+why.ID, why.Args...); text != "reason."+why.ID {
+		return text
+	}
+	return why.Text
 }
 
 // categoryLabel はカテゴリの表示名を返す。

@@ -74,6 +74,14 @@ type Options struct {
 	// Stderr は記録の行き先。nil なら os.Stderr。
 	Stderr io.Writer
 
+	// oldOrder は1つ前の版の再生順を返す関数。nil なら [diff.GitOldOrder]。
+	//
+	// 試験で引き継ぎ候補を出すための穴である。固定にすると、引き継ぎ候補が
+	// バッジとして画面に載るところまでを見るのに git リポジトリが要る。
+	// 見本が git でない以上、その経路は端から端まで一度も通らない。
+	// internal/diff が同じ理由で Options.OldOrder を開けているのに合わせる。
+	oldOrder diff.OldOrderSource
+
 	// openBrowser はブラウザーを開く関数。nil なら [openBrowser]。
 	// テストで差し替えるための穴で、外からは触れない。
 	openBrowser func(url string) error
@@ -187,7 +195,7 @@ func newServer(opt Options) (*server, error) {
 	// この値は変わらない。ファイルの中身は開くたびに読み直すが、突き合わせは
 	// 起動時のもので、両者がずれうることは承知のうえで固定してある
 	// （比較は13ロケール全部を読むので、1行開くたびにやり直す種類の処理ではない）。
-	repo, err := diff.LoadWith(opt.Root, diff.Options{Working: true})
+	repo, err := diff.LoadWith(opt.Root, diff.Options{Working: true, OldOrder: opt.oldOrder})
 	if err != nil {
 		return nil, err
 	}

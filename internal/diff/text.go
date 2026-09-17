@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/order"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // TextOptions は text 形式の出力の指定。
@@ -169,23 +170,30 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 // 見る順は [Summary.canJudge] と同じにしてある。引き継ぎ候補は再生順と旧再生順の
 // 両方を要るので、順が食い違うと「再生順は読めているのに再生順を読めていません」
 // と書くことになる。
-func judgeBlockReason(sum Summary, c Category) string {
+//
+// 文字列ではなく [reason.Reason] を返すのは、画面（internal/web）が目録で文面を
+// 差し替えるためである。日本語の文面は Text に入ったまま残るので、この関数を
+// %s で書式に渡す CLI 側の出力は1バイトも変わらない。
+func judgeBlockReason(sum Summary, c Category) reason.Reason {
 	if c.needsWorking() && !sum.HasWorking {
 		if sum.WorkingExists {
-			return "作業コピーを読んでいません"
+			return reason.New(reason.JudgeWorkingNotRead, "作業コピーを読んでいません")
 		}
-		return "作業コピーがありません"
+		return reason.New(reason.JudgeWorkingMissing, "作業コピーがありません")
 	}
 	if (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs) {
-		return "再生順を読めていません"
+		return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
 	}
 	if c.needsOldOrder() && (!sum.OldOrder || sum.OldOrderStale) {
 		if sum.OldOrderReason != "" {
-			return sum.OldOrderReason
+			// 旧再生順を取り出せない理由は load.go が作る。識別子も一緒に
+			// 運ばれてくるので、ここで当て直さない。当て直すと、番兵を見る
+			// 場所が2つになる。
+			return reason.New(sum.OldOrderReasonID, sum.OldOrderReason)
 		}
-		return "1つ前の再生順を読めていません"
+		return reason.New(reason.JudgeOldOrderUnreadable, "1つ前の再生順を読めていません")
 	}
-	return "再生順を読めていません"
+	return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
 }
 
 // carryCopiedFirst は「複製」を先にした写しを返す。元の並びは変えない。
