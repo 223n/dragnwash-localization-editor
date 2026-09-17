@@ -26,6 +26,11 @@ Translations/_discovered を先に見て、--game があればゲームのフォ
 1つでも失われるなら、どのロケールも書かずに止まり、何が失われるかを表示します
 （終了コード 1）。--dry-run でも同じ判定をします。この確認は外せません。
 
+--game を指定したときは、その前にもう1つ確かめます。ゲームに入っている翻訳が
+コミット済みと食い違っていたら、同じように止まります。Mod は「いま読み込んで
+いる訳」を作業コピーへ書き出すので、ゲーム側が古いと、その訳で新しいコミットが
+巻き戻ります。訳は消えないため、上の確認では捕まりません。
+
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
@@ -48,7 +53,8 @@ Translations/_discovered を先に見て、--game があればゲームのフォ
 
 終了コード:
   0   成功
-  1   書くと訳が失われるので止めた（1バイトも書いていません）
+  1   書くと訳が失われる、またはゲームに入っている翻訳が古いので止めた
+      （どちらも1バイトも書いていません）
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、など）
 `
 
@@ -228,6 +234,13 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		built[i], stats[i] = out, st
 	}
 
+	// ゲーム側の作業コピーを入力にしたロケールでは、その作業コピーが建っている
+	// 土台がコミット済みとそろっているかを先に見ます。ずれていると、訳は消えない
+	// まま古い版へ巻き戻るので、次の reportLosses では捕まりません。
+	if code := reportBaseDrift(*root, targets, stderr); code != exitOK {
+		return code
+	}
+
 	// 組み立てたものを書くと訳が消えるなら、ここで止める。1件でもあれば
 	// どのロケールも書きません。--dry-run でも同じ判定をします。書かないことは
 	// どちらでも変わらないので、判定だけ変えると「dry-run では通ったのに
@@ -264,6 +277,66 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	}
 	fmt.Fprintf(stdout, "%d 件を書き出しました。\n", len(targets))
 	return exitOK
+}
+
+// publishBaseDriftText は、ゲームに入っている訳がコミット済みと食い違って
+// いたときの見出しです。
+//
+// 止める理由が「訳が消えるから」ではないので、文面を分けてあります。ここで
+// 起きるのは巻き戻りで、消えるのとは直し方が違います。直す先はリポジトリでも
+// 作業コピーでもなく、ゲームに入っている翻訳です。
+const publishBaseDriftText = `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。
+dwloc:       Modは「いま読み込んでいる訳」を作業コピーへ書き出します。
+dwloc:       ゲーム側が古いと、その作業コピーも古い訳を持ち、publish で新しいコミットが巻き戻ります。
+dwloc:       ゲームへ最新の翻訳を入れ直してから、もう一度実行してください。
+`
+
+// reportBaseDrift は、ゲーム側の作業コピーが建っている土台がコミット済みと
+// そろっているかを確かめて報告します。
+//
+// そろっていれば exitOK です。1件でも食い違えば exitProblems（1）で、
+// どのロケールも書きません。読めなくて確かめられなかったときだけが 2 です。
+func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) int {
+	var found []publish.BaseResult
+	for _, t := range targets {
+		if t.GameBase == "" {
+			continue
+		}
+		current, err := os.ReadFile(t.Output)
+		if err != nil {
+			fmt.Fprintf(stderr,
+				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
+				displayPath(root, t.Output), err)
+			return exitError
+		}
+		res, err := publish.CheckBase(t, current)
+		if err != nil {
+			fmt.Fprintf(stderr,
+				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
+				t.GameBase, err)
+			return exitError
+		}
+		if res.Count > 0 {
+			found = append(found, res)
+		}
+	}
+	if len(found) == 0 {
+		return exitOK
+	}
+
+	fmt.Fprint(stderr, publishBaseDriftText)
+	for _, res := range found {
+		fmt.Fprintf(stderr, "dwloc:   %s（%d 件）\n", res.Locale, res.Count)
+		for _, d := range res.Sample {
+			fmt.Fprintf(stderr, "dwloc:       %s\n", d.Key)
+			fmt.Fprintf(stderr, "dwloc:         コミット済み 「%s」\n", d.Repo)
+			fmt.Fprintf(stderr, "dwloc:         ゲーム側     「%s」\n", d.Game)
+		}
+		if res.Count > len(res.Sample) {
+			fmt.Fprintf(stderr, "dwloc:       ほかに %d 件あります。\n", res.Count-len(res.Sample))
+		}
+	}
+	return exitProblems
 }
 
 // reportLosses は、書き出すと失われる訳を数えて報告します。

@@ -178,6 +178,12 @@ const (
 	PublishRowGone = "publish_row_gone"
 	// PublishTranslationCleared は、行はあるが訳が空になること。
 	PublishTranslationCleared = "publish_translation_cleared"
+	// PublishBaseDrift は、ゲームに入っている公開ファイルがコミット済みと
+	// 食い違っていること。置換は locale と count。
+	//
+	// このとき作業コピーは別の土台の上に建っているので、入力にすると新しい
+	// コミットが古い版へ巻き戻る。訳は消えないので PublishRowGone では捕まらない。
+	PublishBaseDrift = "publish_base_drift"
 )
 
 // all は [All] が返す並び。定義した順のまま持つ。
@@ -199,7 +205,7 @@ var all = []string{
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
 
-	PublishRowGone, PublishTranslationCleared,
+	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 }
 
 // All はこのパッケージが名前を付けた識別子を全部返す。

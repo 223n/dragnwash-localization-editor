@@ -155,6 +155,7 @@
     "reason.edit_no_nul": "訳に NUL は入れられない",
     "reason.edit_bad_utf8": "訳が正しいUTF-8ではない",
     "reason.publish_row_gone": "この行が新しい出力に無い",
-    "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる"
+    "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる",
+    "reason.publish_base_drift": "ゲームに入っている訳が {locale} で {count} 件ちがう"
   }
 }

@@ -144,6 +144,9 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	for _, why := range publishLossReasons(t) {
 		check("publish", why)
 	}
+	for _, why := range publishBaseReasons(t) {
+		check("publish", why)
+	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
 	for _, id := range reason.All() {
@@ -632,4 +635,59 @@ func TestSaveErrorIsTranslated(t *testing.T) {
 			}
 		}
 	}
+}
+
+// publishBaseReasons は「ゲームに入っている訳が古い」理由の見本を集める。
+//
+// [publish.BaseReason] を直に呼ばず、実際に判定を走らせるのは、件数の置換が
+// 合っていることまで見たいからである。手で組むと、数を書き写すことになる。
+func publishBaseReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	root := t.TempDir()
+	game := t.TempDir()
+
+	// コミット済み。2件とも訳が入っている。
+	write := func(dir, rel, body string) {
+		t.Helper()
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	header := "key,section,node,order,speaker,translation\n"
+	write(root, "Translations/ja/strings.csv", header+
+		"aaaaaaaaaaaaaaaa,UI,,,UI,あたらしいやく\n"+
+		"bbbbbbbbbbbbbbbb,UI,,,UI,そのままのやく\n")
+	// ゲームに入っているほう。1件だけ古い。
+	write(game, "Translations/ja/strings.csv", header+
+		"aaaaaaaaaaaaaaaa,UI,,,UI,ふるいやく\n"+
+		"bbbbbbbbbbbbbbbb,UI,,,UI,そのままのやく\n")
+	// 作業コピーが無いと、入力がゲーム側にならず GameBase が埋まらない。
+	write(game, "Translations/_discovered/ja.working.csv",
+		"key,section,node,order,speaker,source_en,translation\n"+
+			"aaaaaaaaaaaaaaaa,UI,,,UI,,ふるいやく\n")
+
+	targets, err := publish.DiscoverTargetsWithGame(root, game)
+	if err != nil {
+		t.Fatalf("DiscoverTargetsWithGame: %v", err)
+	}
+	if len(targets) != 1 || targets[0].GameBase == "" {
+		t.Fatalf("入力がゲーム側になっていない: %+v", targets)
+	}
+	current, err := os.ReadFile(targets[0].Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := publish.CheckBase(targets[0], current)
+	if err != nil {
+		t.Fatalf("CheckBase: %v", err)
+	}
+	if res.Count != 1 {
+		t.Fatalf("食い違いが1件でない: %+v", res)
+	}
+	return []reason.Reason{publish.BaseReason(res.Locale, res.Count)}
 }

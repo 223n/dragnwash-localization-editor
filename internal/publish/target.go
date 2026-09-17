@@ -41,6 +41,17 @@ type Target struct {
 	Input string
 	// Output は書き出し先。常に Translations/<ロケール>/strings.csv。
 	Output string
+	// GameBase は Input の土台になっているゲーム側の公開ファイルの場所。
+	//
+	// 埋まるのは、Input がゲーム側の作業コピーになったときだけである。
+	// リポジトリの作業コピーを採ったときも、公開ファイル自身を採ったときも空になる。
+	// つまりこの欄は「入力がゲームから来たか」と「その土台はどこか」を同時に持つ。
+	//
+	// 要るのは、作業コピーの訳がコミット済みと違っていたときに、それが翻訳者の
+	// 編集なのか、ゲーム側が古いための巻き戻りなのかを見分けるためである。
+	// 2つを見比べるだけでは区別できない。土台（Modがその作業コピーを書き出した
+	// ときに読んでいた公開ファイル）が3点目になる（[CheckBase]）。
+	GameBase string
 }
 
 // DiscoverTargets は root 配下の Translations を走査して対象を列挙する
@@ -102,19 +113,25 @@ func discover(root, game string) ([]Target, error) {
 		}
 		output := filepath.Join(dir, locale, StringsFile)
 
-		input := output
-		if working, ok := workingCopy(root, game, locale); ok {
+		input, base := output, ""
+		if working, inGame, ok := workingCopy(root, game, locale); ok {
 			input = working
+			if inGame {
+				base = filepath.Join(game, TranslationsDir, locale, StringsFile)
+			}
 		}
 		if !fileExists(input) {
 			continue
 		}
-		targets = append(targets, Target{Locale: locale, Input: input, Output: output})
+		targets = append(targets, Target{
+			Locale: locale, Input: input, Output: output, GameBase: base,
+		})
 	}
 	return targets, nil
 }
 
 // workingCopy は locale の作業コピーを探す。探す順はリポジトリ、ゲームの順。
+// 第2戻り値は、当たったのがゲーム側かどうか。
 //
 // リポジトリを先に見るのは、ゲーム側を足したことで、いままで通っていた入力が
 // 別のファイルへ入れ替わらないようにするためである。リポジトリの
@@ -125,21 +142,21 @@ func discover(root, game string) ([]Target, error) {
 // ゲーム側はModのホットリロードが読み書きするファイルで、そちらのほうが新しい。
 // それでも後ろに置いたのは、「新しいほうを採る」を規則にすると、どちらが入力に
 // なるかが更新時刻で決まり、実行のたびに入れ替わりうるからである。
-func workingCopy(root, game, locale string) (path string, ok bool) {
+func workingCopy(root, game, locale string) (path string, inGame, ok bool) {
 	name := locale + WorkingSuffix
 
 	inRepo := filepath.Join(root, TranslationsDir, DiscoveredDir, name)
 	if fileExists(inRepo) {
-		return inRepo, true
+		return inRepo, false, true
 	}
 	if game == "" {
-		return "", false
+		return "", false, false
 	}
-	inGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
-	if fileExists(inGame) {
-		return inGame, true
+	fromGame := filepath.Join(game, TranslationsDir, DiscoveredDir, name)
+	if fileExists(fromGame) {
+		return fromGame, true, true
 	}
-	return "", false
+	return "", false, false
 }
 
 // WorkingPath は locale の作業コピーの置き場を返す。ファイルが無くても値を返す。

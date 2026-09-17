@@ -245,3 +245,113 @@ func TestPublishUsageSaysItChecksForLoss(t *testing.T) {
 	_, stdout, _ := runCLI("publish", "--help")
 	checkContains(t, "publish の説明", stdout, []string{"失われる", "--dry-run でも同じ判定"})
 }
+
+// gameOldPublished は、ゲームに入っている古い公開ファイル。
+//
+// コミット済みの「もしもし？」に対して、閉じタグの無い古い版を持たせる。
+// 実機（開発機のSteam）で起きていたのがこの形で、ゲームに入っていた翻訳が
+// 1つ前のリリースのままだった。
+const gameOldPublished = "key,section,node,order,speaker,translation\n" +
+	keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,<i>ずいぶんと長い訳がここにあります。\n"
+
+// gameSamePublished は、ゲームに入っている公開ファイルがコミット済みと同じもの。
+const gameSamePublished = "key,section,node,order,speaker,translation\n" +
+	keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,<i>ずいぶんと長い訳がここにあります。</i>\n"
+
+// longRepo は、訳の長い見本でリポジトリを作る。
+//
+// 訳を長くしてあるのは、報告の切り出しを確かめるためである。短い訳だと、
+// 先頭から一定の文字数を出すだけでも違いが見えてしまい、切り出しの良し悪しが
+// 分からない。
+func longRepo(t *testing.T) string {
+	t.Helper()
+
+	return makeTree(t, map[string]string{
+		"data/script_order.csv": "section,phase,node,order,line_id,key,speaker,condition\n" +
+			"L01 Ryan,intro,Ryan_1_intro,1,line:aaaaaaaa," + keyHello + ",Ryan,\n" +
+			"L01 Ryan,intro,Ryan_1_intro,2,line:bbbbbbbb," + keyHiThere + ",Kobold,\n",
+		jaPublishedPath: "key,section,node,order,speaker,translation\n" +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,<i>ずいぶんと長い訳がここにあります。</i>\n",
+	})
+}
+
+// TestPublishStopsWhenTheGameIsStale は、ゲームに入っている翻訳が古いときに
+// 止まることを見る。
+//
+// これは「訳が失われる」では捕まらない。行は消えず、訳も空にならず、値だけが
+// 古い版へ戻る。実機の作業コピーで実際に3件起き、終了コード0で通っていた。
+func TestPublishStopsWhenTheGameIsStale(t *testing.T) {
+	root := longRepo(t)
+	// 作業コピーは、ゲームに入っている古い訳をそのまま持つ。Modは「いま読み
+	// 込んでいる訳」を書き出すので、これが実際の形である。
+	working := "key,section,node,order,speaker,source_en,translation\n" +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,<i>ずいぶんと長い訳がここにあります。\n" +
+		keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,やあ！\n"
+	game := makeGame(t, map[string]string{
+		"Translations/ja/strings.csv":             gameOldPublished,
+		"Translations/_discovered/ja.working.csv": working,
+	})
+	before := publishOnce(t, root)
+
+	code, stdout, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\n%s", code, exitProblems, stderr)
+	}
+	if after := readFile(t, root, jaPublishedPath); after != before {
+		t.Errorf("止めたのに公開ファイルが変わっている:\n%s", after)
+	}
+	checkContains(t, "標準エラー", stderr, []string{
+		"ゲームに入っている翻訳が古いので",
+		"入れ直して",
+		keyHello,
+	})
+	// キーは畳んだ形ではなく、ファイルにある綴りのまま出す。人はこの値を
+	// ファイルから探すので、大文字になっていると引き当てられない。
+	if strings.Contains(stderr, strings.ToUpper(keyHello)) {
+		t.Errorf("キーが畳んだ形で出ている:\n%s", stderr)
+	}
+	// 報告は違いが見えること。先頭を切り出すだけだと、2行とも同じ文字列になる。
+	repoLine, gameLine := "", ""
+	for _, line := range strings.Split(stderr, "\n") {
+		switch {
+		case strings.Contains(line, "コミット済み"):
+			repoLine = line
+		case strings.Contains(line, "ゲーム側"):
+			gameLine = line
+		}
+	}
+	if repoLine == "" || gameLine == "" {
+		t.Fatalf("見比べる2行が出ていない:\n%s", stderr)
+	}
+	if strings.TrimPrefix(repoLine, "dwloc:         コミット済み ") ==
+		strings.TrimPrefix(gameLine, "dwloc:         ゲーム側     ") {
+		t.Errorf("2行が同じ文字列で、違いが見えない:\n%s\n%s", repoLine, gameLine)
+	}
+	if stdout != "" {
+		t.Errorf("失敗したのに標準出力へ書いている:\n%s", stdout)
+	}
+}
+
+// TestPublishRunsWhenTheGameIsCurrent は、ゲームがそろっていれば止まらないことを見る。
+//
+// ここが鳴ると publish が使えない。作業コピーの訳がコミット済みと違っていても、
+// 土台がそろっているかぎり、それは翻訳者がゲームの中で入れた編集である。
+func TestPublishRunsWhenTheGameIsCurrent(t *testing.T) {
+	root := longRepo(t)
+	// 1行目はゲームの中で書き換えてあり、2行目は新しく訳した行。どちらも通る。
+	working := "key,section,node,order,speaker,source_en,translation\n" +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,ゲームで直した訳\n" +
+		keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,やあ！\n"
+	game := makeGame(t, map[string]string{
+		"Translations/ja/strings.csv":             gameSamePublished,
+		"Translations/_discovered/ja.working.csv": working,
+	})
+	publishOnce(t, root)
+
+	code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	after := readFile(t, root, jaPublishedPath)
+	checkContains(t, "公開ファイル", after, []string{"ゲームで直した訳", "やあ！"})
+}

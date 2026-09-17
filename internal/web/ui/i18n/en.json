@@ -155,6 +155,7 @@
     "reason.edit_no_nul": "A translation cannot contain NUL",
     "reason.edit_bad_utf8": "The translation is not valid UTF-8",
     "reason.publish_row_gone": "This row is not in the new output",
-    "reason.publish_translation_cleared": "The new output leaves this row with an empty translation"
+    "reason.publish_translation_cleared": "The new output leaves this row with an empty translation",
+    "reason.publish_base_drift": "The game has {count} different translations for {locale}"
   }
 }
