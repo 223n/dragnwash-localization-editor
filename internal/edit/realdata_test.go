@@ -20,9 +20,17 @@ var sourceRepoCandidates = []string{
 	`C:\dev\223n\dragnwash-localization`,
 }
 
-// publishedLocales は Translations 直下にあるロケールの数。
-// ignore.txt はファイルなので数に入らない。
-const publishedLocales = 13
+// minPublishedLocales は Translations 直下にあるロケールの数の下限。
+//
+// 数を書き定めていた（13）が、それは「いまワークツリーに何ロケールあるか」で
+// あって、この実装の性質ではない。本体のチェックアウトには16ロケールあり、
+// DRAGNWASH_SOURCE_REPO をそちらへ向けると、ロケール数の照合だけで落ちていた。
+// ロケールは増えるものなので、突き合わせる相手はそのリポジトリ自身から数える
+// （[localeDirs]）。
+//
+// 下限も見る。0 と 0 が一致してしまうと、Translations をそもそも読めていない
+// ことに気づけない。13 は、このリポジトリのどのチェックアウトにもあった数である。
+const minPublishedLocales = 13
 
 // minDataLines は1ロケールあたりのデータ行数の下限。実データは1680行台なので、
 // これを下回ったら「読めていない」ということ。行数はロケールごとに違う
@@ -47,21 +55,51 @@ func sourceRepo(t *testing.T) string {
 	return ""
 }
 
-// realTargets は元リポジトリの13ロケールの公開ファイルを列挙する。
+// realTargets は元リポジトリの全ロケールの公開ファイルを列挙する。
 // 元リポジトリのファイルは読むだけで、絶対に書き換えない。
 func realTargets(t *testing.T) []publish.Target {
 	t.Helper()
-	targets, err := publish.DiscoverTargets(sourceRepo(t))
+	root := sourceRepo(t)
+	targets, err := publish.DiscoverTargets(root)
 	if err != nil {
 		t.Fatalf("対象を列挙できない: %v", err)
 	}
-	if len(targets) != publishedLocales {
-		t.Fatalf("ロケール数が違う: got %d, want %d", len(targets), publishedLocales)
+	if want := localeDirs(t, root); len(targets) != want {
+		t.Fatalf("ロケール数が違う: got %d, want %d", len(targets), want)
 	}
 	return targets
 }
 
-// TestRealDataRoundTrip は13ロケールの公開ファイルを読んで、1行も編集せずに
+// localeDirs は root/Translations 直下のロケールの数を数える。
+//
+// 数え方は publish.DiscoverTargets と同じで、ディレクトリだけを見て、名前が
+// '_' で始まるものを飛ばす。ignore.txt はファイルなので数に入らない。
+func localeDirs(t *testing.T, root string) int {
+	t.Helper()
+
+	dir := filepath.Join(root, "Translations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("%s を読めない: %v", dir, err)
+	}
+	n := 0
+	for _, entry := range entries {
+		info, err := os.Stat(filepath.Join(dir, entry.Name()))
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), "_") {
+			continue
+		}
+		n++
+	}
+	if n < minPublishedLocales {
+		t.Fatalf("ロケールが %d しかない。Translations を読めていない: %s", n, dir)
+	}
+	return n
+}
+
+// TestRealDataRoundTrip は全ロケールの公開ファイルを読んで、1行も編集せずに
 // 書き戻すと入力とバイト単位で完全に一致することを確かめる。
 //
 // このパッケージの約束「触っていない行は1バイトも変えない」を、実データで

@@ -353,7 +353,18 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		// Windows では、ゲームがホットリロードでファイルを開いている最中の
 		// rename が共有違反で失敗する（実測で、読み手がいると数パーセント）。
 		// 画面はこれを見て少し待ってからもう一度送る。
-		s.logf("save failed locale=%s", target.Locale)
+		//
+		// 端末には理由を書く。応答には出さない（すぐ上の注記）ので、書かないと
+		// 「なぜ書けないか」がどこにも出ない。待っても直らない失敗——ゲームの
+		// フォルダーへ書けない PC（Program Files の既定の権限、権限を絞った端末、
+		// 読み取り専用で繋いだ外付け）——では、画面は開くのに保存だけが落ち
+		// 続けるので、権限の話が読めないと直し方に手が届かない。edit は --game を
+		// 省いてもゲームのフォルダーを探すので、この道は指定を打っていない人にも
+		// 起きる（そのときの逃げ道は --no-game）。
+		//
+		// 誤りに入るのはパスと OS の文言だけで、行の中身は入らない
+		// （[TestGameSaveLogHasNoRowContent] が頁全体で見張っている）。
+		s.logf("save failed locale=%s: %v", target.Locale, err)
 		return saveOutcome{
 			results: results,
 			status:  http.StatusServiceUnavailable,

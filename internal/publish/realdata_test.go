@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -17,9 +18,45 @@ var sourceRepoCandidates = []string{
 	`C:\dev\223n\dragnwash-localization`,
 }
 
-// publishedLocales は Translations 直下にあるロケールの数。
-// ignore.txt はファイルなので数に入らない。
-const publishedLocales = 13
+// minPublishedLocales は Translations 直下にあるロケールの数の下限。
+//
+// 数を書き定めていた（13）が、それは「いまワークツリーに何ロケールあるか」で
+// あって、この実装の性質ではない。本体のチェックアウトには16ロケールあり、
+// DRAGNWASH_SOURCE_REPO をそちらへ向けると、16ロケールとも入力とバイト一致して
+// いるのに、ロケール数の照合だけで落ちていた。ロケールは増えるものなので、
+// 突き合わせる相手はそのリポジトリ自身から数える（[localeDirs]）。
+//
+// 下限も見る。0 と 0 が一致してしまうと、Translations をそもそも読めていない
+// ことに気づけない。13 は、このリポジトリのどのチェックアウトにもあった数である。
+const minPublishedLocales = 13
+
+// localeDirs は root/Translations 直下のロケールの数を数える。
+//
+// 数え方は [DiscoverTargets] と同じで、ディレクトリだけを見て、名前が '_' で
+// 始まるものを飛ばす。ignore.txt はファイルなので数に入らない。
+func localeDirs(t *testing.T, root string) int {
+	t.Helper()
+
+	dir := filepath.Join(root, TranslationsDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("%s を読めない: %v", dir, err)
+	}
+	n := 0
+	for _, entry := range entries {
+		if !isDir(filepath.Join(dir, entry.Name())) {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), localeSkipPrefix) {
+			continue
+		}
+		n++
+	}
+	if n < minPublishedLocales {
+		t.Fatalf("ロケールが %d しかない。Translations を読めていない: %s", n, dir)
+	}
+	return n
+}
 
 // sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
 // CI には元リポジトリが無いので、飛ばせることが必須。
@@ -58,8 +95,8 @@ func TestRealDataRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("対象を列挙できない: %v", err)
 	}
-	if len(targets) != publishedLocales {
-		t.Errorf("ロケール数が違う: got %d, want %d", len(targets), publishedLocales)
+	if want := localeDirs(t, root); len(targets) != want {
+		t.Errorf("ロケール数が違う: got %d, want %d", len(targets), want)
 	}
 
 	matched := 0

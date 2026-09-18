@@ -12,7 +12,7 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
@@ -27,7 +27,7 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
         ゲームに入れたプラグインのフォルダー。auto と書くと Steam の
-        ライブラリから探します。指定しないと見に行きません。
+        ライブラリから探します。指定しなくても探します。
         探し先は標準エラーへ1行出します（--format csv の
         標準出力を汚さないためです）。実際にそこから読んだかどうかは、
         ロケールごとの「作業コピー」の行に出るパスで分かります。
@@ -39,6 +39,9 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         省略すると全ロケールを報告します。
         絞っても公開ファイルは全ロケール読みます。言語間の比較の
         母集合を欠かさないためで、絞れるのは報告だけです。
+  --no-game
+        ゲームのフォルダーを探しも読みもしません。別のPCや機械と出力を
+        突き合わせるときに使います。--game と同時には指定できません。
   --no-working
         作業コピーがあっても読みません。公開ファイルだけで何が言えるかを
         再現するための指定です。作業コピーが古いときにも使えます。
@@ -104,6 +107,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	var locales localeList
 	fs.Var(&locales, "locale", "報告するロケール")
 	noWorking := fs.Bool("no-working", false, "作業コピーを読まない")
+	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	all := fs.Bool("all", false, "参考のカテゴリも一覧にする")
 	limit := fs.Int("limit", diffLimitDefault, "1カテゴリに並べる上限（0 で全件）")
 	format := fs.String("format", diffFormatText, "出力の形式（text または csv）")
@@ -125,7 +129,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		return exitError
 	}
 
-	gamePath, ok := resolveGame(*game, stderr)
+	gamePath, ok := resolveGameAuto(*game, *noGame, false, stderr)
 	if !ok {
 		return exitError
 	}

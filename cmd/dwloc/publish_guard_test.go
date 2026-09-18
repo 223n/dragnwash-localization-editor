@@ -233,7 +233,7 @@ func TestPublishSaysGameIsUnusedWithPath(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("終了コード = %d\n%s", code, stderr)
 	}
-	checkContains(t, "標準エラー", stderr, []string{"--game は使いません"})
+	checkContains(t, "標準エラー", stderr, []string{"--game と --no-game は使いません"})
 	if strings.Contains(stderr, "作業コピーの探し先にします") {
 		t.Errorf("使わないのに探し先を出している:\n%s", stderr)
 	}

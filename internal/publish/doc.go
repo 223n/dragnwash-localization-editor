@@ -8,8 +8,9 @@
 // # 入力をどこから取るか
 //
 // 入力は作業コピーがあればそれ、無ければ公開ファイル自身である。作業コピーは
-// リポジトリの Translations/_discovered を先に見て、ゲームのフォルダーを渡されて
-// いればそちらも見る（[DiscoverTargetsWithGame]）。出力は常に
+// ゲームのフォルダーを渡されていればそこを先に見て、当たらなければリポジトリの
+// Translations/_discovered を見る（[DiscoverTargetsWithGame]。順を決めた理由は
+// workingCopy の doc コメント）。出力は常に
 // Translations/<ロケール>/strings.csv で、入力が公開ファイル自身のときこの処理は
 // 冪等になる（同じバイト列が返る。実機の13ロケールで確かめてある）。
 //

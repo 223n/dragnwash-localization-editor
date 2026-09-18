@@ -12,33 +12,42 @@ import (
 )
 
 // publishUsage は publish の説明。
-const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--path <ファイル>] [--dry-run]
+const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--dry-run]
 
 <ルート>/Translations 配下の各ロケールについて、公開用の strings.csv を作り直します。
 tools/hash-strings.ps1 と同じ出力です。
 
 入力は、<ロケール>.working.csv があればそれ、無ければ
-Translations/<ロケール>/strings.csv 自身です。作業コピーはリポジトリの
-Translations/_discovered を先に見て、--game があればゲームのフォルダーも見ます。
+Translations/<ロケール>/strings.csv 自身です。作業コピーはゲームのフォルダーを
+先に見て、そこに無ければリポジトリの Translations/_discovered を見ます。
+ゲームのフォルダーは、--game を省いても Steam のライブラリから探します。
+探させないときは --no-game です。
 出力は常に <ルート>/Translations/<ロケール>/strings.csv です。
 
 書き出す前に、いまの公開ファイルに入っている訳が新しい出力に残るかを確かめます。
 1つでも失われるなら、どのロケールも書かずに止まり、何が失われるかを表示します
 （終了コード 1）。--dry-run でも同じ判定をします。この確認は外せません。
 
---game を指定したときは、その前にもう1つ確かめます。ゲームに入っている翻訳が
-コミット済みと食い違っていたら、同じように止まります。Mod は「いま読み込んで
-いる訳」を作業コピーへ書き出すので、ゲーム側が古いと、その訳で新しいコミットが
-巻き戻ります。訳は消えないため、上の確認では捕まりません。
+ゲーム側の作業コピーを入力にしたときは、その前にもう1つ確かめます。ゲームに
+入っている翻訳がコミット済みと食い違っていたら、同じように止まります。Mod は
+「いま読み込んでいる訳」を作業コピーへ書き出すので、ゲーム側が古いと、その訳で
+新しいコミットが巻き戻ります。訳は消えないため、上の確認では捕まりません。
+
+止まったら、リポジトリの Translations/<ロケール>/strings.csv をゲームのフォルダーの
+同じ場所へ写し、ゲームを起動し直して F1 → Translation → Export working copy を
+押してください。既訳を1行でも直して publish を通すたびに、ゲーム側は1つ古くなります。
 
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
         作業コピーを探すゲームのプラグインフォルダー。auto と書くと Steam の
-        ライブラリから探します。指定しないと見に行きません。
-        ゲーム内で直した訳をコミットする側へ入れるのは、この指定を付けた
-        publish です。読むのは作業コピーだけで、再生順は常にリポジトリ側です。
+        ライブラリから探します。指定しなくても探します。
+  --no-game
+        ゲームのフォルダーを探しも読みもしません。コミットする中身を
+        リポジトリの中だけで決めたいときに使います。
+        ゲーム内で直した訳は入りません。打った訳が黙って落ちるので、
+        「ゲームが古い」で止まったときの逃げ道には使わないでください。
   --locale <ロケール>
         対象のロケール。複数回指定するか、カンマ区切りで並べられます。
         省略すると Translations 配下のすべてが対象になります。
@@ -66,7 +75,7 @@ Translations/_discovered を先に見て、--game があればゲームのフォ
 const publishLossText = `dwloc: 訳が失われるので、1バイトも書きませんでした。
 dwloc:       いまの公開ファイルに入っている訳が、新しい出力に残りません。
 dwloc:       入力にした作業コピーが途中までになっていないか、壊れていないかを確かめてください。
-dwloc:       ゲーム内で Export game flow をやり直すと、作業コピーを作り直せます。
+dwloc:       ゲーム内で F1 → Translation → Export working copy を押すと、作業コピーを作り直せます。
 `
 
 // publishLossListMax は、失われる行を何件まで並べるかです。
@@ -144,6 +153,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	fs.Var(&locales, "locale", "対象のロケール")
 	var paths pathList
 	fs.Var(&paths, "path", "変換するファイル（入出力兼用）")
+	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	dryRun := fs.Bool("dry-run", false, "書き込まずに内容だけ表示する")
 	if code, ok := parseFlags(fs, args, publishUsage, stdout, stderr); !ok {
 		return code
@@ -167,14 +177,14 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 1行だけが出て何にも効かない、という嘘になります。
 	gamePath := ""
 	if len(paths) == 0 {
-		resolved, ok := resolveGame(*game, stderr)
+		resolved, ok := resolveGameAuto(*game, *noGame, false, stderr)
 		if !ok {
 			return exitError
 		}
 		gamePath = resolved
-	} else if *game != "" {
+	} else if *game != "" || *noGame {
 		fmt.Fprintln(stderr,
-			"dwloc: --path を指定したので --game は使いません。走査をしないため、作業コピーを探す先がありません。")
+			"dwloc: --path を指定したので --game と --no-game は使いません。走査をしないため、作業コピーを探す先がありません。")
 	}
 
 	// 再生順は全ロケールで共通なので1回だけ読む。
