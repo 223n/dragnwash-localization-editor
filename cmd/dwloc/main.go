@@ -218,15 +218,22 @@ dwloc:       実際に読むのは、そのロケールの作業コピーがこ�
 `
 
 // gameNotFoundText は自動検出が空振りしたときの案内です。
+//
+// 押すボタンの名前は Export working copy です。Export game flow ではありません。
+// あちらはレベルと会話グラフ（data/script_order.csv の元）を書き出す別のボタンで、
+// 作業コピー Translations/_discovered/<ロケール>.working.csv は作りません
+// （翻訳リポジトリの src/DragNWashLocalization/Plugin.ImGui.cs:426 と 438）。
+// 間違ったほうを案内していたので、押しても作業コピーができず、この案内がもう1度出る、
+// という行き止まりになっていました。押す場所（F1 → Translation）も添えます。
 const gameNotFoundText = `dwloc: ゲームのフォルダーが見つかりません。
 dwloc:       Steam のライブラリを探しましたが、Translations/_discovered を持つプラグインがありませんでした。
-dwloc:       ゲームを1度起動して、ゲーム内で Export game flow を実行してください。
+dwloc:       ゲームを1度起動して、ゲーム内で F1 → Translation → Export working copy を押してください。
 dwloc:       場所が分かっているときは --game <フォルダー> で直に指定できます。
 `
 
 // gameNotFoundMacText は、macOS で自動検出が空振りしたときの案内です。
 //
-// 文面を分けるのは、macOS では「ゲームを1度起動して Export game flow を実行して
+// 文面を分けるのは、macOS では「ゲームを1度起動して Export working copy を押して
 // ください」が実行できない案内だからです。Drag'n Wash Localization は macOS で
 // 動きません。BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに
 // 割り込めず、Mod が読み込まれないためです（元リポジトリの README による）。
@@ -245,7 +252,7 @@ dwloc:       ほかのPCで書き出した作業コピーがあるときは --ga
 // gameNotPluginText は --game に指定された場所が外れていたときの案内です。
 const gameNotPluginText = `dwloc: 指定された場所に Translations/_discovered がありません: %s
 dwloc:       ゲームのフォルダーか、その中の BepInEx/plugins/<プラグイン> を指定してください。
-dwloc:       そのフォルダーは、ゲーム内で Export game flow を1度実行するとできます。
+dwloc:       そのフォルダーは、ゲーム内で F1 → Translation → Export working copy を1度押すとできます。
 `
 
 // gameAmbiguousText は候補が複数あったときの案内です。
@@ -288,7 +295,7 @@ var findGame = gamedir.Find
 // gameAutoNotFoundText は、--game を省いた edit の自動検出が空振りしたときの案内です。
 //
 // --game auto のときの案内（[gameNotFoundText]）より短くします。あちらは
-// 「探せ」と打った人への返事なので、次にやること（ゲーム内の Export game flow）
+// 「探せ」と打った人への返事なので、次にやること（ゲーム内の Export working copy）
 // まで書きます。こちらは打っていない人へこちらの都合で出す字なので、
 // 何を探して何が無かったか、そのために画面が何を出せないかだけ言って退きます。
 const gameAutoNotFoundText = `dwloc: ゲームのフォルダーを探しましたが、見つかりませんでした。

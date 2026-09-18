@@ -34,7 +34,7 @@ const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <
 ゲームのフォルダーにしかありません（リポジトリの Translations/_discovered は
 .gitignore で外してあります）。そのため edit は、--game を省いてもゲームの
 フォルダーを探します。見つからなければ、原文の欄が空のまま始めます。
-publish と diff は探しません（あちらは別の PC や機械と突き合わせる出力なので、
+publish と diff も同じように探します（3つとも同じ探し方です。
 同じリポジトリから同じ答えが出ることを崩しません）。
 探させたくないときは --no-game を付けます。読み書きするのは --root の中だけに
 なります。
@@ -59,12 +59,12 @@ publish は回しません。保存は「触った行の最終フィールドだ
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
         作業コピーを探すゲームのプラグインフォルダー。auto と書くと Steam の
-        ライブラリから探します。省略したときも探します（edit だけの扱いです。
-        publish と diff は省略すると見に行きません）。見つからないときや
-        候補が複数あるときは、作業コピー無しで始めます。止まりません。
+        ライブラリから探します。省略したときも探します（publish と diff も
+        同じです）。見つからないときや候補が複数あるときは、作業コピー無しで
+        始めます。止まりません。
         原文の欄と「未翻訳」の判定は、ここが読めるかどうかで決まります。
         ここに作業コピーがあるロケールでは、保存先がその作業コピーになります。
-        書いた訳をコミットする側へ入れるには dwloc publish --game を回します。
+        書いた訳をコミットする側へ入れるには dwloc publish を回します。
   --no-game
         ゲームのフォルダーを探しも読みもしません。読み書きするのは --root の
         中だけになります。リポジトリを写して試すとき、ゲームのフォルダーへ
@@ -108,7 +108,7 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	fs := newFlagSet("dwloc edit", stderr)
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
-	// 打ち消しを置くのは edit だけです。publish と diff は --game を省いた
+	// 打ち消しは3つとも受けます。publish と diff も --game を省いた
 	// ときに探さないので、打ち消す相手がありません。
 	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	// diff や publish と違い、--locale は1つだけ受けます。画面に出せるのは
@@ -140,9 +140,14 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	// ゲームのフォルダーは、ロケールを照合する前に決めます。ゲーム側にしか
 	// 作業コピーが無いロケールは、決めてからでないと対象に入りません。
 	//
-	// --game を省いたときに探しに行くのは edit だけです（理由はあちらの
-	// doc コメント）。見つからなくても止まらないので、ここで exitError に
-	// なるのは --game に指定した場所が外れていたときだけです。
+	// --game を省いても探しに行きます。publish と diff も同じです（理由は
+	// [resolveGameAuto] の doc コメント）。見つからなくても止まらないので、
+	// ここで exitError になるのは --game に指定した場所が外れていたときと、
+	// --game と --no-game を一緒に打たれたときだけです。
+	//
+	// 第3引数が true なのは edit だけです。探して見つからなかったときの案内を
+	// 出すかどうかで、見つからなければ読む先は1つも増えていないので、
+	// publish と diff で言う理由がありません。
 	gamePath, ok := resolveGameAuto(*game, *noGame, true, stderr)
 	if !ok {
 		return exitError
