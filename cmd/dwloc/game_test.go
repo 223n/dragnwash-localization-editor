@@ -168,7 +168,7 @@ func TestRunWithGameErrors(t *testing.T) {
 			t.Fatalf("終了コード = %d\n%s", code, stderr)
 		}
 		checkContains(t, "標準エラー", stderr,
-			[]string{"Translations/_discovered がありません", "Export game flow"})
+			[]string{"Translations/_discovered がありません", "Export working copy"})
 	})
 
 	t.Run("候補が複数なら選ばずに一覧を出す", func(t *testing.T) {
@@ -296,8 +296,8 @@ func TestEditWithoutGameKeepsGoingWhenNothingIsFound(t *testing.T) {
 		t.Errorf("作業コピーを開いたことになっている:\n%s", stdout)
 	}
 	// --game auto のときの長い案内は出さない。打っていない人への字なので、
-	// 次にやること（ゲーム内の Export game flow）まで並べない。
-	if strings.Contains(stderr, "Export game flow") {
+	// 次にやること（ゲーム内の Export working copy）まで並べない。
+	if strings.Contains(stderr, "Export working copy") {
 		t.Errorf("--game auto の案内が出ている:\n%s", stderr)
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
@@ -27,7 +27,7 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         翻訳リポジトリのルート（既定: カレントディレクトリ）
   --game <フォルダー>|auto
         ゲームに入れたプラグインのフォルダー。auto と書くと Steam の
-        ライブラリから探します。指定しないと見に行きません。
+        ライブラリから探します。指定しなくても探します。
         探し先は標準エラーへ1行出します（--format csv の
         標準出力を汚さないためです）。実際にそこから読んだかどうかは、
         ロケールごとの「作業コピー」の行に出るパスで分かります。
