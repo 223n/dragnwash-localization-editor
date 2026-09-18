@@ -34,8 +34,8 @@ const editUsage = `使い方: dwloc edit [--root <ディレクトリ>] [--game <
 ゲームのフォルダーにしかありません（リポジトリの Translations/_discovered は
 .gitignore で外してあります）。そのため edit は、--game を省いてもゲームの
 フォルダーを探します。見つからなければ、原文の欄が空のまま始めます。
-publish と diff も同じように探します（3つとも同じ探し方です。
-同じリポジトリから同じ答えが出ることを崩しません）。
+publish と diff も同じように探します（3つとも同じ探し方です）。
+その代わり、--game を省いたときの結果は実行する PC とゲームの有無で変わります。
 探させたくないときは --no-game を付けます。読み書きするのは --root の中だけに
 なります。
 読み書きするファイルは、画面の上に出します。
@@ -109,7 +109,7 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	// 打ち消しは3つとも受けます。publish と diff も --game を省いた
-	// ときに探さないので、打ち消す相手がありません。
+	// ときに探すので、打ち消す相手があります。
 	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	// diff や publish と違い、--locale は1つだけ受けます。画面に出せるのは
 	// 1ロケールで、複数を受けても最初の1つしか使えません。使わない指定を
