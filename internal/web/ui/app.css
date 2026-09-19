@@ -14,38 +14,66 @@
 */
 
 :root {
+  /* 選択欄・チェックボックス・スクロールバーも OS の配色に合わせる。 */
+  color-scheme: light dark;
+
   --bg: #f4f6f9;
   --surface: #ffffff;
   --fg: #212529;
   --muted: #5c636a;
   --line: #dee2e6;
-  --line-strong: #ced4da;
+  --line-strong: #868e96;
   --hover: #f1f3f5;
   --primary: #0b5ed7;
+  --primary-hover: #0a53be;
+  --on-primary: #ffffff;
   --primary-soft: #dbe7fb;
   --heading-section: #e8eef7;
   --heading-node: #f0f2f5;
+  --thead-bg: #f8f9fa;
 
   /*
-    状態の色。白地に対する明度差をそろえてある。地色（--todo-bg など）は
-    バッジと選ばれたチップの背景で、文字は必ず濃いほう（--todo など）で出す。
-    計測（白地）: --todo 6.8:1、--review 8.3:1、--info 8.6:1、--muted 5.9:1、
-    --primary 5.4:1（白文字を載せたときも同じ）。いずれも AA を通る。
+    状態の色。色覚の違い（P型・D型・T型）でも4つが見分けられるよう、色相と
+    明度の両方で離してある。Okabe–Ito の CUD 配色（琥珀・深紅・青・青緑）を
+    起点に、3案を独立に作って審査し、色覚シミュレーション（Machado 2009）で
+    どの組も CIEDE2000 が 10 以上、要確認と保存済み、要作業と要確認は明度差
+    （|ΔL*|）も 8 以上になるものを採った（2026-09-20）。名前を必ず出す約束は
+    そのままである。地色（--todo-bg など）はバッジと選ばれたチップの背景で、
+    文字は必ず濃いほう（--todo など）で出す。
+    計測（白地）: --todo 5.2:1、--review 10.3:1、--info 10.5:1、--saved 5.2:1、--muted 6.1:1、
+    --primary 5.8:1（--on-primary が白なので、白文字を載せた組も同じ）。地色の上でも
+    --todo 4.7:1、--review 9.1:1、--info 9.2:1、--saved 4.6:1。行の地色の上でも --todo / --row-unsaved-bg 5.0:1、
+    --review / --row-failed-bg 9.5:1、--review / --row-conflict-bg 9.7:1。いずれも AA を通る。
   */
-  --todo: #8a4b00;
-  --todo-bg: #fdf3e4;
-  --review: #9a1c1c;
-  --review-bg: #fdeaea;
-  --info: #3a4a5a;
-  --info-bg: #e9eef3;
+  --todo: #946300;
+  --todo-bg: #fef2e2;
+  --review: #870016;
+  --review-bg: #ffedeb;
+  --review-line: #a56e6c;
+  --info: #024369;
+  --info-bg: #eaf1fa;
+
+  /*
+    行の地色。未保存・保存できない・競合・編集できない行に敷く。文字はその上に
+    --todo / --review / --fg で載るので、地色は薄く保つ。明度比は上の計測に
+    含めてある（--todo / --row-unsaved-bg がいちばん薄い）。
+  */
+  --row-unsaved-bg: #fef9f0;
+  --row-failed-bg: #fff4f3;
+  --row-conflict-bg: #fff7f6;
+  --row-locked-bg: #fdf5f4;
 
   /* 保存の状態。色だけで意味を伝えないので、文字とアイコンも必ず変える。 */
-  --saved: #1b5e20;
-  --saved-bg: #e6f4e8;
-  --pending: #8a4b00;
-  --failed: #9a1c1c;
+  --saved: #2a7b56;
+  --saved-bg: #e4f7eb;
+  --pending: #946300;
+  --failed: #870016;
 
   --shadow: 0 0 1px rgba(0, 0, 0, 0.125), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --drawer-shadow: 0 0 24px rgba(0, 0, 0, 0.3);
+  /* 引き出しの右端の線。明るい配色では区切り線と同じ色で、暗い配色では枠の色。 */
+  --drawer-edge: #dee2e6;
+  --backdrop: rgba(0, 0, 0, 0.4);
   --radius: 6px;
 
   /*
@@ -66,6 +94,68 @@
   --top-gap: 8px;
   --thead-height: 2.4em;
   --sidebar-width: 300px;
+}
+
+/*
+  暗い配色。OS の設定（prefers-color-scheme）が暗いときだけ、上の変数を差し替える。
+  画面の中に切り替えは置かない。この道具は画面の状態をどこにも残さないと決めて
+  あり、切り替えを置くと覚える場所が要る。
+
+  色みは明るい配色と同じ（要作業は橙、要確認は赤、参考は青、保存済みは緑）。
+  名前を必ず出す約束もそのままなので、意味は色だけに頼っていない。
+
+  明るい側の変数を1つ残らず定義する（TestDarkSchemeRedefinesEveryToken）。
+  抜けると、その色だけ明るい配色の値が暗い画面に残る。
+
+  計測（WCAG 2.x の明度比。3案を独立に作って審査し、採ったもの）:
+    --fg / --surface 11.8:1   --muted / --surface 7.4:1   --muted / --bg 8.5:1
+    --primary / --surface 5.6:1   --on-primary / --primary 6.3:1
+    --todo / --todo-bg 7.7:1   --review / --review-bg 4.7:1
+    --info / --info-bg 5.1:1   --saved / --saved-bg 7.7:1
+    --todo / --surface 11.3:1   --review / --surface 6.9:1
+    --info / --surface 7.6:1   --saved / --surface 11.3:1
+    --todo / --row-unsaved-bg 8.1:1   --review / --row-failed-bg 4.9:1
+    枠: --line-strong / --surface 3.5:1   --review-line / --review-bg 3.5:1
+  文字はすべて AA（4.5:1）、枠は 3:1 を通る。
+
+  影は濃くする。暗い地では薄い影が消えて、札の境目が無くなる。
+*/
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191d;
+    --surface: #212529;
+    --fg: #dee2e6;
+    --muted: #adb5bd;
+    --line: #343a40;
+    --line-strong: #707986;
+    --hover: #2c3136;
+    --primary: #5c9df8;
+    --primary-hover: #78b0fa;
+    --on-primary: #0a1a33;
+    --primary-soft: #1f3a66;
+    --heading-section: #2b3648;
+    --heading-node: #2a2f35;
+    --thead-bg: #272b30;
+    --todo: #feda69;
+    --todo-bg: #4b3e28;
+    --review: #f99188;
+    --review-bg: #4e3b3b;
+    --review-line: #cf8179;
+    --info: #8ab9f2;
+    --info-bg: #37414d;
+    --row-unsaved-bg: #433b2f;
+    --row-failed-bg: #4c3736;
+    --row-conflict-bg: #4e3b3a;
+    --row-locked-bg: #443736;
+    --saved: #8df0c6;
+    --saved-bg: #2a453a;
+    --pending: #feda69;
+    --failed: #f99188;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.6);
+    --drawer-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+    --drawer-edge: #707986;
+    --backdrop: rgba(0, 0, 0, 0.6);
+  }
 }
 
 * {
@@ -224,11 +314,11 @@ button {
 .btn-primary {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
 }
 
 .btn-primary:hover {
-  background: #0a53be;
+  background: var(--primary-hover);
 }
 
 .btn-icon {
@@ -327,7 +417,7 @@ button {
 .notice.error {
   color: var(--review);
   background: var(--review-bg);
-  border-bottom: 1px solid #f1b6b6;
+  border-bottom: 1px solid var(--review-line);
 }
 
 /*
@@ -391,7 +481,7 @@ button {
   margin: 8px 16px;
   padding: 12px 16px;
   background: var(--review-bg);
-  border: 1px solid #f1b6b6;
+  border: 1px solid var(--review-line);
   border-inline-start: 4px solid var(--failed);
   border-radius: var(--radius);
 }
@@ -415,6 +505,16 @@ button {
 
 .conflict button {
   margin-inline-end: 8px;
+}
+
+/*
+  引き止めの中の素のボタン（「ファイルの訳を採る」）の枠。--line-strong のままだと
+  赤い地（--review-bg）に対して明るい配色で 2.9:1、暗い配色で 2.4:1 しかなく、
+  枠の比 3:1 を切る。--muted なら明るい配色で 5.4:1、暗い配色で 5.0:1 になる。
+  主ボタン（.btn-primary）は自分の枠色を持つので外す。
+*/
+.conflict .btn:not(.btn-primary) {
+  border-color: var(--muted);
 }
 
 .orphans-list {
@@ -563,8 +663,9 @@ button {
 
 /*
   条件の重さ（要作業／要確認／参考）。縁と文字の色だけでは伝わらない。
-  --todo #8a4b00 と --review #9a1c1c は色覚によっては近く、冒頭に書いた
-  「色だけで意味を伝えない」に反していた。件数の欄と同じように名前も出す。
+  以前の値（--todo #8a4b00 と --review #9a1c1c）は色覚によっては近く、冒頭に
+  書いた「色だけで意味を伝えない」に反していた。いまの値は色覚の違いでも
+  見分けられるよう選び直してあるが、件数の欄と同じように名前も出す。
   小さく前に置くのは、カテゴリ名のほうが読みたいものだからである。
 */
 .chip-status {
@@ -841,7 +942,7 @@ button {
   grid-template-columns: 6ch 18ch 12ch minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px 12px;
   padding: 6px 12px;
-  background: #f8f9fa;
+  background: var(--thead-bg);
   border-bottom: 2px solid var(--line);
   border-radius: var(--radius) var(--radius) 0 0;
   font-size: 12px;
@@ -939,14 +1040,19 @@ button {
   padding-top: 0.15em;
 }
 
-/* 状態バッジ。色を変えるが、名前も必ず出す（色だけで意味を伝えない）。 */
+/*
+  状態バッジ。色を変えるが、名前も必ず出す（色だけで意味を伝えない）。
+
+  折り返しを許す。列の幅（18ch）より長い名前（「タグの開閉がそろわない行」）を
+  nowrap にすると、隣の speaker 列へはみ出して文字が重なった（実機で起きた）。
+*/
 .badge {
   padding: 0 7px;
   font-size: 12px;
   line-height: 1.5;
   border: 1px solid currentColor;
   border-radius: 999px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .badge.todo {
@@ -965,7 +1071,7 @@ button {
 }
 
 .row.not-editable {
-  background: #fbf3f3;
+  background: var(--row-locked-bg);
 }
 
 /*
@@ -1017,6 +1123,22 @@ button {
 }
 
 /*
+  地色を敷いた行の訳欄の枠。--line-strong のままだと、暗い配色で --row-unsaved-bg
+  と --row-failed-bg に対して 2.5:1 しかなく、枠の比 3:1 を切る。--muted なら
+  暗い配色で 5.3:1、明るい配色で 5.7:1 になる。左の太い縁（未保存の橙、保存できない
+  の赤）はそのまま残す。
+*/
+.row.unsaved .translation[tabindex] {
+  border-color: var(--muted);
+  border-inline-start-color: var(--pending);
+}
+
+.row.save-failed .translation[tabindex] {
+  border-color: var(--muted);
+  border-inline-start-color: var(--failed);
+}
+
+/*
   競合している行の訳欄。どちらを残すか選ぶまで開かないので、tabindex を外して
   ある（app.js の rowNode）。外すと上の指定がまるごと当たらなくなり、高さと
   余白だけが消えて行が詰まるので、見た目のぶんはここで敷き直す。
@@ -1044,7 +1166,7 @@ button {
 
 /* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */
 .row.unsaved {
-  background: #fffbf0;
+  background: var(--row-unsaved-bg);
 }
 
 .row.unsaved .translation {
@@ -1052,7 +1174,7 @@ button {
 }
 
 .row.save-failed {
-  background: #fff1f1;
+  background: var(--row-failed-bg);
 }
 
 .row.save-failed .translation {
@@ -1060,7 +1182,7 @@ button {
 }
 
 .row.conflicted {
-  background: #fff6f6;
+  background: var(--row-conflict-bg);
 }
 
 /*
@@ -1124,7 +1246,13 @@ button {
     max-height: none;
     padding: 12px;
     background: var(--bg);
-    box-shadow: 0 0 24px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--drawer-shadow);
+    /*
+      右端に線を引く。暗い配色では黒い影が暗い地に沈み、幕の向こう（rgba の幕を
+      かけた一覧）との比が 1.1:1 しかなく、引き出しの端が見えない。線の色は
+      --drawer-edge で、暗い配色では枠の色（3.5:1）にしてある。
+    */
+    border-inline-end: 1px solid var(--drawer-edge);
     transform: translateX(-100%);
     transition: transform 0.2s;
     /* 帯（z-index 2）より前に出す。幕（3）よりも前。 */
@@ -1144,7 +1272,7 @@ button {
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--backdrop);
     z-index: 3;
   }
 
