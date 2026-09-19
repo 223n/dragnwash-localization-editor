@@ -35,7 +35,15 @@ const (
 	realScriptGap    = 17   // 台本に無い台詞行
 	realUnknownOrig  = 93   // 由来を判定できない行
 	realResidual     = 110  // 再生順に無い公開ハッシュキー（17 + 93）
+	// realTagUnbalanced はタグの開閉がそろわない行。全部が <size=70%> や <i> を
+	// 原文が閉じずに使っている行で、訳も同じ書き方をしている（原文とは
+	// 比べない判定なので、原文どおりでも当たる）。de と ko は少ない
+	// （realTagUnbalancedExtra）。
+	realTagUnbalanced = 53
 )
+
+// realTagUnbalancedExtra は [realTagUnbalanced] と違うロケールの件数。
+var realTagUnbalancedExtra = map[string]int{"de": 51, "ko": 52}
 
 // sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
 // CI には元リポジトリが無いので、飛ばせることが必須。
@@ -100,6 +108,7 @@ func TestRealDataCounts(t *testing.T) {
 		CatNotPublished:  realNotPublished,
 		CatScriptGap:     realScriptGap,
 		CatUnknownOrigin: realUnknownOrig,
+		CatTagUnbalanced: realTagUnbalanced,
 	}
 	for _, sum := range rep.Locales {
 		t.Run(sum.Locale, func(t *testing.T) {
@@ -113,8 +122,12 @@ func TestRealDataCounts(t *testing.T) {
 				t.Errorf("形の分からない行がある: %d", sum.BrokenRows)
 			}
 			for _, c := range categories {
-				if sum.Counts[c] != want[c] {
-					t.Errorf("%s の件数が違う: got %d, want %d", c, sum.Counts[c], want[c])
+				expect := want[c]
+				if extra, ok := realTagUnbalancedExtra[sum.Locale]; ok && c == CatTagUnbalanced {
+					expect = extra
+				}
+				if sum.Counts[c] != expect {
+					t.Errorf("%s の件数が違う: got %d, want %d", c, sum.Counts[c], expect)
 				}
 			}
 			// 3つの参考カテゴリで、再生順に無い公開キー110件をちょうど割り切る。
@@ -331,7 +344,7 @@ func TestRealDataOutputs(t *testing.T) {
 		t.Fatalf("csv で書けない: %v", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(csv.String(), "\n"), "\n")
-	if len(lines)-1 != realNotPublished+realScriptGap+realUnknownOrig {
+	if len(lines)-1 != realNotPublished+realScriptGap+realUnknownOrig+realTagUnbalanced {
 		t.Errorf("CSV の行数が違う: got %d", len(lines)-1)
 	}
 	// 作業コピーが無いので、英語原文がログへ出ることはない。

@@ -49,10 +49,23 @@
     localeLabel: document.getElementById("locale-label"),
     locale: document.getElementById("locale"),
     reload: document.getElementById("reload"),
+    /*
+      ボタンの文字。ボタンの中にはアイコンも入っているので、文字は隣の span へ
+      入れる。ボタンそのものへ textContent で入れるとアイコンが消える。
+      条件を外す・競合の2つのボタンも同じ。
+    */
+    reloadLabel: document.getElementById("reload-label"),
     rows: document.getElementById("rows"),
     saveState: document.getElementById("save-state"),
-    notice: document.getElementById("edit-notice"),
+    /* 一覧の上の案内。アイコンを隣に置いてあるので、文字は中の span に入れる。 */
+    noticeText: document.getElementById("edit-notice-text"),
     message: document.getElementById("message"),
+    /* 列の見出し。文言は目録から入れる。 */
+    colLine: document.getElementById("col-line"),
+    colStatus: document.getElementById("col-status"),
+    colSpeaker: document.getElementById("col-speaker"),
+    colSource: document.getElementById("col-source"),
+    colTranslation: document.getElementById("col-translation"),
     path: document.getElementById("file-path"),
     gamePath: document.getElementById("game-path"),
     notes: document.getElementById("notes"),
@@ -74,6 +87,8 @@
     conflictHelp: document.getElementById("conflict-help"),
     conflictKeep: document.getElementById("conflict-keep"),
     conflictTake: document.getElementById("conflict-take"),
+    conflictKeepLabel: document.getElementById("conflict-keep-label"),
+    conflictTakeLabel: document.getElementById("conflict-take-label"),
     /* 貼り付く帯そのもの。高さを測って余白へ渡すために持つ（watchTopHeight）。 */
     top: document.querySelector(".top"),
     /* 絞り込みの一帯そのもの。スラッシュの近道が画面へ送るために持つ。 */
@@ -81,6 +96,13 @@
     filterLabel: document.getElementById("filter-label"),
     filters: document.getElementById("filters"),
     filterClear: document.getElementById("filter-clear"),
+    filterClearLabel: document.getElementById("filter-clear-label"),
+    finderTitle: document.getElementById("finder-title"),
+    /* 左の列と、その開閉に使うもの（toggleSidebar を見よ）。 */
+    sidebar: document.getElementById("sidebar"),
+    menu: document.getElementById("menu"),
+    sidebarClose: document.getElementById("sidebar-close"),
+    backdrop: document.getElementById("backdrop"),
     searchLabel: document.getElementById("search-label"),
     search: document.getElementById("search"),
     finderNote: document.getElementById("finder-note"),
@@ -248,6 +270,40 @@
     return e;
   }
 
+  /*
+    アイコン。index.html の先頭に埋めた図形（<symbol id="i-…">）を指す。
+
+    svg は createElementNS で作る。createElement で作ると HTML の要素になり、
+    描かれない。名前空間は、頁に埋めてある図形の svg から読む。文字列で書くと
+    その中に URL が入り、資産に URL を1つも置かないという試験と食い違う
+    （TestAssetsHaveNoExternalReference）。
+
+    aria-hidden を付けるのは、隣の文字が名前になるからである。アイコンだけの
+    要素には、呼ぶ側が aria-label を付けること。
+  */
+  var svgNS = document.querySelector("svg").namespaceURI;
+
+  function icon(name) {
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS(svgNS, "use");
+    use.setAttribute("href", "#i-" + name);
+    svg.appendChild(use);
+    return svg;
+  }
+
+  /*
+    畳みの見出し（summary）を組む。アイコン、文言、開閉を示す山形の順。
+    summary そのものが id を持つ（TestNoticesStartFolded が見る）ので、文字だけを
+    差し替えることはできず、中身ごと組み直す。
+  */
+  function foldTitle(summary, name, text) {
+    var chev = icon("chevron-down");
+    chev.setAttribute("class", "icon chev");
+    summary.replaceChildren(icon(name), span(null, text), chev);
+  }
+
   function li(className, text) {
     var e = document.createElement("li");
     if (className) {
@@ -385,17 +441,29 @@
     document.title = t("app.title");
     el.title.textContent = t("app.title");
     el.localeLabel.textContent = t("ui.locale");
-    el.reload.textContent = t("ui.reload");
+    el.reloadLabel.textContent = t("ui.reload");
+    /*
+      左の列の開閉ボタンと閉じるボタンはアイコンだけなので、名前を属性で入れる。
+      列の見出しと列名も目録から。
+    */
+    el.menu.setAttribute("aria-label", t("ui.sidebar"));
+    el.sidebarClose.setAttribute("aria-label", t("ui.sidebar_close"));
+    el.finderTitle.textContent = t("ui.finder_title");
+    el.colLine.textContent = t("ui.col_line");
+    el.colStatus.textContent = t("ui.col_status");
+    el.colSpeaker.textContent = t("ui.col_speaker");
+    el.colSource.textContent = t("ui.col_source");
+    el.colTranslation.textContent = t("ui.edit_label");
     el.countsTitle.textContent = t("ui.counts");
     el.statsTitle.textContent = t("ui.stats");
-    el.notice.textContent = t("ui.edit_notice");
+    el.noticeText.textContent = t("ui.edit_notice");
     el.conflictTitle.textContent = t("ui.conflict_title");
     el.conflictHelp.textContent = t("ui.conflict_help");
-    el.conflictKeep.textContent = t("ui.conflict_keep_mine");
-    el.conflictTake.textContent = t("ui.conflict_take_file");
+    el.conflictKeepLabel.textContent = t("ui.conflict_keep_mine");
+    el.conflictTakeLabel.textContent = t("ui.conflict_take_file");
     el.orphansTitle.textContent = t("ui.orphans_title");
     el.filterLabel.textContent = t("ui.filter");
-    el.filterClear.textContent = t("ui.filter_clear");
+    el.filterClearLabel.textContent = t("ui.filter_clear");
     el.searchLabel.textContent = t("ui.search");
     /* 入力欄の中の案内も目録から。画面に文字列を直接書かない。 */
     el.search.setAttribute("placeholder", t("ui.search_placeholder"));
@@ -412,8 +480,8 @@
       のは、その後ろに添える「中に何が入っているか」だけ。畳んだままでも
       ファイル名が読めることが、この畳みの条件だった。
     */
-    el.finderNoteTitle.textContent = t("ui.finder_note_title");
-    el.keysTitle.textContent = t("ui.keys_title");
+    foldTitle(el.finderNoteTitle, "circle-info", t("ui.finder_note_title"));
+    foldTitle(el.keysTitle, "keyboard", t("ui.keys_title"));
     el.panelMore.textContent = t("ui.panel_more");
     /*
       文言が入ったので出す。入るまでは hidden にしてある（index.html）。
@@ -655,7 +723,7 @@
     条件1つ。選ばれているかは state.filter が持ち、組み直しても残る。
 
     重さの名前（要作業／要確認／参考）も添える。縁と文字の色だけで重さを伝えて
-    いたが、--todo #8a4b00 と --review #9a1c1c は色覚によっては近く、app.css の
+    いたが、以前の --todo #8a4b00 と --review #9a1c1c は色覚によっては近く、app.css の
     冒頭に書いた「色だけで意味を伝えない」に反していた。件数の欄は最初から
     名前を出している。名前は待ち受けが返したものをそのまま使う。
 
@@ -1023,7 +1091,15 @@
     if (!entry) {
       return;
     }
-    entry.note.textContent = text || "";
+    /*
+      アイコンを添える。編集できない行は鍵、それ以外（保存できない理由、値が
+      変わった断り）は注意の三角。競合中の新旧は rowNode が自分で組む。
+    */
+    clear(entry.note);
+    if (text) {
+      entry.note.appendChild(icon(entry.editable ? "triangle-exclamation" : "lock"));
+      entry.note.appendChild(span(null, text));
+    }
     entry.note.hidden = !text;
   }
 
@@ -1838,6 +1914,18 @@
     flush();
   }
 
+  /*
+    保存の状態に添えるアイコン。文言と色だけでなく形でも伝える。
+    回るのは saving だけ（app.css の .save-state.saving）。
+  */
+  var saveIcons = {
+    clean: "circle-check",
+    saving: "spinner",
+    pending: "floppy-disk",
+    failed: "triangle-exclamation",
+    conflict: "code-merge"
+  };
+
   function updateStatus() {
     var text = t("ui.save_clean");
     var kind = "clean";
@@ -1871,7 +1959,7 @@
       text = t("ui.save_orphans", { count: state.orphans.length });
       kind = "failed";
     }
-    el.saveState.textContent = text;
+    el.saveState.replaceChildren(icon(saveIcons[kind]), span(null, text));
     el.saveState.className = "save-state " + kind;
   }
 
@@ -2002,11 +2090,15 @@
       setShownText(entry, entry.saved);
       clear(note);
       note.hidden = false;
-      note.appendChild(span("note-label", t("ui.conflict_file") + ": "));
-      note.appendChild(span("note-value", entry.saved));
-      note.appendChild(span("note-label", " / " + t("ui.conflict_mine") + ": "));
-      note.appendChild(span("note-value", state.mine.get(line.n)));
-      note.appendChild(span("note-locked", " " + t("ui.conflict_locked")));
+      note.appendChild(icon("code-merge"));
+      /* 文はまとめて1つの span に入れる。1言は flex なので、ばらすと隙間が空く。 */
+      var body = span(null, "");
+      body.appendChild(span("note-label", t("ui.conflict_file") + ": "));
+      body.appendChild(span("note-value", entry.saved));
+      body.appendChild(span("note-label", " / " + t("ui.conflict_mine") + ": "));
+      body.appendChild(span("note-value", state.mine.get(line.n)));
+      body.appendChild(span("note-locked", " " + t("ui.conflict_locked")));
+      note.appendChild(body);
     }
     markRow(entry);
     return row;
@@ -2015,8 +2107,9 @@
   function headingNode(line) {
     var e = document.createElement("div");
     e.className = "heading " + (line.heading || "other");
+    e.appendChild(icon("hashtag"));
     /* ファイルにあるコメント行をそのまま出す。組み直さない。 */
-    e.textContent = line.text;
+    e.appendChild(span(null, line.text));
     return e;
   }
 
@@ -2242,7 +2335,63 @@
   }
 
   /*
-    一文字の近道。スラッシュで検索の欄へ移る。
+    左の列の開閉。
+
+    狭い画面（900px 以下。app.css の @media と同じ幅）では列は引き出しで、
+    開いているあいだだけ body に sidebar-open を立てる。広い画面では列を畳んで
+    一覧を広げるだけで、sidebar-collapsed を立てる。2つを分けるのは、狭い画面で
+    開いた状態を広い画面へ持ち越さないためである。幅が変わったら引き出しは閉じる。
+
+    状態はどこにも残さない。この道具は画面の状態をどこにも残さないと決めてある。
+    開き直せば列は出ている。
+
+    aria-expanded は開閉のたびに書く。ボタンが何を開閉するかは aria-controls
+    （index.html）が結んでいる。
+  */
+  var narrow = window.matchMedia("(max-width: 900px)");
+
+  function sidebarOpen() {
+    return document.body.classList.contains("sidebar-open");
+  }
+
+  function syncMenu() {
+    var expanded = narrow.matches
+      ? sidebarOpen()
+      : !document.body.classList.contains("sidebar-collapsed");
+    el.menu.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+
+  function setDrawer(open) {
+    document.body.classList.toggle("sidebar-open", open);
+    el.backdrop.hidden = !open;
+    syncMenu();
+  }
+
+  function toggleSidebar() {
+    if (narrow.matches) {
+      setDrawer(!sidebarOpen());
+      return;
+    }
+    document.body.classList.toggle("sidebar-collapsed");
+    syncMenu();
+  }
+
+  el.menu.addEventListener("click", toggleSidebar);
+  el.sidebarClose.addEventListener("click", function () {
+    setDrawer(false);
+    /* 閉じたら焦点を開いたボタンへ戻す。落とすと body へ飛ぶ。 */
+    el.menu.focus();
+  });
+  el.backdrop.addEventListener("click", function () {
+    setDrawer(false);
+  });
+  narrow.addEventListener("change", function () {
+    setDrawer(false);
+  });
+  syncMenu();
+
+  /*
+    一文字の近道。スラッシュで検索の欄へ移る。Escape で引き出しを閉じる。
 
     入力欄に焦点があるときは絶対に効かせない。効くと、訳にスラッシュが打てなく
     なる。変換中も横取りしない。修飾キーが付いているもの（Ctrl+/ など）も
@@ -2253,6 +2402,17 @@
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) {
+      return;
+    }
+    /*
+      引き出しが開いているときの Escape は、引き出しを閉じる。検索の欄に焦点が
+      あっても閉じる（欄は引き出しの中にある）。訳の入力欄の Escape は入力欄
+      自身が受けて閉じるが、引き出しは一覧の上に被さるので、両方閉じてよい。
+    */
+    if (e.key === "Escape" && sidebarOpen()) {
+      e.preventDefault();
+      setDrawer(false);
+      el.menu.focus();
       return;
     }
     if (isTyping(e.target)) {
@@ -2270,6 +2430,13 @@
         既定の送り方（入力欄そのものを画面へ入れる。一帯の余白は使わない）で
         上書きし、検索の欄が貼り付く帯の下へ潜る。
       */
+      /* 狭い画面では、先に引き出しを開く。広い画面で畳んでいれば出す。 */
+      if (narrow.matches) {
+        setDrawer(true);
+      } else {
+        document.body.classList.remove("sidebar-collapsed");
+        syncMenu();
+      }
       el.search.focus();
       el.search.select();
       if (el.finder) {

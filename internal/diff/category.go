@@ -50,7 +50,7 @@ func (s Status) id() string {
 
 // Category は報告の種別。
 //
-// 並び順がそのまま表示順になる。要作業2つ → 要確認3つ → 参考3つ。
+// 並び順がそのまま表示順になる。要作業2つ → 要確認4つ → 参考4つ。
 type Category int
 
 const (
@@ -72,13 +72,15 @@ const (
 	CatScriptGap
 	// CatUnknownOrigin は由来を判定できない公開行。
 	CatUnknownOrigin
+	// CatTagUnbalanced は訳の中のタグの開閉がそろわない行。
+	CatTagUnbalanced
 )
 
 // categories は表示順に並べた全カテゴリ。
 var categories = []Category{
 	CatUntranslated, CatLocaleGap,
 	CatVanished, CatCarryover, CatDropped, CatStrayLineID,
-	CatNotPublished, CatScriptGap, CatUnknownOrigin,
+	CatNotPublished, CatScriptGap, CatUnknownOrigin, CatTagUnbalanced,
 }
 
 // categoryInfo はカテゴリごとの固定の情報。
@@ -182,6 +184,22 @@ var categoryTable = map[Category]categoryInfo{
 		note: noteUnknownOrigin, noteID: reason.NoteUnknownOrigin,
 		detail: []string{
 			"公開ファイルだけでは UI 文言と孤児を見分けられません。",
+		},
+	},
+	CatTagUnbalanced: {
+		// note は空。行ごとに当たったタグが違うので、Finding.Note へ1件ずつ入れる
+		// （[TagBalance.Note]）。
+		//
+		// 重さは参考にしてある。原文が <size=80%> を閉じずに使う行が実データの
+		// 公開ファイルで各ロケール 51〜53 行あり、訳も同じ書き方なので毎回当たる。
+		// 要確認にすると dwloc diff の終了コードが全ロケールで常に非 0 になる。
+		// 見つけたいのは <i> の閉じ忘れのような打ち間違いで、それは画面の
+		// 絞り込み（重さに関係なく全カテゴリを出す）で拾える。
+		name: "タグの開閉がそろわない行", id: "tag_unbalanced", status: StatusInfo,
+		detail: []string{
+			"訳の中で、開始タグに対応する終了タグが無い行と、終了タグだけがある行です。",
+			"原文とは比べません。原文が閉じずに使っているタグ（<size=80%> など）も、訳が同じ書き方なら当たります。",
+			"作業コピーを読んでいるときはその行を、読んでいないときは公開ファイルの行を見ます。",
 		},
 	},
 }

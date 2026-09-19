@@ -174,6 +174,11 @@ func diffReasons(t *testing.T) []reason.Reason {
 		out = append(out, f.NoteReason)
 	}
 
+	// タグの開閉。判定は訳だけで決まるので、判定そのものを走らせて3通りを出させる。
+	for _, text := range []string{"<i>強調", "強調</i>", "<b>太字</i>"} {
+		out = append(out, diff.CheckTags(text).Note())
+	}
+
 	// 旧再生順を取り出せない理由。git を呼ばずに、番兵をそのまま返させる。
 	// ここを通すと [diff.LoadWith] の当てはめ（oldOrderReasonID）まで確かめられる。
 	fail := func(err error) diff.OldOrderSource {

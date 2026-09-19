@@ -216,7 +216,8 @@ func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.Fil
 	// 起動後に訳が入ったキーは「未翻訳」のバッジを外す。局所更新はここだけで、
 	// カテゴリの割り当てそのものは起動時のまま動かさない。
 	filled := s.filledKeys(locale)
-	badges := s.badgesByKey(cat, findings, filled)
+	tags := s.tagStates(locale)
+	badges := s.badgesByKey(cat, findings, filled, tags)
 
 	lines := file.Lines()
 	resp.Lines = make([]lineView, 0, len(lines))
@@ -307,8 +308,11 @@ func keyKind(value string) string {
 // 同じキーが同じカテゴリで2回出ることがある（引き継ぎ候補は行ごとに候補が付く）。
 // バッジは「その行に何が当たっているか」を示すものなので、カテゴリで重複を消す。
 // 数を知りたいときのために件数は別に出してあるので、ここで数えなおさない。
+//
+// tags は起動後に保存した行のタグの判定（[server.tagStates]）。入っている行は、
+// 起動時の「タグの開閉がそろわない行」のバッジを落とし、いまの判定で付け直す。
 func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
-	filled map[string]struct{}) map[string][]badgeView {
+	filled map[string]struct{}, tags map[string]tagState) map[string][]badgeView {
 
 	out := make(map[string][]badgeView)
 	seen := make(map[string]map[string]struct{})
@@ -332,6 +336,13 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
 				continue
 			}
 		}
+		if f.Category == diff.CatTagUnbalanced {
+			if _, touched := tags[f.Key]; touched {
+				// 起動後に保存した行。いまの訳での判定のほうを使うので、
+				// 起動時のバッジはここで落とす。付け直すのはこの下。
+				continue
+			}
+		}
 		seen[f.Key][id] = struct{}{}
 		out[f.Key] = append(out[f.Key], badgeView{
 			Category: id,
@@ -345,6 +356,29 @@ func (s *server) badgesByKey(cat *Catalog, findings []diff.Finding,
 			// 画面から消える。消えるのは落ちるより悪いので、ここで拾う。
 			// 入れ忘れそのものは TestFindingNotesCarryTheirReason が落とす。
 			Note: s.findingNote(cat, f),
+		})
+	}
+	// 起動後に保存した行のうち、いまの訳でタグの開閉がそろっていない行。
+	// 起動時に当たっていたかどうかに関わらず、いまの判定で付ける。注記も
+	// いまの訳のものになる（直しかけて別のタグが残った行では、当たっている
+	// タグが起動時と違う）。
+	tagID := diff.CatTagUnbalanced.ID()
+	for k, st := range tags {
+		if !st.bad {
+			continue
+		}
+		if seen[k] == nil {
+			seen[k] = make(map[string]struct{})
+		}
+		if _, dup := seen[k][tagID]; dup {
+			continue
+		}
+		seen[k][tagID] = struct{}{}
+		out[k] = append(out[k], badgeView{
+			Category: tagID,
+			Label:    s.categoryLabel(cat, diff.CatTagUnbalanced),
+			Status:   diff.CatTagUnbalanced.Status().ID(),
+			Note:     s.reasonText(cat, st.note),
 		})
 	}
 	return out
@@ -420,6 +454,15 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary,
 					view.Count = 0
 				}
 			}
+			if view.Judged && c == diff.CatTagUnbalanced {
+				// 起動後に保存した行のぶんだけ動かす。直した行を引き、壊した行を
+				// 足す。判定は保存した行の訳だけで済むので、ここは再判定である
+				// （[editOverlay]）。
+				view.Count = view.Count + s.tagDelta(locale)
+				if view.Count < 0 {
+					view.Count = 0
+				}
+			}
 			// 引いたあとで比べる。badgesByKey も訳が入ったキーのバッジを落として
 			// いるので、局所更新のあいだも2つの数は同じだけ減る。ここを引く前に
 			// 置くと、1行訳すたびに「食い違っている」と言い出す。
@@ -474,7 +517,7 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		// 手がかりが1バイトも出なかった。
 		notes = append(notes, s.cat.T(cat, "note.via_publish", "path", s.displayPath(target.Output)))
 	}
-	if s.untranslatedFilled(locale) > 0 {
+	if s.untranslatedFilled(locale) > 0 || s.tagsTouched(locale) > 0 {
 		// 件数を局所更新したことを断る。できないこと（カテゴリの再判定）を
 		// 黙っていると、翻訳者は画面の数字を publish 後の状態だと読む。
 		notes = append(notes, s.cat.T(cat, "note.counts_local"))

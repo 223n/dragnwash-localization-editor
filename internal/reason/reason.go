@@ -144,6 +144,20 @@ const (
 // NoteLocaleGap は他のロケールにあってこのロケールに無いこと。置換は count。
 const NoteLocaleGap = "note_locale_gap"
 
+// タグの開閉がそろわない行の注記（internal/diff の TagBalance.Note）。
+//
+// 置換は tags（当たったタグを空白で連ねたもの）。両方あるときだけ unclosed と
+// unopened に分かれる。3つに分けてあるのは、片方が空のときに「開始の無い
+// 終了タグ: 」のような見出しだけを画面に残さないためである。
+const (
+	// NoteTagUnclosed は開始があるのに終了が無いタグがあること。置換は tags。
+	NoteTagUnclosed = "note_tag_unclosed"
+	// NoteTagUnopened は終了だけがあるタグがあること。置換は tags。
+	NoteTagUnopened = "note_tag_unopened"
+	// NoteTagUnclosedUnopened は両方あること。置換は unclosed と unopened。
+	NoteTagUnclosedUnopened = "note_tag_unclosed_unopened"
+)
+
 // 保存できない理由（internal/edit の file.go）。
 const (
 	// EditNoHeader はヘッダー行が無いこと。
@@ -201,6 +215,8 @@ var all = []string{
 	NoteCarryMoved, NoteCarryCopied, NoteCarryCopiedUnknown,
 
 	NoteLocaleGap,
+
+	NoteTagUnclosed, NoteTagUnopened, NoteTagUnclosedUnopened,
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
