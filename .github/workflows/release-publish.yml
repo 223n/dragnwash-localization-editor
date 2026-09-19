@@ -166,7 +166,7 @@ jobs:
           dwloc ${VERSION}
 
           Drag'n Wash の翻訳リポジトリを扱うコマンドです。
-          この書庫には、実行ファイルと LICENSE とこの説明が入っています。
+          この書庫には、実行ファイルと LICENSE と THIRD_PARTY_NOTICES.md とこの説明が入っています。
 
           いちばん簡単な始め方:
             dwloc を翻訳リポジトリのフォルダー（Translations と同じ場所）へ置いて、
@@ -221,6 +221,8 @@ jobs:
               ./cmd/dwloc
 
             cp LICENSE "${dir}/LICENSE"
+            # 画面のアイコン（Font Awesome Free、CC BY 4.0）の帰属表示。書庫にも入れる
+            cp THIRD_PARTY_NOTICES.md "${dir}/THIRD_PARTY_NOTICES.md"
             cp dist/README.txt "${dir}/README.txt"
 
             # tar.gz は権限をそのまま保つ。ランナーの umask に左右されないよう、ここで明示する。
