@@ -101,7 +101,7 @@
     "ui.keys_title": "キー操作",
     "ui.keys_help": "訳の欄で Enter を押すと、確定して次の行の入力欄が開きます。Escape は入力欄を閉じるだけです。Tab でも次の行へ移れます。入力欄の外でスラッシュを押すと検索の欄へ移ります。変換中のキーは横取りしません。変換を確定した直後の Enter も、行送りには使いません（確定しただけで次の行へ飛ばないようにするためです）。出ている最後の行では、閉じずにその行に留まります。",
 
-    "note.counts_local": "件数は起動時の判定です。訳を入れた行のぶんだけ未翻訳から引いていますが、ほかのカテゴリは判定し直していません。数え直すには dwloc edit を起動し直してください。",
+    "note.counts_local": "件数は起動時の判定です。訳を入れた行のぶんだけ未翻訳から引き、保存した行のタグの開閉だけ判定し直していますが、ほかのカテゴリは判定し直していません。数え直すには dwloc edit を起動し直してください。",
     "note.working_read": "作業コピー: {path}",
     "note.working_none": "作業コピーがありません（{path}）。未翻訳と publish で捨てられる行は判定できません。",
     "note.working_skipped": "作業コピーを読んでいません（{path}）。",
@@ -129,6 +129,7 @@
     "category.not_published": "どのロケールにも訳が無い行",
     "category.script_gap": "台本に無い台詞行",
     "category.unknown_origin": "由来を判定できない行",
+    "category.tag_unbalanced": "タグの開閉がそろわない行",
 
     "reason.judge_working_not_read": "作業コピーを読んでいません",
     "reason.judge_working_missing": "作業コピーがありません",
@@ -154,6 +155,9 @@
     "reason.note_carry_copied": "引き継ぎ先 {target}（複製。旧キーは {live} で生きているので、この行の訳は残してください）",
     "reason.note_carry_copied_unknown": "引き継ぎ先 {target}（複製。旧キーは 別の行 で生きているので、この行の訳は残してください）",
     "reason.note_locale_gap": "他の {count} ロケールにあります",
+    "reason.note_tag_unclosed": "閉じていないタグ: {tags}",
+    "reason.note_tag_unopened": "開始の無い終了タグ: {tags}",
+    "reason.note_tag_unclosed_unopened": "閉じていないタグ: {unclosed}／開始の無い終了タグ: {unopened}",
     "reason.edit_no_header": "ヘッダー行が無い（空のファイルか、コメントと空行だけのファイル）",
     "reason.edit_bad_header": "{line}行目のヘッダーが {text} で、受理される4種のいずれでもない（key,section,node,order,speaker,translation / key,speaker,translation / key,translation / key,section,node,order,speaker,source_en,translation）",
     "reason.edit_not_record": "この行はレコードとして読まれない",

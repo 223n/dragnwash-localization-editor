@@ -12,6 +12,7 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // maxRowsBody は POST /api/rows の本文の上限。
@@ -205,11 +206,15 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		s.markFilled(target.Locale, line.Key(), line.Translation() != "")
+		// タグの開閉は保存した訳だけで判定し直せる（原文と比べない）。
+		// 起動時の判定を、この行についてだけいまの訳で上書きする。
+		s.markTags(target.Locale, line.Key(), diff.CheckTags(line.Translation()))
 	}
 
 	sum := s.summary(target.Locale)
 	filled := s.filledKeys(target.Locale)
-	badges := s.badgesByKey(cat, s.findings[target.Locale], filled)
+	tags := s.tagStates(target.Locale)
+	badges := s.badgesByKey(cat, s.findings[target.Locale], filled, tags)
 	for i := range out.results {
 		if line, ok := out.file.Line(out.results[i].Line); ok {
 			out.results[i].Badges = badges[line.Key()]
@@ -474,9 +479,14 @@ func hasSourceColumn(header []string) bool {
 
 // editOverlay は起動後の局所更新を持つ。
 //
-// 持つのは「訳が入ったキー」だけである。カテゴリの再判定はしない。判定し直すには
-// 13ロケール全部を読むことになり、1回の自動保存でやる処理ではない。できないことは
-// 画面の断り書き（note.counts_local）で正直に伝える。
+// 持つのは「訳が入ったキー」と「保存した行のタグの開閉」の2つだけである。
+// ほかのカテゴリの再判定はしない。判定し直すには 13ロケール全部を読むことになり、
+// 1回の自動保存でやる処理ではない。できないことは画面の断り書き
+// （note.counts_local）で正直に伝える。
+//
+// タグの開閉だけ判定し直すのは、その判定が保存した行の訳だけで決まるからである
+// （[diff.CheckTags]。原文とも他のロケールとも比べない）。判定そのものは
+// internal/diff のものをそのまま呼ぶので、ここに判断は増えていない。
 type editOverlay struct {
 	mu sync.Mutex
 	// untranslated は起動時に「未翻訳」と判定されたキー。ロケール名で引く。
@@ -484,13 +494,100 @@ type editOverlay struct {
 	// filled は起動後に訳が入ったキー。ロケール名で引く。
 	// 訳を消したときはここから外れるので、件数は両方向に動く。
 	filled map[string]map[string]struct{}
+	// tagged は起動時に「タグの開閉がそろわない行」と判定されたキー。
+	// 件数をどちらへ動かすか（直したのか、壊したのか）を決めるために持つ。
+	tagged map[string]map[string]struct{}
+	// tags は起動後に保存した行の、いまの訳での判定。触った行だけ入る。
+	// 起動時の判定をこの行についてだけ上書きするので、直せば外れ、壊せば付く。
+	tags map[string]map[string]tagState
+}
+
+// tagState は起動後に保存した行の、タグの開閉のいまの判定。
+type tagState struct {
+	// bad は開閉がそろっていないか。
+	bad bool
+	// note は bad のときの注記（[diff.TagBalance.Note]）。バッジに添える。
+	note reason.Reason
 }
 
 func newEditOverlay() *editOverlay {
 	return &editOverlay{
 		untranslated: make(map[string]map[string]struct{}),
 		filled:       make(map[string]map[string]struct{}),
+		tagged:       make(map[string]map[string]struct{}),
+		tags:         make(map[string]map[string]tagState),
 	}
+}
+
+// addTagged は起動時の「タグの開閉がそろわない行」を控える。
+func (o *editOverlay) addTagged(locale, key string) {
+	if key == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.tagged[locale] == nil {
+		o.tagged[locale] = make(map[string]struct{})
+	}
+	o.tagged[locale][key] = struct{}{}
+}
+
+// markTags は保存した行のタグの開閉を控える。
+//
+// そろっている行も控える。起動時に当たっていた行を直したときは、「もう当たら
+// ない」ことを覚えていないと起動時のバッジが残る。
+func (s *server) markTags(locale, key string, b diff.TagBalance) {
+	if key == "" {
+		return
+	}
+	o := s.overlay
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.tags[locale] == nil {
+		o.tags[locale] = make(map[string]tagState)
+	}
+	o.tags[locale][key] = tagState{bad: !b.Balanced(), note: b.Note()}
+}
+
+// tagStates は起動後に保存した行のタグの判定の写しを返す。
+func (s *server) tagStates(locale string) map[string]tagState {
+	o := s.overlay
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := make(map[string]tagState, len(o.tags[locale]))
+	for key, st := range o.tags[locale] {
+		out[key] = st
+	}
+	return out
+}
+
+// tagsTouched は起動後にタグの判定をし直した行の数を返す。
+func (s *server) tagsTouched(locale string) int {
+	o := s.overlay
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.tags[locale])
+}
+
+// tagDelta は「タグの開閉がそろわない行」の件数を、起動時からどれだけ動かすかを返す。
+//
+// 起動時に当たっていた行を直せば 1 減り、当たっていなかった行を壊せば 1 増える。
+// 当たっていた行を別の形で壊したままなら動かない。
+func (s *server) tagDelta(locale string) int {
+	o := s.overlay
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := 0
+	for key, st := range o.tags[locale] {
+		_, was := o.tagged[locale][key]
+		switch {
+		case was && !st.bad:
+			n--
+		case !was && st.bad:
+			n++
+		}
+	}
+	return n
 }
 
 // addUntranslated は起動時の「未翻訳」を控える。
