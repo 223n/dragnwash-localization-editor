@@ -498,6 +498,12 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 		add(CatUntranslated, workingFinding(idx, work.untranslated[k]))
 	}
 
+	// タグの開閉。訳だけを見るので、作業コピーが無くても判定できる。見る行は
+	// publish の入力になる側（作業コピーがあればそれ、無ければ公開ファイル）。
+	for _, f := range tagFindings(idx, loc) {
+		add(CatTagUnbalanced, f)
+	}
+
 	// 母集合からこのロケールの公開ハッシュキーを引いた残り。
 	for k := range union {
 		if _, have := mine[k]; have {
