@@ -225,6 +225,12 @@ func newServer(opt Options) (*server, error) {
 			// 積のぶんだけ件数から引く。引くだけで、カテゴリの再判定はしない。
 			s.overlay.addUntranslated(f.Locale, f.Key)
 		}
+		if f.Category == diff.CatTagUnbalanced {
+			// 「タグの開閉がそろわない行」のキーも控えておく。こちらは保存した
+			// 行だけ判定し直す（訳だけで判定できるので、他のロケールを読まない）。
+			// 起動時の集合は、件数をどちらへ動かすかを決めるために持つ。
+			s.overlay.addTagged(f.Locale, f.Key)
+		}
 	}
 
 	if err := s.loadAssets(); err != nil {
