@@ -363,9 +363,16 @@ func TestSearchStaysInThePage(t *testing.T) {
 			}
 		}
 	}
+	// 書き出し（fetchCsv）だけは JSON でない応答を受けるので getJSON を通らない。
+	// 行き先は字面で見る。組み立てに入るのはロケール名と形の2つで、どちらも
+	// 待ち受けが数えあげた値との完全一致を通る（internal/web の handleExport）。
+	if !strings.Contains(js, `var url = "/api/export?locale=" + encodeURIComponent(state.locale) +`) {
+		t.Error("書き出しの行き先が /api/export の字面で組まれていない")
+	}
 	// 要求を組み立てる場所そのものが増えていないことも見る。
-	if got := strings.Count(js, "fetch("); got != 2 {
-		t.Errorf("fetch( が %d 箇所ある。要求は getJSON と postJSON の2か所だけにする", got)
+	// いまの3つは getJSON・postJSON・fetchCsv である。
+	if got := strings.Count(js, "fetch("); got != 3 {
+		t.Errorf("fetch( が %d 箇所ある。要求は getJSON と postJSON と fetchCsv の3か所だけにする", got)
 	}
 	// URL とブラウザーの控えに残す経路。1つでもあれば検索語がそこへ残りうる。
 	//

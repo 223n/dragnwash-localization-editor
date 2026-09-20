@@ -194,7 +194,7 @@ func (s *server) writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// noteRequest は記録に足す1言を入れる。--verbose でないときは何もしない。
+// noteRequest は記録に足す1言を入れる。記録していないときは何もしない。
 //
 // 足してよいのはロケール名と件数だけ。行の中身はここを通らない。
 func noteRequest(w http.ResponseWriter, format string, args ...any) {

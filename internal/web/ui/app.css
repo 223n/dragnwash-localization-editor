@@ -286,7 +286,8 @@ body {
 
 select,
 button,
-input {
+input,
+textarea {
   font: inherit;
   padding: 5px 8px;
   border: 1px solid var(--line-strong);
@@ -1153,15 +1154,69 @@ button {
   border-color: var(--muted);
 }
 
+/*
+  差し込む入力欄。textarea なので、出ている側の欄（.row .translation[tabindex]）と
+  同じ寸法・同じ折り返しにそろえる。そろえないと、打ち始めた瞬間に行の高さが
+  跳ねる。高さは app.js が中身に合わせて伸ばす（fitEditor）。
+
+  resize を切るのは、隅を引いて伸び縮みさせられると fitEditor の測り直しと
+  食い違うためである。overflow-y は hidden にしない。窓の幅が変わったのに
+  測り直せていない場面で、字が切れて見えなくなる。送りの棒が出るほうがよい。
+*/
 .editor {
+  display: block;
   width: 100%;
+  min-height: 2em;
   padding: 2px 8px;
   border: 1px solid var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
   outline: none;
+  resize: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
   /* 差し込んだ入力欄も、焦点が入る要素なので同じ余白を持たせる。 */
   scroll-margin-top: calc(var(--top-height, 10em) + var(--thead-height) + var(--top-gap));
   scroll-margin-bottom: 3em;
+}
+
+/*
+  書き出しの一帯。2つの選び方を縦に積み、それぞれの下に「何が出てくるか」を
+  添える。ボタンの名前だけでは、公開ファイルの形といま直しているファイルの
+  違いが読めない。
+
+  ボタンは列の幅いっぱいにする。左の列は狭く、2つを横に並べると文言が折り返って
+  どちらが何だか分からなくなる。
+*/
+.export-choice + .export-choice {
+  margin-top: 12px;
+}
+
+.export-choice .btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.export-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/*
+  結果の1行。うまくいったときとそうでないときで色を変えるが、色だけに頼らない
+  （文言がそのまま理由になっている）。空のときは余白ごと消す。
+*/
+.export-state {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.export-state:empty {
+  margin: 0;
+}
+
+.export-state.bad {
+  color: var(--failed);
 }
 
 /* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */

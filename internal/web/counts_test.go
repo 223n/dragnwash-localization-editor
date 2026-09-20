@@ -543,7 +543,7 @@ func TestDuplicateKeyRowsLoseTheBadgeTogether(t *testing.T) {
 }
 
 // TestNoticesStartFolded は、近道の一覧・絞り込みの断り書き・起動したときの
-// 状態の一帯が、どれも畳んだ状態で始まることを見る。
+// 状態の一帯・書き出しが、どれも畳んだ状態で始まることを見る。
 //
 // 実測（実データの ja、1721行）で、2つとも開くと一覧の始まりが 1280幅で
 // 671.0px → 821.3px、375幅で 1212.6px → 1669.9px まで下がる。読むのは1度で
@@ -565,8 +565,8 @@ func TestNoticesStartFolded(t *testing.T) {
 			t.Errorf("%s に見出し（summary）が無い。畳むと何が入っているか読めない", id)
 		}
 	}
-	if n := strings.Count(html, ` class="fold" hidden>`); n != 3 {
-		t.Errorf("畳みが %d 個。近道の一覧・絞り込みの断り書き・起動したときの状態の3つのはず", n)
+	if n := strings.Count(html, ` class="fold" hidden>`); n != 4 {
+		t.Errorf("畳みが %d 個。近道の一覧・絞り込みの断り書き・起動したときの状態・書き出しの4つのはず", n)
 	}
 	if strings.Contains(html, `class="fold" open`) || strings.Contains(html, "<details open") {
 		t.Error("畳みが開いた状態で始まっている")
@@ -582,6 +582,7 @@ func TestNoticesStartFolded(t *testing.T) {
 		"el.keysFold.hidden = false;",
 		"el.finderFold.hidden = false;",
 		"el.panelFold.hidden = false;",
+		"el.exportFold.hidden = false;",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js に %q が無い。文言が入っても畳みが出てこない", want)
