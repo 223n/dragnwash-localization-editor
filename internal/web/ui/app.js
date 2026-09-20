@@ -815,9 +815,23 @@
     });
   }
 
-  /* 入力欄。頁に1つだけ作り、いま触っている行へ差し込む。 */
-  var editor = document.createElement("input");
-  editor.type = "text";
+  /*
+    入力欄。頁に1つだけ作り、いま触っている行へ差し込む。
+
+    textarea にしてあるのは、欄の幅に収まらない訳を折り返して全部見せるため
+    である。input だと1行へ流れ、打っている場所の前後しか見えない。出ている
+    側の欄（.value）は white-space: pre-wrap で折り返しているので、input の
+    ままだと、打ち始めた瞬間に見え方まで変わることになる。
+
+    値が複数行になる道は開けていない。Enter は行送りに使っており（keydown で
+    preventDefault）、貼り付けも改行を空白へ置き換える（sanitize）。textarea に
+    したのは折り返しのためだけで、internal/edit が CR / LF を含む値を拒む
+    という前提はそのままである。
+
+    高さは中身に合わせて伸ばす（fitEditor）。rows は伸ばす前の下限にあたる。
+  */
+  var editor = document.createElement("textarea");
+  editor.rows = 1;
   editor.className = "cell translation editor notranslate";
   /*
     綴り検査を切る。ブラウザーの綴り検査は、内蔵翻訳と同じく入力の中身を
@@ -831,6 +845,38 @@
   editor.setAttribute("autocapitalize", "off");
   editor.setAttribute("autocomplete", "off");
   editor.setAttribute("translate", "no");
+
+  /*
+    入力欄の高さを中身に合わせる。
+
+    textarea は rows で決まった高さのままなので、折り返して増えたぶんは自分で
+    伸ばすしかない。いったん auto へ戻してから scrollHeight を測るのは、戻さ
+    ないと前の高さが下限として残り、字を消しても縮まないためである。
+
+    枠線のぶんを足すのを忘れないこと。この頁は * { box-sizing: border-box } な
+    ので、height に入れた値は枠線を含んだ高さになる。一方 scrollHeight は枠線を
+    含まない。そのまま入れると内側が枠線のぶんだけ足りず、折り返した訳に2pxの
+    送りの棒が出る（実際に出た。clientHeight 92 に対して scrollHeight 94）。
+
+    頁に差し込んだあとでしか測れない。幅が決まっていなければ、どこで折り返すかも
+    決まらない。
+  */
+  function fitEditor() {
+    if (!editor.parentNode) {
+      return;
+    }
+    editor.style.height = "auto";
+    var style = window.getComputedStyle(editor);
+    var border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    editor.style.height = editor.scrollHeight + (border || 0) + "px";
+  }
+
+  /*
+    窓の幅が変わったら測り直す。折り返す位置が変わるので、開いたままにして
+    おくと高さが合わなくなる。合わないぶんは overflow-y: auto が引き受けるが、
+    1行の欄に送りの棒が出るのは見た目がよくない。
+  */
+  window.addEventListener("resize", fitEditor);
 
   /*
     訳に入れられない字を落とす。
@@ -1168,6 +1214,11 @@
       blur が走って閉じてしまう（実際に起きた）。
     */
     entry.row.insertBefore(editor, entry.value);
+    /*
+      焦点より先に高さを決める。focus はこの欄を画面へ入れようとするので、
+      あとから伸ばすと、送った先が実際の欄の位置とずれる。
+    */
+    fitEditor();
     editor.focus();
     entry.value.hidden = true;
     if (leaving !== null && leaving !== n) {
@@ -1266,6 +1317,8 @@
       editor.value = clean;
       editor.setSelectionRange(caret, caret);
     }
+    /* 折り返しが1行増えた（減った）ぶんを追う。 */
+    fitEditor();
     var entry = state.rows.get(n);
     if (entry) {
       setShownText(entry, clean);

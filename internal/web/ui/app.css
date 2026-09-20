@@ -286,7 +286,8 @@ body {
 
 select,
 button,
-input {
+input,
+textarea {
   font: inherit;
   padding: 5px 8px;
   border: 1px solid var(--line-strong);
@@ -1153,12 +1154,26 @@ button {
   border-color: var(--muted);
 }
 
+/*
+  差し込む入力欄。textarea なので、出ている側の欄（.row .translation[tabindex]）と
+  同じ寸法・同じ折り返しにそろえる。そろえないと、打ち始めた瞬間に行の高さが
+  跳ねる。高さは app.js が中身に合わせて伸ばす（fitEditor）。
+
+  resize を切るのは、隅を引いて伸び縮みさせられると fitEditor の測り直しと
+  食い違うためである。overflow-y は hidden にしない。窓の幅が変わったのに
+  測り直せていない場面で、字が切れて見えなくなる。送りの棒が出るほうがよい。
+*/
 .editor {
+  display: block;
   width: 100%;
+  min-height: 2em;
   padding: 2px 8px;
   border: 1px solid var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
   outline: none;
+  resize: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
   /* 差し込んだ入力欄も、焦点が入る要素なので同じ余白を持たせる。 */
   scroll-margin-top: calc(var(--top-height, 10em) + var(--thead-height) + var(--top-gap));
   scroll-margin-bottom: 3em;
