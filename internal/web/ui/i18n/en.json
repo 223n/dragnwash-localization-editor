@@ -39,7 +39,8 @@
     "error.row_moved": "This row has shifted. A different key now sits on that line number, so nothing was written. Please reload.",
     "error.unknown_form": "That is not a form this can write out.",
     "error.export_failed": "Could not write it out. No file was made.",
-    "error.export_would_lose": "Writing this form out would lose {count} translations that are in the committed file. Not a byte was written. Run dwloc publish to see which rows.",
+    "error.export_would_lose": "Writing this form out would leave {count} translations from the committed file out of the new output. Not a byte was written. This happens when committed rows are missing from the working copy (the \"dropped by publish\" count looks at the working copy instead, so it can stay at 0). In the game, press F1 then Translation then Export working copy to make the working copy again. Run dwloc publish to see which rows.",
+    "error.export_would_roll_back": "The translations installed in the game are older, so nothing was written out. {count} translations differ between the game and the committed file. The working copy carries those older translations, so writing this form out would roll back newer commits. Put the latest translations into the game, then make the working copy again.",
 
     "warn.value_normalized": "The saved value differs from what you typed. The value in the file is shown.",
 

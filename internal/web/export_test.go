@@ -192,3 +192,102 @@ func TestExportIsRecorded(t *testing.T) {
 		}
 	}
 }
+
+// newGameWithBase はゲーム側のフォルダーを作る。
+//
+// 置くのは2つ。ゲームに入っている公開ファイル（土台）と、その上で Mod が
+// 書き出した作業コピーである。この2つが揃って初めて Target.GameBase が埋まり、
+// [publish.CheckBase] が働く。
+func newGameWithBase(t *testing.T, base, working string) string {
+	t.Helper()
+	game := t.TempDir()
+	for rel, body := range map[string]string{
+		filepath.Join("Translations", "ja", "strings.csv"):             base,
+		filepath.Join("Translations", "_discovered", "ja.working.csv"): working,
+	} {
+		path := filepath.Join(game, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return game
+}
+
+func TestExportRefusesToRollBackNewerCommits(t *testing.T) {
+	// publish が書く前に見る守りは2つある。訳が失われること（CheckLoss）と、
+	// ゲームに入っている翻訳が古いこと（CheckBase）である。後者を通さないと、
+	// 訳は消えないまま古い版へ静かに巻き戻ったCSVを書き出せてしまう。
+	// 巻き戻りは CheckLoss では捕まらない。訳は消えておらず、書き換わっただけである。
+	//
+	// 実際に起きた: 実データで dwloc publish は「ゲームに入っている翻訳が古い」で
+	// 止まるのに、画面の書き出しはそこを見ずに先の「訳が失われる」を出していた。
+	base := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		// 土台はコミット済みより古い訳を持つ（repo は「もしもし？」）。
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+		"",
+	}, "\n")
+	working := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+		keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！",
+		keyVanished + ",L01 Ryan,Ryan_1_intro,3,Ryan," + jaVanished,
+		keyUI + ",UI,,,UI,設定",
+		"",
+	}, "\n")
+	game := newGameWithBase(t, base, working)
+	s := newTestServer(t, Options{Game: game, UILang: "ja"})
+
+	rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("状態コードが %d、409 を期待:\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "巻き戻") {
+		t.Errorf("巻き戻りの文面になっていない: %q", rec.Body.String())
+	}
+	// 行の中身は出さない。件数だけで足りる。
+	if strings.Contains(rec.Body.String(), "もしもし") {
+		t.Errorf("誤りの文面に訳が出ている: %q", rec.Body.String())
+	}
+
+	// 編集中のファイルのままなら出せること。止めるのは publish の形のときだけで、
+	// 書き出し全部ではない。
+	rec = do(t, s, http.MethodGet, "/api/export?locale=ja&form=working", true, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("編集中のファイルの書き出しまで止めている: %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "ja.working.csv") {
+		t.Errorf("作業コピーの名前になっていない: %q", got)
+	}
+}
+
+func TestExportChecksTheBaseBeforeTheLosses(t *testing.T) {
+	// 守りの順番も publish と同じにする。両方に当たる状態で失われる訳のほうを
+	// 先に出すと、同じ状態に対して画面と publish が別の理由を言う。直し方は
+	// 別（片方はゲームへ入れ直す、もう片方は作業コピーを作り直す）なので、
+	// 順番が違うと人が別の場所を直しにいく。
+	base := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+		"",
+	}, "\n")
+	// 作業コピーは1行しかない。このまま出せば訳も失われる。
+	working := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+		"",
+	}, "\n")
+	game := newGameWithBase(t, base, working)
+	s := newTestServer(t, Options{Game: game, UILang: "ja"})
+
+	rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("状態コードが %d、409 を期待:\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "巻き戻") {
+		t.Errorf("土台の食い違いより先に、失われる訳を出している: %q", rec.Body.String())
+	}
+}

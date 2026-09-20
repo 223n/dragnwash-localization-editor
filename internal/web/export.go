@@ -28,6 +28,7 @@ Content-Disposition: attachment を付けるだけで、どこへ書くかは知
 
 	published   dwloc publish が作るのと同じCSV。キーがハッシュになり、行の
 	            並びが台本の順になる。そのままリポジトリへ入れられる形。
+	            publish が書く前に見る守りを、同じ順で同じだけ通る。
 	working     いま書き込んでいるファイルをそのまま写したもの。作業コピーが
 	            あればそれ、無ければ公開ファイル自身になる。
 */
@@ -108,6 +109,34 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 	out, _, err := publish.BuildTarget(data, *target)
 	if err != nil {
 		return nil, "", err
+	}
+
+	/*
+		ゲーム側の作業コピーを入力にしたときは、その作業コピーが建っている土台が
+		コミット済みとそろっているかを先に見る。
+
+		ずれていると、訳は消えないまま古い版へ巻き戻る。下の [publish.CheckLoss] は
+		これを捕まえられない。訳は消えておらず、書き換わっただけだからである。
+
+		順番も publish と同じにする（cmd/dwloc の runPublish は、組み立て →
+		土台の食い違い → 失われる訳、の順で見る）。順番が違うと、同じ状態に
+		対して画面と publish が別の理由を出す。
+	*/
+	if target.GameBase != "" {
+		current, err := os.ReadFile(target.Output)
+		if err != nil {
+			return nil, "", err
+		}
+		drift, err := publish.CheckBase(*target, current)
+		if err != nil {
+			return nil, "", err
+		}
+		if drift.Count > 0 {
+			// 件数だけを返す。どの行かは訳そのものなので画面へ出さない。
+			http.Error(w, s.cat.T(cat, "error.export_would_roll_back",
+				"count", strconv.Itoa(drift.Count)), http.StatusConflict)
+			return nil, "", nil
+		}
 	}
 
 	losses, err := publish.CheckTargetLoss(*target, out)
