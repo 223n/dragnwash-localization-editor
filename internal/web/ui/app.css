@@ -1179,6 +1179,46 @@ button {
   scroll-margin-bottom: 3em;
 }
 
+/*
+  書き出しの一帯。2つの選び方を縦に積み、それぞれの下に「何が出てくるか」を
+  添える。ボタンの名前だけでは、公開ファイルの形といま直しているファイルの
+  違いが読めない。
+
+  ボタンは列の幅いっぱいにする。左の列は狭く、2つを横に並べると文言が折り返って
+  どちらが何だか分からなくなる。
+*/
+.export-choice + .export-choice {
+  margin-top: 12px;
+}
+
+.export-choice .btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.export-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/*
+  結果の1行。うまくいったときとそうでないときで色を変えるが、色だけに頼らない
+  （文言がそのまま理由になっている）。空のときは余白ごと消す。
+*/
+.export-state {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.export-state:empty {
+  margin: 0;
+}
+
+.export-state.bad {
+  color: var(--failed);
+}
+
 /* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */
 .row.unsaved {
   background: var(--row-unsaved-bg);
