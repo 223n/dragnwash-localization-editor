@@ -75,16 +75,35 @@ type Options struct {
 	IdleTimeout time.Duration
 	// NoBrowser が true ならブラウザーを開かない。
 	NoBrowser bool
-	// Verbose が true なら要求を1行ずつ記録する。
+	// Verbose が true なら要求を1行ずつ画面へ記録する。
 	//
 	// 記録するのはメソッド・パス・状態コード・所要時間・ロケール名・件数だけ。
 	// 原文と訳は既定でも --verbose でも書かない。
+	//
+	// Record だけが入っているときも同じ1行を組み立てる。違うのは行き先で、
+	// --verbose は画面へ、Record はファイルへ向かう。
 	Verbose bool
 
 	// Stdout は URL とトークンの行き先。nil なら os.Stdout。
 	Stdout io.Writer
 	// Stderr は記録の行き先。nil なら os.Stderr。
 	Stderr io.Writer
+	// HideFromRecord は記録から伏せたい文字列を渡す先。nil なら何もしない。
+	//
+	// 最初の1回の URL にはトークンが載っており、その URL は画面に出す。呼び出し側が
+	// 画面をログファイルへも束ねているので、何もしなければトークンがファイルに残る。
+	// 要求の記録からトークンを落としている（[server.logger] の doc）のと同じ理由で、
+	// ファイルにも残さない。渡すのはトークンが決まった直後で、URL を出すより前。
+	HideFromRecord func(secret string)
+	// Record は要求の記録だけを受け取る行き先。nil なら画面の外へは記録しない。
+	//
+	// --verbose を付けなくても要求を残したい先（ログファイル）のために開けてある。
+	// --verbose のときはこちらを使わず Stderr へ書く。呼び出し側が Stderr を
+	// ログファイルにも束ねているので、両方へ書くとファイルに二重に入る。
+	//
+	// 書く中身は --verbose のときと1文字も変わらない。ファイルだからといって
+	// 原文と訳は書かない。不具合の報告にそのまま貼れるものにしておく。
+	Record io.Writer
 
 	// oldOrder は1つ前の版の再生順を返す関数。nil なら [diff.GitOldOrder]。
 	//
@@ -134,6 +153,8 @@ type server struct {
 
 	stdout io.Writer
 	stderr io.Writer
+	// record は要求の記録だけの行き先。--verbose でないときに使う。
+	record io.Writer
 
 	// stop は待ち受けを終えるための合図。暇で終わるときに閉じる。
 	stop     chan struct{}
@@ -183,6 +204,7 @@ func newServer(opt Options) (*server, error) {
 		idle:      newIdleTracker(),
 		stdout:    opt.Stdout,
 		stderr:    opt.Stderr,
+		record:    opt.Record,
 		stop:      make(chan struct{}),
 	}
 
@@ -241,6 +263,10 @@ func newServer(opt Options) (*server, error) {
 		return nil, err
 	}
 	s.token = token
+	// URL を出すより前に伏せさせる。あとからでは、出したあとの行に間に合わない。
+	if opt.HideFromRecord != nil {
+		opt.HideFromRecord(token)
+	}
 	return s, nil
 }
 
