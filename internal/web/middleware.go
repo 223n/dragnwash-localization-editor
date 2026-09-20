@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -32,7 +33,7 @@ const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 
 //
 //  1. 守りのヘッダー   どの応答にも付ける。404 にも付ける。
 //  2. panic からの復帰 行の中身を漏らさずに 500 を返す。
-//  3. 記録            --verbose のときだけ。中身は書かない。
+//  3. 記録            --verbose かログファイルがあるときだけ。中身は書かない。
 //  4. Host の検査      通す綴りの完全一致だけ。
 //  5. Sec-Fetch の検査 同一生成元だけ。
 //  6. トークンと Cookie  無ければ 404。
@@ -110,17 +111,18 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// logger は要求を1行ずつ記録する。--verbose のときだけ。
+// logger は要求を1行ずつ記録する。--verbose かログファイルがあるときだけ。
 //
 // 書くのはメソッド・パス・状態コード・所要時間と、ハンドラーが足した1言
 // （ロケール名と件数）だけ。
 //
 // パスは r.URL.Path で、問い合わせ文字列は書かない。最初の1回の URL には
 // トークンが載っているので、そのまま書くと記録からトークンが読める。
-// 原文と訳は既定でも --verbose でも書かない。
+// 原文と訳は既定でも --verbose でもログファイルでも書かない。
 func (s *server) logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.opt.Verbose {
+		out := s.recordTo()
+		if out == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -130,9 +132,22 @@ func (s *server) logger(next http.Handler) http.Handler {
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
-		s.logf("%s %s %d %s%s", r.Method, r.URL.Path, sw.status,
+		fmt.Fprintf(out, "dwloc edit: %s %s %d %s%s\n", r.Method, r.URL.Path, sw.status,
 			time.Since(start).Round(time.Millisecond), sw.note)
 	})
+}
+
+// recordTo は要求の記録の行き先を返す。記録しないときは nil。
+//
+// --verbose のときは画面（標準エラー）へ書く。呼び出し側がそこをログファイルへも
+// 束ねているので、1回書けば画面とファイルの両方に入る。--verbose でないときは
+// ログファイルだけへ書く。行き先を2つに分けてどちらへも書くと、--verbose の
+// ときにファイルへ同じ行が2度入る。
+func (s *server) recordTo() io.Writer {
+	if s.opt.Verbose {
+		return s.stderr
+	}
+	return s.record
 }
 
 // logf は記録を標準エラーへ1行書く。

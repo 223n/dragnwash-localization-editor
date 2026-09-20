@@ -84,8 +84,9 @@ publish は回しません。保存は「触った行の最終フィールドだ
   --no-browser
         ブラウザーを自動で開きません。URL は標準出力に出ます。
   --verbose
-        要求を1行ずつ記録します。書くのはメソッド・パス・状態コード・
-        所要時間・ロケール名・件数だけです。原文と訳は書きません。
+        要求を1行ずつ画面にも出します。付けなくても同じ記録は
+        logs/dwloc_<日付>.log に残ります。書くのはメソッド・パス・
+        状態コード・所要時間・ロケール名・件数だけで、原文と訳は書きません。
 
 状態バッジと件数は dwloc diff と同じ判定です。起動したときに1回だけ
 突き合わせ、その結果を画面に出します。判定できていないものは「0 件」ではなく
@@ -187,6 +188,12 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		Verbose:     *verbose,
 		Stdout:      stdout,
 		Stderr:      stderr,
+		// --verbose を付けていなくても、要求の記録はログファイルへ残します。
+		// 画面は今までどおり静かなままで、あとから辿れる手がかりだけが増えます。
+		Record: record,
+		// トークンはログファイルに残しません。最初の1回の URL に載っており、
+		// その URL は画面に出るためです。
+		HideFromRecord: hideFromRecord,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "dwloc: %v\n", err)
