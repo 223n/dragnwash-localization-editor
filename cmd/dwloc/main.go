@@ -15,6 +15,10 @@
 // この3段に分けているのは、CIが「検証に落ちた」と「そもそも実行できなかった」を
 // 区別できるようにするためです。元実装の check-translations.py は前者だけを1で返し、
 // 後者はトレースバックで落ちていました（移植仕様「形式検証 / 未決の点」）。
+//
+// 画面に出したものは logs/dwloc_<日付>.log にも残します（internal/logfile）。
+// 翻訳者にコマンドの出力を貼り直してもらうより、その日のファイルを添えてもらう
+// ほうが確実だからです。原文と訳は書きません。
 package main
 
 import (
@@ -28,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/gamedir"
+	"github.com/223n/dragnwash-localization-editor/internal/logfile"
 )
 
 // version は表示する版。既定は "dev" で、リリース時は次のように差し替えます。
@@ -87,12 +92,65 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
       （diff --strict では要作業でも 1 になります）
   2   実行時のエラー（引数の誤り、ファイルが読めない、など）
 
+記録:
+  画面に出したものを logs/dwloc_<日付>.log にも残します。1日1ファイルで、
+  同じ日の実行は追記します。古いファイルは消しません。不具合を知らせるときは
+  その日のファイルを添えてください。原文と訳は書きません。
+
 サブコマンドごとの説明は dwloc <サブコマンド> --help で表示します。
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(mainWithRecord())
 }
+
+// mainWithRecord は記録をファイルへ残しながら run を呼び、終了コードを返します。
+//
+// main から切り離してあるのは os.Exit のためです。os.Exit は defer を走らせない
+// ので、ファイルを閉じる場所が要ります。閉じ忘れると、改行で終わっていない
+// 最後の1行が落ちます。
+func mainWithRecord() int {
+	w, err := logfile.Open(logfile.Dir)
+	if err != nil {
+		// 記録を始められなくても本体は動かします。翻訳の作業は記録が無くても
+		// 進められる一方、ここで止めると「logs を作れない場所では使えない道具」
+		// になります。読み取り専用の場所へ置かれることは十分あります。
+		fmt.Fprintf(os.Stderr, "dwloc: 記録を残せません（%v）。このまま続けます。\n", err)
+		return run(os.Args[1:], os.Stdout, os.Stderr)
+	}
+
+	// 実行の区切りはファイルにだけ入れます。1日分を追記していくので、
+	// どこからが今回の実行かが読めるようにします。画面には出しません。
+	fmt.Fprintf(w, "=== dwloc %s %s（%s/%s）===\n",
+		version, strings.Join(os.Args[1:], " "), runtime.GOOS, runtime.GOARCH)
+
+	// 要求の記録は、--verbose を付けていなくてもファイルにだけ残します。
+	// 画面をうるさくせずに、不具合の報告から辿れる手がかりを増やします。
+	record = w
+	hideFromRecord = w.Hide
+
+	// 画面が先、記録が後。io.MultiWriter は最初の失敗でそこから先をやめるので、
+	// この順なら記録が書けなくなっても画面には出ます。
+	code := run(os.Args[1:], io.MultiWriter(os.Stdout, w), io.MultiWriter(os.Stderr, w))
+
+	if err := w.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "dwloc: 記録を書けませんでした（%v）\n", err)
+	}
+	return code
+}
+
+// record は要求の記録だけを受け取る行き先です。nil なら記録しません。
+//
+// 画面には出さず、ログファイルにだけ残すためにあります。変数にしてあるのは
+// run のシグネチャを変えないためで、stdin と startEdit が同じ理由で変数です。
+// 試験では nil のままなので、記録の経路は試験の出力に混ざりません。
+var record io.Writer
+
+// hideFromRecord は記録から伏せたい文字列を渡す先です。nil なら何もしません。
+//
+// record と別の変数にしてあるのは、型付きの nil を避けるためです。*logfile.Writer を
+// そのまま io.Writer の変数に入れると、nil でも「nil でない io.Writer」になります。
+var hideFromRecord func(secret string)
 
 // run は引数を解釈してサブコマンドへ渡し、終了コードを返します。
 //
