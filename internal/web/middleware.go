@@ -46,6 +46,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /app.js", s.handleAsset("/app.js"))
 	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("GET /api/lines", s.handleLines)
+	mux.HandleFunc("GET /api/export", s.handleExport)
 	mux.HandleFunc("POST /api/rows", s.handleRows)
 
 	return s.securityHeaders(s.recoverer(s.logger(s.checkHost(s.checkFetchSite(

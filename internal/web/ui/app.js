@@ -77,6 +77,17 @@
     */
     panelFold: document.getElementById("panel-fold"),
     panelMore: document.getElementById("panel-more"),
+    /* 書き出しの畳みと、その中の2つのボタン（exportCsv を見よ）。 */
+    exportFold: document.getElementById("export-fold"),
+    exportTitle: document.getElementById("export-title"),
+    exportHelp: document.getElementById("export-help"),
+    exportPublished: document.getElementById("export-published"),
+    exportPublishedLabel: document.getElementById("export-published-label"),
+    exportPublishedNote: document.getElementById("export-published-note"),
+    exportWorking: document.getElementById("export-working"),
+    exportWorkingLabel: document.getElementById("export-working-label"),
+    exportWorkingNote: document.getElementById("export-working-note"),
+    exportState: document.getElementById("export-state"),
     countsTitle: document.getElementById("counts-title"),
     counts: document.getElementById("counts"),
     statsTitle: document.getElementById("stats-title"),
@@ -171,6 +182,8 @@
     searchTimer: null,
     saving: false,
     saveError: false,
+    /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
+    exporting: false,
     timer: null,
     retry: 0,
     /*
@@ -482,6 +495,12 @@
     */
     foldTitle(el.finderNoteTitle, "circle-info", t("ui.finder_note_title"));
     foldTitle(el.keysTitle, "keyboard", t("ui.keys_title"));
+    foldTitle(el.exportTitle, "floppy-disk", t("ui.export_title"));
+    el.exportHelp.textContent = t("ui.export_help");
+    el.exportPublishedLabel.textContent = t("ui.export_published");
+    el.exportPublishedNote.textContent = t("ui.export_published_note");
+    el.exportWorkingLabel.textContent = t("ui.export_working");
+    el.exportWorkingNote.textContent = t("ui.export_working_note");
     el.panelMore.textContent = t("ui.panel_more");
     /*
       文言が入ったので出す。入るまでは hidden にしてある（index.html）。
@@ -493,6 +512,7 @@
     */
     el.keysFold.hidden = false;
     el.finderFold.hidden = false;
+    el.exportFold.hidden = false;
     /*
       「1行もありません」はここでは入れない。applyView が、出す行が0のときだけ
       入れて、そうでないときは空にする。中身の入れ替えで出し入れするので、
@@ -1553,10 +1573,10 @@
       確定したら compositionend から onInput が時計を引き直す。
     */
     if (state.composing) {
-      return;
+      return Promise.resolve();
     }
     if (state.saving || state.mine || state.pending.size === 0) {
-      return;
+      return Promise.resolve();
     }
     var edits = [];
     var sent = new Map();
@@ -1582,7 +1602,13 @@
     var gen = state.gen;
     state.saving = true;
     updateStatus();
-    postJSON("/api/rows", {
+    /*
+      送り終わりを返す。書き出し（exportCsv）が、送っていない訳を落としたまま
+      ファイルを読まないようにするためだけにある。ほかの呼び出し側はどこも
+      戻り値を見ていないので、返すようにしても振る舞いは変わらない。
+      失敗も下の catch が受け止めるので、ここが投げっぱなしになることは無い。
+    */
+    return postJSON("/api/rows", {
       locale: state.locale,
       baseVersion: state.version,
       edits: edits
@@ -1609,6 +1635,160 @@
         scheduleRetry();
         updateStatus();
       });
+  }
+
+  /*
+    書き出し。いま開いているロケールのCSVを、翻訳者が選んだ場所へ保存させる。
+
+    置き場を決めるのはブラウザーである。ここが行うのは、待ち受けから中身を
+    受け取って、ブラウザーへ「これを保存して」と渡すところまでで、保存先の
+    パスはどこにも作らないし、待ち受けへも送らない。画面からパスを受け取る
+    経路を開けると、そこが待ち受けの中でいちばん弱い場所になる。
+
+    先に未保存を送りきる。待ち受けはファイルを読んで書き出すので、送っていない
+    訳は書き出したものに入らない。押した時点の画面と、保存されたファイルの
+    中身が違うのは、この道具がいちばんやってはいけないことである。
+  */
+  function exportCsv(form) {
+    if (!state.locale || state.exporting) {
+      return;
+    }
+    /*
+      開いている入力欄を閉じ、打った訳を未保存の控えへ入れる。ボタンを押した
+      時点で blur は走っているが、走らない経路（キーボードでたどり着いた場合）を
+      当てにしない。
+    */
+    closeEditor();
+    state.exporting = true;
+    updateExportButtons();
+    setExportState("", false);
+
+    flush().then(function () {
+      if (state.saving || state.pending.size > 0) {
+        /*
+          まだ送り終わっていない。待って勝手に書き出すのではなく、押し直して
+          もらう。待つ作りにすると、押したのに何も起きない時間ができる。
+        */
+        setExportState(t("ui.export_wait"), true);
+        return null;
+      }
+      return fetchCsv(form)
+        .then(function (got) {
+          return saveCsv(got.blob, got.name);
+        })
+        .then(function (saved) {
+          if (saved) {
+            setExportState(t("ui.export_done"), false);
+          } else {
+            /* 人が保存ダイアログを閉じた。何も無かったことにする。 */
+            setExportState("", false);
+          }
+        })
+        .catch(function (err) {
+          setExportState(err && err.message ? err.message : t("ui.export_failed"), true);
+        });
+    }).then(function () {
+      state.exporting = false;
+      updateExportButtons();
+    });
+  }
+
+  /* 書き出しの結果を、ボタンのすぐ下に出す。押した場所の近くで答える。 */
+  function setExportState(text, bad) {
+    el.exportState.textContent = text ? text : "";
+    el.exportState.className = bad ? "export-state bad" : "export-state";
+  }
+
+  function updateExportButtons() {
+    el.exportPublished.disabled = state.exporting;
+    el.exportWorking.disabled = state.exporting;
+  }
+
+  /*
+    中身を取りにいく。誤りのときは本文が理由そのものなので、そのまま投げる。
+    状態コードだけを出しても、翻訳者には直しようがない。
+  */
+  function fetchCsv(form) {
+    var url = "/api/export?locale=" + encodeURIComponent(state.locale) +
+      "&form=" + encodeURIComponent(form);
+    return fetch(url, { credentials: "same-origin" }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (text) {
+          throw new Error(text ? text.trim() : t("ui.export_failed"));
+        });
+      }
+      var name = nameFromDisposition(res.headers.get("Content-Disposition"));
+      return res.blob().then(function (blob) {
+        return { blob: blob, name: name };
+      });
+    });
+  }
+
+  /*
+    Content-Disposition から名前を取る。待ち受けが付ける名前は
+    [A-Za-z0-9._-] だけなので（internal/web の exportName）、当てるのも
+    その形に限る。当たらなければ決め打ちにする。応答の文字列がそのまま
+    ファイル名になる道を作らない。
+  */
+  function nameFromDisposition(value) {
+    var found = value ? /filename="([A-Za-z0-9._-]+)"/.exec(value) : null;
+    return found ? found[1] : "strings.csv";
+  }
+
+  /*
+    保存先をブラウザーに決めさせる。
+
+    showSaveFilePicker があれば「名前を付けて保存」が出るので、フォルダーも
+    名前もその場で選べる。無いブラウザーでは <a download> に落ちる。そちらは
+    ブラウザーが決めた落とし先へ入る。
+
+    人がダイアログを閉じたとき（AbortError）は false を返す。「書き出しました」と
+    言わないのが大事で、言えば、どこにも無いファイルを探しにいかせることになる。
+  */
+  function saveCsv(blob, name) {
+    if (!window.showSaveFilePicker) {
+      return Promise.resolve(downloadCsv(blob, name));
+    }
+    return window.showSaveFilePicker({
+      suggestedName: name,
+      types: [{ accept: { "text/csv": [".csv"] } }]
+    }).then(function (handle) {
+      return handle.createWritable().then(function (stream) {
+        return stream.write(blob).then(function () {
+          return stream.close();
+        });
+      }).then(function () {
+        return true;
+      });
+    }, function (err) {
+      if (err && err.name === "AbortError") {
+        return false;
+      }
+      /*
+        ダイアログを出せなかった。押してから中身が届くまでの間に、ブラウザーが
+        「人の操作から続いている」と見なす時間が切れることがある。決まった
+        落とし先へ入れるほうへ戻す。何も保存されないよりはよい。
+      */
+      return downloadCsv(blob, name);
+    });
+  }
+
+  function downloadCsv(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    /*
+      すぐ剥がすと、保存が始まる前に中身が消える実装がある。少し置いてから
+      捨てる。置いてあるあいだもブラウザーの中だけで、外へは出ない。
+    */
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 60000);
+    return true;
   }
 
   function onSaved(res, sent) {
@@ -2575,6 +2755,12 @@
         });
         el.conflictKeep.addEventListener("click", keepMine);
         el.conflictTake.addEventListener("click", takeFile);
+        el.exportPublished.addEventListener("click", function () {
+          exportCsv("published");
+        });
+        el.exportWorking.addEventListener("click", function () {
+          exportCsv("working");
+        });
         window.addEventListener("beforeunload", function (e) {
           if (!hasUnsaved()) {
             return;

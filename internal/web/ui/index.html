@@ -347,6 +347,48 @@
           </div>
         </div>
       </details>
+      <!--
+        書き出し。いま開いているロケールのCSVを、好きな場所へ保存させる。
+
+        「ファイル」の畳みと同じ一帯に置く。どちらも「いま直しているのがどの
+        ファイルか」の話で、離して置くと、上に出ている名前と、ここで書き出す
+        中身が別物に見える。
+
+        畳んでおく。押すのは作業が一区切りしたときだけで、開いたままだと
+        条件の一帯が列の中でスクロールアウトする。ほかの畳みと同じく hidden で
+        始め、文言が入ったら出す（app.js の applyCatalog）。空の summary は、
+        名前を持たない焦点の止まり場になる。
+      -->
+      <details id="export-fold" class="fold" hidden>
+        <summary id="export-title"></summary>
+        <div class="fold-body">
+          <p id="export-help" class="notice keys"></p>
+          <div class="export-choice">
+            <button id="export-published" class="btn" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
+              <span id="export-published-label"></span>
+            </button>
+            <p id="export-published-note" class="export-note"></p>
+          </div>
+          <div class="export-choice">
+            <button id="export-working" class="btn" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-floppy-disk"/></svg>
+              <span id="export-working-label"></span>
+            </button>
+            <p id="export-working-note" class="export-note"></p>
+          </div>
+        </div>
+      </details>
+      <!--
+        書き出しの結果。畳みの外に置く。中に置くと、閉じているあいだ支援技術の
+        木から外れて告知されない（counts_test.go の assertFoldsHoldNoLiveRegion）。
+        押すのは畳みを開いているときだけなので、中でも読めはするが、告知する欄を
+        畳める場所に置く作りそのものを残さない。
+
+        #message と同じく hidden は出し入れせず、中身の入れ替えで出し入れする
+        （空のときは app.css の .export-state:empty が余白を落とす）。
+      -->
+      <p id="export-state" class="export-state" role="status"></p>
     </section>
   </aside>
   <!-- 引き出しの後ろの幕。狭い画面で引き出しが開いているあいだだけ出す。押すと閉じる。 -->
