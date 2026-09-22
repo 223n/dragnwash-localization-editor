@@ -1,3 +1,7 @@
 # 除外の書き方は .gitignore と違い、ディレクトリごと外すときは末尾を /** にする
 node_modules/**
 docs/port-spec.md
+
+# 英語版の文書。textlint の規則は日本語向けで、英語の一文一行は文字数の上限に掛かる
+*.en.md
+**/*.en.md
