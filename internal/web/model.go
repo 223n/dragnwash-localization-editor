@@ -536,6 +536,13 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 	default:
 		notes = append(notes, s.cat.T(cat, "note.working_none", "path", s.displayPath(sum.WorkingPath)))
 	}
+	if sum.HasLayoutRisks {
+		// 読めたときだけ言う。無いほうが普通（ゲーム内でレイアウトの検査を
+		// 押したときだけ書かれる）なので、無いことをここで毎回断らない。
+		// 判定していないことはカテゴリのチップが言う。
+		notes = append(notes, s.cat.T(cat, "note.layout_risks_read",
+			"path", s.displayPath(sum.LayoutRisksPath)))
+	}
 	if !sum.OrderKeys || !sum.OrderLineIDs {
 		notes = append(notes, s.cat.T(cat, "note.order_unreadable"))
 	}

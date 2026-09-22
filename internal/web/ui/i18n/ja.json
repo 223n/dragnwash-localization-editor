@@ -122,6 +122,7 @@
 
     "note.counts_local": "件数は起動時の判定です。訳を入れた行のぶんだけ未翻訳から引き、保存した行のタグの開閉だけ判定し直していますが、ほかのカテゴリは判定し直していません。数え直すには dwloc edit を起動し直してください。",
     "note.working_read": "作業コピー: {path}",
+    "note.layout_risks_read": "はみ出しの記録: {path}",
     "note.working_none": "作業コピーがありません（{path}）。未翻訳と publish で捨てられる行は判定できません。",
     "note.working_skipped": "作業コピーを読んでいません（{path}）。",
     "note.order_unreadable": "再生順を読めていません。台本から消えた行などは判定しません。",

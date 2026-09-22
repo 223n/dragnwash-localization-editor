@@ -121,6 +121,7 @@
     "ui.keys_help": "In a translation cell, Enter commits and opens the next row. Escape only closes the input. Tab also moves to the next row. Press slash outside an input to jump to the search box. Keys are never taken over while composing. The Enter that commits a composition is not used to advance either, so that committing alone never jumps to the next row. On the last row shown, Enter keeps the input open and stays there. On a narrow screen, slash opens the side column first.",
 
     "note.counts_local": "Counts come from the check at startup. Rows you translated are subtracted from Untranslated, and the tag balance of rows you saved is re-checked, but no other category is re-judged. Restart dwloc edit to recount.",
+    "note.layout_risks_read": "Overflow record: {path}",
     "note.working_read": "Working copy: {path}",
     "note.working_none": "No working copy ({path}). Untranslated rows and rows dropped by publish cannot be judged.",
     "note.working_skipped": "The working copy was not read ({path}).",
