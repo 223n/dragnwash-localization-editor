@@ -66,10 +66,10 @@ func TestGitOldOrderSkipsSideBranch(t *testing.T) {
 // mergeOrResolve は branch をマージする。衝突したら want で解決してコミットする。
 func mergeOrResolve(t *testing.T, root, branch, want string) {
 	t.Helper()
+	// merge も commit と同じく裏で git maintenance run --auto を起こす。
+	// 詳しくは oldorder_test.go の gitTestOpts にある。
 	cmd := exec.Command("git",
-		"-c", "user.name=dwloc test",
-		"-c", "user.email=dwloc@example.invalid",
-		"merge", "--no-ff", "-m", "Merge "+branch, branch)
+		append(gitTestOpts(), "merge", "--no-ff", "-m", "Merge "+branch, branch)...)
 	cmd.Dir = root
 	if err := cmd.Run(); err == nil {
 		return

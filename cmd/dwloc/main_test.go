@@ -57,6 +57,28 @@ func runCLI(args ...string) (code int, stdout, stderr string) {
 	return code, out.String(), errOut.String()
 }
 
+// gitTestOpts は、テストで動かす git に与える設定を返す。
+//
+// 名前とメールは、手元の git 設定に依らないために与える。
+//
+// gc.auto と maintenance.auto は、commit や merge が裏で起こす
+// 「git maintenance run --auto」を止めるために与える。この子プロセスは
+// gc.autoDetach の既定（true）で本体から分離するため、テストの本体が
+// 終わったあとも .git へ書き続けることがある。t.TempDir の後片付け
+// （RemoveAll）と競ると、中身を消したあとのディレクトリへ書き戻され、
+// 「directory not empty」で落ちる。CI で実際に起きた。
+//
+// 呼ぶたびに新しいスライスを返す。共有のスライスに append すると、
+// 呼び出しごとに同じ配列を書き換えてしまう。
+func gitTestOpts() []string {
+	return []string{
+		"-c", "user.name=dwloc test",
+		"-c", "user.email=dwloc@example.invalid",
+		"-c", "gc.auto=0",
+		"-c", "maintenance.auto=false",
+	}
+}
+
 // makeTree は一時ディレクトリに files を書き、そのルートを返す。
 // キーはルートからの相対パスで、区切りは常にスラッシュで書く。
 func makeTree(t *testing.T, files map[string]string) string {
