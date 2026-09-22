@@ -179,6 +179,15 @@ func diffReasons(t *testing.T) []reason.Reason {
 		out = append(out, diff.CheckTags(text).Note())
 	}
 
+	// 原文とタグの構成。こちらも原文と訳の2つで決まるので、判定を直に走らせる。
+	for _, tc := range [][2]string{
+		{"<i>emphasis</i>", "強調"},           // 原文にあって訳に無い
+		{"emphasis", "<i>強調</i>"},           // 訳にあって原文に無い
+		{"<size=70%>hint", "<size=60%>ヒント"}, // 両方
+	} {
+		out = append(out, diff.CompareTags(tc[0], tc[1]).Note())
+	}
+
 	// 旧再生順を取り出せない理由。git を呼ばずに、番兵をそのまま返させる。
 	// ここを通すと [diff.LoadWith] の当てはめ（oldOrderReasonID）まで確かめられる。
 	fail := func(err error) diff.OldOrderSource {

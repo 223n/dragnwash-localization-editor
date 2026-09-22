@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -175,4 +176,214 @@ func findingOf(t *testing.T, rep *Report, c Category) Finding {
 	}
 	t.Fatalf("%s の Finding が無い", c)
 	return Finding{}
+}
+
+func TestCompareTags(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		trans   string
+		missing []string
+		extra   []string
+	}{
+		{name: "どちらもタグが無い", source: "Hello", trans: "こんにちは"},
+		{name: "そろっている", source: "<i>Hello</i>", trans: "<i>こんにちは</i>"},
+		// TextMeshPro は入れ違いを直して描くので、並びは違いにしない。
+		{name: "並びが違うだけ", source: "<b><i>a</i></b>", trans: "<i><b>あ</b></i>"},
+		{name: "訳に無い", source: "<i>Hello</i>", trans: "こんにちは",
+			missing: []string{"<i>", "</i>"}},
+		{name: "訳に余る", source: "Hello", trans: "<i>こんにちは</i>",
+			extra: []string{"<i>", "</i>"}},
+		{name: "値を書き換えた", source: "<size=70%>hint", trans: "<size=60%>ヒント",
+			missing: []string{"<size=70%>"}, extra: []string{"<size=60%>"}},
+		{name: "数が足りない", source: "<i>a</i><i>b</i>", trans: "<i>あb</i>",
+			missing: []string{"<i>", "</i>"}},
+		{name: "大文字小文字は同じタグ", source: "<I>a</I>", trans: "<i>あ</i>"},
+		{name: "閉じ括弧の前の空白は同じタグ", source: "<i >a</i>", trans: "<i>あ</i>"},
+		{name: "値の大文字小文字も同じタグ", source: `<gradient="Gold">a</gradient>`,
+			trans: `<gradient="gold">あ</gradient>`},
+		{name: "自分で閉じるタグも数える", source: "a<br/>b", trans: "あb",
+			missing: []string{"<br/>"}},
+		{name: "綴りは書かれたまま返す", source: "<SIZE=70%>a", trans: "あ",
+			missing: []string{"<SIZE=70%>"}},
+		// 実データの原文にある書き方。開閉はそろっていないが、訳が同じ書き方なら
+		// 構成はそろっている（そちらは [CheckTags] の担当）。
+		{name: "原文が閉じずに使うタグ", source: "<size=80%>hint", trans: "<size=80%>ヒント"},
+		{name: "タグに見えないもの", source: "a < b", trans: "あ < い"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CompareTags(tt.source, tt.trans)
+			if !slices.Equal(got.Missing, tt.missing) {
+				t.Errorf("Missing: got %q, want %q", got.Missing, tt.missing)
+			}
+			if !slices.Equal(got.Extra, tt.extra) {
+				t.Errorf("Extra: got %q, want %q", got.Extra, tt.extra)
+			}
+			if got.Same() != (len(tt.missing) == 0 && len(tt.extra) == 0) {
+				t.Errorf("Same が %v", got.Same())
+			}
+		})
+	}
+}
+
+func TestTagDiffNote(t *testing.T) {
+	tests := []struct {
+		name string
+		d    TagDiff
+		id   string
+		text string
+	}{
+		{name: "そろっている", d: TagDiff{}, id: "", text: ""},
+		{
+			name: "訳に無い", d: TagDiff{Missing: []string{"<i>", "</i>"}},
+			id: reason.NoteTagMissing, text: "原文にあって訳に無いタグ: <i> </i>",
+		},
+		{
+			name: "訳に余る", d: TagDiff{Extra: []string{"<b>"}},
+			id: reason.NoteTagExtra, text: "訳にあって原文に無いタグ: <b>",
+		},
+		{
+			name: "両方", d: TagDiff{Missing: []string{"<size=70%>"}, Extra: []string{"<size=60%>"}},
+			id:   reason.NoteTagMissingExtra,
+			text: "原文にあって訳に無いタグ: <size=70%>／訳にあって原文に無いタグ: <size=60%>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.d.Note()
+			if got.ID != tt.id || got.Text != tt.text {
+				t.Errorf("got %q / %q, want %q / %q", got.ID, got.Text, tt.id, tt.text)
+			}
+		})
+	}
+}
+
+// タグを含む原文と、そのキー。CSVに直接書くので引用符とカンマは使わない。
+var (
+	srcEmph = "<i>Wonderful!</i>"
+	srcHint = "<size=70%>(hint)"
+	keyEmph = key.For(srcEmph)
+	keyHint = key.For(srcHint)
+)
+
+// TestCompareTagMismatch は、原文とタグの構成が違う行がカテゴリとして出ること、
+// 原文が要るので作業コピーが無ければ判定しないことを見る。
+func TestCompareTagMismatch(t *testing.T) {
+	t.Run("作業コピーが無いときは判定しない", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv": orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader +
+				keyEmph + ",L01 Ryan,Ryan_1_intro,1,Ryan,すばらしい\n",
+		}, false)
+		rep := Compare(repo, nil)
+
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 0 {
+			t.Errorf("公開ファイルには原文が無いのに判定した: got %d", got)
+		}
+		if rep.Locales[0].JudgeBlockReason(CatTagMismatch).Empty() {
+			t.Error("判定できない理由が空。0件と区別が付かない")
+		}
+	})
+
+	t.Run("原文にあるタグが訳に無い", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyEmph + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcEmph + ",すばらしい\n",
+		}, true)
+		rep := Compare(repo, nil)
+
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 1 {
+			t.Fatalf("件数が違う: got %d, want 1", got)
+		}
+		if rep.Status() != StatusReview {
+			t.Errorf("要確認のはず: got %s", rep.Status())
+		}
+		f := findingOf(t, rep, CatTagMismatch)
+		if f.Key != keyEmph {
+			t.Errorf("キーが違う: got %s, want %s", f.Key, keyEmph)
+		}
+		if f.Note != "原文にあって訳に無いタグ: <i> </i>" || f.NoteReason.ID != reason.NoteTagMissing {
+			t.Errorf("注記が違う: %q / %q", f.Note, f.NoteReason.ID)
+		}
+		if f.Section != "L01 Ryan" || f.Speaker != "Ryan" {
+			t.Errorf("位置が写っていない: %+v", f)
+		}
+	})
+
+	t.Run("値を書き換えた行は両方に出る", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyHint + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHint + ",<size=60%>（ヒント）\n",
+		}, true)
+		rep := Compare(repo, nil)
+
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 1 {
+			t.Fatalf("件数が違う: got %d, want 1", got)
+		}
+		f := findingOf(t, rep, CatTagMismatch)
+		if f.NoteReason.ID != reason.NoteTagMissingExtra {
+			t.Errorf("注記が違う: %q", f.NoteReason.ID)
+		}
+	})
+
+	t.Run("構成がそろっていれば出ない", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyEmph + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcEmph + ",<i>すばらしい</i>\n",
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 0 {
+			t.Errorf("原文どおりの訳で当たった: got %d", got)
+		}
+	})
+
+	t.Run("訳が空の行は見ない", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyEmph + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcEmph + ",\n",
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 0 {
+			t.Errorf("未翻訳の行をタグの話として数えた: got %d", got)
+		}
+		if got := counts(t, rep, "ja")[CatUntranslated]; got != 1 {
+			t.Errorf("未翻訳として出ていない: got %d", got)
+		}
+	})
+
+	t.Run("原文が未取得の行は見ない", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,,<i>こんにちは</i>\n",
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 0 {
+			t.Errorf("原文の無い行で当たった: got %d", got)
+		}
+	})
+
+	t.Run("同じキーが2行あっても1件", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyEmph + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcEmph + ",すばらしい\n" +
+				keyEmph + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcEmph + ",すごい\n",
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatTagMismatch]; got != 1 {
+			t.Errorf("件数が違う: got %d, want 1", got)
+		}
+	})
 }

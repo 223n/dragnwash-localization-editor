@@ -158,6 +158,20 @@ const (
 	NoteTagUnclosedUnopened = "note_tag_unclosed_unopened"
 )
 
+// 原文とタグの構成が違う行の注記（internal/diff の TagDiff.Note）。
+//
+// 開閉の3つ（NoteTag*）と分けてあるのは、直し方が違うからである。開閉は
+// 訳の中だけで直せるが、こちらは原文の側を見て合わせる。置換の作りは
+// 同じで、片方だけのときは tags、両方あるときは missing と extra に分かれる。
+const (
+	// NoteTagMissing は原文にあって訳に無いタグがあること。置換は tags。
+	NoteTagMissing = "note_tag_missing"
+	// NoteTagExtra は訳にあって原文に無いタグがあること。置換は tags。
+	NoteTagExtra = "note_tag_extra"
+	// NoteTagMissingExtra は両方あること。置換は missing と extra。
+	NoteTagMissingExtra = "note_tag_missing_extra"
+)
+
 // 保存できない理由（internal/edit の file.go）。
 const (
 	// EditNoHeader はヘッダー行が無いこと。
@@ -217,6 +231,8 @@ var all = []string{
 	NoteLocaleGap,
 
 	NoteTagUnclosed, NoteTagUnopened, NoteTagUnclosedUnopened,
+
+	NoteTagMissing, NoteTagExtra, NoteTagMissingExtra,
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,

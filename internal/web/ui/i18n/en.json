@@ -149,6 +149,7 @@
     "category.script_gap": "Dialogue row not in the script",
     "category.unknown_origin": "Origin cannot be determined",
     "category.tag_unbalanced": "Rows with unbalanced tags",
+    "category.tag_mismatch": "Rows whose tags differ from the source",
 
     "reason.judge_working_not_read": "The working copy was not read",
     "reason.judge_working_missing": "There is no working copy",
@@ -177,6 +178,9 @@
     "reason.note_tag_unclosed": "Unclosed tags: {tags}",
     "reason.note_tag_unopened": "Closing tags without an opening: {tags}",
     "reason.note_tag_unclosed_unopened": "Unclosed tags: {unclosed} / closing tags without an opening: {unopened}",
+    "reason.note_tag_missing": "Tags in the source but not in the translation: {tags}",
+    "reason.note_tag_extra": "Tags in the translation but not in the source: {tags}",
+    "reason.note_tag_missing_extra": "Tags in the source but not in the translation: {missing} / tags in the translation but not in the source: {extra}",
     "reason.edit_no_header": "There is no header row (the file is empty, or holds only comments and blank lines)",
     "reason.edit_bad_header": "The header on line {line} is {text}, which is none of the four accepted forms (key,section,node,order,speaker,translation / key,speaker,translation / key,translation / key,section,node,order,speaker,source_en,translation)",
     "reason.edit_not_record": "This line is not read as a record",

@@ -149,6 +149,7 @@
     "category.script_gap": "台本に無い台詞行",
     "category.unknown_origin": "由来を判定できない行",
     "category.tag_unbalanced": "タグの開閉がそろわない行",
+    "category.tag_mismatch": "原文とタグが違う行",
 
     "reason.judge_working_not_read": "作業コピーを読んでいません",
     "reason.judge_working_missing": "作業コピーがありません",
@@ -177,6 +178,9 @@
     "reason.note_tag_unclosed": "閉じていないタグ: {tags}",
     "reason.note_tag_unopened": "開始の無い終了タグ: {tags}",
     "reason.note_tag_unclosed_unopened": "閉じていないタグ: {unclosed}／開始の無い終了タグ: {unopened}",
+    "reason.note_tag_missing": "原文にあって訳に無いタグ: {tags}",
+    "reason.note_tag_extra": "訳にあって原文に無いタグ: {tags}",
+    "reason.note_tag_missing_extra": "原文にあって訳に無いタグ: {missing}／訳にあって原文に無いタグ: {extra}",
     "reason.edit_no_header": "ヘッダー行が無い（空のファイルか、コメントと空行だけのファイル）",
     "reason.edit_bad_header": "{line}行目のヘッダーが {text} で、受理される4種のいずれでもない（key,section,node,order,speaker,translation / key,speaker,translation / key,translation / key,section,node,order,speaker,source_en,translation）",
     "reason.edit_not_record": "この行はレコードとして読まれない",

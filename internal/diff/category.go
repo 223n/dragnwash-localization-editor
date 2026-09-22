@@ -74,12 +74,17 @@ const (
 	CatUnknownOrigin
 	// CatTagUnbalanced は訳の中のタグの開閉がそろわない行。
 	CatTagUnbalanced
+	// CatTagMismatch は原文とタグの構成が違う行。
+	//
+	// 値は並びの最後に足す。表示順は categories が決めるので、ここへ割り込ませて
+	// 既存のカテゴリの値を動かす理由が無い。
+	CatTagMismatch
 )
 
 // categories は表示順に並べた全カテゴリ。
 var categories = []Category{
 	CatUntranslated, CatLocaleGap,
-	CatVanished, CatCarryover, CatDropped, CatStrayLineID,
+	CatVanished, CatCarryover, CatDropped, CatStrayLineID, CatTagMismatch,
 	CatNotPublished, CatScriptGap, CatUnknownOrigin, CatTagUnbalanced,
 }
 
@@ -200,6 +205,25 @@ var categoryTable = map[Category]categoryInfo{
 			"訳の中で、開始タグに対応する終了タグが無い行と、終了タグだけがある行です。",
 			"原文とは比べません。原文が閉じずに使っているタグ（<size=80%> など）も、訳が同じ書き方なら当たります。",
 			"作業コピーを読んでいるときはその行を、読んでいないときは公開ファイルの行を見ます。",
+		},
+	},
+	CatTagMismatch: {
+		// note は空。行ごとに当たったタグが違うので、Finding.Note へ1件ずつ入れる
+		// （[TagDiff.Note]）。
+		//
+		// 重さは要確認にしてある。開閉（[CatTagUnbalanced]）を参考に留めたのは、
+		// 原文どおりに書いた訳が毎回当たって終了コードが常に非 0 になるからだが、
+		// こちらは原文と同じ構成なら当たらない。当たる行は、原文にあった書式が
+		// 訳で落ちているか増えている行で、そのまま公開すると表示が変わる。
+		//
+		// 原文が要るので、作業コピーの無い CI では判定そのものが起きない。
+		// 終了コードを動かすのは、作業コピーを持っている翻訳者の手元だけである。
+		name: "原文とタグが違う行", id: "tag_mismatch", status: StatusReview, needsWorking: true,
+		detail: []string{
+			"原文にあるタグが訳に無い行と、原文に無いタグが訳にある行です。",
+			"数と値まで見ます。<size=70%> を <size=60%> に書き換えた行も当たります。",
+			"並びは見ません。<b><i> と <i><b> は同じ構成として通します。",
+			"訳が空の行は出しません。未翻訳として既に出ているためです。",
 		},
 	},
 }

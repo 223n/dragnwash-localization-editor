@@ -504,6 +504,15 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 		add(CatTagUnbalanced, f)
 	}
 
+	// 原文とタグの構成の突き合わせ。原文が要るので作業コピーだけを見る。
+	// 開閉と重なることはある（原文が <i> を閉じずに使う行で、訳がその <i> を
+	// 落としていれば両方に出る）。片方を落とさないのは、直し方が違うからである。
+	if sum.canJudge(CatTagMismatch) {
+		for _, f := range tagMismatchFindings(idx, loc) {
+			add(CatTagMismatch, f)
+		}
+	}
+
 	// 母集合からこのロケールの公開ハッシュキーを引いた残り。
 	for k := range union {
 		if _, have := mine[k]; have {
