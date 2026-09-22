@@ -109,6 +109,15 @@ type Summary struct {
 	BrokenRows int
 	// WorkingRows は作業コピーの行数。
 	WorkingRows int
+	// HasLayoutRisks はゲームが測ったはみ出しの記録を読んだか。
+	HasLayoutRisks bool
+	// LayoutRisksExist はその記録のファイルが実在するか。
+	// HasLayoutRisks が false でもこちらが true なら --no-working で読まなかっただけ。
+	LayoutRisksExist bool
+	// LayoutRisksPath はその記録の置き場所（[Locale.LayoutRisksPath]）。
+	LayoutRisksPath string
+	// LayoutRiskRows は読めた記録の行数。結び付けられた行の数ではない。
+	LayoutRiskRows int
 	// SourceMissing は作業コピーのハッシュ行のうち原文が未取得のものの数。
 	//
 	// ゲームが未ロードだと source_en が空になる（移植仕様「作業コピー生成 R7/R8」）。
@@ -137,6 +146,9 @@ func (s Summary) canJudge(c Category) bool {
 		return false
 	}
 	if c.needsOrderNorms() && !s.OrderNorms {
+		return false
+	}
+	if c.needsLayoutRisks() && !s.HasLayoutRisks {
 		return false
 	}
 	if c.needsOldOrder() && (!s.OldOrder || s.OldOrderStale) {
@@ -427,6 +439,10 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 		OldOrderReason:   r.OldOrderReason,
 		OldOrderReasonID: r.OldOrderReasonID,
 		WorkingRows:      len(loc.Working),
+		HasLayoutRisks:   loc.HasLayoutRisks,
+		LayoutRisksExist: loc.LayoutRisksExist,
+		LayoutRisksPath:  loc.LayoutRisksPath,
+		LayoutRiskRows:   len(loc.LayoutRisks),
 		Counts:           make(map[Category]int, len(categories)),
 	}
 	for _, c := range categories {
@@ -554,6 +570,13 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 	if sum.canJudge(CatCarryFrom) {
 		for _, f := range carryFromFindings(idx, loc) {
 			add(CatCarryFrom, f)
+		}
+	}
+
+	// はみ出しの恐れ。ゲームが測った記録を行に結び付ける。
+	if sum.canJudge(CatLayoutRisk) {
+		for _, f := range layoutRiskFindings(idx, loc) {
+			add(CatLayoutRisk, f)
 		}
 	}
 

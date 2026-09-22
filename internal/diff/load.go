@@ -36,6 +36,23 @@ type Locale struct {
 	// 区別して伝えるため。--no-working を付けた利用者に「ゲーム内で書き出して
 	// ください」と促すと、すでに済んでいる作業をやり直させることになる。
 	WorkingExists bool
+
+	// LayoutRisksPath は Translations/_discovered/layout_risks.csv。
+	// 作業コピーと同じディレクトリにある。存在しなくても値は入る。
+	LayoutRisksPath string
+	// LayoutRisks はゲームが測ったはみ出しの記録。読まなかったときは空。
+	//
+	// ロケールごとのファイルではない。ゲームでそのとき選んでいた言語の結果が
+	// 1つのファイルに書かれるので、全ロケールに同じ中身が入る。どの行がこの
+	// ロケールの結果かは layout.go が訳を突き合わせて決める。
+	LayoutRisks []LayoutRisk
+	// HasLayoutRisks はその記録を読んだかどうか。
+	HasLayoutRisks bool
+	// LayoutRisksExist はその記録のファイルが実在するかどうか。
+	//
+	// HasLayoutRisks と分けてあるのは、[Locale.WorkingExists] と同じ理由で、
+	// 「ありません」と「読みませんでした」を区別して伝えるため。
+	LayoutRisksExist bool
 }
 
 // Repo は比較に必要なものを読み終えた状態。
@@ -140,10 +157,14 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	repo.OldOrderReason, repo.OldOrderReasonID = oldOrderWhy.Text, oldOrderWhy.ID
 
 	for _, t := range targets {
+		workingPath := publish.WorkingPath(root, opt.Game, t.Locale)
 		loc := Locale{
 			Name:          t.Locale,
 			PublishedPath: t.Output,
-			WorkingPath:   publish.WorkingPath(root, opt.Game, t.Locale),
+			WorkingPath:   workingPath,
+			// はみ出しの記録は作業コピーと同じ場所にある。作業コピーが無くても
+			// 記録だけがあることはあるので、パスは作業コピーの有無に関わらず持つ。
+			LayoutRisksPath: filepath.Join(filepath.Dir(workingPath), LayoutRisksFile),
 		}
 
 		published, err := readRowsFile(t.Output)
@@ -167,6 +188,22 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 				loc.Working = working
 				loc.HasWorking = true
 			}
+		}
+		// はみ出しの記録。ゲーム側が書くファイルで、原文が入っているので、
+		// 判定に使うかどうかは作業コピーと同じ指定（--no-working）で決める。
+		// --no-working は「手元の再現できる入力だけで判定する」ための指定で、
+		// ゲームが測った値はその外にある。
+		//
+		// ファイルの有無だけは指定に関わらず見る。「ありません」と
+		// 「読みませんでした」を書き分けるのに要る。
+		risks, err := readLayoutRisks(loc.LayoutRisksPath)
+		if err != nil {
+			return nil, err
+		}
+		loc.LayoutRisksExist = risks != nil
+		if opt.Working && risks != nil {
+			loc.LayoutRisks = risks
+			loc.HasLayoutRisks = true
 		}
 		repo.Locales = append(repo.Locales, loc)
 	}
@@ -294,6 +331,37 @@ func readRowsFile(path string) ([]Row, error) {
 		return nil, &FileError{Path: path, Err: err}
 	}
 	return rows, nil
+}
+
+// LayoutRisksFile はゲームがはみ出しの記録を書くファイルの名前。
+//
+// ロケール名が入らないのは、ゲームがそのとき選んでいた言語の結果を1つの
+// ファイルへ上書きで書くからである（翻訳リポジトリの CONTRIBUTING.ja.md）。
+const LayoutRisksFile = "layout_risks.csv"
+
+// readLayoutRisks は layout_risks.csv を読む。ファイルが無ければ nil を返す。
+//
+// 記録が無いことと、記録が空であることは区別する。前者は「測っていない」で、
+// 後者は「測ったがはみ出す行は無かった」である。0 件と書いてよいのは後者だけ
+// なので、呼び出し側は nil かどうかで HasLayoutRisks を決める。
+func readLayoutRisks(path string) ([]LayoutRisk, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	risks, err := ParseLayoutRisks(data)
+	if err != nil {
+		return nil, &FileError{Path: path, Err: err}
+	}
+	if risks == nil {
+		// 中身が0行でも「読んだ」ことは伝えたい。nil は「ファイルが無い」の
+		// 意味に使っているので、空の並びへ置き換える。
+		risks = []LayoutRisk{}
+	}
+	return risks, nil
 }
 
 // FileError はどのファイルで失敗したかを持つエラー。

@@ -83,6 +83,11 @@ const (
 	// JudgeOrderNoNorms は再生順に norm 列の値が1つも無いこと。
 	// 正規化した英文のハッシュが無いと、引き継ぎ元を探せない。
 	JudgeOrderNoNorms = "judge_order_no_norms"
+	// JudgeNoLayoutRisks はゲームが測ったはみ出しの記録が無いこと。
+	// 測っていないので、「はみ出す行は無い」とは言えない。
+	JudgeNoLayoutRisks = "judge_no_layout_risks"
+	// JudgeLayoutRisksNotRead はその記録があるのに読まなかったこと（--no-working）。
+	JudgeLayoutRisksNotRead = "judge_layout_risks_not_read"
 )
 
 // 1つ前の版の再生順を取り出せない理由（internal/diff の oldorder.go と load.go）。
@@ -154,6 +159,12 @@ const (
 	// NoteCarryFromSimilar は指紋が近いこと。置換の distance にその距離が入る。
 	NoteCarryFromSimilar = "note_carry_from_similar"
 )
+
+// NoteLayoutRisk はゲームが測ってはみ出しの恐れがあると出た行であること
+// （internal/diff の LayoutRisk.cause）。
+//
+// 置換は ratio、axis、required、available。どれもゲームが書いた綴りのまま渡す。
+const NoteLayoutRisk = "note_layout_risk"
 
 // NoteLocaleGap は他のロケールにあってこのロケールに無いこと。置換は count。
 const NoteLocaleGap = "note_locale_gap"
@@ -231,7 +242,7 @@ const (
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOldOrderUnreadable,
-	JudgeOrderNoNorms,
+	JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
 
 	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderOnlyOneVersion,
 	OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs, OldOrderStale,
@@ -244,6 +255,8 @@ var all = []string{
 	NoteCarryMoved, NoteCarryCopied, NoteCarryCopiedUnknown,
 
 	NoteCarryFromSame, NoteCarryFromSimilar,
+
+	NoteLayoutRisk,
 
 	NoteLocaleGap,
 

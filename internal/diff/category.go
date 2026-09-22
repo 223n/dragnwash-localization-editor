@@ -82,12 +82,15 @@ const (
 	CatTagMismatch
 	// CatCarryFrom は作業コピーの未翻訳の行のうち、引き継ぎ元の候補がある行。
 	CatCarryFrom
+	// CatLayoutRisk はゲームが測って、はみ出しの恐れがあると出た行。
+	CatLayoutRisk
 )
 
 // categories は表示順に並べた全カテゴリ。
 var categories = []Category{
 	CatUntranslated, CatLocaleGap,
-	CatVanished, CatCarryover, CatCarryFrom, CatDropped, CatStrayLineID, CatTagMismatch,
+	CatVanished, CatCarryover, CatCarryFrom, CatDropped, CatStrayLineID,
+	CatTagMismatch, CatLayoutRisk,
 	CatNotPublished, CatScriptGap, CatUnknownOrigin, CatTagUnbalanced,
 }
 
@@ -112,6 +115,11 @@ type categoryInfo struct {
 	// data/script_order.csv もある（上流の tools/rekey.py augment が後から
 	// 足した列）。無いときに「0 件」と書くと、引き継ぎ元が無いと読まれる。
 	needsOrderNorms bool
+	// needsLayoutRisks はゲームが測ったはみ出しの記録が無いと判定できないかどうか。
+	//
+	// 記録はゲーム内で Check translation layout を押したときだけ書かれる。
+	// 押していないのに「0 件」と書くと、はみ出す行は無いと読まれる。
+	needsLayoutRisks bool
 	// needsOldOrder は1つ前の版の再生順が無いと判定できないかどうか。
 	// git から取り出せない環境（git が無い、リポジトリでない、履歴が1版しかない）
 	// でも道具そのものは動くので、ここも「0 件」ではなく理由を書く印として立てる。
@@ -247,6 +255,18 @@ var categoryTable = map[Category]categoryInfo{
 			"訳が空の行は出しません。未翻訳として既に出ているためです。",
 		},
 	},
+	CatLayoutRisk: {
+		// note は空。行ごとに比と軸が違うので、Finding.Note へ1件ずつ入れる
+		// （[LayoutRisk.cause]）。
+		name: "はみ出しの恐れがある行", id: "layout_risk", status: StatusReview,
+		needsLayoutRisks: true,
+		detail: []string{
+			"ゲーム内の F1 → Translation → Check translation layout が測った結果です。",
+			"比（ratio）が大きいほどはみ出しが大きいので、訳を短くするか言い換えてください。",
+			"記録はロケールごとに分かれていないため、測ったときの訳と1字も違わない行だけを結び付けます。",
+			"訳を直すとその行は外れます。直した訳がまだはみ出すかどうかは、もう一度ゲームで測ってください。",
+		},
+	},
 }
 
 // String は画面に出す日本語名を返す。
@@ -282,6 +302,11 @@ func (c Category) needsOrderLineIDs() bool {
 // needsOrderNorms は再生順の norm 列が無いと判定できないカテゴリかを返す。
 func (c Category) needsOrderNorms() bool {
 	return categoryTable[c].needsOrderNorms
+}
+
+// needsLayoutRisks はゲームが測ったはみ出しの記録が無いと判定できないカテゴリかを返す。
+func (c Category) needsLayoutRisks() bool {
+	return categoryTable[c].needsLayoutRisks
 }
 
 // needsOldOrder は1つ前の版の再生順が無いと判定できないカテゴリかを返す。

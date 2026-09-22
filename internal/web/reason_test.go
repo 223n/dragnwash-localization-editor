@@ -231,6 +231,13 @@ func diffReasons(t *testing.T) []reason.Reason {
 	// 引き継ぎ元の候補。行ごとに文面が違うので、判定を走らせて出させる。
 	out = append(out, carryFromReasons(t)...)
 
+	// はみ出しの記録。無いときと、あるのに読まなかったときで理由が分かれる。
+	out = append(out, ready.JudgeBlockReason(diff.CatLayoutRisk))
+	existing := ready
+	existing.LayoutRisksExist = true
+	out = append(out, existing.JudgeBlockReason(diff.CatLayoutRisk))
+	out = append(out, layoutRiskReasons(t)...)
+
 	// 旧版が更新後の内容に見えるとき。[diff.Compare] が立てる印を写して作る。
 	stale := newStaleSummary(t, root)
 	out = append(out, stale.JudgeBlockReason(diff.CatCarryover))
@@ -312,6 +319,53 @@ func carryFromReasons(t *testing.T) []reason.Reason {
 	}
 	if len(out) != 2 {
 		t.Fatalf("引き継ぎ元の候補が %d 件。2件（文字の一致と指紋）を期待", len(out))
+	}
+	return out
+}
+
+// layoutRiskReasons ははみ出しの恐れの理由を、判定を走らせて集める。
+//
+// ゲームが書く layout_risks.csv を仕込む。ロケールの列を持たないファイルなので、
+// 訳が一致することで結び付く（internal/diff の layout.go）。
+func layoutRiskReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	const source = "The gate opens when the crest is clean."
+	const translation = "紋章がきれいになるとゲートが開きます"
+
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("data/script_order.csv",
+		"section,phase,node,order,line_id,key,speaker,condition\n"+
+			"L01 Ryan,intro,Gate_1,1,line:gate0001,"+key.For(source)+",Ryan,\n")
+	write("Translations/ja/strings.csv",
+		"key,section,node,order,speaker,translation\n"+
+			key.For(source)+",L01 Ryan,Gate_1,1,Ryan,"+translation+"\n")
+	write("Translations/_discovered/layout_risks.csv",
+		"source_en,translation,axis,required_px,available_px,ratio,object_path\n"+
+			source+","+translation+",x,240,180,1.33,Canvas/Label\n")
+
+	repo, err := diff.LoadWith(root, diff.Options{Working: true})
+	if err != nil {
+		t.Fatalf("LoadWith: %v", err)
+	}
+	var out []reason.Reason
+	for _, f := range diff.Compare(repo, nil).Findings {
+		if f.Category == diff.CatLayoutRisk {
+			out = append(out, f.NoteReason)
+		}
+	}
+	if len(out) != 1 {
+		t.Fatalf("はみ出しの恐れが %d 件。1件を期待", len(out))
 	}
 	return out
 }
