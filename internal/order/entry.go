@@ -63,6 +63,20 @@ type Entry struct {
 	// Condition は親ノードがジャンプの前に読んだ変数名を、半角スペース区切りで
 	// 連結した文字列（例 "$conrad_jerked_off_3 $conrad_used_mount_3"）。空もある。
 	Condition string
+	// Norm は正規化した英文のハッシュ（norm 列）。記号・大文字小文字・書式タグ・
+	// 空白の違いを落としてからハッシュを取った値で、作り方は internal/linekey の
+	// NormalizedKey にある。列が無い版の script_order.csv では空。
+	//
+	// ゲーム内Mod（ScriptOrder.cs）はこの3列を読まない。読むのは dwloc だけで、
+	// 英文が書き換わって key が変わった行の引き継ぎ先を探すのに使う。
+	Norm string
+	// FP は正規化した英文の指紋（fp 列、16桁の小文字16進）。列が無い版では空。
+	FP string
+	// NLen は正規化した英文の文字数（nlen 列）。読めなければ 0。
+	//
+	// 短い台詞を指紋で突き合わせないための足切りに使う
+	// （internal/linekey の MinFuzzyLength）。
+	NLen int
 }
 
 // NormalizeKey は key 列の値を、前後の空白を除いてから小文字にする。
@@ -147,6 +161,9 @@ func parseEntries(rows []csvfile.Row, dropEmptyKey bool) []Entry {
 			Key:        NormalizeKey(rawKey),
 			Speaker:    row.Get("speaker"),
 			Condition:  row.Get("condition"),
+			Norm:       row.Get("norm"),
+			FP:         row.Get("fp"),
+			NLen:       parseNLen(row.Get("nlen")),
 		})
 	}
 	return entries
@@ -160,6 +177,19 @@ func parseEntries(rows []csvfile.Row, dropEmptyKey bool) []Entry {
 // 範囲外の値で 0 ではなく巨大値が入ってしまうため
 // （移植仕様「スクリプト順 / 敵対検証」[medium] R5）。
 func parseOrder(raw string) int {
+	value, ok := parseInt32(raw)
+	if !ok {
+		return 0
+	}
+	return value
+}
+
+// parseNLen は nlen 列を数に直す。読めなければ 0 を返す。
+//
+// [parseOrder] と同じ中身だが、別の関数にしてある。order 列の 0 は元実装の
+// int.TryParse の既定値をそのまま写したもので、nlen の 0 は「正規化後の長さが
+// 分からない」の意味である。0 の意味が違うものを1つの関数で説明できない。
+func parseNLen(raw string) int {
 	value, ok := parseInt32(raw)
 	if !ok {
 		return 0

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/223n/dragnwash-localization-editor/internal/linekey"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
@@ -43,6 +44,12 @@ type Finding struct {
 	// 貼る側の手順が変わる。機械で読みたいときのためにこの欄を用意し、
 	// 人が読む側は既にある note 列で足りるようにした。
 	CarryTo string
+	// CarryFrom は訳の引き継ぎ元の旧キー（[CatCarryFrom] のときだけ入る）。
+	//
+	// [Finding.CarryTo] と向きが逆である。CarryTo はこの行の訳をどこへ移すかで、
+	// CarryFrom はこの行の訳をどこから持ってくるか。CSV には列を足さず、同じ
+	// 内容を Note の文面にも入れてある（11列という約束を守るため）。
+	CarryFrom string
 	// CarryKind は引き継ぎ元の旧行を移すのか写すのか（[CatCarryover] のときだけ入る）。
 	//
 	// CarryTo と分けて持つのは、旧行の始末が正反対になるから。[CarryMoved] の
@@ -65,6 +72,9 @@ type Summary struct {
 	OrderKeys bool
 	// OrderLineIDs は再生順の台詞IDを1件以上読めたか。意味は OrderKeys と同じ。
 	OrderLineIDs bool
+	// OrderNorms は再生順の norm 列に値のある行を1つ以上読めたか。
+	// これが false のあいだ、引き継ぎ元の候補は判定しない。
+	OrderNorms bool
 	// OldOrder は1つ前の版の再生順を読めたか。
 	// これが false のあいだ、引き継ぎ候補は判定しない。
 	OldOrder bool
@@ -99,6 +109,15 @@ type Summary struct {
 	BrokenRows int
 	// WorkingRows は作業コピーの行数。
 	WorkingRows int
+	// HasLayoutRisks はゲームが測ったはみ出しの記録を読んだか。
+	HasLayoutRisks bool
+	// LayoutRisksExist はその記録のファイルが実在するか。
+	// HasLayoutRisks が false でもこちらが true なら --no-working で読まなかっただけ。
+	LayoutRisksExist bool
+	// LayoutRisksPath はその記録の置き場所（[Locale.LayoutRisksPath]）。
+	LayoutRisksPath string
+	// LayoutRiskRows は読めた記録の行数。結び付けられた行の数ではない。
+	LayoutRiskRows int
 	// SourceMissing は作業コピーのハッシュ行のうち原文が未取得のものの数。
 	//
 	// ゲームが未ロードだと source_en が空になる（移植仕様「作業コピー生成 R7/R8」）。
@@ -113,9 +132,9 @@ type Summary struct {
 // canJudge はそのカテゴリを判定できたかを返す。false のとき Counts の 0 は
 // 「1件も無い」ではなく「判定していない」を意味する。
 //
-// 判定できないのは3つの場合しかない。作業コピーが要るのに読んでいないとき、
-// 再生順が要るのに読めていないとき、1つ前の版の再生順を取り出せないときで、
-// どれも「0 件」と書くと嘘になる。
+// 判定できないのは4つの場合しかない。作業コピーが要るのに読んでいないとき、
+// 再生順が要るのに読めていないとき、再生順に norm 列が無いとき、1つ前の版の
+// 再生順を取り出せないときで、どれも「0 件」と書くと嘘になる。
 func (s Summary) canJudge(c Category) bool {
 	if c.needsWorking() && !s.HasWorking {
 		return false
@@ -124,6 +143,12 @@ func (s Summary) canJudge(c Category) bool {
 		return false
 	}
 	if c.needsOrderLineIDs() && !s.OrderLineIDs {
+		return false
+	}
+	if c.needsOrderNorms() && !s.OrderNorms {
+		return false
+	}
+	if c.needsLayoutRisks() && !s.HasLayoutRisks {
 		return false
 	}
 	if c.needsOldOrder() && (!s.OldOrder || s.OldOrderStale) {
@@ -226,6 +251,20 @@ type orderIndex struct {
 	lineIDs map[string]struct{}
 	// data は話者名を引くために持つ。
 	data *order.Data
+
+	// norms は正規化した英文のハッシュ（norm 列）から、その値を持つ行への対応。
+	// 引き継ぎ元を探すのに使う（carryfrom.go）。
+	norms map[string][]order.Entry
+	// fuzzy は指紋で突き合わせられる行。fp が読め、正規化後の長さが足切りを
+	// 超えるものだけが入る。
+	fuzzy []order.Entry
+	// fuzzyByNode は [orderIndex.fuzzy] をノードごとに分けた表。
+	fuzzyByNode map[string][]order.Entry
+	// hasNorms は norm 列に値のある行が1つでもあったか。
+	//
+	// 無いのは列そのものが無い版の script_order.csv を読んだときで、そのときは
+	// 引き継ぎ元を「0 件」ではなく「判定していません」にする。
+	hasNorms bool
 }
 
 // newOrderIndex は再生順から索引を作る。
@@ -234,9 +273,11 @@ func newOrderIndex(data *order.Data) *orderIndex {
 		data = &order.Data{}
 	}
 	idx := &orderIndex{
-		first:   make(map[string]order.Entry, len(data.Entries)),
-		lineIDs: make(map[string]struct{}, len(data.Entries)),
-		data:    data,
+		first:       make(map[string]order.Entry, len(data.Entries)),
+		lineIDs:     make(map[string]struct{}, len(data.Entries)),
+		data:        data,
+		norms:       make(map[string][]order.Entry),
+		fuzzyByNode: make(map[string][]order.Entry),
 	}
 	for _, e := range data.Entries {
 		// キーが空の行は再生順の行としては残るが、公開ファイルのどのキーとも
@@ -248,6 +289,21 @@ func newOrderIndex(data *order.Data) *orderIndex {
 		}
 		if e.LineID != "" {
 			idx.lineIDs[e.LineID] = struct{}{}
+		}
+		// 引き継ぎ元を探すための索引。キーの無い行は訳の出どころにならないので
+		// 入れない。
+		if e.Key == "" {
+			continue
+		}
+		if e.Norm != "" {
+			idx.hasNorms = true
+			idx.norms[e.Norm] = append(idx.norms[e.Norm], e)
+		}
+		if _, ok := linekey.ParseFingerprint(e.FP); ok && e.NLen >= linekey.MinFuzzyLength {
+			idx.fuzzy = append(idx.fuzzy, e)
+			if e.Node != "" {
+				idx.fuzzyByNode[e.Node] = append(idx.fuzzyByNode[e.Node], e)
+			}
 		}
 	}
 	return idx
@@ -378,10 +434,15 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 		WorkingExists:    loc.WorkingExists,
 		OrderKeys:        len(idx.first) > 0,
 		OrderLineIDs:     len(idx.lineIDs) > 0,
+		OrderNorms:       idx.hasNorms,
 		OldOrder:         r.OldOrder != nil,
 		OldOrderReason:   r.OldOrderReason,
 		OldOrderReasonID: r.OldOrderReasonID,
 		WorkingRows:      len(loc.Working),
+		HasLayoutRisks:   loc.HasLayoutRisks,
+		LayoutRisksExist: loc.LayoutRisksExist,
+		LayoutRisksPath:  loc.LayoutRisksPath,
+		LayoutRiskRows:   len(loc.LayoutRisks),
 		Counts:           make(map[Category]int, len(categories)),
 	}
 	for _, c := range categories {
@@ -502,6 +563,30 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 	// publish の入力になる側（作業コピーがあればそれ、無ければ公開ファイル）。
 	for _, f := range tagFindings(idx, loc) {
 		add(CatTagUnbalanced, f)
+	}
+
+	// 引き継ぎ元の候補。作業コピーの未翻訳の行に、公開ファイルの旧キーを添える。
+	// 引き継ぎ候補（CatCarryover）とは根拠も向きも違う（carryfrom.go の説明）。
+	if sum.canJudge(CatCarryFrom) {
+		for _, f := range carryFromFindings(idx, loc) {
+			add(CatCarryFrom, f)
+		}
+	}
+
+	// はみ出しの恐れ。ゲームが測った記録を行に結び付ける。
+	if sum.canJudge(CatLayoutRisk) {
+		for _, f := range layoutRiskFindings(idx, loc) {
+			add(CatLayoutRisk, f)
+		}
+	}
+
+	// 原文とタグの構成の突き合わせ。原文が要るので作業コピーだけを見る。
+	// 開閉と重なることはある（原文が <i> を閉じずに使う行で、訳がその <i> を
+	// 落としていれば両方に出る）。片方を落とさないのは、直し方が違うからである。
+	if sum.canJudge(CatTagMismatch) {
+		for _, f := range tagMismatchFindings(idx, loc) {
+			add(CatTagMismatch, f)
+		}
 	}
 
 	// 母集合からこのロケールの公開ハッシュキーを引いた残り。

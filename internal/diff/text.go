@@ -97,6 +97,15 @@ func (r *Report) writeTextLocale(b *strings.Builder, opt TextOptions, sum Summar
 		b.WriteString("                ゲーム内で作業コピーを書き出すと判定できるようになります。\n")
 	}
 
+	// はみ出しの記録は、作業コピーが無くても読めることがある（ゲーム内で
+	// レイアウトの検査だけを走らせた場合）。読めたときだけ出す。無いほうが
+	// 普通なので、無いことをここで毎回言わない。判定できないことは
+	// カテゴリの行が言う。
+	if sum.HasLayoutRisks {
+		fmt.Fprintf(b, "    はみ出しの記録  %s   %d 行\n",
+			relPath(opt.Root, sum.LayoutRisksPath), sum.LayoutRiskRows)
+	}
+
 	findings := r.localeFindings(sum.Locale)
 	for _, status := range []Status{StatusTodo, StatusReview, StatusInfo} {
 		fmt.Fprintf(b, "\n  %s\n", status)
@@ -183,6 +192,17 @@ func judgeBlockReason(sum Summary, c Category) reason.Reason {
 	}
 	if (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs) {
 		return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
+	}
+	if c.needsLayoutRisks() && !sum.HasLayoutRisks {
+		if sum.LayoutRisksExist {
+			return reason.New(reason.JudgeLayoutRisksNotRead,
+				"はみ出しの記録を読んでいません")
+		}
+		return reason.New(reason.JudgeNoLayoutRisks,
+			"ゲーム内で Check translation layout を走らせた記録がありません")
+	}
+	if c.needsOrderNorms() && !sum.OrderNorms {
+		return reason.New(reason.JudgeOrderNoNorms, "再生順に norm 列がありません")
 	}
 	if c.needsOldOrder() && (!sum.OldOrder || sum.OldOrderStale) {
 		if sum.OldOrderReason != "" {

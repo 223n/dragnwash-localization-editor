@@ -50,7 +50,8 @@ func (s Status) id() string {
 
 // Category は報告の種別。
 //
-// 並び順がそのまま表示順になる。要作業2つ → 要確認4つ → 参考4つ。
+// 表示順は [categories] が決める。要作業2つ → 要確認6つ → 参考4つ。
+// この const の並びは値の割り当てだけで、後ろに足しても表示順は変わらない。
 type Category int
 
 const (
@@ -74,12 +75,22 @@ const (
 	CatUnknownOrigin
 	// CatTagUnbalanced は訳の中のタグの開閉がそろわない行。
 	CatTagUnbalanced
+	// CatTagMismatch は原文とタグの構成が違う行。
+	//
+	// 値は並びの最後に足す。表示順は categories が決めるので、ここへ割り込ませて
+	// 既存のカテゴリの値を動かす理由が無い。
+	CatTagMismatch
+	// CatCarryFrom は作業コピーの未翻訳の行のうち、引き継ぎ元の候補がある行。
+	CatCarryFrom
+	// CatLayoutRisk はゲームが測って、はみ出しの恐れがあると出た行。
+	CatLayoutRisk
 )
 
 // categories は表示順に並べた全カテゴリ。
 var categories = []Category{
 	CatUntranslated, CatLocaleGap,
-	CatVanished, CatCarryover, CatDropped, CatStrayLineID,
+	CatVanished, CatCarryover, CatCarryFrom, CatDropped, CatStrayLineID,
+	CatTagMismatch, CatLayoutRisk,
 	CatNotPublished, CatScriptGap, CatUnknownOrigin, CatTagUnbalanced,
 }
 
@@ -98,6 +109,17 @@ type categoryInfo struct {
 	needsOrderKeys bool
 	// needsOrderLineIDs は再生順の台詞IDについて同じ意味。
 	needsOrderLineIDs bool
+	// needsOrderNorms は再生順の norm 列が無いと判定できないかどうか。
+	//
+	// norm は正規化した英文のハッシュで、列そのものが無い版の
+	// data/script_order.csv もある（上流の tools/rekey.py augment が後から
+	// 足した列）。無いときに「0 件」と書くと、引き継ぎ元が無いと読まれる。
+	needsOrderNorms bool
+	// needsLayoutRisks はゲームが測ったはみ出しの記録が無いと判定できないかどうか。
+	//
+	// 記録はゲーム内で Check translation layout を押したときだけ書かれる。
+	// 押していないのに「0 件」と書くと、はみ出す行は無いと読まれる。
+	needsLayoutRisks bool
 	// needsOldOrder は1つ前の版の再生順が無いと判定できないかどうか。
 	// git から取り出せない環境（git が無い、リポジトリでない、履歴が1版しかない）
 	// でも道具そのものは動くので、ここも「0 件」ではなく理由を書く印として立てる。
@@ -158,6 +180,18 @@ var categoryTable = map[Category]categoryInfo{
 			"訳は書き換えていません。中身を確かめてから、作業コピーで移してください。",
 		},
 	},
+	CatCarryFrom: {
+		// note は空。行ごとに引き継ぎ元が違うので、Finding.Note へ1件ずつ入れる
+		// （[carrySource.cause]）。
+		name: "引き継ぎ元の候補", id: "carry_from", status: StatusReview,
+		needsWorking: true, needsOrderNorms: true,
+		detail: []string{
+			"作業コピーにある未翻訳の行のうち、公開ファイルから訳を持ってこられそうな行です。",
+			"コミットされている再生順の norm 列（正規化した英文のハッシュ）と fp 列（指紋）で突き合わせます。",
+			"引き継ぎ候補と向きが逆です。あちらは旧行に引き継ぎ先を添え、こちらは新しい行に引き継ぎ元を添えます。",
+			"訳は書き換えていません。中身を確かめてから、作業コピーで写してください。",
+		},
+	},
 	CatDropped: {
 		name: "publish で捨てられる行", id: "dropped", status: StatusReview, needsWorking: true,
 		detail: []string{
@@ -202,6 +236,37 @@ var categoryTable = map[Category]categoryInfo{
 			"作業コピーを読んでいるときはその行を、読んでいないときは公開ファイルの行を見ます。",
 		},
 	},
+	CatTagMismatch: {
+		// note は空。行ごとに当たったタグが違うので、Finding.Note へ1件ずつ入れる
+		// （[TagDiff.Note]）。
+		//
+		// 重さは要確認にしてある。開閉（[CatTagUnbalanced]）を参考に留めたのは、
+		// 原文どおりに書いた訳が毎回当たって終了コードが常に非 0 になるからだが、
+		// こちらは原文と同じ構成なら当たらない。当たる行は、原文にあった書式が
+		// 訳で落ちているか増えている行で、そのまま公開すると表示が変わる。
+		//
+		// 原文が要るので、作業コピーの無い CI では判定そのものが起きない。
+		// 終了コードを動かすのは、作業コピーを持っている翻訳者の手元だけである。
+		name: "原文とタグが違う行", id: "tag_mismatch", status: StatusReview, needsWorking: true,
+		detail: []string{
+			"原文にあるタグが訳に無い行と、原文に無いタグが訳にある行です。",
+			"数と値まで見ます。<size=70%> を <size=60%> に書き換えた行も当たります。",
+			"並びは見ません。<b><i> と <i><b> は同じ構成として通します。",
+			"訳が空の行は出しません。未翻訳として既に出ているためです。",
+		},
+	},
+	CatLayoutRisk: {
+		// note は空。行ごとに比と軸が違うので、Finding.Note へ1件ずつ入れる
+		// （[LayoutRisk.cause]）。
+		name: "はみ出しの恐れがある行", id: "layout_risk", status: StatusReview,
+		needsLayoutRisks: true,
+		detail: []string{
+			"ゲーム内の F1 → Translation → Check translation layout が測った結果です。",
+			"比（ratio）が大きいほどはみ出しが大きいので、訳を短くするか言い換えてください。",
+			"記録はロケールごとに分かれていないため、測ったときの訳と1字も違わない行だけを結び付けます。",
+			"訳を直すとその行は外れます。直した訳がまだはみ出すかどうかは、もう一度ゲームで測ってください。",
+		},
+	},
 }
 
 // String は画面に出す日本語名を返す。
@@ -232,6 +297,16 @@ func (c Category) needsOrderKeys() bool {
 // needsOrderLineIDs は再生順の台詞IDが読めていないと判定できないカテゴリかを返す。
 func (c Category) needsOrderLineIDs() bool {
 	return categoryTable[c].needsOrderLineIDs
+}
+
+// needsOrderNorms は再生順の norm 列が無いと判定できないカテゴリかを返す。
+func (c Category) needsOrderNorms() bool {
+	return categoryTable[c].needsOrderNorms
+}
+
+// needsLayoutRisks はゲームが測ったはみ出しの記録が無いと判定できないカテゴリかを返す。
+func (c Category) needsLayoutRisks() bool {
+	return categoryTable[c].needsLayoutRisks
 }
 
 // needsOldOrder は1つ前の版の再生順が無いと判定できないカテゴリかを返す。
