@@ -80,6 +80,9 @@ const (
 	// JudgeOldOrderUnreadable は1つ前の版の再生順を取り出せていないこと。
 	// より細かい理由が分かるときは OldOrder* のほうが入る。
 	JudgeOldOrderUnreadable = "judge_old_order_unreadable"
+	// JudgeOrderNoNorms は再生順に norm 列の値が1つも無いこと。
+	// 正規化した英文のハッシュが無いと、引き継ぎ元を探せない。
+	JudgeOrderNoNorms = "judge_order_no_norms"
 )
 
 // 1つ前の版の再生順を取り出せない理由（internal/diff の oldorder.go と load.go）。
@@ -139,6 +142,17 @@ const (
 	NoteCarryCopied = "note_carry_copied"
 	// NoteCarryCopiedUnknown は複製だが、生きている位置が分からない場合。
 	NoteCarryCopiedUnknown = "note_carry_copied_unknown"
+)
+
+// 引き継ぎ元の候補の注記（internal/diff の carrySource.cause）。
+//
+// 置換は source（旧キーと位置を " / " で連ねたもの）、key、pos、distance。
+// 引き継ぎ先（NoteCarry*）と分けてあるのは、報告が付く行と指す向きが逆だから。
+const (
+	// NoteCarryFromSame は正規化した英文が一致したこと（書式と記号だけの違い）。
+	NoteCarryFromSame = "note_carry_from_same"
+	// NoteCarryFromSimilar は指紋が近いこと。置換の distance にその距離が入る。
+	NoteCarryFromSimilar = "note_carry_from_similar"
 )
 
 // NoteLocaleGap は他のロケールにあってこのロケールに無いこと。置換は count。
@@ -217,6 +231,7 @@ const (
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOldOrderUnreadable,
+	JudgeOrderNoNorms,
 
 	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderOnlyOneVersion,
 	OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs, OldOrderStale,
@@ -227,6 +242,8 @@ var all = []string{
 	NoteDroppedBroken, NoteDroppedMismatch,
 
 	NoteCarryMoved, NoteCarryCopied, NoteCarryCopiedUnknown,
+
+	NoteCarryFromSame, NoteCarryFromSimilar,
 
 	NoteLocaleGap,
 

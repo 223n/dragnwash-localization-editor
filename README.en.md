@@ -725,7 +725,7 @@ The controls on the screen are as follows.
 
 | Control | What happens |
 | ---- | ---- |
-| Filter | Shows only the rows matching any of the conditions you chose. You can choose several. The conditions are the eleven built from the counts at startup, plus two for "screen state" (unsaved, cannot save) |
+| Filter | Shows only the rows matching any of the conditions you chose. You can choose several. The conditions are the twelve built from the counts at startup, plus two for "screen state" (unsaved, cannot save) |
 | Search | Shows only rows containing what you typed in the speaker, source text, translation or key |
 | Left column | The button at the top (the three lines) folds the filter and explanation column away and brings it back. On a narrow screen it becomes a drawer |
 | Clear conditions | Clears the filter and the search together |
@@ -765,8 +765,8 @@ That one counts rows in the working copy whose key is broken and which `publish`
 The "Save as" dialog only appears in browsers that support it.  
 In browsers that do not, it goes to your usual download folder.
 
-The eleven filters are the same categories `dwloc diff` counts.  
-`diff` splits the same eleven into three tiers, "needs work", "needs checking" and "informational", and prints each with a reason.  
+The twelve filters are the same categories `dwloc diff` counts.  
+`diff` splits the same twelve into three tiers, "needs work", "needs checking" and "informational", and prints each with a reason.  
 The names alone do not tell you where to start, so here is a table.
 
 | Tier | Category | What kind of rows |
@@ -775,6 +775,7 @@ The names alone do not tell you where to start, so here is a table.
 | Needs work | Present in other locales but missing here | Rows that other languages have a translation for, but this language has no row for |
 | Needs checking | Rows that disappeared from the script | Rows that were in the playback order at the last publication but are not there now |
 | Needs checking | Carry-over candidates | Guesses at where to move the translation for rows whose key changed because the English changed |
+| Needs checking | Carry-over sources | Untranslated rows that a translation can be brought in for, from the published file. The opposite direction of the row above |
 | Needs checking | Rows dropped by `publish` | Rows whose key is neither 16 hex digits nor a `line:`, and rows whose source-text hash does not match the key |
 | Needs checking | Line-ID rows not in the script | Rows whose line ID does not appear in the playback order |
 | Needs checking | Rows whose tags differ from the source | Rows where a tag in the source text is missing from the translation, and rows with a tag the source text does not have. Counts and values are compared too |
@@ -784,7 +785,7 @@ The names alone do not tell you where to start, so here is a table.
 | Informational | Rows whose tags do not balance | Rows in the translation where an opening tag has no closing tag, and rows with a closing tag only. They are not compared against the source text |
 
 On the real machine, ja had 32 untranslated, 17 dialogue rows not in the script, and 93 rows whose origin cannot be determined (`dwloc 0.5.0`, 18 September 2026).  
-When the working copy cannot be read, "untranslated", "rows dropped by `publish`" and "rows whose tags differ from the source" become "not judged".  
+When the working copy cannot be read, "untranslated", "rows dropped by `publish`", "rows whose tags differ from the source" and "carry-over sources" become "not judged".  
 That is why the same 32 appear as "rows with no translation in any locale".  
 If you want to read the reasons too, run `dwloc diff --all`.
 

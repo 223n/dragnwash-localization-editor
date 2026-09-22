@@ -184,6 +184,9 @@ func judgeBlockReason(sum Summary, c Category) reason.Reason {
 	if (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs) {
 		return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
 	}
+	if c.needsOrderNorms() && !sum.OrderNorms {
+		return reason.New(reason.JudgeOrderNoNorms, "再生順に norm 列がありません")
+	}
 	if c.needsOldOrder() && (!sum.OldOrder || sum.OldOrderStale) {
 		if sum.OldOrderReason != "" {
 			// 旧再生順を取り出せない理由は load.go が作る。識別子も一緒に

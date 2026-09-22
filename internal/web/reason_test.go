@@ -5,12 +5,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/linekey"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
@@ -221,11 +224,95 @@ func diffReasons(t *testing.T) []reason.Reason {
 	ready := base
 	ready.OrderKeys, ready.OrderLineIDs, ready.HasWorking = true, true, true
 	out = append(out, ready.JudgeBlockReason(diff.CatCarryover))
+	// 再生順に norm 列が無いとき。作業コピーは読めているので、引き継ぎ元だけが
+	// 判定できない。
+	out = append(out, ready.JudgeBlockReason(diff.CatCarryFrom))
+
+	// 引き継ぎ元の候補。行ごとに文面が違うので、判定を走らせて出させる。
+	out = append(out, carryFromReasons(t)...)
 
 	// 旧版が更新後の内容に見えるとき。[diff.Compare] が立てる印を写して作る。
 	stale := newStaleSummary(t, root)
 	out = append(out, stale.JudgeBlockReason(diff.CatCarryover))
 
+	return out
+}
+
+// carryFromReasons は引き継ぎ元の候補の理由を、判定を走らせて集める。
+//
+// [newReasonRoot] とは別に仕込むのは、こちらの判定が norm / fp / nlen 列を
+// 要るためである。あの一式へ列を足すと、あれを使っているほかの試験の入力まで
+// 変わる。
+//
+// 列の値は internal/linekey で計算する。書き写すと、移植がずれたときに
+// 見本も一緒にずれる。
+func carryFromReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	// 旧: 記号だけが違う文と、言い回しが変わる前の文。
+	const gateOld = "The gate opens, when the crest is clean!"
+	const washOld = "Grab the sponge before the water gets cold."
+	// 新: 正規化すると gateOld と同じになる文と、washOld に指紋が近い文。
+	const gateNew = "The gate opens when the crest is clean."
+	const washNew = "Grab the sponge before the water turns cold."
+
+	orderRow := func(node, orderText, lineID, source, speaker string) string {
+		n := linekey.Normalize(source)
+		return strings.Join([]string{
+			"L01 Ryan", "intro", node, orderText, lineID, key.For(source), speaker, "",
+			linekey.NormalizedKey(source), linekey.FingerprintText(source),
+			strconv.Itoa(utf8.RuneCountInString(n)),
+		}, ",")
+	}
+	workingRow := func(node, orderText, speaker, source string) string {
+		return strings.Join([]string{
+			key.For(source), "L01 Ryan", node, orderText, speaker, source, "",
+		}, ",")
+	}
+
+	root := t.TempDir()
+	write := func(rel string, lines []string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("data/script_order.csv", []string{
+		"section,phase,node,order,line_id,key,speaker,condition,norm,fp,nlen",
+		orderRow("Gate_1", "1", "line:gate0001", gateOld, "Ryan"),
+		orderRow("Wash_1", "1", "line:wash0001", washOld, "Kobold"),
+		"",
+	})
+	write("Translations/ja/strings.csv", []string{
+		"key,section,node,order,speaker,translation",
+		key.For(gateOld) + ",L01 Ryan,Gate_1,1,Ryan,紋章がきれいになるとゲートが開きます",
+		key.For(washOld) + ",L01 Ryan,Wash_1,1,Kobold,お湯が冷める前にスポンジを取ってください",
+		"",
+	})
+	write("Translations/_discovered/ja.working.csv", []string{
+		"key,section,node,order,speaker,source_en,translation",
+		workingRow("Gate_1", "1", "Ryan", gateNew),
+		workingRow("Wash_1", "1", "Kobold", washNew),
+		"",
+	})
+
+	repo, err := diff.LoadWith(root, diff.Options{Working: true})
+	if err != nil {
+		t.Fatalf("LoadWith: %v", err)
+	}
+	var out []reason.Reason
+	for _, f := range diff.Compare(repo, nil).Findings {
+		if f.Category == diff.CatCarryFrom {
+			out = append(out, f.NoteReason)
+		}
+	}
+	if len(out) != 2 {
+		t.Fatalf("引き継ぎ元の候補が %d 件。2件（文字の一致と指紋）を期待", len(out))
+	}
 	return out
 }
 

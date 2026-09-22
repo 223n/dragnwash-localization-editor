@@ -50,7 +50,8 @@ func (s Status) id() string {
 
 // Category は報告の種別。
 //
-// 並び順がそのまま表示順になる。要作業2つ → 要確認4つ → 参考4つ。
+// 表示順は [categories] が決める。要作業2つ → 要確認6つ → 参考4つ。
+// この const の並びは値の割り当てだけで、後ろに足しても表示順は変わらない。
 type Category int
 
 const (
@@ -79,12 +80,14 @@ const (
 	// 値は並びの最後に足す。表示順は categories が決めるので、ここへ割り込ませて
 	// 既存のカテゴリの値を動かす理由が無い。
 	CatTagMismatch
+	// CatCarryFrom は作業コピーの未翻訳の行のうち、引き継ぎ元の候補がある行。
+	CatCarryFrom
 )
 
 // categories は表示順に並べた全カテゴリ。
 var categories = []Category{
 	CatUntranslated, CatLocaleGap,
-	CatVanished, CatCarryover, CatDropped, CatStrayLineID, CatTagMismatch,
+	CatVanished, CatCarryover, CatCarryFrom, CatDropped, CatStrayLineID, CatTagMismatch,
 	CatNotPublished, CatScriptGap, CatUnknownOrigin, CatTagUnbalanced,
 }
 
@@ -103,6 +106,12 @@ type categoryInfo struct {
 	needsOrderKeys bool
 	// needsOrderLineIDs は再生順の台詞IDについて同じ意味。
 	needsOrderLineIDs bool
+	// needsOrderNorms は再生順の norm 列が無いと判定できないかどうか。
+	//
+	// norm は正規化した英文のハッシュで、列そのものが無い版の
+	// data/script_order.csv もある（上流の tools/rekey.py augment が後から
+	// 足した列）。無いときに「0 件」と書くと、引き継ぎ元が無いと読まれる。
+	needsOrderNorms bool
 	// needsOldOrder は1つ前の版の再生順が無いと判定できないかどうか。
 	// git から取り出せない環境（git が無い、リポジトリでない、履歴が1版しかない）
 	// でも道具そのものは動くので、ここも「0 件」ではなく理由を書く印として立てる。
@@ -161,6 +170,18 @@ var categoryTable = map[Category]categoryInfo{
 			"原文が変わってキーが変わった行の、引き継ぎ先の見当です。",
 			"1つ前の版の再生順を git から読み、新旧を台詞ID (line_id) で突き合わせて求めます。",
 			"訳は書き換えていません。中身を確かめてから、作業コピーで移してください。",
+		},
+	},
+	CatCarryFrom: {
+		// note は空。行ごとに引き継ぎ元が違うので、Finding.Note へ1件ずつ入れる
+		// （[carrySource.cause]）。
+		name: "引き継ぎ元の候補", id: "carry_from", status: StatusReview,
+		needsWorking: true, needsOrderNorms: true,
+		detail: []string{
+			"作業コピーにある未翻訳の行のうち、公開ファイルから訳を持ってこられそうな行です。",
+			"コミットされている再生順の norm 列（正規化した英文のハッシュ）と fp 列（指紋）で突き合わせます。",
+			"引き継ぎ候補と向きが逆です。あちらは旧行に引き継ぎ先を添え、こちらは新しい行に引き継ぎ元を添えます。",
+			"訳は書き換えていません。中身を確かめてから、作業コピーで写してください。",
 		},
 	},
 	CatDropped: {
@@ -256,6 +277,11 @@ func (c Category) needsOrderKeys() bool {
 // needsOrderLineIDs は再生順の台詞IDが読めていないと判定できないカテゴリかを返す。
 func (c Category) needsOrderLineIDs() bool {
 	return categoryTable[c].needsOrderLineIDs
+}
+
+// needsOrderNorms は再生順の norm 列が無いと判定できないカテゴリかを返す。
+func (c Category) needsOrderNorms() bool {
+	return categoryTable[c].needsOrderNorms
 }
 
 // needsOldOrder は1つ前の版の再生順が無いと判定できないカテゴリかを返す。
