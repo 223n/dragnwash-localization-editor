@@ -1,5 +1,7 @@
 # 第三者の著作物
 
+**日本語** | [English](THIRD_PARTY_NOTICES.en.md)
+
 このリポジトリと配布物に含まれる、第三者の著作物の一覧です。
 
 ## Font Awesome Free（アイコン）

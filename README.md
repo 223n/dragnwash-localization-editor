@@ -1,5 +1,6 @@
 # dragnwash-localization-editor
 
+**日本語** | [English](README.en.md)
 [Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization)の翻訳作業を助けるエディターです。
 
 Windows、macOS、Linuxで動きます。  
@@ -1117,6 +1118,9 @@ npm run lint:ja:fix   # 日本語の指摘のうち、機械的に直せるも�
 文体は「ですます調」です。  
 一文一行で書きます。  
 全角文字と半角文字の間にスペースを入れません。
+
+英語版の文書（`*.en.md`）は`markdownlint`だけで検査します。  
+`textlint`の規則は日本語向けなので、`.textlintignore`に並べてあります。
 
 `main`と`develop`への`push`、およびすべてのPull RequestでCIが同じ検査をします。  
 CIではあわせて、ワークフローの構文を`actionlint`で、安全性を`zizmor`で検査します。  

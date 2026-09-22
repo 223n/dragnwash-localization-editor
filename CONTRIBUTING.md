@@ -1,5 +1,7 @@
 # 貢献の手引き
 
+**日本語** | [English](CONTRIBUTING.en.md)
+
 このリポジトリへの変更は、IssueとPull Requestで受け付けます。
 
 ## 進め方

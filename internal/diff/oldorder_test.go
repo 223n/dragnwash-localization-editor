@@ -21,14 +21,33 @@ func gitRepo(t *testing.T) string {
 	return root
 }
 
-// runGit は root で git を走らせる。失敗したらテストを飛ばす。
-// 手元の git 設定に依らないよう、名前とメールは毎回与える。
-func runGit(t *testing.T, root string, args ...string) {
-	t.Helper()
-	full := append([]string{
+// gitTestOpts は、テストで動かす git に与える設定を返す。
+//
+// 名前とメールは、手元の git 設定に依らないために与える。
+//
+// gc.auto と maintenance.auto は、commit や merge が裏で起こす
+// 「git maintenance run --auto」を止めるために与える。この子プロセスは
+// gc.autoDetach の既定（true）で本体から分離するため、テストの本体が
+// 終わったあとも .git へ書き続けることがある。t.TempDir の後片付け
+// （RemoveAll）と競ると、中身を消したあとのディレクトリへ書き戻され、
+// 「directory not empty」で落ちる。CI で実際に起きた。
+//
+// 呼ぶたびに新しいスライスを返す。共有のスライスに append すると、
+// 呼び出しごとに同じ配列を書き換えてしまう。
+func gitTestOpts() []string {
+	return []string{
 		"-c", "user.name=dwloc test",
 		"-c", "user.email=dwloc@example.invalid",
-	}, args...)
+		"-c", "gc.auto=0",
+		"-c", "maintenance.auto=false",
+	}
+}
+
+// runGit は root で git を走らせる。失敗したらテストを飛ばす。
+// 設定は gitTestOpts が与える。
+func runGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	full := append(gitTestOpts(), args...)
 	cmd := exec.Command("git", full...)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {

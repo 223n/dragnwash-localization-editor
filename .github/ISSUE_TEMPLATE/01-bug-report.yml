@@ -4,8 +4,10 @@
 # labels に書くラベルはリポジトリに無ければ付かない。.github/labels.yml で定義してある。
 # 各要素の id は ASCII で付ける。日本語の label だけだと参照名が同じになり、フォームが壊れることがある。
 # validations.required は公開リポジトリでだけ効く。
-name: バグ報告
-description: 期待どおりに動かないことを報告します
+# 画面に出る文言は日英併記にする。区切りは全角スラッシュで、PR のテンプレートに合わせてある。
+# title と labels は日本語のままにする。labels.yml のラベル名と揃える必要があるため。
+name: バグ報告／Bug report
+description: 期待どおりに動かないことを報告します／Report something that does not work as expected
 title: '[バグ] '
 labels:
   - バグ
@@ -16,28 +18,31 @@ body:
         報告ありがとうございます。
         同じ内容のIssueが無いか、先に検索してください。
 
+        Thank you for the report.
+        Please search for an existing issue with the same content first.
+
   - type: textarea
     id: what-happened
     attributes:
-      label: 起きたこと
-      description: 何が起きたかを具体的に書いてください。
-      placeholder: 例：保存すると内容が消える
+      label: 起きたこと／What happened
+      description: 何が起きたかを具体的に書いてください。／Describe specifically what happened.
+      placeholder: 例：保存すると内容が消える／e.g. the content disappears when saved
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: 期待したこと
-      description: 本来どう動くべきかを書いてください。
+      label: 期待したこと／What you expected
+      description: 本来どう動くべきかを書いてください。／Describe how it should have behaved.
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: 再現の手順
-      description: 手順を順番に書いてください。
+      label: 再現の手順／Steps to reproduce
+      description: 手順を順番に書いてください。／List the steps in order.
       value: |
         1.
         1.
@@ -48,34 +53,34 @@ body:
   - type: input
     id: version
     attributes:
-      label: 版
-      description: 問題が起きた版、タグ、またはコミットです。
-      placeholder: 例：v1.2.0
+      label: 版／Version
+      description: 問題が起きた版、タグ、またはコミットです。／The version, tag or commit where it happened.
+      placeholder: 例／e.g. v1.2.0
     validations:
       required: true
 
   - type: textarea
     id: environment
     attributes:
-      label: 環境
-      description: OS、ブラウザ、実行環境の版などです。
+      label: 環境／Environment
+      description: OS、ブラウザ、実行環境の版などです。／Your OS, your browser and the versions of what you run it on.
       value: |
         - OS:
-        - ブラウザ:
-        - その他:
+        - ブラウザ／Browser:
+        - その他／Other:
 
   - type: textarea
     id: logs
     attributes:
-      label: ログやエラーの出力
-      description: そのまま貼り付けてください。自動でコードブロックになります。
+      label: ログやエラーの出力／Logs and error output
+      description: そのまま貼り付けてください。自動でコードブロックになります。／Paste it as it is. It becomes a code block automatically.
       render: text
 
   - type: checkboxes
     id: precheck
     attributes:
-      label: 確認したこと
+      label: 確認したこと／What you checked
       options:
-        - label: 同じ内容のIssueが無いことを確かめました
+        - label: 同じ内容のIssueが無いことを確かめました／I checked that there is no issue with the same content
           required: true
-        - label: 最新の版でも起きることを確かめました
+        - label: 最新の版でも起きることを確かめました／I checked that it still happens on the latest version
