@@ -324,9 +324,7 @@ func diffCarryTree(t *testing.T) string {
 	for _, args := range [][]string{
 		{"init"},
 		{"add", "."},
-		// 手元の git 設定に依らないよう、名前とメールはここで与える。
-		{"-c", "user.name=dwloc test", "-c", "user.email=dwloc@example.invalid",
-			"commit", "-m", "before the game update"},
+		append(gitTestOpts(), "commit", "-m", "before the game update"),
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
@@ -547,8 +545,7 @@ func writeCarryTree(t *testing.T, root, newOrder, oldOrder, published string) {
 	}
 	for _, args := range [][]string{
 		{"add", "."},
-		{"-c", "user.name=dwloc test", "-c", "user.email=dwloc@example.invalid",
-			"commit", "-m", "replace the pre-update state"},
+		append(gitTestOpts(), "commit", "-m", "replace the pre-update state"),
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
