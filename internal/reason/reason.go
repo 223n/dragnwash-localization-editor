@@ -80,6 +80,14 @@ const (
 	// JudgeOldOrderUnreadable は1つ前の版の再生順を取り出せていないこと。
 	// より細かい理由が分かるときは OldOrder* のほうが入る。
 	JudgeOldOrderUnreadable = "judge_old_order_unreadable"
+	// JudgeOrderNoNorms は再生順に norm 列の値が1つも無いこと。
+	// 正規化した英文のハッシュが無いと、引き継ぎ元を探せない。
+	JudgeOrderNoNorms = "judge_order_no_norms"
+	// JudgeNoLayoutRisks はゲームが測ったはみ出しの記録が無いこと。
+	// 測っていないので、「はみ出す行は無い」とは言えない。
+	JudgeNoLayoutRisks = "judge_no_layout_risks"
+	// JudgeLayoutRisksNotRead はその記録があるのに読まなかったこと（--no-working）。
+	JudgeLayoutRisksNotRead = "judge_layout_risks_not_read"
 )
 
 // 1つ前の版の再生順を取り出せない理由（internal/diff の oldorder.go と load.go）。
@@ -141,6 +149,23 @@ const (
 	NoteCarryCopiedUnknown = "note_carry_copied_unknown"
 )
 
+// 引き継ぎ元の候補の注記（internal/diff の carrySource.cause）。
+//
+// 置換は source（旧キーと位置を " / " で連ねたもの）、key、pos、distance。
+// 引き継ぎ先（NoteCarry*）と分けてあるのは、報告が付く行と指す向きが逆だから。
+const (
+	// NoteCarryFromSame は正規化した英文が一致したこと（書式と記号だけの違い）。
+	NoteCarryFromSame = "note_carry_from_same"
+	// NoteCarryFromSimilar は指紋が近いこと。置換の distance にその距離が入る。
+	NoteCarryFromSimilar = "note_carry_from_similar"
+)
+
+// NoteLayoutRisk はゲームが測ってはみ出しの恐れがあると出た行であること
+// （internal/diff の LayoutRisk.cause）。
+//
+// 置換は ratio、axis、required、available。どれもゲームが書いた綴りのまま渡す。
+const NoteLayoutRisk = "note_layout_risk"
+
 // NoteLocaleGap は他のロケールにあってこのロケールに無いこと。置換は count。
 const NoteLocaleGap = "note_locale_gap"
 
@@ -156,6 +181,20 @@ const (
 	NoteTagUnopened = "note_tag_unopened"
 	// NoteTagUnclosedUnopened は両方あること。置換は unclosed と unopened。
 	NoteTagUnclosedUnopened = "note_tag_unclosed_unopened"
+)
+
+// 原文とタグの構成が違う行の注記（internal/diff の TagDiff.Note）。
+//
+// 開閉の3つ（NoteTag*）と分けてあるのは、直し方が違うからである。開閉は
+// 訳の中だけで直せるが、こちらは原文の側を見て合わせる。置換の作りは
+// 同じで、片方だけのときは tags、両方あるときは missing と extra に分かれる。
+const (
+	// NoteTagMissing は原文にあって訳に無いタグがあること。置換は tags。
+	NoteTagMissing = "note_tag_missing"
+	// NoteTagExtra は訳にあって原文に無いタグがあること。置換は tags。
+	NoteTagExtra = "note_tag_extra"
+	// NoteTagMissingExtra は両方あること。置換は missing と extra。
+	NoteTagMissingExtra = "note_tag_missing_extra"
 )
 
 // 保存できない理由（internal/edit の file.go）。
@@ -203,6 +242,7 @@ const (
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOldOrderUnreadable,
+	JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
 
 	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderOnlyOneVersion,
 	OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs, OldOrderStale,
@@ -214,9 +254,15 @@ var all = []string{
 
 	NoteCarryMoved, NoteCarryCopied, NoteCarryCopiedUnknown,
 
+	NoteCarryFromSame, NoteCarryFromSimilar,
+
+	NoteLayoutRisk,
+
 	NoteLocaleGap,
 
 	NoteTagUnclosed, NoteTagUnopened, NoteTagUnclosedUnopened,
+
+	NoteTagMissing, NoteTagExtra, NoteTagMissingExtra,
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,

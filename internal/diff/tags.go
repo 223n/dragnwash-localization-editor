@@ -154,3 +154,167 @@ func tagFindings(idx *orderIndex, loc Locale) []Finding {
 	}
 	return out
 }
+
+// TagDiff は原文と訳のタグの構成を突き合わせた結果。
+//
+// [TagBalance] と分けてあるのは、要る材料と直し方が違うからである。開閉は訳
+// だけで判定できて訳の中で直せるが、こちらは原文が要るし、直すときは原文の
+// 構造に合わせる。
+type TagDiff struct {
+	// Missing は原文にあって訳に無いタグ。原文での出現順で、書かれた綴りのまま。
+	Missing []string
+	// Extra は訳にあって原文に無いタグ。訳での出現順で、書かれた綴りのまま。
+	Extra []string
+}
+
+// Same はタグの構成がそろっているか。
+func (d TagDiff) Same() bool {
+	return len(d.Missing) == 0 && len(d.Extra) == 0
+}
+
+// CompareTags は原文と訳のタグの構成を突き合わせる。
+//
+// 見るのはタグの多重集合で、並びは見ない。TextMeshPro は入れ違いを直して描く
+// ので（[CheckTags] と同じ理由）、<b><i> と <i><b> を違いとして出すと、直す
+// ところが無い報告になる。数は見る。原文に <i> が2組あって訳に1組しかない行は、
+// 強調がひとつ落ちている。
+//
+// 突き合わせは正規化した綴りで行い、報告は書かれた綴りのまま返す。正規化は
+// 小文字化と、閉じ括弧の直前の空白を落とすことだけである（[canonicalTag]）。
+// 値まで含めて数えるので <size=70%> と <size=60%> は別のタグになる。値を
+// 無視すると、大きさを書き換えた訳が「そろっている」と出てしまう。書き換えは
+// Missing と Extra の両方に出る（原文の <size=70%> が足りず、訳の <size=60%>
+// が余る）。
+//
+// 自分で閉じるタグ（<br/>）も数える。[CheckTags] は開閉の数え上げから外して
+// いるが、こちらが見るのは「原文にあったものが訳にもあるか」なので、落ちて
+// いれば直す対象である。
+func CompareTags(source, translation string) TagDiff {
+	src := countTags(source)
+	dst := countTags(translation)
+	return TagDiff{
+		Missing: excessTags(src, dst),
+		Extra:   excessTags(dst, src),
+	}
+}
+
+// Note は結果を注記（[Finding.Note] と [Finding.NoteReason]）にする。
+//
+// 片方だけのときと両方のときで識別子を分けるのは [TagBalance.Note] と同じ
+// 理由で、目録の文面に「無いほうの見出し」を残さないためである。
+func (d TagDiff) Note() reason.Reason {
+	missing := strings.Join(d.Missing, " ")
+	extra := strings.Join(d.Extra, " ")
+	switch {
+	case len(d.Missing) > 0 && len(d.Extra) > 0:
+		return reason.New(reason.NoteTagMissingExtra,
+			"原文にあって訳に無いタグ: "+missing+"／訳にあって原文に無いタグ: "+extra,
+			"missing", missing, "extra", extra)
+	case len(d.Missing) > 0:
+		return reason.New(reason.NoteTagMissing, "原文にあって訳に無いタグ: "+missing, "tags", missing)
+	case len(d.Extra) > 0:
+		return reason.New(reason.NoteTagExtra, "訳にあって原文に無いタグ: "+extra, "tags", extra)
+	default:
+		return reason.Reason{}
+	}
+}
+
+// tagCount は1つの文字列に出てきたタグを、正規化した綴りごとに数えたもの。
+type tagCount struct {
+	// order は正規化した綴りを、初めて出てきた順に並べたもの。
+	// 報告の並びを原文（または訳）に出てきた順にするために持つ。
+	order []string
+	// count は正規化した綴りごとの個数。
+	count map[string]int
+	// spelled は正規化した綴りごとの、書かれたままの綴り。初出のものを採る。
+	// <I> と <i> のように綴りだけが違うものは、先に出たほうで報告する。
+	spelled map[string]string
+}
+
+// countTags は文字列のタグを数える。
+func countTags(text string) tagCount {
+	c := tagCount{count: make(map[string]int), spelled: make(map[string]string)}
+	for _, m := range tagToken.FindAllString(text, -1) {
+		canon := canonicalTag(m)
+		if _, seen := c.count[canon]; !seen {
+			c.order = append(c.order, canon)
+			c.spelled[canon] = m
+		}
+		c.count[canon]++
+	}
+	return c
+}
+
+// excessTags は a にあって b に足りないぶんの綴りを、a の出現順で並べる。
+//
+// 足りない数だけ綴りを繰り返す。原文に <i> が2組ある行で1組だけ落ちている
+// ことを、1件として出したいためである。
+func excessTags(a, b tagCount) []string {
+	var out []string
+	for _, canon := range a.order {
+		for i := a.count[canon] - b.count[canon]; i > 0; i-- {
+			out = append(out, a.spelled[canon])
+		}
+	}
+	return out
+}
+
+// canonicalTag は綴りの揺れを落として、同じタグかどうかを数えられる形にする。
+//
+// 落とすのは2つだけ。大文字小文字（[CheckTags] が名前を区別しないのと同じ
+// 扱いにする。<gradient="Gold"> と <gradient="gold"> も同じ色を指す）と、
+// 閉じ括弧の直前の空白（<i > は手打ちの揺れで、別のタグではない）。
+//
+// 引数は [tagToken] が拾った綴りであることを前提にする。末尾は必ず ">" で、
+// 中に ">" は入らない。
+func canonicalTag(token string) string {
+	s := strings.ToLower(token)
+	return strings.TrimRight(strings.TrimSuffix(s, ">"), " \t") + ">"
+}
+
+// tagMismatchFindings は「原文とタグの構成が違う行」を集める。
+//
+// 見るのは作業コピーだけである。公開ファイルには原文の列が無く、突き合わせる
+// 相手がいない。読んでいないときは [Summary.canJudge] が false になり、
+// 0 件ではなく理由が出る。CI には作業コピーが無いので、この判定が CI の
+// 終了コードを動かすことはない。
+//
+// 対象は publish が採る行のうち、原文と訳の両方が入っているものだけ。
+//
+//   - 原文が空の行は、ゲームがその文字をまだ読み込んでいない（移植仕様
+//     「作業コピー生成 R7/R8」）。相手がいないので判定できない。
+//   - 訳が空の行は「未翻訳」に出ている。訳が無ければ原文のタグは全部
+//     「訳に無い」ことになるので、ここでも出すと未翻訳の行がもう一度、
+//     しかもタグの話として並ぶ。
+//
+// 同じキーの行が2つあれば、先に報告した行だけを出す（[tagFindings] と同じ
+// 理由で、画面はバッジをキー単位で付ける）。
+func tagMismatchFindings(idx *orderIndex, loc Locale) []Finding {
+	if !loc.HasWorking {
+		return nil
+	}
+	var out []Finding
+	seen := make(map[string]struct{})
+	for _, row := range loc.Working {
+		k, adopted := PublishKey(row)
+		if !adopted || k == "" {
+			continue
+		}
+		if row.SourceEn == "" || row.Translation == "" {
+			continue
+		}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		d := CompareTags(row.SourceEn, row.Translation)
+		if d.Same() {
+			continue
+		}
+		seen[k] = struct{}{}
+		f := workingFinding(idx, row)
+		note := d.Note()
+		f.Note, f.NoteReason = note.Text, note
+		out = append(out, f)
+	}
+	return out
+}
