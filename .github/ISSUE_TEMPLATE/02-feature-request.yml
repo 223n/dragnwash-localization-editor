@@ -1,6 +1,6 @@
 # 機能の要望のフォーム。書き方の注意は 01-bug-report.yml にある。
-name: 機能の要望
-description: 新しい機能や改善を提案します
+name: 機能の要望／Feature request
+description: 新しい機能や改善を提案します／Propose a new feature or an improvement
 title: '[要望] '
 labels:
   - 機能追加
@@ -11,44 +11,47 @@ body:
         提案ありがとうございます。
         解決したいことを中心に書いてください。方法は後から一緒に考えられます。
 
+        Thank you for the proposal.
+        Write mainly about what you want solved. We can work out how, together, later.
+
   - type: textarea
     id: problem
     attributes:
-      label: 解決したいこと
-      description: 今、何に困っているかを書いてください。
-      placeholder: 例：毎回手で整形していて時間がかかる
+      label: 解決したいこと／What you want solved
+      description: 今、何に困っているかを書いてください。／Describe what is giving you trouble right now.
+      placeholder: 例：毎回手で整形していて時間がかかる／e.g. formatting it by hand every time takes too long
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: 提案する方法
-      description: どう動けばよいかを書いてください。
+      label: 提案する方法／The approach you propose
+      description: どう動けばよいかを書いてください。／Describe how it should behave.
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: 考えた他の方法
-      description: 他に考えた方法があれば書いてください。
+      label: 考えた他の方法／Other approaches you considered
+      description: 他に考えた方法があれば書いてください。／Write down any other approach you thought about.
 
   - type: dropdown
     id: scope
     attributes:
-      label: 関係する範囲
-      description: 関係するところを選んでください。複数選べます。
+      label: 関係する範囲／The area it touches
+      description: 関係するところを選んでください。複数選べます。／Choose the areas it touches. You can choose several.
       multiple: true
       options:
-        - 文書
-        - ワークフロー
-        - 設定
-        - その他
+        - 文書／Documents
+        - ワークフロー／Workflows
+        - 設定／Settings
+        - その他／Other
 
   - type: checkboxes
     id: contribution
     attributes:
-      label: 貢献
+      label: 貢献／Contributing
       options:
-        - label: 自分で実装するつもりがあります
+        - label: 自分で実装するつもりがあります／I intend to implement it myself

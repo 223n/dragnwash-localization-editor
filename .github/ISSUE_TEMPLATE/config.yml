@@ -8,6 +8,6 @@ blank_issues_enabled: false
 # テンプレートから作ったリポジトリでは 223n/dragnwash-localization-editor を自分のリポジトリに書き換える。
 # 脆弱性の報告先は Settings > Advanced Security で Private vulnerability reporting を有効にしないと使えない
 contact_links:
-  - name: 脆弱性の報告
+  - name: 脆弱性の報告／Report a vulnerability
     url: https://github.com/223n/dragnwash-localization-editor/security/advisories/new
-    about: セキュリティに関わる問題は Issue に書かず、非公開で報告してください。
+    about: セキュリティに関わる問題は Issue に書かず、非公開で報告してください。／Do not write security issues in an issue. Report them privately.

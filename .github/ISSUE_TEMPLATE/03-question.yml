@@ -1,6 +1,6 @@
 # 質問のフォーム。書き方の注意は 01-bug-report.yml にある。
-name: 質問
-description: 使い方や仕様について質問します
+name: 質問／Question
+description: 使い方や仕様について質問します／Ask about how to use it or how it is meant to work
 title: '[質問] '
 labels:
   - 質問
@@ -8,19 +8,19 @@ body:
   - type: textarea
     id: question
     attributes:
-      label: 聞きたいこと
-      description: 何を知りたいかを書いてください。
+      label: 聞きたいこと／What you want to ask
+      description: 何を知りたいかを書いてください。／Describe what you want to know.
     validations:
       required: true
 
   - type: textarea
     id: tried
     attributes:
-      label: 試したことと調べたこと
-      description: すでに試したことや、読んだ文書があれば書いてください。
+      label: 試したことと調べたこと／What you tried and looked up
+      description: すでに試したことや、読んだ文書があれば書いてください。／Write down anything you already tried, and any document you read.
 
   - type: textarea
     id: context
     attributes:
-      label: 背景
-      description: 何をしようとしていて、その質問に至ったかを書いてください。
+      label: 背景／Background
+      description: 何をしようとしていて、その質問に至ったかを書いてください。／Describe what you were trying to do that led you to the question.
