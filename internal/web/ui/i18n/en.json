@@ -164,6 +164,7 @@
     "reason.judge_working_not_read": "The working copy was not read",
     "reason.judge_working_missing": "There is no working copy",
     "reason.judge_order_unreadable": "The play order could not be read",
+    "reason.judge_order_no_line_ids": "The play order has no line IDs (line_id)",
     "reason.judge_order_no_norms": "The play order has no norm column",
     "reason.judge_no_layout_risks": "No record of Check translation layout having been run in the game",
     "reason.judge_layout_risks_not_read": "The overflow record was not read",

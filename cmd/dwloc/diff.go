@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
@@ -287,10 +286,17 @@ func diffErrorText(root string, err error) string {
 // そちらの理由で止めたときもここで書きます。引き継ぎ候補だけを見ていたころは、
 // 台詞IDが無いときに台本に無い台詞ID行の保留を書いていませんでした。
 //
+// どのカテゴリが台詞IDを要るかは [diff.OrderLineIDCategories] に尋ね、その表示順の
+// まま並べます。名前を CLI 側に並べて持つと、表の印を足し引きしたときに、
+// 警告だけが古い名指しのまま残ります。text 形式の見出しと画面の断り書きも、
+// 同じ関数から名前を引いています。
+//
 // 保留したかどうかと理由は、ロケールごとの要約（[diff.Summary.CanJudge] と
 // [diff.Summary.JudgeBlockReason]）から取ります。text 形式の本文の
 // 「判定していません（理由）」と同じ判断・同じ文面になります。理由が空のときの
 // 受け皿も JudgeBlockReason が持っているので、「（）」にはなりません。
+// csv には text 形式の見出しが無いので、キーは読めていて台詞IDだけが無いことは、
+// この理由の文面（「再生順に台詞ID (line_id) がありません」）だけで伝わります。
 //
 // 同じ理由で止めたカテゴリは1行にまとめ、同じ行になるロケールも1行にまとめます。
 // 報告するロケールが全部同じなら、ロケール名は書きません。git を使っていない
@@ -301,7 +307,7 @@ func diffErrorText(root string, err error) string {
 // 読めません。台本から消えた行などは判定しません」と書いていて、どちらの
 // カテゴリもそこに入るからです。同じ理由を2度書くことになります。
 func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
-	cats := lineIDCategories(report)
+	cats := diff.OrderLineIDCategories()
 	type held struct {
 		why     string
 		cats    []diff.Category
@@ -360,52 +366,6 @@ func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
 	}
 	fmt.Fprintf(stderr, "dwloc:       %s の行が無いことは、0 件という意味ではありません。\n",
 		joinCategoryIDs(heldCats))
-}
-
-// judgeReady は、判定の材料を全部そろえたロケールの要約です。
-//
-// [lineIDCategories] が、ここから台詞IDだけを欠いて、どのカテゴリが止まるかを
-// 尋ねるために使います。internal/diff が判定の材料を増やしたら、ここにも足します。
-// 足し忘れると、その材料を要るカテゴリがここで判定できないことになり、
-// 台詞IDを要るかどうかを尋ねられなくなります（TestLineIDCategories が気づかせます）。
-var judgeReady = diff.Summary{
-	HasWorking:     true,
-	OrderKeys:      true,
-	OrderLineIDs:   true,
-	OrderNorms:     true,
-	HasLayoutRisks: true,
-	OldOrder:       true,
-}
-
-// lineIDCategories は、再生順の台詞IDが無いと判定できないカテゴリを、値の順に返します。
-//
-// internal/diff はその印（カテゴリの表の needsOrderLineIDs）を外へ出していないので、
-// [diff.Summary.CanJudge] に尋ねて引き出します。材料を全部そろえた要約
-// （[judgeReady]）では判定でき、そこから台詞IDだけを欠くと判定できなくなる
-// カテゴリが、それに当たります。名前を CLI 側に並べて持つと、表の印を足し引き
-// したときに、警告だけが古い名指しのまま残ります。text 形式の見出しも、同じ理由で
-// 名前を表から引いています。
-//
-// 候補のカテゴリは要約の Counts から取ります。Counts には全カテゴリが入る約束です。
-// 並びは値の順で、いまの2つは text 形式の見出しの並び（表示順）と同じです。
-func lineIDCategories(report *diff.Report) []diff.Category {
-	noLineIDs := judgeReady
-	noLineIDs.OrderLineIDs = false
-	seen := make(map[diff.Category]bool)
-	var out []diff.Category
-	for _, sum := range report.Locales {
-		for c := range sum.Counts {
-			if seen[c] {
-				continue
-			}
-			seen[c] = true
-			if judgeReady.CanJudge(c) && !noLineIDs.CanJudge(c) {
-				out = append(out, c)
-			}
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 // joinCategoryNames はカテゴリの日本語名を「」で囲み、「と」でつなぎます。

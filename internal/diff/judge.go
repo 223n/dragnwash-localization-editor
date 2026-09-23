@@ -46,8 +46,9 @@ func (s Summary) JudgeBlockReason(c Category) reason.Reason {
 //
 // 表（categoryTable の needsOrderLineIDs）の印を読むだけで、判定は足さない。
 // 画面の断り書き（internal/web の buildNotes）が、再生順のキーは読めていて台詞IDだけが
-// 無いときに、保留にしたカテゴリを名指しするために開ける。CLI の見出し
-// （lineIDCategoryNames）と同じ印を読むので、印を足し引きしても2つの名指しはずれない。
+// 無いときに、保留にしたカテゴリを名指しするために開ける。text 形式の見出し
+// （lineIDCategoryNames）と csv の警告（cmd/dwloc の warnHeldLineIDCategories）も
+// ここから引くので、印を足し引きしても3つの名指しはずれない。
 func OrderLineIDCategories() []Category {
 	var out []Category
 	for _, c := range categories {

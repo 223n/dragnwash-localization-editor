@@ -492,11 +492,17 @@ func TestRunDiffCSVWarnsWhenOrderHasNoLineIDs(t *testing.T) {
 	}
 	// 台本に無い台詞ID行も同じ理由で止まるので、同じ1行に入る。
 	checkContains(t, "stderr", stderr, []string{
-		"警告: 「引き継ぎ候補」と「台本に無い台詞ID行」は判定しません（再生順を読めていません）。",
+		"警告: 「引き継ぎ候補」と「台本に無い台詞ID行」は判定しません（再生順に台詞ID (line_id) がありません）。",
 		"carryover と stray_line_id の行が無いことは、0 件という意味ではありません。",
 	})
 	if n := strings.Count(stderr, "「引き継ぎ候補」"); n != 1 {
 		t.Errorf("保留を %d 回書いている:\n%s", n, stderr)
+	}
+	// csv には text 形式の見出しが無いので、理由の文面だけで言い分ける。キーは
+	// 読めていて、台本から消えた行は csv に出ている。「再生順を読めていません」と
+	// 書くと、その行まで当てにならないように読める。
+	if strings.Contains(stderr, "再生順を読めていません") {
+		t.Errorf("キーは読めているのに、再生順を丸ごと読めていないように書いている:\n%s", stderr)
 	}
 
 	// text 形式は本文に理由を書くので、標準エラーへ重ねない。
@@ -507,7 +513,10 @@ func TestRunDiffCSVWarnsWhenOrderHasNoLineIDs(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("text 形式で標準エラーへ何か出ている:\n%s", stderr)
 	}
-	checkContains(t, "stdout", stdout, []string{"判定していません（再生順を読めていません）"})
+	checkContains(t, "stdout", stdout, []string{"判定していません（再生順に台詞ID (line_id) がありません）"})
+	if strings.Contains(stdout, "再生順を読めていません") {
+		t.Errorf("キーは読めているのに、本文が再生順を丸ごと読めていないように書いている:\n%s", stdout)
+	}
 }
 
 // TestRunDiffCSVWarnsWhenStrayLineIDIsHeld は、再生順に台詞IDが無いせいで
@@ -560,7 +569,7 @@ func TestRunDiffCSVWarnsWhenStrayLineIDIsHeld(t *testing.T) {
 	// 同じ理由で止めたカテゴリは1行にまとめる。報告するのは ja だけなので、
 	// ロケール名は添えない。
 	checkContains(t, "stderr", stderr, []string{
-		"dwloc: 警告: " + names + "は判定しません（再生順を読めていません）。\n",
+		"dwloc: 警告: " + names + "は判定しません（再生順に台詞ID (line_id) がありません）。\n",
 		"stray_line_id",
 	})
 	if n := strings.Count(stderr, "は判定しません"); n != 1 {
@@ -584,32 +593,57 @@ func diffAllCounts(t *testing.T) map[diff.Category]int {
 	return rep.Locales[0].Counts
 }
 
-// TestLineIDCategories は、台詞IDを要るカテゴリを internal/diff から正しく
-// 引き出せていることを見る。
+// TestWarnHeldLineIDCategoriesNamesWhatIsHeld は、台詞IDだけが無いときの警告が、
+// 実際に保留にしたカテゴリだけを名指しすることを見る。
 //
-// 見ているのは2つ。judgeReady で全カテゴリを判定できること。internal/diff が
-// 判定の材料を増やしたのに judgeReady へ足し忘れると、その材料を要るカテゴリは
-// 台詞IDを要るかどうかを尋ねられなくなり、警告から黙って落ちる。もう1つは、
-// 引き出した中に引き継ぎ候補と台本に無い台詞ID行があり、キーだけで判定できる
-// カテゴリが混ざらないこと。前者が落ちると csv でその保留が見えなくなり、
-// 後者が混ざると止めていないカテゴリを止めたと書く。
-func TestLineIDCategories(t *testing.T) {
+// 名指しするカテゴリは internal/diff の表の印（[diff.OrderLineIDCategories]）から
+// 引く。見ているのは2つ。引き継ぎ候補と台本に無い台詞ID行を名指しすること。
+// 落ちると csv でその保留が見えなくなる。キーだけで判定できるカテゴリ（台本から
+// 消えた行など）を名指ししないこと。混ざると止めていないカテゴリを止めたと書く。
+// どちらも [diff.Summary.CanJudge] と突き合わせるので、表の印と判定がずれたときも
+// ここで落ちる。
+//
+// 材料を全部そろえた要約から、台詞IDだけを欠いて確かめる。そろえ方が足りないと
+// 別の理由で止まったカテゴリが混ざり、突き合わせが成り立たない。そのため先に、
+// そろえた要約で全カテゴリを判定できることを見る。internal/diff が判定の材料を
+// 増やしたら、ここの ready に足す。
+func TestWarnHeldLineIDCategoriesNamesWhatIsHeld(t *testing.T) {
 	counts := diffAllCounts(t)
+	ready := diff.Summary{
+		Locale: "ja", Counts: counts,
+		HasWorking: true, OrderKeys: true, OrderLineIDs: true, OrderNorms: true,
+		HasLayoutRisks: true, OldOrder: true,
+	}
 	for c := range counts {
-		if !judgeReady.CanJudge(c) {
-			t.Errorf("judgeReady で %s を判定できない（%s）。判定の材料が増えたなら judgeReady に足す",
-				c.ID(), judgeReady.JudgeBlockReason(c))
+		if !ready.CanJudge(c) {
+			t.Fatalf("材料をそろえた要約で %s を判定できない（%s）。判定の材料が増えたなら ready に足す",
+				c.ID(), ready.JudgeBlockReason(c))
 		}
 	}
 
-	got := lineIDCategories(&diff.Report{Locales: []diff.Summary{{Locale: "ja", Counts: counts}}})
-	for _, want := range []diff.Category{diff.CatCarryover, diff.CatStrayLineID} {
-		if !slices.Contains(got, want) {
-			t.Errorf("台詞IDを要るカテゴリに %s が無い: %v", want.ID(), got)
+	noLineIDs := ready
+	noLineIDs.OrderLineIDs = false
+	var errOut bytes.Buffer
+	warnHeldLineIDCategories(&diff.Report{Locales: []diff.Summary{noLineIDs}}, &errOut)
+	got := errOut.String()
+
+	var named []diff.Category
+	for c := range counts {
+		in := strings.Contains(got, "「"+c.String()+"」")
+		if held := !noLineIDs.CanJudge(c); in != held {
+			t.Errorf("%s: 判定していない = %v なのに、警告で名指ししたか = %v:\n%s", c.ID(), held, in, got)
+		}
+		if in {
+			named = append(named, c)
 		}
 	}
-	if slices.Contains(got, diff.CatVanished) {
-		t.Errorf("キーだけで判定できる %s が混ざっている: %v", diff.CatVanished.ID(), got)
+	for _, want := range []diff.Category{diff.CatCarryover, diff.CatStrayLineID} {
+		if !slices.Contains(named, want) {
+			t.Errorf("台詞IDを要る %s を名指ししていない:\n%s", want.ID(), got)
+		}
+	}
+	if slices.Contains(named, diff.CatVanished) {
+		t.Errorf("キーだけで判定できる %s を名指ししている:\n%s", diff.CatVanished.ID(), got)
 	}
 }
 
@@ -630,7 +664,9 @@ func TestWarnHeldLineIDCategories(t *testing.T) {
 		return diff.Summary{Locale: locale, OrderKeys: true, OrderLineIDs: true, OldOrder: true, Counts: counts}
 	}
 	const (
-		bothHeld     = "「引き継ぎ候補」と「台本に無い台詞ID行」は判定しません（再生順を読めていません）。\n"
+		// キーは読めているので、理由は「再生順を読めていません」ではなく、台詞IDが
+		// 無いことを言う。csv には text 形式の見出しが無く、この文面だけで読み分ける。
+		bothHeld     = "「引き継ぎ候補」と「台本に無い台詞ID行」は判定しません（再生順に台詞ID (line_id) がありません）。\n"
 		tailCarry    = "dwloc:       carryover の行が無いことは、0 件という意味ではありません。\n"
 		tailBoth     = "dwloc:       carryover と stray_line_id の行が無いことは、0 件という意味ではありません。\n"
 		staleWhy     = "読めた1つ前の再生順が、いまの版と同じ内容に見えます"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // ここは画面の1行と件数を組み立てるところ（model.go）の試験。
@@ -204,6 +205,8 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 	note := func(key string, kv ...string) string { return s.cat.T(ja, key, kv...) }
 	// 台詞IDだけが無いときの断りの頭。名指しの中身は TestLineIDNoteNamesWhatIsHeld が見る。
 	lineIDsHead, _, _ := strings.Cut(note("note.order_line_ids_missing"), "{categories}")
+	// 引き継ぎ候補を止めたことの断りの頭。理由の中身は集計ごとに変わる。
+	oldHeldHead, _, _ := strings.Cut(note("note.old_order_held"), "{reason}")
 
 	// 何もかも読めた集計。ここから1か所ずつ崩す。
 	base := func() diff.Summary {
@@ -272,6 +275,37 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 			sum:     func() diff.Summary { sum := base(); sum.OrderLineIDs = false; return sum },
 			want:    []string{lineIDsHead},
 			notWant: []string{note("note.order_unreadable")},
+		},
+		{
+			// 1つ前の再生順だけが無い。引き継ぎ候補を止めた理由はそれだけなので、
+			// ここで断る。
+			name: "1つ前の再生順が無い", hasSource: true,
+			sum:  func() diff.Summary { sum := base(); sum.OldOrder = false; return sum },
+			want: []string{oldHeldHead},
+		},
+		{
+			// いまの再生順に台詞IDが無ければ、引き継ぎ候補はそのせいで止まっていて、
+			// すぐ上の断りが名指ししている。1つ前の再生順も無いからといってここでも
+			// 断ると、理由（JudgeBlockReason はいまの再生順の欠けを先に返す）まで
+			// 同じ文が2度並ぶ。
+			name: "台詞IDも1つ前の再生順も無い", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.OrderLineIDs, sum.OldOrder = false, false
+				return sum
+			},
+			want:    []string{lineIDsHead},
+			notWant: []string{oldHeldHead},
+		},
+		{
+			name: "再生順のキーも1つ前の再生順も無い", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.OrderKeys, sum.OldOrder = false, false
+				return sum
+			},
+			want:    []string{note("note.order_unreadable")},
+			notWant: []string{oldHeldHead},
 		},
 		{
 			name: "原文の列が無い", hasSource: false,
@@ -360,6 +394,59 @@ func TestLineIDNoteNamesWhatIsHeld(t *testing.T) {
 			}
 			if lang == "en" && hasJapanese(got) {
 				t.Errorf("英語の断り書きに日本語が混ざっている: %q", got)
+			}
+		})
+	}
+}
+
+// TestLineIDCountsGiveTheLineIDReason は、再生順のキーは読めていて台詞IDだけが
+// 無いときに、件数の欄の「判定していません（理由）」が、台詞IDが無いことを
+// 理由にすることを見る。
+//
+// 理由を「再生順を読めていません」にすると、同じ件数の欄で台本から消えた行に
+// 数が出ていることと食い違う（キーは読めているので判定できている）。断り書き
+// （TestLineIDNoteNamesWhatIsHeld）が台詞IDのことを言っているのに、件数の欄だけが
+// 再生順を丸ごと読めていないように書くことにもなる。
+func TestLineIDCountsGiveTheLineIDReason(t *testing.T) {
+	for _, lang := range []string{"ja", "en"} {
+		t.Run(lang, func(t *testing.T) {
+			s := newTestServer(t, Options{UILang: lang})
+			cat := s.cat.lookup(lang)
+			noLineIDsKey := "reason." + reason.JudgeOrderNoLineIDs
+			want := s.cat.T(cat, noLineIDsKey)
+			if want == noLineIDsKey {
+				t.Fatalf("%s の目録に %s が無い", lang, noLineIDsKey)
+			}
+			if want == s.cat.T(cat, "reason."+reason.JudgeOrderUnreadable) {
+				t.Fatalf("キーが無いときの理由と同じ文になっている: %q", want)
+			}
+
+			// 台詞IDのほかは何もかも読めた集計。ほかの理由で止まるカテゴリを混ぜない。
+			// 全カテゴリは、実際の集計の件数から取る（件数には全カテゴリが入る）。
+			sum := judgedSummary("ja", s.summary("ja").Counts)
+			sum.OrderLineIDs = false
+			counts := s.buildCounts(cat, "ja", sum, nil)
+
+			held := 0
+			for _, c := range counts {
+				if c.Judged {
+					continue
+				}
+				held++
+				if c.Reason != want {
+					t.Errorf("%s の理由が %q、%q を期待", c.Category, c.Reason, want)
+				}
+			}
+			if held == 0 {
+				t.Fatal("判定していないカテゴリが1つも無い。集計の前提が崩れている")
+			}
+			// 台本から消えた行はキーだけで判定できる。理由と食い違う相手が
+			// 実際に件数の欄にあることを確かめておく。
+			if !mustCount(t, counts, diff.CatVanished.ID()).Judged {
+				t.Error("台本から消えた行を判定していない。集計の前提が崩れている")
+			}
+			if lang == "en" && hasJapanese(want) {
+				t.Errorf("英語の理由に日本語が混ざっている: %q", want)
 			}
 		})
 	}

@@ -46,8 +46,30 @@ func TestJudgeBlockReason(t *testing.T) {
 			wantID: reason.JudgeOrderUnreadable, wantText: "再生順を読めていません",
 		},
 		{
+			// キーは読めているので、台本から消えた行には件数が出ている。「再生順を
+			// 読めていません」と書くと、その件数と食い違う。csv の標準エラーには
+			// 見出しが無いので、理由の文面だけでそれを言い分ける。
 			name: "再生順の台詞IDが無い", category: CatStrayLineID,
 			edit:   func(s *Summary) { s.OrderLineIDs = false },
+			wantID: reason.JudgeOrderNoLineIDs, wantText: "再生順に台詞ID (line_id) がありません",
+		},
+		{
+			// 引き継ぎ候補はキーも台詞IDも要る。欠けているのが台詞IDだけなら、
+			// 台本に無い台詞ID行と同じ理由になる（csv の警告が1行にまとまる）。
+			name: "引き継ぎ候補も台詞IDだけが無ければ台詞IDの理由", category: CatCarryover,
+			edit:   func(s *Summary) { s.OrderLineIDs = false },
+			wantID: reason.JudgeOrderNoLineIDs, wantText: "再生順に台詞ID (line_id) がありません",
+		},
+		{
+			// キーも無ければ再生順が丸ごと読めていない。text 形式の見出しも画面の
+			// 断り書きもそちらを言うので、台詞IDだけを要るカテゴリもそれにそろえる。
+			name: "キーも台詞IDも無ければ台詞ID行も再生順を読めていない", category: CatStrayLineID,
+			edit:   func(s *Summary) { s.OrderKeys, s.OrderLineIDs = false, false },
+			wantID: reason.JudgeOrderUnreadable, wantText: "再生順を読めていません",
+		},
+		{
+			name: "キーも台詞IDも無ければ引き継ぎ候補も再生順を読めていない", category: CatCarryover,
+			edit:   func(s *Summary) { s.OrderKeys, s.OrderLineIDs = false, false },
 			wantID: reason.JudgeOrderUnreadable, wantText: "再生順を読めていません",
 		},
 		{
@@ -124,6 +146,11 @@ func TestJudgeBlockReason(t *testing.T) {
 // 書き出してください」と言われて、既にある作業コピーを書き出し直す）。
 // canJudge と judgeBlockReason は同じ条件を別々に書いているので、どちらかに
 // 条件を足したときのずれをここで捕まえる。
+//
+// 再生順の2つの理由は、欠けているものを指すだけでなく互いに言い分ける。キーを
+// 読めているのに「再生順を読めていません」と書くと、キーだけで出した件数
+// （台本から消えた行など）と食い違う。キーも無いのに台詞IDのことだけを書くと、
+// 見出しの「再生順を読めていません」と食い違う。
 func TestJudgeBlockReasonNamesAFailingCondition(t *testing.T) {
 	const customID = "test_custom"
 	flags := []func(*Summary, bool){
@@ -164,7 +191,9 @@ func TestJudgeBlockReasonNamesAFailingCondition(t *testing.T) {
 			case reason.JudgeWorkingMissing:
 				holds = c.needsWorking() && !sum.HasWorking && !sum.WorkingExists
 			case reason.JudgeOrderUnreadable:
-				holds = (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs)
+				holds = !sum.OrderKeys && (c.needsOrderKeys() || (c.needsOrderLineIDs() && !sum.OrderLineIDs))
+			case reason.JudgeOrderNoLineIDs:
+				holds = sum.OrderKeys && c.needsOrderLineIDs() && !sum.OrderLineIDs
 			case reason.JudgeLayoutRisksNotRead:
 				holds = c.needsLayoutRisks() && !sum.HasLayoutRisks && sum.LayoutRisksExist
 			case reason.JudgeNoLayoutRisks:

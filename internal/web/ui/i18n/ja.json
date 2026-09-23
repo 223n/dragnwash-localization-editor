@@ -164,6 +164,7 @@
     "reason.judge_working_not_read": "作業コピーを読んでいません",
     "reason.judge_working_missing": "作業コピーがありません",
     "reason.judge_order_unreadable": "再生順を読めていません",
+    "reason.judge_order_no_line_ids": "再生順に台詞ID (line_id) がありません",
     "reason.judge_order_no_norms": "再生順に norm 列がありません",
     "reason.judge_no_layout_risks": "ゲーム内で Check translation layout を走らせた記録がありません",
     "reason.judge_layout_risks_not_read": "はみ出しの記録を読んでいません",

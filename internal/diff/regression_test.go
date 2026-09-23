@@ -180,6 +180,12 @@ func TestUnreadableOrderSuspendsJudgement(t *testing.T) {
 			if rep.Status() == StatusReview {
 				t.Error("再生順を読めないのに要確認になっている")
 			}
+			// 台本に無い台詞ID行は台詞IDしか要らないが、キーも読めていないので理由は
+			// 見出しと同じ「再生順を読めていません」にする。台詞IDのことだけを書くと、
+			// line_id 列だけを直しに行かせることになる。
+			if why := sum.JudgeBlockReason(CatStrayLineID); why.ID != reason.JudgeOrderUnreadable {
+				t.Errorf("台本に無い台詞ID行の理由が違う: %q (%q)", why.ID, why.Text)
+			}
 
 			var b strings.Builder
 			if err := rep.WriteText(&b, TextOptions{}); err != nil {

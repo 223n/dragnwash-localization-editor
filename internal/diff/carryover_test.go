@@ -624,7 +624,9 @@ func TestCarryoverNeedsOrderLineIDs(t *testing.T) {
 	if sum.CanJudge(CatCarryover) {
 		t.Error("台詞IDの無い再生順で引き継ぎ候補を判定している")
 	}
-	if why := sum.JudgeBlockReason(CatCarryover); why.ID != reason.JudgeOrderUnreadable {
+	// キーは読めていて、台本から消えた行の件数も出ている。「再生順を読めていません」
+	// と書くとその件数と食い違うので、欠けているのが台詞IDだと言う。
+	if why := sum.JudgeBlockReason(CatCarryover); why.ID != reason.JudgeOrderNoLineIDs {
 		t.Errorf("理由が違う: %q (%q)", why.ID, why.Text)
 	}
 
@@ -636,8 +638,11 @@ func TestCarryoverNeedsOrderLineIDs(t *testing.T) {
 	if strings.Contains(b.String(), label+"0 件") {
 		t.Errorf("判定できないのに 0 件と書いている:\n%s", b.String())
 	}
-	if !strings.Contains(b.String(), label+"判定していません（再生順を読めていません）") {
+	if !strings.Contains(b.String(), label+"判定していません（再生順に台詞ID (line_id) がありません）") {
 		t.Errorf("判定していないことを書いていない:\n%s", b.String())
+	}
+	if strings.Contains(b.String(), "再生順を読めていません") {
+		t.Errorf("キーは読めているのに、再生順を丸ごと読めていないように書いている:\n%s", b.String())
 	}
 }
 

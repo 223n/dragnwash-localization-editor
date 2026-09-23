@@ -84,12 +84,12 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 //
 // 名前を文面に書き込まず表（[categoryTable] の needsOrderLineIDs）から引くのは、
 // 印を足し引きしたときに、見出しだけが古い名指しのまま残らないようにするため。
+// どのカテゴリかは [OrderLineIDCategories] に尋ねる。画面の断り書きと csv の警告も
+// 同じ関数から引くので、3つの名指しはずれない。
 func lineIDCategoryNames() string {
 	var names []string
-	for _, c := range categories {
-		if c.needsOrderLineIDs() {
-			names = append(names, "「"+c.String()+"」")
-		}
+	for _, c := range OrderLineIDCategories() {
+		names = append(names, "「"+c.String()+"」")
 	}
 	return strings.Join(names, "と")
 }
@@ -204,9 +204,17 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 // 両方を要るので、順が食い違うと「再生順は読めているのに再生順を読めていません」
 // と書くことになる。
 //
+// 再生順については、キーが無いのか台詞IDだけが無いのかで理由を分ける。台詞IDだけが
+// 無いとき、台本から消えた行などはキーだけで判定でき、件数も出る。そこで「再生順を
+// 読めていません」と書くと、その件数と食い違う。text 形式は見出しで補えるが、
+// csv の標準エラー（cmd/dwloc の warnHeldLineIDCategories）には見出しが無く、
+// この文面だけが出る。キーも無いときは、台詞IDだけを要るカテゴリ（台本に無い
+// 台詞ID行）も「再生順を読めていません」にする。見出しと画面の断り書きがそう書く
+// ので、ここだけ台詞IDのことを言うと、line_id 列だけを直しに行かせることになる。
+//
 // 文字列ではなく [reason.Reason] を返すのは、画面（internal/web）が目録で文面を
 // 差し替えるためである。日本語の文面は Text に入ったまま残るので、この関数を
-// %s で書式に渡す CLI 側の出力は1バイトも変わらない。
+// %s で書式に渡す CLI 側は、文字列を返していたころと同じ文面を出す。
 func judgeBlockReason(sum Summary, c Category) reason.Reason {
 	if c.needsWorking() && !sum.HasWorking {
 		if sum.WorkingExists {
@@ -215,7 +223,10 @@ func judgeBlockReason(sum Summary, c Category) reason.Reason {
 		return reason.New(reason.JudgeWorkingMissing, "作業コピーがありません")
 	}
 	if (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs) {
-		return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
+		if !sum.OrderKeys {
+			return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
+		}
+		return reason.New(reason.JudgeOrderNoLineIDs, "再生順に台詞ID (line_id) がありません")
 	}
 	if c.needsLayoutRisks() && !sum.HasLayoutRisks {
 		if sum.LayoutRisksExist {

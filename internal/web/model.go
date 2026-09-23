@@ -557,7 +557,12 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		notes = append(notes, s.cat.T(cat, "note.order_line_ids_missing",
 			"categories", s.lineIDCategoryNames(cat)))
 	}
-	if !sum.OldOrder || sum.OldOrderStale {
+	if (!sum.OldOrder || sum.OldOrderStale) && sum.OrderKeys && sum.OrderLineIDs {
+		// 1つ前の再生順のせいで止めているときだけ言う。いまの再生順のキーや
+		// 台詞IDが無いときは、引き継ぎ候補もそのせいで止まっていて、すぐ上の
+		// 断り書きが言っている。ここでも言うと、理由（JudgeBlockReason は
+		// いまの再生順の欠けを先に返す）まで同じ文が2度並ぶ。
+		//
 		// 断り書きの外枠も、その中に入る理由も、どちらも目録から引く。
 		// 内側だけ日本語のまま差し込むと、英語の文の途中に日本語が挟まる。
 		why := s.reasonText(cat, sum.JudgeBlockReason(diff.CatCarryover))

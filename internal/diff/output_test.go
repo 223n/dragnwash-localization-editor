@@ -321,7 +321,8 @@ func TestWriteTextWithoutLocales(t *testing.T) {
 // そこで「台本から消えた行などは判定しません」と書くと、すぐ下の件数と食い違い、
 // どちらを信じればよいか分からなくなる。止まるのは台詞IDを要るカテゴリだけなので、
 // 見出しもそのカテゴリを名指しする。名指しは categoryTable の印と一致させ、
-// 表を変えたときに見出しだけが古いまま残らないようにする。
+// 表を変えたときに見出しだけが古いまま残らないようにする。本文のカテゴリの行に
+// 添える理由も、見出しと同じく台詞IDが無いことを言う。
 func TestWriteTextHeaderNamesWhatIsHeld(t *testing.T) {
 	const keysMissing = "再生順を読めていません。台本から消えた行などは判定しません。"
 	const lineIDsMissing = "再生順に台詞ID (line_id) がありません。「引き継ぎ候補」と「台本に無い台詞ID行」は判定しません。"
@@ -408,6 +409,16 @@ func TestWriteTextHeaderNamesWhatIsHeld(t *testing.T) {
 			if named && sum.CanJudge(c) {
 				t.Errorf("%s: 判定しないと書いたのに判定している", c)
 			}
+			// 本文のそのカテゴリの行も、見出しと同じく台詞IDが無いことを理由にする。
+			// 「再生順を読めていません」と書くと、見出しとも、すぐ上の台本から消えた行の
+			// 件数とも食い違う。
+			held := pad(c.String(), categoryNameWidth()) + "判定していません（再生順に台詞ID (line_id) がありません）"
+			if named && !strings.Contains(body, held) {
+				t.Errorf("%s: 本文に %q が無い:\n%s", c, held, body)
+			}
+		}
+		if strings.Contains(body, "再生順を読めていません") {
+			t.Errorf("キーは読めているのに、本文が再生順を丸ごと読めていないように書いている:\n%s", body)
 		}
 		// 台本から消えた行はキーだけで判定でき、件数が出る。見出しと食い違わないこと。
 		if want := pad(CatVanished.String(), categoryNameWidth()) + "1 件"; !strings.Contains(body, want) {
