@@ -850,7 +850,9 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if end < 0 {
 		t.Fatal("ロケールの切り替えの終わりが分からない")
 	}
-	if !strings.Contains(js[start:start+end], "load(el.locale.value, true)") {
+	// 読むのは change の時点で控えた値（chosen）。尋ねるのは送り終えてからなので、
+	// そのあいだに欄の値は変わりうる（app.js の load が欄を描いたロケールへそろえる）。
+	if !strings.Contains(js[start:start+end], "load(chosen, true)") {
 		t.Error("ロケールを切り替えても条件と検索語が残る。前のロケールの条件を持ち越す")
 	}
 	// 外すのは切り替えの手前ではなく、読めたときだけ。

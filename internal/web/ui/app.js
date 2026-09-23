@@ -163,6 +163,9 @@
     state.discarding 捨てると答えた読み直し（切り替え）の最中の印。立っている
                     あいだは保存を送らない（flush を見よ）。読めたら捨て、読めなければ
                     倒して送り直しへ戻す（load を見よ）。
+    state.loading   最後に始めた読み込みの札（{ locale: 読みにいったロケール }）。
+                    読んでいなければ null。応答は、札がこれと同じときだけ描く
+                    （load を見よ）。ロケールの欄もこれを見てそろえる（syncLocale）。
   */
   var state = {
     locale: "",
@@ -203,6 +206,7 @@
     sending: null,
     asking: 0,
     discarding: null,
+    loading: null,
     /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
     exporting: false,
     timer: null,
@@ -2667,6 +2671,13 @@
     画面は「未保存 1 件」と言ったまま、その訳を二度と送らなかった（原因が消えた
     あとも、同じ行を打ち直すまでファイルに入らない）。retryDelays の「諦めない」が、
     失敗した読み直しを1回挟むだけで破れていた。
+
+    描くのは、最後に始めた読み込みの応答だけにする（state.loading の札）。返る前に
+    もう1つ選ぶと（欄に焦点を置いて↓を続けて押すと起きる）、応答は選んだ順にも
+    逆の順にも返る。どちらも描いていたころは、あとから返ったほうが一覧・ファイルの
+    名前・保存の宛先（state.locale）を決め、欄は別のロケールを指したまま残った。
+    欄に出ているロケールを選び直しても change は起きないので、欄が指すロケールへは
+    欄からたどり着けない。欄は、描いたあとと失敗したあとに必ずそろえる（syncLocale）。
   */
   function load(locale, resetFinder) {
     /*
@@ -2674,6 +2685,13 @@
       読めなければ倒して送り直しへ戻す（stopHolding）。
     */
     var holding = state.discarding;
+    /*
+      この読み込みの札。先に始めた読み込みの札はここで置き換わり、その応答は
+      描かれなくなる。空のロケール（選ぶ前へ戻した）は読みにいかないので札を持たない。
+    */
+    var ticket = locale ? { locale: locale } : null;
+    state.loading = ticket;
+    syncLocale();
     if (!locale) {
       stopHolding(holding);
       clear(el.list);
@@ -2685,6 +2703,23 @@
     /* URL に載せるのはロケール名だけ。原文も訳も URL には載せない。 */
     getJSON("/api/lines?locale=" + encodeURIComponent(locale))
       .then(function (data) {
+        if (state.loading !== ticket) {
+          /*
+            あとから別の読み込みが始まっている。描かない。世代も送り直しの時計も
+            進めない。まだ画面に出ているのは前の内容で、あとの読み込みが片付ける。
+
+            捨てると答えた印の後始末だけはする（stopHolding）。印がまだこの読み込みの
+            ものなら倒して送り直しへ戻す。あとの切り替えで捨てると答え直していれば、
+            印はそちらのものに替わっているので触らない（stopHolding は自分の印の
+            ときだけ倒す）。そちらを倒すと、あとの読み込みが返るまでに保存へ回った
+            訳が送られ、捨てると答えた訳がファイルに入る。
+            あとの読み込みが同じ印を持ったままなのは、あとで押したときに捨てる訳が
+            もう無く、尋ねなかったとき（askDiscard）だけである。そのとき印が止めて
+            いるのは、そのあと打った訳の保存だけなので、倒して送らせてよい。
+          */
+          stopHolding(holding);
+          return;
+        }
         /*
           世代を1つ進める。進めておくと、送りかけの保存の応答が返ってきたときに
           「もう画面のものではない」と分かる。別ロケールの版と件数を載せない。
@@ -2711,9 +2746,14 @@
           前のロケールのまま残った。state.locale も前のロケールのままなので、
           書き出しや保存は画面に出ていないロケールへ向かう。片付ける先を1つずつ
           足すより、戻す道そのものを作らない。
+
+          外すのは空の選択肢1つだけで、欄の値は描いたあとでそろえる（syncLocale）。
+          選択肢を組み直して値もここで決めていたころは、組み直しが最初の応答でしか
+          走らず、あとから返った応答は欄に触れずに一覧だけを描いた。
         */
-        if (el.locale.querySelector('option[value=""]')) {
-          fillLocales(data.locale);
+        var blank = el.locale.querySelector('option[value=""]');
+        if (blank) {
+          el.locale.removeChild(blank);
         }
         /*
           条件を外すのはここ。render より先に外すと、チップも一覧も新しい
@@ -2734,18 +2774,49 @@
         renderOrphans();
         el.conflict.hidden = true;
         render(data);
+        /*
+          札を下ろすのは描き終えてから。描く途中で投げたら、下の .catch がこの
+          読み込みの失敗として受ける（札がまだ残っているので、あとの読み込みの
+          ものと取り違えない）。
+        */
+        state.loading = null;
+        syncLocale();
       })
       .catch(function () {
+        /*
+          読めなかったので何も捨てていない。捨てると答えた印を倒し、送り直しへ戻す。
+          あとから別の読み込みが始まっていても同じにする（理由は上の .then の注記）。
+        */
+        stopHolding(holding);
+        if (state.loading !== ticket) {
+          /*
+            あとから別の読み込みが始まっている。失敗を出さない。あとの読み込みが
+            読めていれば、読めている画面の上に「読めませんでした」が載る。
+          */
+          return;
+        }
+        state.loading = null;
         /*
           失敗の中身は出さない。翻訳者にできるのは読み直すことだけ。
           ロケールの欄は元に戻す。戻さないと、欄だけが新しいロケールを指した
           まま中身は前のロケール、という食い違いが画面に残る。
         */
-        el.locale.value = state.locale;
+        syncLocale();
         showMessage(t("ui.load_failed"));
-        stopHolding(holding);
         updateStatus();
       });
+  }
+
+  /*
+    ロケールの欄を、画面が向かっている先にそろえる。読んでいる最中なら最後に
+    始めた読み込みの行き先、読んでいなければ画面に出ているロケール（state.locale）。
+
+    欄はこの画面でいちばん目立つ「どのロケールを見ているか」の表示である。一覧と
+    別のロケールを指していると、翻訳者は別のロケールのつもりで訳を打つ。欄に
+    出ているロケールを選び直しても change は起きないので、自分では直せない。
+  */
+  function syncLocale() {
+    el.locale.value = state.loading ? state.loading.locale : state.locale;
   }
 
   /*
@@ -3017,12 +3088,27 @@
         showGamePath(data.game);
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
+          /*
+            選んだロケールはここで控える。尋ねるのは送り終えてからなので、そのあいだに
+            先に始めた読み込みが返ると、欄は描いたロケールへそろえ直される（load）。
+            欄の値を読み直すと、選んでいないロケールを読みにいく。
+          */
+          var chosen = el.locale.value;
           askDiscard("ui.switch_confirm").then(function (answer) {
             if (answer === "stale") {
+              /*
+                あとから押されたほうに任せる。欄にも触らない。あとから選び直したなら
+                欄はもうそのロケールを指している。
+              */
               return;
             }
             if (answer === "keep") {
-              el.locale.value = state.locale;
+              /*
+                断ったので何も変えない。欄は選ぶ前に指していた先へ戻す。読んでいる
+                最中ならその行き先で、画面に出ている前のロケールではない。前のロケールへ
+                戻すと、読み込みが返ったときに欄と一覧が食い違う。
+              */
+              syncLocale();
               return;
             }
             /*
@@ -3036,7 +3122,7 @@
               外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
               チップと一覧は前のロケールのまま残る（load を見よ）。
             */
-            load(el.locale.value, true);
+            load(chosen, true);
           });
         });
         el.reload.addEventListener("click", function () {

@@ -20,6 +20,7 @@ import {
   dataRows,
   editor,
   openApp,
+  openEditor,
   rowByLine,
   saveState,
   translationCell,
@@ -85,6 +86,92 @@ function gate() {
     release = resolve;
   });
   return { promise, release };
+}
+
+// holdLines は /api/lines をロケールごとに栓で止める。release(locale) を呼ぶまで、その
+// ロケールの応答を返さない。asked は要求の来たロケールを来た順に控える。fail に入れた
+// ロケールは、栓を開けたあと 500 で返す。応答が返る順を試験の側で決めるために使う。
+async function holdLines(page, { fail = [] } = {}) {
+  const gates = new Map();
+  const gateFor = (locale) => {
+    if (!gates.has(locale)) {
+      gates.set(locale, gate());
+    }
+    return gates.get(locale);
+  };
+  const asked = [];
+  await page.route(isPath("/api/lines"), async (route) => {
+    const locale = new URL(route.request().url()).searchParams.get("locale");
+    asked.push(locale);
+    await gateFor(locale).promise;
+    if (fail.includes(locale)) {
+      await route.fulfill({ status: 500, body: "boom" });
+      return;
+    }
+    await route.continue();
+  });
+  return { asked, release: (locale) => gateFor(locale).release() };
+}
+
+// watchLinesSettled は、画面が /api/lines の応答を受け取り終えたロケールを頁の中で控える
+// 仕掛けを入れる。goto より前に呼ぶ。控えたものは linesSettled で読む。
+//
+// 古い応答を描かないことは、画面がその応答を受け取り終えたあとでないと確かめられない。
+// 描かないのが正しいので、画面には待つ手がかりが出ない。response の事象は試験の側へ先に
+// 届くことがあり、そのとき load の .then はまだ走っていないかもしれない。ここでは、画面が
+// 本文を読み終えた（失敗なら状態を受け取った）あと、次のタスクで控える。そこまでは
+// マイクロタスクだけでつながっているので、控えた時点で load の .then か .catch は走り
+// 終えている。タスクは MessageChannel で積む。setTimeout で積むと、page.clock で時計を
+// 止めた試験では控えが走らない。
+async function watchLinesSettled(page) {
+  await page.addInitScript(() => {
+    const send = window.fetch;
+    const channel = new MessageChannel();
+    window.__linesSettled = [];
+    channel.port1.onmessage = (event) => {
+      window.__linesSettled.push(event.data);
+    };
+    window.fetch = function (input) {
+      return send.apply(this, arguments).then((res) => {
+        const url = new URL(String(input), window.location.href);
+        if (url.pathname !== "/api/lines") {
+          return res;
+        }
+        const settled = () => channel.port2.postMessage(url.searchParams.get("locale"));
+        if (!res.ok) {
+          settled();
+          return res;
+        }
+        const read = res.json.bind(res);
+        res.json = () =>
+          read().then((data) => {
+            settled();
+            return data;
+          });
+        return res;
+      });
+    };
+  });
+}
+
+// linesSettled は、ここまでに画面が受け取り終えた /api/lines の応答のロケール（来た順）。
+function linesSettled(page) {
+  return page.evaluate(() => window.__linesSettled);
+}
+
+// answerDialogs はダイアログを控え、answers の順に受ける（true）か断る（false）。
+function answerDialogs(page, answers) {
+  const seen = [];
+  const queue = [...answers];
+  page.on("dialog", async (dialog) => {
+    seen.push({ type: dialog.type(), message: dialog.message() });
+    if (queue.shift()) {
+      await dialog.accept();
+    } else {
+      await dialog.dismiss();
+    }
+  });
+  return seen;
 }
 
 // countRowPosts は /api/rows への POST を頁の中で数える仕掛けを入れる。goto より前に呼ぶ。
@@ -342,6 +429,39 @@ test.describe("ロケールを省いて起動したとき", () => {
     await expect(app.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 3 }));
     await expect(app.locator("#locale option")).toHaveText(["he", "ja"]);
   });
+
+  // 最初の読み込みが返る前にもう1つ選んだとき（欄に焦点を置いて↓を続けて押すと起きる）。
+  // 以前は、先に返った応答が選択肢を組み直して欄をそのロケールにし、空の選択肢が消えた
+  // あとに返った応答は欄に触れずに一覧だけを描いた。欄と、一覧・ファイルの名前・保存の
+  // 宛先（state.locale）が別のロケールを指した。欄に出ているロケールを選び直しても change
+  // は起きないので、欄が指すロケールへは欄からたどり着けない。描くのは最後に始めた読み込み
+  // だけにし、欄は描いたロケールにそろえる（app.js の load）。応答が返る順はどちらもある。
+  for (const [label, order] of [
+    ["選んだ順", ["ja", "he"]],
+    ["逆の順", ["he", "ja"]],
+  ]) {
+    test(`続けて2つ選んで応答が${label}に返っても、あとで選んだロケールだけを描き、欄もそれにそろえる`, async ({
+      page,
+      server,
+    }) => {
+      await watchLinesSettled(page);
+      await openApp(page, server);
+      const lines = await holdLines(page);
+      await page.locator("#locale").selectOption("ja");
+      await page.locator("#locale").selectOption("he");
+      await expect.poll(() => lines.asked.toSorted()).toEqual(["he", "ja"]);
+
+      for (const locale of order) {
+        lines.release(locale);
+        await expect.poll(() => linesSettled(page)).toContain(locale);
+      }
+      await expect(page.locator("#locale")).toHaveValue("he");
+      await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
+      await expect(page.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 1 }));
+      await expect(page.locator("#message")).toBeEmpty();
+      await expect(page.locator("#locale option")).toHaveText(["he", "ja"]);
+    });
+  }
 });
 
 // 畳みの summary は焦点を受ける。文言が入る前に出すと、名前の無い開閉要素が焦点の順に
@@ -609,6 +729,44 @@ test.describe("ロケールの切り替え", () => {
     expect(await server.readRootText(workingRel)).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
   });
 
+  // 上と同じく読み込みのあいだに打って保存を送り、その返事を待つあいだに別のロケールを
+  // 選んだとき。切り替えを決めるのは送り終えてからで、そのまえに先の読み込みが返ると、
+  // 欄は描いたロケールへそろい直す（app.js の load）。決めたときに欄の値を読むと、選んで
+  // いないロケールを読みにいく。読むのは change の時点で控えたロケール（chosen）。
+  test("保存の返事を待つあいだに選んだロケールは、先の読み込みが返って欄がそろい直しても、選んだとおりに読む", async ({
+    app,
+  }) => {
+    const lines = await holdLines(app);
+    const rows = gate();
+    await app.route(
+      isPath("/api/rows"),
+      async (route) => {
+        await rows.promise;
+        await route.continue();
+      },
+      { times: 1 },
+    );
+
+    await app.locator("#locale").selectOption("he");
+    await expect.poll(() => lines.asked).toEqual(["he"]);
+    // he はまだ返らない。前のロケール（ja）の行に打って欄から離れ、保存を送る。
+    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
+    await editor(app).press("Escape");
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
+    await app.locator("#locale").selectOption("ja");
+    lines.release("he");
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
+
+    lines.release("ja");
+    rows.release();
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+    await expect(app.locator("#locale")).toHaveValue("ja");
+    expect(lines.asked).toEqual(["he", "ja"]);
+    // 送った訳は ja のファイルに入り、読み直した一覧にも出る。
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    await waitForSaved(app);
+  });
+
   // 失敗したときに条件だけ外すと、チップと一覧が前のロケールのまま、欄だけが新しい
   // ロケールを指す三者バラバラの画面になった（load の注記。実際に起きた）。失敗したら
   // 何も変わっていないのが正しい。
@@ -631,6 +789,39 @@ test.describe("ロケールの切り替え", () => {
     await expect(rowByLine(app, SAMPLE_LINES.goodbye)).toBeVisible();
     expect(dialogs).toHaveLength(0);
   });
+
+  // 読み込みが返る前に選び直し、前の読み込みがあとから返ったとき。描けば、欄はあとで
+  // 選んだロケール、一覧とファイルの名前は前のロケールになる。失敗して返ったときに
+  // 「読めませんでした」を出せば、読めている画面の上に嘘の失敗が載る。描くのも失敗を
+  // 出すのも、最後に始めた読み込みだけにする（app.js の load）。
+  for (const [label, fail] of [
+    ["読めて", []],
+    ["失敗して", ["he"]],
+  ]) {
+    test(`読み込みが返る前に選び直したら、前の読み込みがあとから${label}返っても画面を変えない`, async ({
+      page,
+      server,
+    }) => {
+      await watchLinesSettled(page);
+      await openApp(page, server);
+      const lines = await holdLines(page, { fail });
+      await page.locator("#locale").selectOption("he");
+      await page.locator("#locale").selectOption("ja");
+      await expect.poll(() => lines.asked.toSorted()).toEqual(["he", "ja"]);
+
+      // 起動したときに読んだ ja のあとに、あとで選んだ ja が返る。
+      lines.release("ja");
+      await expect.poll(() => linesSettled(page)).toEqual(["ja", "ja"]);
+      await expect(page.locator("#message")).toBeEmpty();
+      lines.release("he");
+      await expect.poll(() => linesSettled(page)).toEqual(["ja", "ja", "he"]);
+
+      await expect(page.locator("#locale")).toHaveValue("ja");
+      await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+      await expect(page.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 3 }));
+      await expect(page.locator("#message")).toBeEmpty();
+    });
+  }
 });
 
 test.describe("保存できていない訳があるとき", () => {
@@ -706,6 +897,35 @@ test.describe("保存できていない訳があるとき", () => {
     await expect(rowByLine(app, SAMPLE_LINES.goodbye)).toHaveClass(/(^|\s)save-failed(\s|$)/);
     await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
     await expect(saveState(app)).toHaveText(msg("ja", "ui.save_failed"));
+  });
+
+  // 切り替えを受けて読んでいるあいだに、別のロケールを選んで断ったとき。断ったのだから
+  // 何も変えない。読み込みは続くので、欄は読んでいる先へ戻す。以前は画面に出ている前の
+  // ロケールへ戻したので、読み込みが返ると、欄は前のロケール、一覧は読んだロケールになった。
+  test("切り替えを受けて読んでいるあいだに別のロケールを選んで断ると、欄は読んでいる先へ戻る", async ({
+    app,
+    server,
+  }) => {
+    await failRow(app, SAMPLE_LINES.goodbye, typed);
+    const dialogs = answerDialogs(app, [true, false]);
+    const lines = await holdLines(app);
+
+    await app.locator("#locale").selectOption("he");
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["he"]);
+    // he はまだ返らない。ja を選び直して、尋ねられたら断る。
+    await app.locator("#locale").selectOption("ja");
+    await expect.poll(() => dialogs.length).toBe(2);
+    expect(dialogs[1]).toEqual({ type: "confirm", message: msg("ja", "ui.switch_confirm") });
+    await expect(app.locator("#locale")).toHaveValue("he");
+
+    lines.release("he");
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
+    await expect(app.locator("#locale")).toHaveValue("he");
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_clean"));
+    expect(lines.asked).toEqual(["he"]);
+    // 1つ目は受けたので、打った訳は捨てた。ファイルに入れてはいない。
+    expect(await server.readRootText(workingRel)).not.toContain(typed);
   });
 
   // 欄を開いたまま読み直しを押すと、欄から離れた時点で保存が走る（blur）。以前はその返事を
@@ -923,6 +1143,67 @@ test.describe("保存を送り直しているとき", () => {
       .toBe(true);
     await waitForSaved(page);
     expect(await rowPosts(page)).toBeGreaterThan(asked);
+  });
+
+  // 捨てると答えた切り替えを、読み終える前に別の切り替えで上書きしたとき。前の読み込みは
+  // 描かない（app.js の load）が、捨てると答えた印の後始末はする。ただし印は、あとの切り替えで
+  // 捨てると答え直したほうのものなので、前の応答が倒してはならない。倒すと、あとの読み込みが
+  // 返るまでのあいだに送り直しの時計が切れ、捨てると答えた訳がファイルに入る。
+  test("捨てると答えた切り替えを読み終える前に選び直すと、前の応答が返っても捨てると答えた訳を送らない", async ({
+    page,
+    server,
+  }) => {
+    await countRowPosts(page);
+    await watchLinesSettled(page);
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await openApp(page, server);
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
+    const before = await server.readRoot(workingRel);
+
+    let down = true;
+    await page.route(isPath("/api/rows"), (route) =>
+      down
+        ? route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ message: msg("ja", "error.save_failed") }),
+          })
+        : route.continue(),
+    );
+    await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
+    await editor(page).press("Escape");
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
+
+    const lines = await holdLines(page);
+    const dialogs = watchDialogs(page, true);
+    await page.locator("#locale").selectOption("he");
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["he"]);
+    await page.locator("#locale").selectOption("ja");
+    await expect.poll(() => dialogs.length).toBe(2);
+    await expect.poll(() => lines.asked).toEqual(["he", "ja"]);
+    const asked = await rowPosts(page);
+
+    // 前の読み込み（he）が先に返る。描かない。
+    lines.release("he");
+    await expect.poll(() => linesSettled(page)).toEqual(["ja", "he"]);
+    await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+    // 原因が消える。あとの読み込みはまだ返らないので、保存へ回る道を通っても送らない。
+    // 送り直しの時計は、2つ目を尋ねる前の送り直し（settle）が止めているので、ここでは
+    // 行を開いて何も変えずに閉じ、保存へ回す（閉じると flush を呼ぶ）。
+    down = false;
+    await openEditor(page, SAMPLE_LINES.goodbye);
+    await editor(page).press("Escape");
+    await page.clock.runFor(60_000);
+    expect(await rowPosts(page)).toBe(asked);
+
+    lines.release("ja");
+    await expect(translationCell(page, SAMPLE_LINES.goodbye)).toHaveText(SAMPLE.goodbye.ja);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
+    await expect(page.locator("#locale")).toHaveValue("ja");
+    await page.clock.runFor(60_000);
+    expect(await rowPosts(page)).toBe(asked);
+    expect((await server.readRoot(workingRel)).equals(before), "捨てると答えた訳がファイルに入った").toBe(true);
   });
 });
 
