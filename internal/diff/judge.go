@@ -3,8 +3,8 @@ package diff
 import "github.com/223n/dragnwash-localization-editor/internal/reason"
 
 // このファイルは判定を1つも足さない。すでにある [Summary.canJudge] と
-// judgeBlockReason と [Status.id] と、カテゴリの表の印（needsOrderLineIDs）を、
-// パッケージの外から読めるようにするだけである。
+// judgeBlockReason と [Status.id] と、カテゴリの表の印（needsOrderLineIDs）と
+// 表示順（[categories]）を、パッケージの外から読めるようにするだけである。
 //
 // 外へ出す理由。画面（internal/web）はカテゴリごとの件数を出すが、0 という数字には
 // 「1件も無い」と「判定していない」の2つの意味がある。後者を 0 件と書くと
@@ -41,14 +41,27 @@ func (s Summary) JudgeBlockReason(c Category) reason.Reason {
 	return judgeBlockReason(s, c)
 }
 
+// Categories は全カテゴリを表示順に返す。
+//
+// 表示順の表（[categories]）の写しを返すだけで、判定は足さない。csv の警告
+// （cmd/dwloc の warnHeldCategories）が、判定を保留したカテゴリを text 形式の
+// 本文と同じ順に名指しするために開ける。[Summary.Counts] の鍵を Category の値で
+// 並べても表示順にはならない（後から足したカテゴリの値は並びの最後にある）。
+//
+// 写しを返すのは、呼び出し側が並べ替えても表示順の表が動かないようにするため。
+func Categories() []Category {
+	return append([]Category(nil), categories...)
+}
+
 // OrderLineIDCategories は、再生順の台詞IDが読めていないと判定できないカテゴリを、
 // 表示順に返す。
 //
 // 表（categoryTable の needsOrderLineIDs）の印を読むだけで、判定は足さない。
 // 画面の断り書き（internal/web の buildNotes）が、再生順のキーは読めていて台詞IDだけが
 // 無いときに、保留にしたカテゴリを名指しするために開ける。text 形式の見出し
-// （lineIDCategoryNames）と csv の警告（cmd/dwloc の warnHeldLineIDCategories）も
-// ここから引くので、印を足し引きしても3つの名指しはずれない。
+// （lineIDCategoryNames）もここから引くので、印を足し引きしても2つの名指しはずれない。
+// csv の警告（cmd/dwloc の warnHeldCategories）は台詞IDに限らず保留した全カテゴリを
+// 書くので、ここではなく [Summary.CanJudge] から名指しを決める。
 func OrderLineIDCategories() []Category {
 	var out []Category
 	for _, c := range categories {

@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
@@ -209,6 +210,26 @@ func TestJudgeBlockReasonNamesAFailingCondition(t *testing.T) {
 				t.Fatalf("%s %+v: 欠けていない材料を理由にしている: %q (%q)", c, sum, got.ID, got.Text)
 			}
 		}
+	}
+}
+
+// TestCategories は、外へ開けた全カテゴリの並びが表示順の表そのものであり、
+// 表の写しであることを見る。
+//
+// csv の警告（cmd/dwloc）はこの並びで保留したカテゴリを名指しする。表に無い
+// カテゴリが混じったり欠けたりすると、判定していないのに名指しされないカテゴリが
+// できる。写しでないと、呼び出し側の並べ替えが text 形式の並びまで変える。
+func TestCategories(t *testing.T) {
+	got := Categories()
+	if !slices.Equal(got, categories) {
+		t.Fatalf("表示順の表と違う: %v, want %v", got, categories)
+	}
+	if len(got) != len(categoryTable) {
+		t.Errorf("%d 個。定義表には %d 個ある", len(got), len(categoryTable))
+	}
+	got[0], got[len(got)-1] = got[len(got)-1], got[0]
+	if slices.Equal(got, categories) || !slices.Equal(Categories(), categories) {
+		t.Errorf("返した並びを入れ替えたら表示順の表が変わった: %v", categories)
 	}
 }
 

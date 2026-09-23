@@ -84,8 +84,8 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 //
 // 名前を文面に書き込まず表（[categoryTable] の needsOrderLineIDs）から引くのは、
 // 印を足し引きしたときに、見出しだけが古い名指しのまま残らないようにするため。
-// どのカテゴリかは [OrderLineIDCategories] に尋ねる。画面の断り書きと csv の警告も
-// 同じ関数から引くので、3つの名指しはずれない。
+// どのカテゴリかは [OrderLineIDCategories] に尋ねる。画面の断り書きも同じ関数から
+// 引くので、2つの名指しはずれない。
 func lineIDCategoryNames() string {
 	var names []string
 	for _, c := range OrderLineIDCategories() {
@@ -207,7 +207,7 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 // 再生順については、キーが無いのか台詞IDだけが無いのかで理由を分ける。台詞IDだけが
 // 無いとき、台本から消えた行などはキーだけで判定でき、件数も出る。そこで「再生順を
 // 読めていません」と書くと、その件数と食い違う。text 形式は見出しで補えるが、
-// csv の標準エラー（cmd/dwloc の warnHeldLineIDCategories）には見出しが無く、
+// csv の標準エラー（cmd/dwloc の warnHeldCategories）には見出しが無く、
 // この文面だけが出る。キーも無いときは、台詞IDだけを要るカテゴリ（台本に無い
 // 台詞ID行）も「再生順を読めていません」にする。見出しと画面の断り書きがそう書く
 // ので、ここだけ台詞IDのことを言うと、line_id 列だけを直しに行かせることになる。
