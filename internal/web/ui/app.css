@@ -1089,9 +1089,16 @@ button {
 /*
   訳の欄。焦点が入ると入力欄へ差し替わるので、差し替わったことが
   枠で分かるようにする。幅は元の欄と同じ（grid の列に収まる）。
+
+  空白は詰めずに出す（pre-wrap）。入力欄（.editor）と同じ折り返しにそろえる
+  約束で、既定の white-space: normal のままだと、訳の先頭の空白が消え、続いた
+  空白が1つに詰まって描かれる。textContent は正しいのに、開く前と開いたあとで
+  見え方が変わり、前後に空白のある訳（internal/edit が引用して守っている）を
+  翻訳者が画面で見分けられない。
 */
 .row .translation {
   border-radius: 4px;
+  white-space: pre-wrap;
 }
 
 /*

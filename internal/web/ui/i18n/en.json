@@ -83,6 +83,7 @@
     "ui.export_working": "Save the file you are editing, as it is",
     "ui.export_working_note": "A plain copy of the file being written to: the working copy when there is one, the published file itself when there is not.",
     "ui.export_wait": "Unsaved translations are being sent. Press again once that is done.",
+    "ui.export_conflict": "There is a conflict. Pick which translation to keep, then press again.",
     "ui.export_done": "Written out.",
     "ui.export_failed": "Could not write it out.",
     "ui.counts": "Counts",

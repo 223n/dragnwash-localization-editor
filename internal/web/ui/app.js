@@ -152,6 +152,10 @@
                     保存の応答が「もう画面のものではない」と分かるようにする。
     state.saveError 要求そのものが落ちているか（届かない、404、503）。行ごとの
                     理由（state.failed）とは別に持つ。
+    state.inflight  いま送っている訳（行番号 → 値）。送っていなければ null。
+                    返るまでのあいだ、その行の「ファイルの値」は entry.saved では
+                    なくこちらになる見込みなので、onInput が未保存かどうかを決める
+                    ときに見る。
   */
   var state = {
     locale: "",
@@ -182,6 +186,7 @@
     searchTimer: null,
     saving: false,
     saveError: false,
+    inflight: null,
     /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
     exporting: false,
     timer: null,
@@ -363,7 +368,13 @@
     いないときの高さに合わせてある。
   */
   function watchTopHeight() {
-    if (!el.top) {
+    /*
+      測る前に見張りの有無を確かめる。測ってから確かめていたころは、
+      ResizeObserver が無い環境でも、目録が届く前（ロケールの一覧も文言も空）の
+      低い帯を1度だけ測った値が残り、既定値が効かなかった（実測: 375x812 で
+      --top-height は 63px、帯は 117.8px）。
+    */
+    if (!el.top || typeof ResizeObserver !== "function") {
       return;
     }
     var apply = function () {
@@ -375,9 +386,6 @@
       document.documentElement.style.setProperty("--top-height", h + "px");
     };
     apply();
-    if (typeof ResizeObserver !== "function") {
-      return;
-    }
     /*
       帯の高さは、競合の引き止めや行き先の無い訳が出入りしたときだけでなく、
       窓の幅が変わって中身が折り返したときにも変わる。どちらも ResizeObserver
@@ -1342,7 +1350,15 @@
     var entry = state.rows.get(n);
     if (entry) {
       setShownText(entry, clean);
-      if (clean === entry.saved) {
+      /*
+        保存値と同じなら未保存から外す。ただし、その行をいま送っている最中は
+        外さない。entry.saved は送る前の古い値で、応答が返ればファイルは送った
+        値になる。そこで「保存値へ戻した」を未保存から外すと、ファイルには送った
+        値が残ったまま画面は「保存済み」になり、戻した訳は二度と送られない
+        （実際に起きた）。控えておけば、応答のあとで送った値と違うので残り、
+        次の保存で送られる（applyResults と onSaved）。
+      */
+      if (clean === entry.saved && !(state.inflight && state.inflight.has(n))) {
         state.pending.delete(n);
       } else {
         state.pending.set(n, clean);
@@ -1576,6 +1592,20 @@
       return Promise.resolve();
     }
     if (state.saving || state.mine || state.pending.size === 0) {
+      if (!state.saving && !state.mine && state.saveError) {
+        /*
+          送り直しを待っているあいだに、送るものが無くなった（保存値へ打ち戻した、
+          競合で「ファイルの訳を採る」を選んだ、など）。落ちていた要求はもう無い
+          ので、「保存できません（もう一度試しています）」を下ろす。下ろさないと、
+          閉じても何も失われないのに、翻訳者は存在しない失敗を直しにいく。
+          scheduleRetry の早い戻りと同じ扱いで、1行ずつの理由（state.failed）は
+          そちらの表示に任せる。
+        */
+        state.saveError = false;
+        state.retry = 0;
+        showMessage("");
+        updateStatus();
+      }
       return Promise.resolve();
     }
     var edits = [];
@@ -1601,6 +1631,7 @@
     */
     var gen = state.gen;
     state.saving = true;
+    state.inflight = sent;
     updateStatus();
     /*
       送り終わりを返す。書き出し（exportCsv）が、送っていない訳を落としたまま
@@ -1619,6 +1650,7 @@
           updateStatus();
           return;
         }
+        state.inflight = null;
         onSaved(res, sent);
       })
       .catch(function () {
@@ -1631,6 +1663,7 @@
           updateStatus();
           return;
         }
+        state.inflight = null;
         showMessage(t("ui.save_failed_detail"));
         scheduleRetry();
         updateStatus();
@@ -1664,6 +1697,20 @@
     setExportState("", false);
 
     flush().then(function () {
+      if (state.mine) {
+        /*
+          競合している。送った訳が 409 で返ると、onConflict がそれを state.mine へ
+          移して state.pending から外すので、下の判定だけでは「送りきった」に見える。
+          そのまま取りにいくと、選ぶ前のよその訳の中身を「書き出しました」と渡す。
+          書き出したものの中では、黙って破棄したのと同じになる。どちらを残すかを
+          選んでもらってから、押し直してもらう。
+
+          「送っています」とは言わない。競合のあいだは自動保存を止めていて、
+          何も送っていない。
+        */
+        setExportState(t("ui.export_conflict"), true);
+        return null;
+      }
       if (state.saving || state.pending.size > 0) {
         /*
           まだ送り終わっていない。待って勝手に書き出すのではなく、押し直して
@@ -1685,7 +1732,12 @@
           }
         })
         .catch(function (err) {
-          setExportState(err && err.message ? err.message : t("ui.export_failed"), true);
+          /*
+            待ち受けが返した理由（目録の文）だけをそのまま出す。ブラウザーが投げた
+            誤り（届かなかったときの "Failed to fetch"、保存ダイアログの書き込みの
+            失敗など）は、目録に無い英文なので出さず、目録の文で伝える。
+          */
+          setExportState(err && err.fromServer ? err.message : t("ui.export_failed"), true);
         });
     }).then(function () {
       state.exporting = false;
@@ -1707,6 +1759,9 @@
   /*
     中身を取りにいく。誤りのときは本文が理由そのものなので、そのまま投げる。
     状態コードだけを出しても、翻訳者には直しようがない。
+
+    投げる誤りには fromServer の印を付ける。exportCsv が出してよいのは、この
+    印の付いた文（待ち受けが目録から組んだもの）だけである。
   */
   function fetchCsv(form) {
     var url = "/api/export?locale=" + encodeURIComponent(state.locale) +
@@ -1714,7 +1769,9 @@
     return fetch(url, { credentials: "same-origin" }).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (text) {
-          throw new Error(text ? text.trim() : t("ui.export_failed"));
+          var err = new Error(text ? text.trim() : t("ui.export_failed"));
+          err.fromServer = true;
+          throw err;
         });
       }
       var name = nameFromDisposition(res.headers.get("Content-Disposition"));
@@ -1897,8 +1954,16 @@
         if (entry) {
           entry.saved = r.translation;
           if (state.editing !== r.line) {
-            /* ファイルから読み直した値を出す。画面とファイルを同じにする。 */
-            setShownText(entry, r.translation);
+            /*
+              ファイルから読み直した値を出す。画面とファイルを同じにする。
+
+              ただし、送ったあとに打ち直した訳が未保存として残っていれば、そちらを
+              出す（shownValue）。行には「未保存」の印が付いたままで、次の保存で
+              送るのもそちらである。ファイルの値で描き直すと、欄と入力欄と送り直して
+              いる訳が別物になり、次の保存が落ちたときに翻訳者が見ている訳が
+              どこにも無い値になる。
+            */
+            setShownText(entry, shownValue(r.line, r.translation));
           }
           renderBadgesForKey(entry, r.badges);
           setRowNote(entry, r.warning ? r.warning : "");
@@ -2087,12 +2152,65 @@
 
     var mine = remap(clashed, oldKeys, body.current);
     var keep = remap(untouched, oldKeys, body.current);
+    /*
+      保存できなかった訳（state.failed）も、同じ規則でキーから載せ直す。値は
+      { reason, value } のまま移す。行番号のままにしていたころは、よそが上に
+      1行足しただけで、goodbye の訳が hello の行に「保存できない行」として出た。
+      そのまま hello の行を1字直すと、goodbye の訳が hello のキーへ保存され、
+      hello の訳は消えた（実際に起きた）。載せる先を決められないものは、
+      ほかと同じく行き先の無い訳として出す。
+    */
+    var failed = remap(state.failed, oldKeys, body.current);
+
+    /*
+      入力欄で打っている最中なら、その行も同じ規則で引き直しておく。描き直しは
+      一覧を作り直すので、入力欄はいったん外れる。開き直さないと、焦点は body へ
+      落ち、続けて打った字はどこにも入らないのに、保存の欄は「保存済み」と言う
+      （keepAlways に書いた事故と同じ形。実際に起きた）。
+    */
+    var typing = null;
+    var caret = null;
+    if (state.editing !== null && document.activeElement === editor) {
+      remap(new Map([[state.editing, true]]), oldKeys, body.current).edits.forEach(function (value, line) {
+        typing = line;
+      });
+      caret = { start: editor.selectionStart, end: editor.selectionEnd };
+    }
 
     state.mine = mine.edits.size ? mine.edits : null;
     state.pending = keep.edits;
+    state.failed = failed.edits;
     addOrphans(mine.lost);
     addOrphans(keep.lost);
-    render(body.current);
+    addOrphans(failed.lost.map(function (item) {
+      return { key: item.key, text: item.text.value };
+    }));
+    /*
+      描き直すあいだは、入力欄の blur で保存へ回さない。入力欄を頁から外すと
+      Chromium は blur を出し、commitEditor がその場で flush する。それでは
+      下の「すぐに送らず自動保存の時計を通す」が破れる。
+    */
+    editor.removeEventListener("blur", commitEditor);
+    try {
+      render(body.current);
+    } finally {
+      editor.addEventListener("blur", commitEditor);
+    }
+    /*
+      打っていた行を開き直し、キャレットも戻す。競合した行（isLocked）は
+      openEditor が開かない。どちらを残すか選ぶまで編集させないためである。
+
+      描き直しで隠れた行には差し込まない。未保存の訳がある行は keepAlways が
+      出すので、隠れるのは打った訳が保存値と同じ行だけで、失う訳は無い。
+      隠れた行へ差し込むと、焦点は入らず高さ0の入力欄が残る（reviewClosed を見よ）。
+    */
+    var reopen = typing !== null ? state.rows.get(typing) : null;
+    if (reopen && !reopen.row.hidden) {
+      openEditor(typing);
+      if (state.editing === typing) {
+        editor.setSelectionRange(caret.start, caret.end);
+      }
+    }
     if (state.mine) {
       showMessage(body.message ? body.message : t("ui.save_conflict"));
       el.conflict.hidden = false;
@@ -2465,19 +2583,14 @@
     チップの checked と一覧は前のロケールのまま残った（実測で「チップ2つが
     選ばれたまま、一覧も表示中の行数も前のロケールのまま」になった）。
     失敗したときは何も変わっていないのが正しい。
+
+    保存の世代と送り直しの時計も、読めたときだけ片付ける（下の .then）。読む前に
+    片付けていたころは、読み込みに失敗すると送り直しの時計が止まったまま戻らず、
+    画面は「未保存 1 件」と言ったまま、その訳を二度と送らなかった（原因が消えた
+    あとも、同じ行を打ち直すまでファイルに入らない）。retryDelays の「諦めない」が、
+    失敗した読み直しを1回挟むだけで破れていた。
   */
   function load(locale, resetFinder) {
-    /*
-      世代を1つ進める。進めておくと、送りかけの保存の応答が返ってきたときに
-      「もう画面のものではない」と分かる。別ロケールの版と件数を載せない。
-    */
-    state.gen = state.gen + 1;
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-    state.retry = 0;
-    state.saveError = false;
     if (!locale) {
       clear(el.list);
       el.rows.textContent = "";
@@ -2488,7 +2601,36 @@
     /* URL に載せるのはロケール名だけ。原文も訳も URL には載せない。 */
     getJSON("/api/lines?locale=" + encodeURIComponent(locale))
       .then(function (data) {
+        /*
+          世代を1つ進める。進めておくと、送りかけの保存の応答が返ってきたときに
+          「もう画面のものではない」と分かる。別ロケールの版と件数を載せない。
+
+          読めたここで進める。読み込みの途中に返った応答は、まだ画面に出ている
+          （前の）内容のものなので、そのまま載せてよい。
+        */
+        state.gen = state.gen + 1;
+        if (state.timer) {
+          clearTimeout(state.timer);
+          state.timer = null;
+        }
+        state.retry = 0;
+        state.saveError = false;
+        /* 送りかけの訳は前の内容のもので、応答も上の世代で捨てる。 */
+        state.inflight = null;
         showMessage("");
+        /*
+          選んだあとは「ロケールを選んでください」を選択肢から外す。起動時に
+          ロケールを指定したときと同じ並びになる（fillLocales）。
+
+          残しておくと、行が並んでいるのに空へ戻せる。戻すと一覧だけが消え、
+          ファイルの名前・条件のチップ・件数・「表示中 N 行」・抱えている訳は
+          前のロケールのまま残った。state.locale も前のロケールのままなので、
+          書き出しや保存は画面に出ていないロケールへ向かう。片付ける先を1つずつ
+          足すより、戻す道そのものを作らない。
+        */
+        if (el.locale.querySelector('option[value=""]')) {
+          fillLocales(data.locale);
+        }
         /*
           条件を外すのはここ。render より先に外すと、チップも一覧も新しい
           ロケールのぶんが最初から外れた形で描かれる（buildFilters は
@@ -2728,7 +2870,15 @@
         el.filterClear.addEventListener("click", function () {
           /* 条件も検索語もまとめて外す。「全部見たい」は1手でできるようにする。 */
           clearFinder();
-          buildFilters(state.data ? state.data.counts : []);
+          /*
+            チップは組み直さず、選択だけを外す。組み直すと、数と添え書きが
+            最後に読み込んだときの件数（state.data.counts）に戻る。保存の応答で
+            待ち受けが数え直した数（updateChipRows）が消え、件数の欄とも別の
+            時点の数になる。
+          */
+          el.filters.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+            box.checked = false;
+          });
           applyView();
         });
         /*

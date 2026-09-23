@@ -83,6 +83,7 @@
     "ui.export_working": "編集中のファイルのまま保存",
     "ui.export_working_note": "いま書き込んでいるファイルをそのまま写します。作業コピーがあればそれ、無ければ公開ファイル自身です。",
     "ui.export_wait": "未保存の訳を送っています。済んでから、もう一度押してください。",
+    "ui.export_conflict": "競合しています。どちらの訳を残すか選んでから、もう一度押してください。",
     "ui.export_done": "書き出しました。",
     "ui.export_failed": "書き出せませんでした。",
     "ui.counts": "件数",
