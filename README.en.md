@@ -738,6 +738,17 @@ The controls on the screen are as follows.
 The browser asks you where to save it.  
 This tool does not take a destination path, so there is no field on the screen to type one into.
 
+When you press it, any translations not yet sent are sent first, and then it exports.  
+If a translation shown on screen is still not in the file, it does not export.  
+The reason appears under the button, so sort it out and press again.
+
+| When it does not export | How to sort it out |
+| ---- | ---- |
+| Translations are still being sent, or could not be sent | Wait until they have been sent |
+| There is a conflict | Pick which translation to keep |
+| A row cannot be saved | Fix it using the reason shown on the row |
+| A translation has no row to go to | Copy it down, then reload |
+
 There are two forms you can export.
 
 | What you choose | What comes out |
