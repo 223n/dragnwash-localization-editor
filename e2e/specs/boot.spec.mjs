@@ -1251,6 +1251,56 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     expect(dialogs).toHaveLength(0);
   });
 
+  // 2度押すと、2つの確認（askDiscard）が同じ送り終わりを待つ。待つあいだに別の行へ打ち足した訳は、
+  // 送っている最中なのでまだ送られない。返ったところで先に押したほうがそれを送り始めると、以前は
+  // あとで押したほうがその返事を待たずに尋ねた（送っている最中の flush はすぐ戻るため。app.js の
+  // settle）。受ければ読み込みが走り、「その訳は消えます」と尋ねた訳が、そのあと返った保存で
+  // ファイルに入った。その返事も待ってから決める。送れていれば尋ねずに読み直す。
+  test("待つあいだに打ち足した訳を先に押したほうが送り始めても、その返事を待ってから決める", async ({ app, server }) => {
+    const before = await server.readRootText(workingRel);
+    const added = "もしもし。";
+    const first = gate();
+    const second = gate();
+    const sent = [];
+    await app.route(isPath("/api/rows"), async (route) => {
+      sent.push(route.request().postDataJSON().edits.map((edit) => edit.line));
+      await (sent.length === 1 ? first.promise : second.promise);
+      await route.continue();
+    });
+    const dialogs = watchDialogs(app, true);
+    const lines = watchRequests(app, "/api/lines");
+
+    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
+    await editor(app).press("Escape");
+    await expect.poll(() => sent.length).toBe(1);
+    await typeTranslation(app, SAMPLE_LINES.hello, added);
+    await editor(app).press("Escape");
+    await app.locator("#reload").click();
+    await app.locator("#reload").click();
+    first.release();
+
+    // 打ち足したぶんを送り始めた。その返事が返るまでは、尋ねもせず、読みにもいかない。
+    // 確認が開いていれば、閉じるまで evaluate は返らない（尋ねていれば dialogs に入っている）。
+    await expect.poll(() => sent).toEqual([[SAMPLE_LINES.goodbye], [SAMPLE_LINES.hello]]);
+    await app.evaluate(() => true);
+    expect(dialogs).toHaveLength(0);
+    expect(lines).toHaveLength(0);
+
+    second.release();
+    await expect.poll(() => lines.length).toBe(1);
+    await waitForSaved(app);
+    expect(dialogs).toHaveLength(0);
+    expect(sent).toHaveLength(2);
+    expect(await server.readRootText(workingRel)).toBe(
+      before
+        .replace(`,${SAMPLE.goodbye.source},\n`, `,${SAMPLE.goodbye.source},${typed}\n`)
+        .replace(`,${SAMPLE.hello.source},${SAMPLE.hello.ja}\n`, `,${SAMPLE.hello.source},${added}\n`),
+    );
+    // 読み直した一覧に、送った2つの訳がファイルの値として出る。
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    await expect(translationCell(app, SAMPLE_LINES.hello)).toHaveText(added);
+  });
+
   // 切り替えでも同じ。he を選んだあとで ja へ戻したら、読むのは戻した ja だけで、
   // he は1度も読まない。
   test("返る前にロケールを選び直したら、あとで選んだほうだけを読む", async ({ app }) => {

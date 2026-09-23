@@ -3071,12 +3071,24 @@
     ので、送り終わりそのもの（state.sending）を先に待つ。そのあとの flush が、
     送っているあいだに打ち足されたぶんと、送り直しを待っていた訳を送る。落ちても
     投げない（flush の catch が受け止め、送り直しの時計を引き直す）。
+
+    待ち終えたら、送っている最中かどうかをもう一度見て、そうならその送り終わりを
+    待ってからやり直す。同じ送り終わりを待っているのが自分だけとは限らないためで
+    ある。読み直しを2度押すと、2つの settle が同じ送り終わりを待つ。先に動いたほうの
+    flush が、待つあいだに打ち足された訳を送り始めると、あとのほうの flush は送って
+    いる最中なので早く戻り、その保存が返る前に尋ねていた（実際に起きた）。受けると
+    読み込みが走り、「その訳は消えます」と尋ねた訳が、そのあと返った保存でファイルに
+    入った。
+
+    同じ送り終わりを待つ settle は、待ち始めた順に動く。先に動いたほうが送れば、
+    残りはその送り終わりを同じ順で待ち直す。最後に押したほうはいつも最後に動くので、
+    それが送り終えたあとに、ほかの settle が次を送り始めることは無い。
   */
   function settle() {
-    var sending = state.saving && state.sending ? state.sending : Promise.resolve();
-    return sending.then(function () {
-      return flush();
-    });
+    if (state.saving && state.sending) {
+      return state.sending.then(settle);
+    }
+    return flush();
   }
 
   /*

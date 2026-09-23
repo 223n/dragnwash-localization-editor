@@ -477,6 +477,11 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 	if !strings.Contains(js, "state.sending = postJSON(") {
 		t.Error("flush が送り終わりを控えていない。送っている最中の保存を待てない")
 	}
+	// 待ち終えたら、送っている最中かをもう一度見てやり直すこと。2度押すと、先に動いた
+	// ほうが送り始めた保存を、あとのほうが待たずに尋ねていた（実際に起きた）。
+	if !strings.Contains(functionBody(t, js, "settle"), "return state.sending.then(settle);") {
+		t.Error("settle が、待っているあいだに送り始められた保存を待たずに尋ねる")
+	}
 	// 捨てると答えたあとは送らない。印を見るのは、送る要求を組むより前であること。
 	fl := strings.Index(js, "function flush()")
 	if fl < 0 {
