@@ -156,10 +156,15 @@ type server struct {
 	// record は要求の記録だけの行き先。--verbose でないときに使う。
 	record io.Writer
 
-	// stop は待ち受けを終えるための合図。暇で終わるときに閉じる。
+	// stop は待ち受けを終えるための合図。暇（watchIdle）、Ctrl+C（run の select）、
+	// そのほかの抜け方（待ち受けの失敗など。run の defer）のどれで終わるときも閉じる。
+	// 閉じるのは stopOnce の中で1度だけである。閉じていることは「終わった」ことしか
+	// 表さず、どの道で終わったかは分からない。
 	stop     chan struct{}
 	stopOnce sync.Once
-	// stopReason は終わった理由の文言。
+	// stopReason は終わった理由の文言。書くのは stop を閉じるのと同じ stopOnce の
+	// 中だけで、暇と Ctrl+C のときに入る。待ち受けの失敗などで抜けたときは空のまま
+	// stop が閉じる。
 	stopReason string
 }
 
@@ -328,6 +333,9 @@ func (s *server) run() error {
 
 	s.idle.touch()
 	go s.watchIdle()
+	// どの道で抜けても暇の見張りを止める。止めないと、Ctrl+C や待ち受けの失敗で
+	// 抜けたあとも見張りが回り続け、暇になった時点で stopReason を書き換えにくる。
+	defer s.stopOnce.Do(func() { close(s.stop) })
 
 	select {
 	case err := <-done:
@@ -336,7 +344,12 @@ func (s *server) run() error {
 		}
 		return err
 	case <-ctx.Done():
-		s.stopReason = s.t("server.interrupted")
+		// 理由を書くのも見張りと同じ stopOnce の中で行う。同時に暇になっても、
+		// 書くのはどちらか一方だけになる。
+		s.stopOnce.Do(func() {
+			s.stopReason = s.t("server.interrupted")
+			close(s.stop)
+		})
 	case <-s.stop:
 	}
 

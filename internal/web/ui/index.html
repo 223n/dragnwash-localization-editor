@@ -10,7 +10,8 @@
 
   配置は3つに分かれる。
 
-    .top      貼り付く帯。保存の状態と、競合の引き止めと、失敗の理由
+    .top      貼り付く帯。保存の状態と、別に保存するメニューと、競合の
+              引き止めと、失敗の理由
     .sidebar  絞り込み・検索と、畳んだ説明（キー操作、断り書き、起動時の状態）
     .content  一覧
 
@@ -93,10 +94,14 @@
   するためである。貼り付けないと、ボタンは画面の55,000px 上にあり、そのあいだ
   自動保存は止まったままになる（実際に起きた）。
 
-  ここへ入れるのは bar / message / conflict / orphans の4つだけにする。足すと、
-  その高さのぶんだけ競合の引き止めが下へ押し出される。一帯は max-height: 50vh で
-  止めてあるので、あふれたぶんは一帯の中でスクロールアウトし、決断用のボタンが
-  押せなくなる（絞り込みの一帯を入れていたときに 800x600 で実際に起きた）。
+  ここへ入れるのは bar / message / export-state / conflict / orphans の5つだけに
+  する。足すと、その高さのぶんだけ競合の引き止めが下へ押し出される。一帯は
+  max-height: 50vh で止めてあるので、あふれたぶんは一帯の中でスクロールアウトし、
+  決断用のボタンが押せなくなる（絞り込みの一帯を入れていたときに 800x600 で
+  実際に起きた）。
+
+  export-state は例外として足した。ふだんは空で高さが0になり、中身が入るのは
+  翻訳者が書き出しを押した直後だけである（#export-menu の注記）。
 -->
 <div class="top">
   <header class="bar">
@@ -135,6 +140,54 @@
       <span id="shown" class="shown" aria-live="polite"></span>
     </span>
     <!--
+      書き出し。いま開いているロケールのCSVを、好きな場所へ保存させる。
+      帯に置くのは、行のどこを見ていても押せるようにするためである。
+
+      帯にはボタン1つだけを置き、2つの選び方と説明はメニュー（#export-menu）に
+      入れる。2つを並べると帯が横に伸び、狭い画面では段が増えて一覧の始まりが
+      下がる。
+
+      目録が届くまでは hidden で出さない。文言の入っていないボタンが、名前を
+      持たないまま焦点の順に並ぶことになる（app.js の applyCatalog が出す）。
+    -->
+    <button id="export-open" class="btn export-open" type="button" popovertarget="export-menu" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-floppy-disk"/></svg>
+      <span id="export-title"></span>
+      <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+    </button>
+    <!--
+      書き出しのメニュー。popover にする。
+
+      帯（.top）は max-height: 50vh と overflow: auto で止めてあるので、帯の中に
+      絶対配置で開くと、帯の縁で切れて帯の中でスクロールする。popover は最前面の
+      層（top layer）に出るので、帯の縁に切られない。外を押すか Escape で閉じ、
+      閉じると焦点は開いたボタンへ戻る。どれもブラウザーに任せる。
+
+      中に見張り（aria-live / role="status"）を置かない。閉じた popover は描かれず、
+      支援技術の木からも外れる。選んだ時点でメニューは閉じるので、結果は帯の中の
+      #export-state に出す。
+
+      popover を持たないブラウザーでは、中身が帯の中にそのまま出る。押せない
+      よりはよい。
+    -->
+    <div id="export-menu" class="export-menu" popover>
+      <p id="export-help" class="export-help"></p>
+      <div class="export-choice">
+        <button id="export-published" class="btn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
+          <span id="export-published-label"></span>
+        </button>
+        <p id="export-published-note" class="export-note"></p>
+      </div>
+      <div class="export-choice">
+        <button id="export-working" class="btn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-floppy-disk"/></svg>
+          <span id="export-working-label"></span>
+        </button>
+        <p id="export-working-note" class="export-note"></p>
+      </div>
+    </div>
+    <!--
       保存の状態。保存済み／保存しています／未保存 N 件／保存できません／競合。
       黙って成功したように見せないための欄で、文言とアイコンは app.js が入れる。
       読み上げにも出す。黙って失敗しないことは、目で見ている人だけの約束ではない。
@@ -153,24 +206,46 @@
   <p id="message" class="notice error" role="status"></p>
 
   <!--
+    書き出しの結果。帯のメニュー（#export-menu）の外に置く。メニューは選んだ
+    時点で閉じ、閉じたメニューの中身は支援技術の木から外れるので、中に置くと
+    結果が見えも告知されもしない。
+
+    #message と同じく hidden は出し入れせず、中身の入れ替えで出し入れする。
+    空のときは app.css の .notice:empty が余白と下線を落とすので、高さは0になる。
+    うまくいったという知らせだけは、下の残り時間の帯が尽きたら消える
+    （app.css の .export-state.timed）。失敗の理由は消さない。
+  -->
+  <p id="export-state" class="notice export-state" role="status"></p>
+
+  <!--
     競合（409）の引き止め。手前でファイルが変わったとき、どちらの編集を載せるかを
     人に選ばせる。黙って上書きも、黙って破棄もしない。ボタンは2つとも type="button"
     で、form は使わない（CSP の form-action 'none' と、CSRF の入口を増やさないため）。
+
+    tabindex="-1" は、打っていた行が競合したときに焦点をここへ移すため（app.js の
+    onConflict）。Tab の順には入らない。
   -->
-  <section id="conflict" class="conflict" hidden>
+  <section id="conflict" class="conflict" tabindex="-1" aria-labelledby="conflict-title" hidden>
     <p class="lead">
       <svg class="icon" aria-hidden="true"><use href="#i-code-merge"/></svg>
       <span id="conflict-title"></span>
     </p>
     <p id="conflict-help"></p>
-    <button id="conflict-keep" class="btn btn-primary" type="button">
-      <svg class="icon" aria-hidden="true"><use href="#i-user-pen"/></svg>
-      <span id="conflict-keep-label"></span>
-    </button>
-    <button id="conflict-take" class="btn" type="button">
-      <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
-      <span id="conflict-take-label"></span>
-    </button>
+    <!--
+      2つのボタンは1つの箱にまとめ、帯の中で下端に貼り付ける（app.css の
+      .conflict-actions）。狭くて低い画面では、説明の文が長く折り返して、
+      ボタンが帯の見える範囲の下へ出る。
+    -->
+    <div class="conflict-actions">
+      <button id="conflict-keep" class="btn btn-primary" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-user-pen"/></svg>
+        <span id="conflict-keep-label"></span>
+      </button>
+      <button id="conflict-take" class="btn" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
+        <span id="conflict-take-label"></span>
+      </button>
+    </div>
   </section>
 
   <!--
@@ -347,48 +422,6 @@
           </div>
         </div>
       </details>
-      <!--
-        書き出し。いま開いているロケールのCSVを、好きな場所へ保存させる。
-
-        「ファイル」の畳みと同じ一帯に置く。どちらも「いま直しているのがどの
-        ファイルか」の話で、離して置くと、上に出ている名前と、ここで書き出す
-        中身が別物に見える。
-
-        畳んでおく。押すのは作業が一区切りしたときだけで、開いたままだと
-        条件の一帯が列の中でスクロールアウトする。ほかの畳みと同じく hidden で
-        始め、文言が入ったら出す（app.js の applyCatalog）。空の summary は、
-        名前を持たない焦点の止まり場になる。
-      -->
-      <details id="export-fold" class="fold" hidden>
-        <summary id="export-title"></summary>
-        <div class="fold-body">
-          <p id="export-help" class="notice keys"></p>
-          <div class="export-choice">
-            <button id="export-published" class="btn" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
-              <span id="export-published-label"></span>
-            </button>
-            <p id="export-published-note" class="export-note"></p>
-          </div>
-          <div class="export-choice">
-            <button id="export-working" class="btn" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#i-floppy-disk"/></svg>
-              <span id="export-working-label"></span>
-            </button>
-            <p id="export-working-note" class="export-note"></p>
-          </div>
-        </div>
-      </details>
-      <!--
-        書き出しの結果。畳みの外に置く。中に置くと、閉じているあいだ支援技術の
-        木から外れて告知されない（counts_test.go の assertFoldsHoldNoLiveRegion）。
-        押すのは畳みを開いているときだけなので、中でも読めはするが、告知する欄を
-        畳める場所に置く作りそのものを残さない。
-
-        #message と同じく hidden は出し入れせず、中身の入れ替えで出し入れする
-        （空のときは app.css の .export-state:empty が余白を落とす）。
-      -->
-      <p id="export-state" class="export-state" role="status"></p>
     </section>
   </aside>
   <!-- 引き出しの後ろの幕。狭い画面で引き出しが開いているあいだだけ出す。押すと閉じる。 -->

@@ -1,0 +1,6 @@
+key,section,node,order,speaker,translation
+
+# ===== L01 Harbor =====
+# --- morning: harbor_intro ---
+39f1bc8d00590f24,L01 Harbor,harbor_intro,1,Mira,Willkommen in der Hafen-Waschanlage!
+03e605dbe442f229,L01 Harbor,harbor_intro,2,Pip,Die Schaummaschine brummt wieder.

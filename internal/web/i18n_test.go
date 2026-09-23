@@ -1,10 +1,13 @@
 package web
 
 import (
+	"io/fs"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestCatalogsLoad(t *testing.T) {
@@ -114,6 +117,41 @@ func TestPlaceholdersMatch(t *testing.T) {
 	}
 }
 
+// TestSaveFailedDetailDoesNotAdviseReloading は、保存に失敗したときの案内
+// （ui.save_failed_detail）が、訳を失う「読み直し」を勧めていないことを見る。
+//
+// 要求が落ちると、画面は訳を抱えたまま自動で送り直し続ける（app.js の retryDelays）。
+// 読み直しは、まだ送れていない訳を捨てる（尋ねはするが、案内に従った人は受ける）。
+// 以前の文は「もう一度書き換えるか、読み直してください」で、翻訳者を訳を捨てる側へ
+// 導いていた。案内のとおり待てば訳がファイルに入ることは、E2E の save-failure.spec.mjs
+// （届かなかった保存は…戻れば送り直してファイルに入る）が見ている。
+func TestSaveFailedDetailDoesNotAdviseReloading(t *testing.T) {
+	c, err := loadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 勧める言い方。どちらも以前の文にあったもの。
+	advice := map[string][]string{
+		"ja": {"読み直してください"},
+		"en": {"or reload"},
+	}
+	for lang, bad := range advice {
+		cat := c.byLang[lang]
+		if cat == nil {
+			t.Fatalf("%s の目録が無い", lang)
+		}
+		text := cat.Messages["ui.save_failed_detail"]
+		if text == "" {
+			t.Fatalf("%s.json に ui.save_failed_detail が無い", lang)
+		}
+		for _, phrase := range bad {
+			if strings.Contains(text, phrase) {
+				t.Errorf("%s の ui.save_failed_detail が読み直しを勧めている（%q）: %q", lang, phrase, text)
+			}
+		}
+	}
+}
+
 // placeholders は文言に出てくる {name} を並べて返す。
 func placeholders(text string) string {
 	var names []string
@@ -188,6 +226,14 @@ func TestParseAcceptLanguage(t *testing.T) {
 		{"*", ""},
 		{"ja;q=0", ""},
 		{"ja;q=bogus", ""},
+		// 空の項目は飛ばす（連続したカンマ、末尾のカンマ）。
+		{"ja,,en", "ja,en"},
+		{"ja,", "ja"},
+		{" , ", ""},
+		// q は 0 から 1 まで。1 ちょうどは通し、外れた値の項目は落とす。
+		{"ja;q=1", "ja"},
+		{"ja;q=1.5,en", "en"},
+		{"ja;q=-0.1,en", "en"},
 	}
 	for _, tc := range cases {
 		got := strings.Join(parseAcceptLanguage(tc.header), ",")
@@ -260,5 +306,129 @@ func TestLabelsAreTranslated(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// catalogFile は目録1つぶんの中身を作る。試験で壊した目録と並べる、正しい目録。
+func catalogFile(lang string) *fstest.MapFile {
+	return &fstest.MapFile{Data: []byte(`{"lang":"` + lang + `","dir":"ltr","name":"` + lang +
+		`","messages":{"ui.reload":"x"}}`)}
+}
+
+// unreadableFS は name だけを読めない fs.FS。一覧には出るのに読めない目録を作る
+// （権限が外れた、ほかのプログラムが掴んでいる、など）。
+type unreadableFS struct {
+	fstest.MapFS
+	name string
+}
+
+func (f unreadableFS) Open(name string) (fs.File, error) {
+	if name == f.name {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
+	return f.MapFS.Open(name)
+}
+
+// ReadFile も塞ぐ。fstest.MapFS は ReadFile を持っているので、fs.ReadFile は
+// Open を通らずにそちらを呼ぶ。
+func (f unreadableFS) ReadFile(name string) ([]byte, error) {
+	if name == f.name {
+		return nil, &fs.PathError{Op: "read", Path: name, Err: fs.ErrPermission}
+	}
+	return f.MapFS.ReadFile(name)
+}
+
+// TestCatalogsRefuseToStartWhenBroken は、目録が1つでも読めなければ起動を止める
+// ことを見る。
+//
+// 目録は人が手で足す（言語を増やす）。壊れたまま走らせると、画面の文言が鍵のまま
+// 出るか、--ui-lang で指した言語と画面の言語が食い違う。どちらも翻訳者には
+// 直しようがない。止めるときは、どのファイルが悪いかを誤りに書く。
+func TestCatalogsRefuseToStartWhenBroken(t *testing.T) {
+	good := func(extra map[string]*fstest.MapFile) fstest.MapFS {
+		fsys := fstest.MapFS{
+			catalogDir + "/ja.json": catalogFile("ja"),
+			catalogDir + "/en.json": catalogFile("en"),
+		}
+		for name, file := range extra {
+			fsys[name] = file
+		}
+		return fsys
+	}
+	broken := func(body string) map[string]*fstest.MapFile {
+		return map[string]*fstest.MapFile{catalogDir + "/de.json": {Data: []byte(body)}}
+	}
+
+	cases := []struct {
+		name string
+		fsys fs.FS
+		want string
+	}{
+		{"目録の置き場が無い", fstest.MapFS{}, catalogDir},
+		{"JSON でない", good(broken(`{"lang":`)), "de.json"},
+		{"lang が無い", good(broken(`{"dir":"ltr","messages":{}}`)), "de.json"},
+		{"lang とファイル名が合わない", good(broken(`{"lang":"fr","dir":"ltr","messages":{}}`)), "de.json"},
+		{"dir が ltr でも rtl でもない", good(broken(`{"lang":"de","dir":"ttb","messages":{}}`)), "de.json"},
+		{"dir が無い", good(broken(`{"lang":"de","messages":{}}`)), "de.json"},
+		{"原典が無い", fstest.MapFS{catalogDir + "/en.json": catalogFile("en")}, originLang + ".json"},
+		{"受け皿が無い", fstest.MapFS{catalogDir + "/ja.json": catalogFile("ja")}, fallbackLang + ".json"},
+		{"一覧にあるのに読めない", unreadableFS{good(broken(`{}`)), catalogDir + "/de.json"}, "de.json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadCatalogsFrom(tc.fsys)
+			if err == nil {
+				t.Fatal("壊れた目録で起動してしまう")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("誤りに %q が無い: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestCatalogsSkipWhatIsNotACatalog は、目録の置き場にある .json 以外のものを
+// 読まないことを見る。
+//
+// 置き場に説明のファイルや古い目録を退避したディレクトリがあっても、それを
+// 目録として読んで起動を止めたりはしない。
+func TestCatalogsSkipWhatIsNotACatalog(t *testing.T) {
+	c, err := loadCatalogsFrom(fstest.MapFS{
+		catalogDir + "/ja.json":     catalogFile("ja"),
+		catalogDir + "/en.json":     catalogFile("en"),
+		catalogDir + "/README.md":   {Data: []byte("# 目録の書き方")},
+		catalogDir + "/old/de.json": {Data: []byte(`{"lang":`)},
+	})
+	if err != nil {
+		t.Fatalf("目録でないものまで読んで止まった: %v", err)
+	}
+	if want := []string{"en", "ja"}; !slices.Equal(c.langs, want) {
+		t.Errorf("読んだ言語が %v、%v を期待", c.langs, want)
+	}
+}
+
+// TestLookupFindsARegionalCatalog は、言語だけの指定で地域つきの目録に当たることを
+// 見る。
+//
+// 目録が "pt-BR" しか無いとき、Accept-Language の "pt" や --ui-lang pt で英語へ
+// 落とすと、読める言語があるのに読めない画面を出すことになる。言語タグは
+// 大文字小文字を区別しない（目録は小文字で持つ）。
+func TestLookupFindsARegionalCatalog(t *testing.T) {
+	c, err := loadCatalogsFrom(fstest.MapFS{
+		catalogDir + "/ja.json":    catalogFile("ja"),
+		catalogDir + "/en.json":    catalogFile("en"),
+		catalogDir + "/pt-BR.json": catalogFile("pt-BR"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lang := range []string{"pt", "PT", " pt ", "pt-BR", "pt-br"} {
+		if cat := c.lookup(lang); cat == nil || cat.Lang != "pt-BR" {
+			t.Errorf("%q が pt-BR に当たらない: %+v", lang, cat)
+		}
+	}
+	// 選び方の全体（--ui-lang > Accept-Language > en）を通しても同じ。
+	if got := c.forRequest("", "pt;q=0.9,de").Lang; got != "pt-BR" {
+		t.Errorf("Accept-Language の pt が %q になった", got)
 	}
 }

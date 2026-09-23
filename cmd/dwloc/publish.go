@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,7 +60,12 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
 
-すべての対象を先に組み立ててから書き出します。1件でも失敗すれば何も書きません。
+すべての対象を先に組み立ててから書き出します。組み立てで1件でも失敗すれば
+何も書きません。書き出しの途中で失敗したとき（書き込みの権限が無い、ディスクが
+足りない、など）は、そこで止まります（終了コード 2）。巻き戻しはしないので、
+それより前に書いたロケールは新しい内容のまま残り、標準出力に1行ずつ出ます。
+書いた分も上の確認を通った出力なので、訳は失われません。書き出せなかった
+ロケールと、まだ書いていないロケールは元の内容のままです。
 
 終了コード:
   0   成功
@@ -229,10 +236,14 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		targets = found
 	}
 
-	// まず全件を組み立てる。書き出しはその後。途中で失敗したとき
+	// まず全件を組み立てる。書き出しはその後。組み立ての途中で失敗したとき
 	// 「先頭の数ロケールだけ新しい内容、残りは古い内容」という半端な状態を
 	// 作らないためです。入力ヘッダーの列名重複のように、読み始めて初めて分かる
 	// 失敗があるので、事前の検査では代われません。
+	//
+	// 書き出しそのものの失敗（権限・ディスク不足など）までは防げません。
+	// 下の書き出しの繰り返しは巻き戻さないので、そこで失敗したときは先に書いた
+	// ロケールだけが新しい内容になります。使い方の説明はそのとおりに書いてあります。
 	built := make([][]byte, len(targets))
 	stats := make([]publish.Stats, len(targets))
 	for i, t := range targets {
@@ -306,6 +317,11 @@ dwloc:       ゲームへ最新の翻訳を入れ直してから、もう一度�
 //
 // そろっていれば exitOK です。1件でも食い違えば exitProblems（1）で、
 // どのロケールも書きません。読めなくて確かめられなかったときだけが 2 です。
+//
+// コミット済みの公開ファイルがまだ無いロケール（新しい言語の最初の publish）は
+// 確かめずに通します。巻き戻る先が無いからです。publish.CheckTargetLoss が
+// 出力先の無いときを「失うものが無い」と扱うのと同じ考えです。ここで止めると、
+// ゲームで入れた新しい言語の訳が、コミットする側へ1行も届きません。
 func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) int {
 	var found []publish.BaseResult
 	for _, t := range targets {
@@ -313,6 +329,9 @@ func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) in
 			continue
 		}
 		current, err := os.ReadFile(t.Output)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			fmt.Fprintf(stderr,
 				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",

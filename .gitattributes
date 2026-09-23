@@ -11,3 +11,12 @@
 *.yaml text
 *.sh text
 *.ps1 text
+
+# 画像はバイナリとして扱う。改行の変換も差分の表示もさせない。
+# 上の text=auto でも中身から判定されるが、判定に頼らず明示しておく
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary

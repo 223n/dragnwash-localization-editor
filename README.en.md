@@ -696,6 +696,11 @@ Open the `URL` printed on standard output in a browser and every row of one loca
 Select the translation column to edit it.  
 It saves automatically when you stop typing.
 
+![The whole editing screen. The filter and the search are in the left column, and each row shows the speaker, the source and the translation. Untranslated rows carry a badge](docs/images/edit-overview-en.png)
+
+The screenshots use made-up lines written for this explanation.  
+None of the game's script is shown.
+
 When it saves to the working copy, the game reloads it in about two seconds.  
 You can translate, check it on screen and repeat, with no restart.  
 It works when the game is running, that language is selected, and `Developer tools` is on.  
@@ -717,6 +722,8 @@ Selecting the translation column turns that spot into an input box.
 The input box wraps to the length of the translation, and its height grows with the content.  
 You can fix a translation that does not fit the column while seeing all of it, without scrolling sideways.
 
+![A translation column opened as an input box. The save state at the top right reads "unsaved: 1"](docs/images/edit-editing-en.png)
+
 A translation cannot contain a line break.  
 `Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
 The published file reads one line as one record, so a translation containing a line break cannot be saved in the first place.
@@ -734,9 +741,23 @@ The controls on the screen are as follows.
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
 
-"Save to another location" in the left column saves the CSV of the locale you have open to wherever you like.  
+"Save a copy" in the bar at the top saves the CSV of the locale you have open to wherever you like.  
+Pressing it opens a menu where you choose the form.  
 The browser asks you where to save it.  
 This tool does not take a destination path, so there is no field on the screen to type one into.
+
+![The menu opened from "Save a copy" in the top bar. You choose between the form of the published file and the file being edited as it is](docs/images/edit-export-en.png)
+
+When you press it, any translations not yet sent are sent first, and then it exports.  
+If a translation shown on screen is still not in the file, it does not export.  
+The reason appears under the button, so sort it out and press again.
+
+| When it does not export | How to sort it out |
+| ---- | ---- |
+| Translations are still being sent, or could not be sent | Wait until they have been sent |
+| There is a conflict | Pick which translation to keep |
+| A row cannot be saved | Fix it using the reason shown on the row |
+| A translation has no row to go to | Copy it down, then reload |
 
 There are two forms you can export.
 
@@ -826,6 +847,8 @@ Pressing the translation column on that row does not open the input box; the row
 Typing into an undecided row could mean either "put my translation on top" or "take the translation from the file".  
 Rows that are not in conflict can still be edited as usual while the prompt is up.
 
+![The conflict prompt. Two buttons appear at the top of the bar, and the row in conflict shows the translation in the file and yours side by side](docs/images/edit-conflict-en.png)
+
 Besides a conflict, there are two other reasons saving stops.  
 Both appear when the rows in the file changed while you were editing.  
 That happens when you redo `Export working copy` in the game, or run `publish` in another window.
@@ -911,12 +934,16 @@ What `diff` shows are candidates, not certainties.
 It does not rewrite translations, so check the content before you move anything.
 
 `publish` assembles everything it targets before writing anything out.  
-If even one thing fails, it writes nothing.  
+If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
-The write goes through a temporary file, so the original file survives even if it stops partway.
+Each file is written through a temporary file, so a file it could not write keeps its original content.  
+However, if writing fails partway (no write permission, not enough disk space, and so on), it does not roll back.  
+The locales it wrote before that keep their new content, and it stops with exit code `2`.  
+Each locale it wrote is printed as one line on standard output.  
+All of them passed the checks above, so no translation is lost.
 
 You can narrow what it targets with `--locale`.  
 With `--path` it stops scanning `Translations` and converts only the file you name.
@@ -1053,7 +1080,7 @@ How the options were compared is in the research report.
 
 | Tool | What it is for |
 | ---- | ---- |
-| Node 22 or later | Used to check the Japanese documents |
+| Node 22 or later | Used to check the Japanese documents and to run the E2E tests |
 | Go 1.27.1 or later | Used for the implementation. It is pinned in `go.mod` |
 
 ### Building it yourself
@@ -1104,6 +1131,46 @@ CI builds all six targets, so writing anything that uses `CGO` will pass locally
 There are tests that refer to the original repository.  
 They run when you put its path in `DRAGNWASH_SOURCE_REPO`.  
 Without it, they look in the default location and are skipped if nothing is found.
+
+### Tests and coverage
+
+There are two kinds of tests.  
+The Go tests, and end-to-end (E2E) tests that drive the screen (`internal/web/ui`) in a browser.  
+The E2E tests run in Playwright's Chromium.
+
+```bash
+npm ci
+npx playwright install chromium   # first time only. On Linux, add --with-deps
+npm run test:go                   # Go tests and coverage
+npm run test:e2e                  # E2E tests of the screen and coverage of app.js
+npm test                          # both
+```
+
+`npm run test:go` runs `go test ./cmd/... ./internal/...` with coverage and prints the figure for each package and the total.  
+The profile is left in `coverage/go/cover.out`.
+
+`npm run test:e2e` builds `dwloc` into a temporary directory, creates a sample translation repository in a separate temporary directory for each test, and starts `dwloc edit` on it.  
+It neither reads nor writes the contents of your checkout.  
+Coverage of `app.js` is counted on lines, leaving out comments and blank lines.  
+The report is written to `coverage/e2e/index.html`.  
+To use a `dwloc` you have already built, put its path in `DWLOC_BIN`.  
+A relative path is taken from the root of the repository.
+
+When you run a narrowed set of specs with `npx playwright test -c e2e <spec>`, first remove the raw data of earlier runs with `node e2e/coverage.mjs clean`.  
+Aggregate the results afterwards with `npm run test:e2e:report`.  
+If raw data from an earlier run is left behind, the aggregation stops without counting.
+
+Both fail when coverage falls below `coverageThresholds` in `package.json`.  
+The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
+Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
+When you add tests and the figures go up, raise the thresholds too.
+
+### Trying the screen with the sample
+
+[samples/harbor](samples/harbor) is a made-up translation repository for trying out the screen.  
+You can open the `edit` screen without the original repository or the game.  
+The screenshots in the README are taken with this sample too (`npm run screenshots` retakes them).  
+How to use it is described in [samples/README.en.md](samples/README.en.md).
 
 ### Checking the Japanese documents
 
@@ -1237,7 +1304,7 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
 | `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the safety of the workflows with CodeQL |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |

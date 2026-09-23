@@ -148,6 +148,14 @@ func TestParsePythonRecords(t *testing.T) {
 			want:  [][]string{{"a", "b"}, {}, {"c", "d"}},
 		},
 		{
+			// [SplitPythonLines] は終端の無い空文字の行を作らないが、呼び出し側が
+			// 組んだ行に混ざっても、前後の行とつながらずに0フィールドのレコードになる。
+			// Python の csv.reader(["a\n", "", "b\n"]) も [['a'], [], ['b']] を返す。
+			name:  "終端の無い空文字の行も0フィールドのレコード",
+			lines: []string{"a\n", "", "b\n"},
+			want:  [][]string{{"a"}, {}, {"b"}},
+		},
+		{
 			name:  "列数はレコードごとに変わってよい",
 			lines: []string{"a,b,c\n", "1\n", "1,2,3,4\n"},
 			want:  [][]string{{"a", "b", "c"}, {"1"}, {"1", "2", "3", "4"}},

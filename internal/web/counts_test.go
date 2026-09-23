@@ -565,8 +565,10 @@ func TestNoticesStartFolded(t *testing.T) {
 			t.Errorf("%s に見出し（summary）が無い。畳むと何が入っているか読めない", id)
 		}
 	}
-	if n := strings.Count(html, ` class="fold" hidden>`); n != 4 {
-		t.Errorf("畳みが %d 個。近道の一覧・絞り込みの断り書き・起動したときの状態・書き出しの4つのはず", n)
+	// 書き出しは畳みではなくなった。帯のボタンとメニュー（popover）で、押さえは
+	// [TestExportMenuLivesInTheBar]。
+	if n := strings.Count(html, ` class="fold" hidden>`); n != 3 {
+		t.Errorf("畳みが %d 個。近道の一覧・絞り込みの断り書き・起動したときの状態の3つのはず", n)
 	}
 	if strings.Contains(html, `class="fold" open`) || strings.Contains(html, "<details open") {
 		t.Error("畳みが開いた状態で始まっている")
@@ -582,7 +584,6 @@ func TestNoticesStartFolded(t *testing.T) {
 		"el.keysFold.hidden = false;",
 		"el.finderFold.hidden = false;",
 		"el.panelFold.hidden = false;",
-		"el.exportFold.hidden = false;",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js に %q が無い。文言が入っても畳みが出てこない", want)
@@ -730,8 +731,10 @@ func between(t *testing.T, body, opening, closing string) string {
 // 閉じた details は中身を描かないので、支援技術の木からも外れる（実測:
 // 閉じた畳みの中の p は checkVisibility() が false）。[TestAlertsAreAnnounced] が
 // #message と #empty に hidden を使わせないのと同じ理由がここにも要る。いまは
-// 見張り（#shown・#save-state・#message・#empty）が4つとも畳みの外にあるが、
-// 外から見張っていないと、あとから中へ移しても何も落ちない。
+// 見張り（#shown・#save-state・#message・#export-state・#empty）が5つとも畳みの
+// 外にあるが、外から見張っていないと、あとから中へ移しても何も落ちない。
+// 書き出しのメニュー（popover）も閉じると同じく木から外れる。あちらは
+// [TestExportMenuLivesInTheBar] が見る。
 func assertFoldsHoldNoLiveRegion(t *testing.T, html string) {
 	t.Helper()
 

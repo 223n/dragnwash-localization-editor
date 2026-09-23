@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // TestSaveRejectsMovedRow は、行番号の指す行が思っているキーの行でないときに
@@ -163,5 +164,40 @@ func TestSessionCookieIsPerPort(t *testing.T) {
 	// 自分の Cookie では通ること。
 	if code := ask(&http.Cookie{Name: a.cookieName, Value: a.token}); code != http.StatusOK {
 		t.Errorf("自分の Cookie で %d が返った、200 を期待", code)
+	}
+}
+
+// TestSaveToMissingRowSaysTheRowIsMissing は、キーを添えて無い行番号へ送ったときに
+// 「行が無い」と言うことを確かめる。
+//
+// キーの照合は、行が無ければ素通しして internal/edit に断らせる。照合の側で
+// 「行がずれた」と言うと、読み直せば直る話に見えてしまい、画面はいつまでも
+// 載せ直しを続ける。行が無いことの理由は1か所（internal/edit）でだけ作る。
+func TestSaveToMissingRowSaysTheRowIsMissing(t *testing.T) {
+	s := newTestServer(t, Options{Root: newEditRoot(t), UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	path := inputPath(t, s, "ja")
+	before := readFile(t, path)
+
+	lines := getLines(t, s, "ja")
+	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 999, Key: key.For(srcBye), Translation: jaTyped})
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[errorResponse](t, rec.Body.Bytes())
+	if len(got.Results) != 1 {
+		t.Fatalf("結果が %+v", got.Results)
+	}
+	why := reason.New(reason.EditNoSuchLine, "そんな行番号は無い")
+	want := s.cat.T(ja, "error.not_editable", "line", "999", "reason", s.reasonText(ja, why))
+	if got.Results[0].Error != want {
+		t.Errorf("理由が %q、%q を期待", got.Results[0].Error, want)
+	}
+	if got.Results[0].Error == s.cat.T(ja, "error.row_moved") {
+		t.Error("無い行を「ずれた」と言っている")
+	}
+	if after := readFile(t, path); after != before {
+		t.Errorf("ファイルが変わった\n前: %q\n後: %q", before, after)
 	}
 }

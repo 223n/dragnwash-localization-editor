@@ -7,6 +7,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // 引き継ぎ候補の試験に使う英文とそのキー。ハッシュは手で書かず key.For で作る。
@@ -297,6 +298,27 @@ func TestCarryoverRule(t *testing.T) {
 			wantPairs:    map[string]string{},
 			wantVanished: 1,
 		},
+		{
+			name: "引き継ぎ先のキーが旧版にもあったら候補にしない",
+			// line:0002 の英文が、前から line:0005 にあった別の英文と同じになった。
+			// 今回現れたキーではないので、旧訳を持って行くと別の台詞に別の訳を貼る。
+			oldOrder: orderFile(
+				introRow("1", "line:0001", keyA),
+				introRow("2", "line:0002", keyB),
+				introRow("3", "line:0003", keyC),
+				introRow("4", "line:0004", keyD),
+				introRow("5", "line:0005", keyX),
+			),
+			order: orderFile(
+				introRow("1", "line:0001", keyA),
+				introRow("2", "line:0002", keyX),
+				introRow("3", "line:0003", keyC),
+				introRow("4", "line:0004", keyD),
+				introRow("5", "line:0005", keyX),
+			),
+			wantPairs:    map[string]string{},
+			wantVanished: 1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -567,6 +589,63 @@ func TestCarryoverNeedsOrder(t *testing.T) {
 	}
 }
 
+// TestCarryoverNeedsOrderLineIDs は、いまの再生順に台詞IDが1つも無いときに、
+// 引き継ぎ候補を「0 件」ではなく保留にすることを確かめる。
+//
+// 引き継ぎ候補は新旧の再生順を台詞IDで突き合わせて求める。いまの版に台詞IDが
+// 無ければ、キーが変わった行があっても1件も見つけられない。旧版の側で同じ状態を
+// 保留にしている（TestCarryoverEmptyOldOrderIsBlocked）のと同じ理由で、ここで
+// 0 件と書くと「移すべき訳は無い」と読まれ、翻訳者は消えた行の訳を捨てる。
+func TestCarryoverNeedsOrderLineIDs(t *testing.T) {
+	repo := newRepoWith(t, map[string]string{
+		// キーは読めるが line_id が1つも入っていない。
+		"data/script_order.csv": orderFile(
+			introRow("1", "", keyA),
+			introRow("2", "", keyB2),
+		),
+		"Translations/ja/strings.csv": publishedHeader +
+			keyA + ",L01 Ryan,Ryan_1_intro,1,Ryan,あ\n" +
+			keyB + ",L01 Ryan,Ryan_1_intro,2,Ryan,い\n",
+	}, Options{OldOrder: fixedOldOrder(orderFile(
+		introRow("1", "line:0001", keyA),
+		introRow("2", "line:0002", keyB),
+	))})
+	rep := Compare(repo, nil)
+	sum := rep.Locales[0]
+
+	// 前提: 旧版は読めていて、台本から消えた行もある。
+	if !sum.OldOrder {
+		t.Fatalf("前提が崩れている: 旧再生順を読めていない（%s）", sum.OldOrderReason)
+	}
+	if got := sum.Counts[CatVanished]; got != 1 {
+		t.Fatalf("前提が崩れている: 台本から消えた行 = %d 件, want 1", got)
+	}
+
+	if sum.CanJudge(CatCarryover) {
+		t.Error("台詞IDの無い再生順で引き継ぎ候補を判定している")
+	}
+	// キーは読めていて、台本から消えた行の件数も出ている。「再生順を読めていません」
+	// と書くとその件数と食い違うので、欠けているのが台詞IDだと言う。
+	if why := sum.JudgeBlockReason(CatCarryover); why.ID != reason.JudgeOrderNoLineIDs {
+		t.Errorf("理由が違う: %q (%q)", why.ID, why.Text)
+	}
+
+	var b strings.Builder
+	if err := rep.WriteText(&b, TextOptions{}); err != nil {
+		t.Fatalf("WriteText が失敗した: %v", err)
+	}
+	label := pad(CatCarryover.String(), categoryNameWidth())
+	if strings.Contains(b.String(), label+"0 件") {
+		t.Errorf("判定できないのに 0 件と書いている:\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), label+"判定していません（再生順に台詞ID (line_id) がありません）") {
+		t.Errorf("判定していないことを書いていない:\n%s", b.String())
+	}
+	if strings.Contains(b.String(), "再生順を読めていません") {
+		t.Errorf("キーは読めているのに、再生順を丸ごと読めていないように書いている:\n%s", b.String())
+	}
+}
+
 // TestCarryoverEmptyOldOrderIsBlocked は、旧版として取り出したものに台詞IDと
 // キーの組が1つも無いときに、0 件ではなく保留になることを確かめる。
 //
@@ -638,6 +717,106 @@ func TestKeysByLineID(t *testing.T) {
 				if got[id] != k {
 					t.Errorf("%s: got %q, want %q", id, got[id], k)
 				}
+			}
+		})
+	}
+}
+
+// TestCarryKindString は移動と複製の表示名を固定する。一覧の行の先頭に出る語で、
+// 翻訳者は旧行の訳を消してよいかをこの1語で決める。引き継ぎ候補でない行には
+// 何も付けない（空を返す）。
+func TestCarryKindString(t *testing.T) {
+	tests := []struct {
+		kind CarryKind
+		want string
+	}{
+		{CarryNone, ""},
+		{CarryMoved, "移動"},
+		{CarryCopied, "複製"},
+		{CarryKind(99), ""},
+	}
+	for _, tt := range tests {
+		if got := tt.kind.String(); got != tt.want {
+			t.Errorf("%d: got %q, want %q", int(tt.kind), got, tt.want)
+		}
+	}
+}
+
+// argOf は理由の置換から name の値を引く。無ければ第2戻り値が false。
+func argOf(r reason.Reason, name string) (string, bool) {
+	for i := 0; i+1 < len(r.Args); i += 2 {
+		if r.Args[i] == name {
+			return r.Args[i+1], true
+		}
+	}
+	return "", false
+}
+
+// TestCarryTargetCause は引き継ぎ候補の注記の組み立てを固定する。
+//
+// 位置が空なら " / " を添えない。旧キーがどこで生きているか分からない複製には
+// 別の識別子を当てる。目録の {live} に「別の行」のような日本語を流し込むと、
+// 英語の画面にその語だけが日本語のまま残るため。
+func TestCarryTargetCause(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     carryTarget
+		wantID     string
+		wantText   string
+		wantTarget string
+		wantLive   string
+	}{
+		{
+			name: "移動",
+			target: carryTarget{key: keyB2, kind: CarryMoved,
+				section: "L01 Ryan", node: "Ryan_1_intro", orderText: "2"},
+			wantID:     reason.NoteCarryMoved,
+			wantText:   "引き継ぎ先 " + keyB2 + " / L01 Ryan / Ryan_1_intro / 2（移動。旧キーはもう再生順にありません）",
+			wantTarget: keyB2 + " / L01 Ryan / Ryan_1_intro / 2",
+		},
+		{
+			name:       "位置が分からない移動",
+			target:     carryTarget{key: keyB2, kind: CarryMoved},
+			wantID:     reason.NoteCarryMoved,
+			wantText:   "引き継ぎ先 " + keyB2 + "（移動。旧キーはもう再生順にありません）",
+			wantTarget: keyB2,
+		},
+		{
+			name: "生きている場所が分かる複製",
+			target: carryTarget{key: keyB2, kind: CarryCopied,
+				section: "L01 Ryan", node: "Ryan_1_intro", orderText: "2", livePos: "Unused / Start / 7"},
+			wantID: reason.NoteCarryCopied,
+			wantText: "引き継ぎ先 " + keyB2 + " / L01 Ryan / Ryan_1_intro / 2" +
+				"（複製。旧キーは Unused / Start / 7 で生きているので、この行の訳は残してください）",
+			wantTarget: keyB2 + " / L01 Ryan / Ryan_1_intro / 2",
+			wantLive:   "Unused / Start / 7",
+		},
+		{
+			name:   "生きている場所が分からない複製",
+			target: carryTarget{key: keyB2, kind: CarryCopied, section: "L01 Ryan"},
+			wantID: reason.NoteCarryCopiedUnknown,
+			wantText: "引き継ぎ先 " + keyB2 + " / L01 Ryan" +
+				"（複製。旧キーは 別の行 で生きているので、この行の訳は残してください）",
+			wantTarget: keyB2 + " / L01 Ryan",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.target.cause()
+			if got.ID != tt.wantID {
+				t.Errorf("識別子が違う: got %q, want %q", got.ID, tt.wantID)
+			}
+			if got.Text != tt.wantText {
+				t.Errorf("文面が違う:\n got  %s\n want %s", got.Text, tt.wantText)
+			}
+			if v, ok := argOf(got, "target"); !ok || v != tt.wantTarget {
+				t.Errorf("target が違う: got %q (%v), want %q", v, ok, tt.wantTarget)
+			}
+			if v, ok := argOf(got, "key"); !ok || v != tt.target.key {
+				t.Errorf("key が違う: got %q (%v), want %q", v, ok, tt.target.key)
+			}
+			if v, ok := argOf(got, "live"); !ok || v != tt.wantLive {
+				t.Errorf("live が違う: got %q (%v), want %q", v, ok, tt.wantLive)
 			}
 		})
 	}

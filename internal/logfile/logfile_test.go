@@ -60,6 +60,80 @@ func TestOpenMakesDir(t *testing.T) {
 	}
 }
 
+func TestOpenUsesToday(t *testing.T) {
+	// cmd/dwloc が呼ぶのは時計を差し替えない Open のほう。今日の日付の名前で
+	// 開けていないと、「今日の分を送ってください」で別の日のファイルが送られてくる。
+	dir := filepath.Join(t.TempDir(), Dir)
+	before := Name(time.Now())
+	w, err := Open(dir)
+	after := Name(time.Now())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	// 日付をまたいだ瞬間に走っても落ちないよう、呼ぶ前と後のどちらかに合えばよい。
+	got := w.Path()
+	if base := filepath.Base(got); base != before && base != after {
+		t.Errorf("開いたのが %q、%q か %q を期待", base, before, after)
+	}
+	if filepath.Dir(got) != dir {
+		t.Errorf("置き場が %q、%q を期待", filepath.Dir(got), dir)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("ファイルが作られていない: %v", err)
+	}
+}
+
+func TestOpenFailsWhenLogsIsAFile(t *testing.T) {
+	// logs という名前のファイルが先にあると、フォルダーを作れない。そのときは
+	// 記録を始めない。書けないまま進めても、あとから「記録が残っていない」と
+	// 気付くだけになる。
+	path := filepath.Join(t.TempDir(), Dir)
+	const content = "人のファイル\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+
+	w, err := open(path, c.now)
+	if err == nil {
+		_ = w.Close()
+		t.Fatal("フォルダーを作れないのに open が成功した")
+	}
+	if w != nil {
+		t.Errorf("誤りと一緒に Writer を返した: %+v", w)
+	}
+	// フォルダーを作るために人のファイルを消したり書き換えたりしない。
+	// 道具が人のファイルを壊さない約束（パッケージコメント）。
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("人のファイルが読めなくなった: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("人のファイルが変わった: %q", got)
+	}
+}
+
+func TestOpenFailsWhenDayFileIsADir(t *testing.T) {
+	// 今日のファイル名でフォルダーがあると、置き場はあっても開けない。
+	// このときも記録を始めず、誤りを返す。
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "dwloc_20260921.log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+
+	w, err := open(dir, c.now)
+	if err == nil {
+		_ = w.Close()
+		t.Fatal("開けないのに open が成功した")
+	}
+	if w != nil {
+		t.Errorf("誤りと一緒に Writer を返した: %+v", w)
+	}
+}
+
 func TestWriteAddsTime(t *testing.T) {
 	dir := t.TempDir()
 	c := &clock{at(2026, 9, 21, 10, 30, 45)}
@@ -211,6 +285,70 @@ func TestDayChangeMovesToNextFile(t *testing.T) {
 	}
 	if got, want := read(t, dir, "dwloc_20260922.log"), "00:00:01 次の日\n"; got != want {
 		t.Errorf("次の日の中身が違う\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestDayChangeFlushesUnfinishedLine(t *testing.T) {
+	// 改行を待っている途中で日付が変わったら、途中の行は前日のファイルへ書き切る。
+	// 行を2つのファイルへ割らない（rotate のコメント）。時刻は書いた時点のもの。
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 23, 59, 59)}
+	w := newWriter(t, dir, c)
+
+	if _, err := w.Write([]byte("続けるには Enter")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	c.t = at(2026, 9, 22, 0, 0, 1)
+	if _, err := w.Write([]byte("次の日\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got, want := filepath.Base(w.Path()), "dwloc_20260922.log"; got != want {
+		t.Errorf("移った先が %q、%q を期待", got, want)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got, want := read(t, dir, "dwloc_20260921.log"), "00:00:01 続けるには Enter\n"; got != want {
+		t.Errorf("前の日の中身が違う\n got %q\nwant %q", got, want)
+	}
+	if got, want := read(t, dir, "dwloc_20260922.log"), "00:00:01 次の日\n"; got != want {
+		t.Errorf("次の日の中身が違う\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestDayChangeKeepsGoingWhenNextFileFails(t *testing.T) {
+	// 日付をまたいだ先のファイルを開けなくても、画面への出力は止めない。
+	// 前日のファイルへ今日の分を続けて書くこともしない（1日1ファイルを崩さない）。
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 23, 59, 59)}
+	w := newWriter(t, dir, c)
+
+	if _, err := w.Write([]byte("前の日\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	// 次の日のファイル名でフォルダーを作り、開けない状態にする。
+	if err := os.Mkdir(filepath.Join(dir, "dwloc_20260922.log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.t = at(2026, 9, 22, 0, 0, 1)
+
+	for _, line := range []string{"次の日\n", "その次\n"} {
+		n, err := w.Write([]byte(line))
+		if err != nil {
+			t.Errorf("開けなくても Write は誤りを返さない: %v", err)
+		}
+		if n != len(line) {
+			t.Errorf("Write が %d、%d を期待", n, len(line))
+		}
+	}
+	// 失敗そのものは Close が返す。
+	if err := w.Close(); err == nil {
+		t.Error("Close が失敗を返していない")
+	}
+
+	if got, want := read(t, dir, "dwloc_20260921.log"), "23:59:59 前の日\n"; got != want {
+		t.Errorf("前の日の中身が違う\n got %q\nwant %q", got, want)
 	}
 }
 

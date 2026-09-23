@@ -3,6 +3,7 @@ package web
 import (
 	"io/fs"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -110,18 +111,24 @@ func TestSaveRetryDoesNotGiveUp(t *testing.T) {
 
 // topRegion は index.html の `<div class="top">` から、それに対応する閉じ div
 // までを返す。
+func topRegion(t *testing.T, html string) string {
+	t.Helper()
+	return divRegion(t, html, `<div class="top">`)
+}
+
+// divRegion は html の中の open で始まる div から、それに対応する閉じ div
+// までを返す。
 //
 // 入れ子の div を数える。数えずに最初の `</div>` で切ると、.top の中に div を
 // 1つ置いた瞬間に範囲が途中で終わり、message / conflict / orphans が
 // 「一帯の外にある」という、事実と違う理由で落ちる。前の段は index.html に
 // 「ここに div を置くな」というコメントを足して避けていたが、それは試験の
 // 都合を骨組みに持ち込んでいる。
-func topRegion(t *testing.T, html string) string {
+func divRegion(t *testing.T, html, open string) string {
 	t.Helper()
-	const open = `<div class="top">`
 	start := strings.Index(html, open)
 	if start < 0 {
-		t.Fatal("index.html に貼り付ける一帯（.top）が無い")
+		t.Fatalf("%s が無い", open)
 	}
 	depth := 0
 	for i := start; i < len(html); i++ {
@@ -136,7 +143,7 @@ func topRegion(t *testing.T, html string) string {
 			}
 		}
 	}
-	t.Fatal(".top の閉じ div が見つからない")
+	t.Fatalf("%s の閉じ div が見つからない", open)
 	return ""
 }
 
@@ -169,6 +176,149 @@ func TestAlertsStayOnScreen(t *testing.T) {
 	}
 	if !strings.Contains(css[block:block+200], "position: sticky") {
 		t.Error(".top が貼り付いていない")
+	}
+}
+
+// TestExportMenuLivesInTheBar は、書き出しの入口が帯（.bar）にあり、結果の欄が
+// メニューの外にあることを見る。
+//
+// 書き出しは左の列の畳みに置いていたが、帯へ移した。帯は行のどこを見ていても
+// 画面に残るので、1721行の途中からでも押せる。帯にはボタン1つだけを置き、
+// 2つの選び方と説明はメニューに入れる。
+//
+// メニューは popover にする。帯（.top）は max-height: 50vh と overflow: auto で
+// 止めてあるので、帯の中に絶対配置で開くと帯の縁で切れる。popover は最前面の
+// 層に出るので切れない。
+//
+// 閉じた popover は描かれず、支援技術の木からも外れる。選んだ時点でメニューを
+// 閉じるので、結果の欄を中に置くと、結果が見えも告知されもしない。
+func TestExportMenuLivesInTheBar(t *testing.T) {
+	html := uiSource(t, "ui/index.html")
+
+	bar := between(t, html, `<header class="bar">`, "</header>")
+	// 目録が届くまでは hidden。文言の無いボタンを焦点の順に並べない。
+	if !strings.Contains(bar, `<button id="export-open" class="btn export-open" type="button" popovertarget="export-menu" hidden>`) {
+		t.Error("帯に書き出しのボタンが無いか、開くメニュー（popovertarget）が結ばれていない")
+	}
+	menu := divRegion(t, bar, `<div id="export-menu" class="export-menu" popover>`)
+	for _, id := range []string{"export-help", "export-published", "export-working"} {
+		if !strings.Contains(menu, `id="`+id+`"`) {
+			t.Errorf("#%s が書き出しのメニューの中に無い", id)
+		}
+	}
+	for _, bad := range []string{"aria-live", `role="status"`, `role="alert"`} {
+		if strings.Contains(menu, bad) {
+			t.Errorf("書き出しのメニューの中に %s がある。閉じているあいだ木から外れて告知されない", bad)
+		}
+	}
+
+	// 結果の欄は帯の中、メニューの外。.notice を付けておくと、空のとき
+	// .notice:empty が高さを0にする。
+	if !strings.Contains(topRegion(t, html), `<p id="export-state" class="notice export-state" role="status">`) {
+		t.Error("書き出しの結果の欄が帯の中に無い")
+	}
+
+	// 左の列には残さない。2か所にあると、どちらが本物か分からない。
+	sidebar := between(t, html, `<aside id="sidebar" class="sidebar">`, "</aside>")
+	if strings.Contains(sidebar, `id="export-`) {
+		t.Error("左の列に書き出しが残っている")
+	}
+
+	// 見た目の側。閉じた popover を隠しているのはブラウザーの既定
+	// （[popover]:not(:popover-open) { display: none }）で、作者の指定のほうが
+	// 強い。.export-menu に display を書くと、閉じていても出たままになる。
+	css := uiSource(t, "ui/app.css")
+	blocks := 0
+	for rest := css; ; {
+		at := strings.Index(rest, ".export-menu {")
+		if at < 0 {
+			break
+		}
+		end := strings.Index(rest[at:], "}")
+		if end < 0 {
+			t.Fatal(".export-menu の終わりが分からない")
+		}
+		block := rest[at : at+end]
+		if strings.Contains(block, "display:") {
+			t.Errorf(".export-menu に display がある。閉じていてもメニューが出たままになる: %s", block)
+		}
+		blocks++
+		rest = rest[at+end:]
+	}
+	if blocks == 0 {
+		t.Fatal("app.css に .export-menu が無い")
+	}
+	// 置き場所は popover を持つブラウザーでだけ効かせる。持たないブラウザーで
+	// 効かせると、閉じる手段の無いメニューが画面の上に貼り付いたままになる。
+	// 帯の下へ開くために、帯の実測の高さを使う。
+	supports := between(t, css, "@supports selector(:popover-open) {", "\n}")
+	for _, want := range []string{".export-menu {", "position: fixed", "var(--top-height,"} {
+		if !strings.Contains(supports, want) {
+			t.Errorf("popover の置き場所の指定に %q が無い", want)
+		}
+	}
+	if first := between(t, css, ".export-menu {", "}"); strings.Contains(first, "position:") {
+		t.Error("popover の置き場所を @supports の外で決めている")
+	}
+
+	// 画面側。目録が届いたらボタンを出す。選んだらメニューを閉じてから書き出す。
+	// 結果の欄には .notice を付けたままにする。
+	js := uiSource(t, "ui/app.js")
+	if !strings.Contains(functionBody(t, js, "applyCatalog"), "el.exportOpen.hidden = false;") {
+		t.Error("目録が届いても書き出しのボタンを出していない")
+	}
+	for _, form := range []string{"published", "working"} {
+		if !regexp.MustCompile(`closeExportMenu\(\);\s*exportCsv\("` + form + `"\);`).MatchString(js) {
+			t.Errorf("%s を選んだときにメニューを閉じていない", form)
+		}
+	}
+	if body := functionBody(t, js, "setExportState"); !strings.Contains(body, `var name = "notice export-state";`) {
+		t.Error("書き出しの結果の欄から .notice を外している。空のときに高さが残る")
+	}
+}
+
+// TestOnlyExportDoneGoesAway は、書き出しの結果のうち「書き出しました」だけが
+// 残り時間の帯を添えて消え、失敗の理由は残ることを見る。
+//
+// うまくいった知らせは、次に書き出すまで貼り付く帯の下に1行居座っていた。
+// そのぶん一覧が狭くなるので、帯が尽きたら消す。失敗の理由と「送り終わって
+// から押して」は消さない。読み終わる前に消えると、何が起きたかを知るすべが
+// 無くなる。
+func TestOnlyExportDoneGoesAway(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	// .timed を付けるのは、失敗でなく、中身があるときだけ。
+	body := functionBody(t, js, "setExportState")
+	at := strings.Index(body, `name += " timed";`)
+	if at < 0 {
+		t.Fatal("うまくいった知らせに .timed を付けていない。消えない")
+	}
+	if !strings.Contains(body[:at], "if (bad) {") || !strings.Contains(body[:at], "} else if (text) {") {
+		t.Error(".timed を失敗の理由や空の欄にも付けうる形になっている")
+	}
+
+	// 帯が尽きたら消す。消すのは .timed のときだけ。
+	if !regexp.MustCompile(`el\.exportState\.addEventListener\("animationend", function \(\) \{\s*` +
+		`if \(el\.exportState\.classList\.contains\("timed"\)\) \{\s*setExportState\("", false\);`).MatchString(js) {
+		t.Error("残り時間の帯が尽きても、うまくいった知らせを消していない")
+	}
+
+	// 見た目の側。帯は ::after で、読み上げの見張りの中に要素を足さない。
+	// ポインターを載せたら止める。動きを減らす設定でも animationend が
+	// 来るよう、止めずに別の動き（薄くする）に替える。
+	css := uiSource(t, "ui/app.css")
+	for _, want := range []string{
+		".export-state.timed::after {",
+		"animation: export-timer ",
+		".export-state.timed:hover::after {\n  animation-play-state: paused;",
+		"animation-name: export-timer-fade;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css に %q が無い", want)
+		}
+	}
+	if strings.Contains(css, ".export-state.timed::after {\n    animation: none") {
+		t.Error("動きを減らす設定で帯の動きを止めている。animationend が来ず、知らせが消えない")
 	}
 }
 
@@ -248,6 +398,139 @@ func TestScrollMarginIsOnTheFocusedElement(t *testing.T) {
 	}
 	if strings.Contains(css[row:row+end], "scroll-margin") {
 		t.Error(".row に scroll-margin が残っている。焦点はここに入らないので効かない")
+	}
+}
+
+// TestTopHeightDefaultIsTheSameEverywhere は、--top-height の既定値（CSS の var() の
+// 第2引数）が app.css のどこでも同じで、それを説明する3か所（app.css の注記、app.js の
+// watchTopHeight の注記、doc.go）も同じ値を言っていることを見る。
+//
+// 実際に起きた: app.css は 10em なのに、doc.go は「第2引数（8em）」と書き、帯の 49.4px に
+// 合わせたと説明していた。既定値は ResizeObserver が無い環境で実際に効く値なので、
+// 説明が違うと、直す人が間違った前提で値を動かす。
+func TestTopHeightDefaultIsTheSameEverywhere(t *testing.T) {
+	css := uiSource(t, "ui/app.css")
+	values := make(map[string]bool)
+	for _, m := range regexp.MustCompile(`var\(--top-height, ([0-9.]+[a-z]+)\)`).FindAllStringSubmatch(css, -1) {
+		values[m[1]] = true
+	}
+	if len(values) != 1 {
+		t.Fatalf("app.css の --top-height の既定値が1つにそろっていない: %v", values)
+	}
+	var def string
+	for v := range values {
+		def = v
+	}
+
+	doc, err := os.ReadFile("doc.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	said := regexp.MustCompile(`第2引数（(?:既定値の )?([0-9.]+[a-z]+)`)
+	for name, text := range map[string]string{
+		"app.css の注記": css,
+		"app.js":      uiSource(t, "ui/app.js"),
+		"doc.go":      string(doc),
+	} {
+		found := said.FindAllStringSubmatch(text, -1)
+		if len(found) == 0 {
+			t.Errorf("%s が --top-height の既定値を書いていない", name)
+		}
+		for _, m := range found {
+			if m[1] != def {
+				t.Errorf("%s が既定値を %s と書いている。app.css は %s", name, m[1], def)
+			}
+		}
+	}
+}
+
+// TestDiscardAsksAfterSending は、読み直しと切り替えが、送れるものを送り終えてから
+// 尋ね、受けたあとは捨てると答えた訳を送らないことを見る。
+//
+// 実際に起きた: 押した時点で未保存があるかを見て尋ねていたので、打った直後に押すと、
+// 欄から離れたときの保存（blur）が返る前か後かで尋ねたり尋ねなかったりした。尋ねた文は
+// 「その訳は消えます」なのに、その訳は送られてファイルに入った。受けたあとも、読み込みが
+// 返るまでに送り直しの時計が切れると、捨てると答えた訳が送られた。振る舞いは E2E の
+// boot.spec.mjs が見ている。
+func TestDiscardAsksAfterSending(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, "function askDiscard(")
+	if start < 0 {
+		t.Fatal("askDiscard が無い")
+	}
+	end := strings.Index(js[start:], "\n  }")
+	if end < 0 {
+		t.Fatal("askDiscard の終わりが分からない")
+	}
+	body := js[start : start+end]
+	settle := strings.Index(body, "settle().then(")
+	confirm := strings.Index(body, "window.confirm(")
+	if settle < 0 || confirm < 0 || confirm < settle {
+		t.Error("askDiscard が送り終えるのを待たずに尋ねている")
+	}
+	if !strings.Contains(body, "state.discarding = {}") {
+		t.Error("受けたあとに、捨てると答えた訳を送らない印を立てていない")
+	}
+
+	// 送り終わりそのものを待てること（送っている最中の flush は早く戻る）。
+	if !strings.Contains(js, "state.sending = postJSON(") {
+		t.Error("flush が送り終わりを控えていない。送っている最中の保存を待てない")
+	}
+	// 捨てると答えたあとは送らない。印を見るのは、送る要求を組むより前であること。
+	fl := strings.Index(js, "function flush()")
+	if fl < 0 {
+		t.Fatal("flush が無い")
+	}
+	hold := strings.Index(js[fl:], "if (state.discarding) {")
+	post := strings.Index(js[fl:], "state.sending = postJSON(")
+	if hold < 0 || post < 0 || hold > post {
+		t.Error("flush が、捨てると答えた訳を送る前に止めていない")
+	}
+	// 読めなかったら送り直しへ戻すこと（諦めない）。
+	ld := strings.Index(js, "function load(locale, resetFinder)")
+	if ld < 0 {
+		t.Fatal("load が無い")
+	}
+	fail := strings.Index(js[ld:], ".catch(function ()")
+	if fail < 0 || !strings.Contains(js[ld+fail:ld+fail+800], "stopHolding(holding)") {
+		t.Error("読み込みに失敗したときに、止めていた送り直しを戻していない")
+	}
+}
+
+// TestExportStopsWhileTranslationsAreOutsideTheFile は、ファイルに入っていない訳
+// （競合・保存できない行・行き先の無い訳）が残っているあいだ、書き出しが中身を
+// 取りにいかないことを見る。
+//
+// 実際に起きた: 書き出しは未保存（state.pending）と送信中だけを見ていたので、保存
+// できない行や行き先の無い訳が残っていても、その訳の入らない中身を「書き出しました」と
+// 渡した。hasUnsaved が未保存に数えるものは、書き出しでも止める。
+func TestExportStopsWhileTranslationsAreOutsideTheFile(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, "function exportCsv(")
+	if start < 0 {
+		t.Fatal("exportCsv が無い")
+	}
+	end := strings.Index(js[start:], "\n  }")
+	if end < 0 {
+		t.Fatal("exportCsv の終わりが分からない")
+	}
+	body := js[start : start+end]
+	fetch := strings.Index(body, "return fetchCsv(form)")
+	if fetch < 0 {
+		t.Fatal("exportCsv が中身を取りにいっていない")
+	}
+	for _, want := range []string{"if (state.mine) {", "if (state.failed.size) {", "if (state.orphans.length) {"} {
+		at := strings.Index(body, want)
+		if at < 0 || at > fetch {
+			t.Errorf("exportCsv が取りにいく前に %q を見ていない", want)
+		}
+	}
+	for _, key := range []string{"ui.export_conflict", "ui.export_row_failed", "ui.export_orphans"} {
+		if !strings.Contains(body, `t("`+key+`")`) {
+			t.Errorf("exportCsv が止めた理由（%s）を出していない", key)
+		}
 	}
 }
 
@@ -564,18 +847,26 @@ func TestConflictRowIsNotEditableUntilChosen(t *testing.T) {
 // 全部すり抜けて次の行が開いた。翻訳者から見ると、変換を確定しただけで行が飛ぶ。
 // ja / ko / zh-Hans / zh-Hant のためにこの入力方式を選んでいるので、ここが
 // 崩れると選定の根拠が失われる。
+//
+// 時刻は performance.now で測ること。Date.now（壁時計）で測ると、確定と Enter の
+// あいだに OS の時計が後ろへ動いたとき（NTP の段差、休止からの復帰）、差が負のまま
+// 猶予を超えるまで Enter の行送りが効かなくなる。時計を1時間戻せば1時間効かない。
 func TestComposedEnterDoesNotAdvance(t *testing.T) {
 	js := uiSource(t, "ui/app.js")
 
-	if !strings.Contains(js, "state.composedAt = Date.now()") {
-		t.Error("compositionend の時刻を控えていない")
+	if !strings.Contains(js, "state.composedAt = performance.now()") {
+		t.Error("compositionend の時刻を performance.now で控えていない")
+	}
+	if strings.Contains(js, "state.composedAt = Date.now()") ||
+		strings.Contains(js, "Date.now() - state.composedAt") {
+		t.Error("確定の時刻を Date.now で測っている。壁時計が戻ると Enter が長く効かなくなる")
 	}
 	start := strings.Index(js, `editor.addEventListener("keydown"`)
 	if start < 0 {
 		t.Fatal("入力欄の keydown が無い")
 	}
 	block := js[start:]
-	guard := strings.Index(block, "Date.now() - state.composedAt < composedGrace")
+	guard := strings.Index(block, "performance.now() - state.composedAt < composedGrace")
 	if guard < 0 {
 		t.Fatal("確定直後の Enter を見分けていない")
 	}
@@ -708,7 +999,9 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if end < 0 {
 		t.Fatal("ロケールの切り替えの終わりが分からない")
 	}
-	if !strings.Contains(js[start:start+end], "load(el.locale.value, true)") {
+	// 読むのは change の時点で控えた値（chosen）。尋ねるのは送り終えてからなので、
+	// そのあいだに欄の値は変わりうる（app.js の load が欄を描いたロケールへそろえる）。
+	if !strings.Contains(js[start:start+end], "load(chosen, true)") {
 		t.Error("ロケールを切り替えても条件と検索語が残る。前のロケールの条件を持ち越す")
 	}
 	// 外すのは切り替えの手前ではなく、読めたときだけ。
@@ -743,6 +1036,13 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	}
 	if strings.Contains(js[at:at+tail], "clearFinder()") {
 		t.Error("読み直しで条件まで外している。同じロケールを見続けている")
+	}
+	// 読み直すのは画面に出ているロケールで、欄の値ではないこと。
+	//
+	// 実際に起きた: 切り替えを選んで送り終えるのを待っているあいだに読み直しを
+	// 押すと、欄に残った切り替え先を、前のロケールの条件と検索語を付けたまま読んだ。
+	if !strings.Contains(js[at:at+tail], "load(state.locale)") {
+		t.Error("読み直しが画面に出ているロケール（state.locale）を読んでいない")
 	}
 	// 0行のときの文言。
 	if !strings.Contains(js, `t("ui.no_rows")`) {

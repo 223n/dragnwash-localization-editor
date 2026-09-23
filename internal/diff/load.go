@@ -195,15 +195,21 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		// ゲームが測った値はその外にある。
 		//
 		// ファイルの有無だけは指定に関わらず見る。「ありません」と
-		// 「読みませんでした」を書き分けるのに要る。
-		risks, err := readLayoutRisks(loc.LayoutRisksPath)
-		if err != nil {
-			return nil, err
-		}
-		loc.LayoutRisksExist = risks != nil
-		if opt.Working && risks != nil {
-			loc.LayoutRisks = risks
-			loc.HasLayoutRisks = true
+		// 「読みませんでした」を書き分けるのに要る。--no-working のときに
+		// 中身まで読むと、読まないと言ったファイルが壊れているだけで
+		// 読み込み全体が止まる（作業コピーは --no-working なら読まないのと同じ扱い）。
+		if opt.Working {
+			risks, err := readLayoutRisks(loc.LayoutRisksPath)
+			if err != nil {
+				return nil, err
+			}
+			loc.LayoutRisksExist = risks != nil
+			if risks != nil {
+				loc.LayoutRisks = risks
+				loc.HasLayoutRisks = true
+			}
+		} else if _, err := os.Stat(loc.LayoutRisksPath); err == nil {
+			loc.LayoutRisksExist = true
 		}
 		repo.Locales = append(repo.Locales, loc)
 	}
@@ -257,6 +263,8 @@ func oldOrderReasonID(err error) string {
 		return reason.OldOrderNoRepository
 	case errors.Is(err, ErrNotTracked):
 		return reason.OldOrderNotTracked
+	case errors.Is(err, ErrNotCommitted):
+		return reason.OldOrderNotCommitted
 	case errors.Is(err, ErrOnlyOneVersion):
 		return reason.OldOrderOnlyOneVersion
 	case errors.Is(err, ErrGitFailed):

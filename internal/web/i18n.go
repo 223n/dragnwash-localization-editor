@@ -56,7 +56,15 @@ type catalogs struct {
 // 起動時に1回だけ呼ぶ。読めない目録があれば起動を止める。画面に出る文言の
 // 半分が鍵のまま出るような状態で走らせても、翻訳者には直しようがない。
 func loadCatalogs() (*catalogs, error) {
-	entries, err := fs.ReadDir(uiFS, catalogDir)
+	return loadCatalogsFrom(uiFS)
+}
+
+// loadCatalogsFrom は fsys の [catalogDir] にある目録を全部読む。
+//
+// 読む先を引数にしてあるのは、試験で壊れた目録を渡すためである。埋め込みは
+// go build の時点で固まるので、[uiFS] のままでは止める側の道を1度も通せない。
+func loadCatalogsFrom(fsys fs.FS) (*catalogs, error) {
+	entries, err := fs.ReadDir(fsys, catalogDir)
 	if err != nil {
 		return nil, fmt.Errorf("%s を読めません: %w", catalogDir, err)
 	}
@@ -66,7 +74,7 @@ func loadCatalogs() (*catalogs, error) {
 		if entry.IsDir() || !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		data, err := fs.ReadFile(uiFS, path.Join(catalogDir, name))
+		data, err := fs.ReadFile(fsys, path.Join(catalogDir, name))
 		if err != nil {
 			return nil, fmt.Errorf("%s を読めません: %w", name, err)
 		}

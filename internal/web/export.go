@@ -1,6 +1,8 @@
 package web
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -121,21 +123,31 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 		順番も publish と同じにする（cmd/dwloc の runPublish は、組み立て →
 		土台の食い違い → 失われる訳、の順で見る）。順番が違うと、同じ状態に
 		対して画面と publish が別の理由を出す。
+
+		コミット済みの公開ファイルがまだ無いロケール（新しい言語の最初の書き出し）は
+		確かめずに通す。巻き戻る先が無いからである。publish の reportBaseDrift も
+		同じ場面を通しており、下の [publish.CheckTargetLoss] も出力先の無いときを
+		「失うものが無い」と扱う。ここで止めると、ゲームで入れた新しい言語の訳を
+		画面からは1行も書き出せず、同じ状態で publish だけが通る。
 	*/
 	if target.GameBase != "" {
 		current, err := os.ReadFile(target.Output)
-		if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// コミット済みがまだ無い。巻き戻る先が無いので確かめない。
+		case err != nil:
 			return nil, "", err
-		}
-		drift, err := publish.CheckBase(*target, current)
-		if err != nil {
-			return nil, "", err
-		}
-		if drift.Count > 0 {
-			// 件数だけを返す。どの行かは訳そのものなので画面へ出さない。
-			http.Error(w, s.cat.T(cat, "error.export_would_roll_back",
-				"count", strconv.Itoa(drift.Count)), http.StatusConflict)
-			return nil, "", nil
+		default:
+			drift, err := publish.CheckBase(*target, current)
+			if err != nil {
+				return nil, "", err
+			}
+			if drift.Count > 0 {
+				// 件数だけを返す。どの行かは訳そのものなので画面へ出さない。
+				http.Error(w, s.cat.T(cat, "error.export_would_roll_back",
+					"count", strconv.Itoa(drift.Count)), http.StatusConflict)
+				return nil, "", nil
+			}
 		}
 	}
 
