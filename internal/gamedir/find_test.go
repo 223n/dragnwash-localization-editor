@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -119,6 +120,18 @@ func TestInspect(t *testing.T) {
 
 		if got := Inspect(game); len(got) != 0 {
 			t.Fatalf("深すぎる候補を拾っている: %+v", got)
+		}
+	})
+
+	t.Run("空の場所を渡されても作業ディレクトリを目印と取り違えない", func(t *testing.T) {
+		// dwloc を走らせる場所は翻訳リポジトリで、そこにも Translations がある。
+		// 作業コピー（_discovered）を置いたままにしていると、空の場所を相対パスの
+		// 起点として読んだときに、リポジトリがプラグインのフォルダーに見える。
+		repo := makePlugin(t, t.TempDir())
+		t.Chdir(repo)
+
+		if got := Inspect(""); len(got) != 0 {
+			t.Fatalf("作業ディレクトリを候補にしている: %+v", got)
 		}
 	})
 }
@@ -240,6 +253,20 @@ func TestResolve(t *testing.T) {
 	})
 }
 
+func TestAmbiguousErrorListsCandidates(t *testing.T) {
+	// 文面に数と候補の全部を出す。どれを --game に書くかは、この並びから
+	// 選んでもらうしかない。区切りは / にそろえ、OS で見た目を変えない。
+	err := &AmbiguousError{Candidates: []Plugin{
+		{Path: filepath.FromSlash("/lib/a/loc")},
+		{Path: filepath.FromSlash("/lib/b/loc")},
+	}}
+
+	want := "ゲームのプラグインフォルダーが2個見つかった: /lib/a/loc, /lib/b/loc"
+	if got := err.Error(); got != want {
+		t.Errorf("文面が違う\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestPickReturnsNotFound(t *testing.T) {
 	// auto の空振りは ErrNotFound。呼び出し側はこれで「まだ書き出していない」
 	// 案内へ分ける。
@@ -268,4 +295,80 @@ func TestCanonicalKeepsMissingPaths(t *testing.T) {
 	if got := canonical(missing); got != filepath.Clean(missing) {
 		t.Errorf("canonical が変えた: got %q, want %q", got, filepath.Clean(missing))
 	}
+}
+
+func TestCanonicalKeepsValueWithoutWorkingDir(t *testing.T) {
+	// 作業ディレクトリが消えていると Abs が失敗する。そのときは指定された値を
+	// そのまま使う（canonical のコメント）。落ちたり空にしたりすると、
+	// NotPluginError の文面に翻訳者が打った場所が出なくなる。
+	if runtime.GOOS != "linux" {
+		t.Skip("使っている作業ディレクトリを消せるのは Linux だけで確かめている")
+	}
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Remove(dir); err != nil {
+		t.Fatalf("作業ディレクトリを消せない: %v", err)
+	}
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("作業ディレクトリを消しても Getwd が失敗しない")
+	}
+
+	// Linux だけで走るので区切りは / で書く。filepath.Join を通すと先に
+	// 畳まれてしまい、canonical が Clean をかけるかどうかを見られない。
+	if got, want := canonical("games/../DragNWash"), "DragNWash"; got != want {
+		t.Errorf("canonical = %q, want %q", got, want)
+	}
+}
+
+func TestDedupeStrings(t *testing.T) {
+	t.Run("並びを変えない", func(t *testing.T) {
+		// Steam を入れた場所が先頭で、そこから libraryfolders.vdf を辿る。
+		// dedupe と違い、パス順に並べ替えてはいけない。
+		base := tempDir(t)
+		b := filepath.Join(base, "b")
+		a := filepath.Join(base, "a")
+
+		got := dedupeStrings([]string{b, a, b})
+		if strings.Join(got, "|") != strings.Join([]string{b, a}, "|") {
+			t.Errorf("並びが違う\ngot  %q\nwant %q", got, []string{b, a})
+		}
+	})
+
+	t.Run("空は落とす", func(t *testing.T) {
+		// 空を canonical に通すと作業ディレクトリになり、翻訳リポジトリを
+		// Steam のライブラリとして辿ってしまう。
+		dir := tempDir(t)
+
+		got := dedupeStrings([]string{"", dir, ""})
+		if len(got) != 1 || got[0] != dir {
+			t.Errorf("空が残っている: %q", got)
+		}
+	})
+
+	t.Run("相対パスは絶対パスにする", func(t *testing.T) {
+		base := tempDir(t)
+		t.Chdir(base)
+
+		got := dedupeStrings([]string{"Steam"})
+		if want := filepath.Join(base, "Steam"); len(got) != 1 || got[0] != want {
+			t.Errorf("絶対パスになっていない: got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("大文字小文字だけ違う綴りは実体の綴りで1つに畳む", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			t.Skip("大文字小文字を区別しないファイルシステムで、実体の綴りを返すのは Windows だけ")
+		}
+		// レジストリの値は小文字、libraryfolders.vdf は大文字混じりで来る。
+		// 畳まないと同じライブラリを2回走査し、候補が2つに見える。
+		dir := filepath.Join(tempDir(t), "Steam")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		got := dedupeStrings([]string{strings.ToLower(dir), dir})
+		if len(got) != 1 || got[0] != dir {
+			t.Errorf("畳めていないか、綴りが実体と違う: got %q, want %q", got, dir)
+		}
+	})
 }
