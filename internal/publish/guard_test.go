@@ -2,6 +2,7 @@ package publish
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,5 +231,200 @@ func TestPublishedFileRoundTripLosesNothing(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("止めてはいけない: %+v", got)
+	}
+}
+
+// TestCheckLossReadsTheOutputItWillWrite は、書き出そうとしている中身の側の
+// 読み方を固定する。
+//
+// いまの公開ファイルの側は [TestCheckLoss] が見ている。こちらは「何が残るか」を
+// 決める側で、ここを緩く読むと、残らない訳を残ると数えて守りを素通りさせる。
+func TestCheckLossReadsTheOutputItWillWrite(t *testing.T) {
+	const keyA = "aaaaaaaaaaaaaaaa"
+	const keyB = "bbbbbbbbbbbbbbbb"
+	current := []byte(publishedCSV([2]string{keyA, "ある訳"}, [2]string{keyB, "もう1つ"}))
+
+	t.Run("書き出す中身のヘッダーが読めなければ誤りにする", func(t *testing.T) {
+		// 列名が重複していると、どの列が訳なのかを決められない。
+		// 「確かめられなかった」を「失われない」に落とさない。
+		next := "key,Key,node,order,speaker,translation\n" + keyA + ",UI,,,UI,ある訳\n"
+		got, err := CheckLoss("ja", current, []byte(next))
+		if err == nil {
+			t.Fatalf("誤りを返していない: %+v", got)
+		}
+		if got != nil {
+			t.Errorf("誤りと一緒に結果を返している: %+v", got)
+		}
+	})
+
+	t.Run("書き出す中身が空なら訳はすべて失われる", func(t *testing.T) {
+		// 長さ0とヘッダーだけ。どちらも、公開ファイルを空にする書き出しである。
+		for _, next := range [][]byte{nil, []byte(HeaderLine + "\n")} {
+			got, err := CheckLoss("ja", current, next)
+			if err != nil {
+				t.Fatalf("CheckLoss: %v", err)
+			}
+			if len(got) != 2 {
+				t.Fatalf("書き出す中身 %q で %d 件、2件を期待: %+v", next, len(got), got)
+			}
+			for i, want := range []struct {
+				key  string
+				line int
+			}{{keyA, 2}, {keyB, 3}} {
+				if got[i].Key != want.key || got[i].Line != want.line {
+					t.Errorf("%d 件目が %+v、期待 キー %s・%d行目", i+1, got[i], want.key, want.line)
+				}
+				if got[i].Why.ID != reason.PublishRowGone {
+					t.Errorf("%d 件目の理由が %q", i+1, got[i].Why.ID)
+				}
+			}
+		}
+	})
+
+	t.Run("同じキーが2行あれば先の行を見る", func(t *testing.T) {
+		// 先勝ち（R18）。後ろの空の行で上書きしたと見ると、残る訳を失われると報せる。
+		next := publishedCSV(
+			[2]string{keyA, "ある訳"},
+			[2]string{keyA, ""},
+			[2]string{keyB, "もう1つ"},
+		)
+		got, err := CheckLoss("ja", current, []byte(next))
+		if err != nil {
+			t.Fatalf("CheckLoss: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("止めてはいけない: %+v", got)
+		}
+	})
+
+	t.Run("同じ訳でもキーの無い行に移ったものは残らない", func(t *testing.T) {
+		// 残るかどうかは訳の中身ではなくキーで引く。キーの無い行は誰にも
+		// 引かれないので、そこに同じ訳が書かれていても、ゲームには届かない。
+		next := publishedCSV([2]string{"", "ある訳"}, [2]string{keyB, "もう1つ"})
+		got, err := CheckLoss("ja", current, []byte(next))
+		if err != nil {
+			t.Fatalf("CheckLoss: %v", err)
+		}
+		if len(got) != 1 || got[0].Key != keyA {
+			t.Errorf("キー %s だけが失われるはず: %+v", keyA, got)
+		}
+	})
+}
+
+// TestCheckTargetLossFailsWhenOutputIsUnreadable は、いまの公開ファイルが
+// あるのに読めないとき、誤りを返すことを見る。
+//
+// 「ファイルが無い」は失うものが無いので黙ってよい。「あるのに読めない」は
+// 確かめられていないので、同じ扱いにすると確かめられないほうが素通りする
+// （dwloc publish はこの誤りで終了コード 2 を返し、書かない）。
+func TestCheckTargetLossFailsWhenOutputIsUnreadable(t *testing.T) {
+	root := t.TempDir()
+	target := Target{
+		Locale: "ja",
+		Input:  filepath.Join(root, "in.csv"),
+		// ディレクトリは読めない。
+		Output: root,
+	}
+
+	got, err := CheckTargetLoss(target, []byte(publishedCSV()))
+	if err == nil {
+		t.Fatalf("誤りを返していない: %+v", got)
+	}
+	if got != nil {
+		t.Errorf("誤りと一緒に結果を返している: %+v", got)
+	}
+}
+
+// TestCheckTargetLossCatchesABrokenWorkingCopy は、壊れた作業コピーを入力に
+// したときに、組み立てた結果を書く前に訳の消失を捕まえることを見る。
+//
+// doc.go の実測表と同じ形を、組み立て（[BuildTarget]）から通して確かめる。
+// 守りを入れる前は、ヘッダーの引用符が閉じていない作業コピーが終了コード 0 で
+// 通り、公開ファイルがヘッダー1行だけになっていた。壊れた入力ほど静かに消す。
+func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
+	const keyA = "aaaaaaaaaaaaaaaa"
+	const keyB = "bbbbbbbbbbbbbbbb"
+	const keyC = "cccccccccccccccc"
+	published := publishedCSV(
+		[2]string{keyA, "ひとつめ"},
+		[2]string{keyB, "ふたつめ"},
+		[2]string{keyC, "みっつめ"},
+	)
+	const workingHeader = "key,section,node,order,speaker,source_en,translation\n"
+	whole := workingHeader +
+		keyA + ",UI,,,UI,,ひとつめ\n" +
+		keyB + ",UI,,,UI,,ふたつめ\n" +
+		keyC + ",UI,,,UI,,みっつめ\n"
+
+	tests := []struct {
+		name    string
+		working string
+		// wantLost は失われると報せるキー。空なら書き出してよい。
+		wantLost []string
+	}{
+		{
+			name:     "長さ0",
+			working:  "",
+			wantLost: []string{keyA, keyB, keyC},
+		},
+		{
+			name:     "ヘッダーだけ",
+			working:  workingHeader,
+			wantLost: []string{keyA, keyB, keyC},
+		},
+		{
+			name:     "途中まで",
+			working:  workingHeader + keyA + ",UI,,,UI,,ひとつめ\n",
+			wantLost: []string{keyB, keyC},
+		},
+		{
+			// source_en と translation が1つの列名に融合し、translation 列を
+			// 引けなくなる。全行が「訳が空」と見なされて落ちる。
+			name:     "ヘッダーの引用符が閉じていない",
+			working:  strings.Replace(whole, ",source_en,", `,"source_en,`, 1),
+			wantLost: []string{keyA, keyB, keyC},
+		},
+		{
+			name:     "公開ファイルにある行の訳を1つ空にした",
+			working:  strings.Replace(whole, ",ふたつめ\n", ",\n", 1),
+			wantLost: []string{keyB},
+		},
+		{
+			// ふつうの編集。ここで止めると publish が使えない。
+			name:    "訳を書き換えただけ",
+			working: strings.Replace(whole, "ふたつめ", "二つ目", 1),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, TranslationsDir, "ja", StringsFile), published)
+			writeFile(t, filepath.Join(root, TranslationsDir, DiscoveredDir, "ja"+WorkingSuffix), tt.working)
+
+			targets, err := DiscoverTargets(root)
+			if err != nil {
+				t.Fatalf("DiscoverTargets: %v", err)
+			}
+			if len(targets) != 1 || filepath.Base(targets[0].Input) != "ja"+WorkingSuffix {
+				t.Fatalf("入力が作業コピーになっていない: %+v", targets)
+			}
+			out, _, err := BuildTarget(nil, targets[0])
+			if err != nil {
+				t.Fatalf("BuildTarget: %v", err)
+			}
+
+			losses, err := CheckTargetLoss(targets[0], out)
+			if err != nil {
+				t.Fatalf("CheckTargetLoss: %v", err)
+			}
+			var got []string
+			for _, l := range losses {
+				got = append(got, l.Key)
+			}
+			if !slices.Equal(got, tt.wantLost) {
+				t.Errorf("失われると報せたキーが %q、期待 %q", got, tt.wantLost)
+			}
+		})
 	}
 }
