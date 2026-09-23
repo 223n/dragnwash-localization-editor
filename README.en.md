@@ -1068,7 +1068,7 @@ How the options were compared is in the research report.
 
 | Tool | What it is for |
 | ---- | ---- |
-| Node 22 or later | Used to check the Japanese documents |
+| Node 22 or later | Used to check the Japanese documents and to run the E2E tests |
 | Go 1.27.1 or later | Used for the implementation. It is pinned in `go.mod` |
 
 ### Building it yourself
@@ -1119,6 +1119,34 @@ CI builds all six targets, so writing anything that uses `CGO` will pass locally
 There are tests that refer to the original repository.  
 They run when you put its path in `DRAGNWASH_SOURCE_REPO`.  
 Without it, they look in the default location and are skipped if nothing is found.
+
+### Tests and coverage
+
+There are two kinds of tests.  
+The Go tests, and end-to-end (E2E) tests that drive the screen (`internal/web/ui`) in a browser.  
+The E2E tests run in Playwright's Chromium.
+
+```bash
+npm ci
+npx playwright install chromium   # first time only. On Linux, add --with-deps
+npm run test:go                   # Go tests and coverage
+npm run test:e2e                  # E2E tests of the screen and coverage of app.js
+npm test                          # both
+```
+
+`npm run test:go` runs `go test ./cmd/... ./internal/...` with coverage and prints the figure for each package and the total.  
+The profile is left in `coverage/go/cover.out`.
+
+`npm run test:e2e` builds `dwloc` into a temporary directory, creates a sample translation repository in a separate temporary directory for each test, and starts `dwloc edit` on it.  
+It neither reads nor writes the contents of your checkout.  
+Coverage of `app.js` is counted on lines, leaving out comments and blank lines.  
+The report is written to `coverage/e2e/index.html`.  
+To use a `dwloc` you have already built, put its path in `DWLOC_BIN`.
+
+Both fail when coverage falls below `coverageThresholds` in `package.json`.  
+The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
+Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
+When you add tests and the figures go up, raise the thresholds too.
 
 ### Checking the Japanese documents
 
@@ -1252,7 +1280,7 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
 | `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the safety of the workflows with CodeQL |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
