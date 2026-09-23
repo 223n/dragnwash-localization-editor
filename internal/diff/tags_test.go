@@ -164,6 +164,24 @@ func TestCompareTagUnbalanced(t *testing.T) {
 			t.Errorf("原文のタグを訳のものとして数えている: got %d", got)
 		}
 	})
+
+	t.Run("公開ファイルの形の分からない行は見ない", func(t *testing.T) {
+		// 形の分からない行は internal/validate が拾う。どの列が訳なのか決められない
+		// 行の中身をタグの話として出すと、直す場所を取り違える。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv": orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,こんにちは\n" +
+				"English,,,,,<i>勝手に足した訳\n",
+		}, false)
+		rep := Compare(repo, nil)
+		if rep.Locales[0].BrokenRows != 1 {
+			t.Fatalf("前提が崩れている: 形の分からない行 = %d", rep.Locales[0].BrokenRows)
+		}
+		if got := counts(t, rep, "ja")[CatTagUnbalanced]; got != 0 {
+			t.Errorf("形の分からない行を見ている: got %d", got)
+		}
+	})
 }
 
 // findingOf はそのカテゴリの最初の Finding を返す。無ければ止める。
