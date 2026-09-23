@@ -1,0 +1,12 @@
+key,section,node,order,speaker,translation
+
+# ===== L01 Harbor =====
+# --- morning: harbor_intro ---
+39f1bc8d00590f24,L01 Harbor,harbor_intro,1,Mira,港の洗車場へようこそ！今日いちばんのお客さんかい？
+03e605dbe442f229,L01 Harbor,harbor_intro,2,Pip,泡の機械がまたうなってるよ。
+5e1923a9fad44d5a,L01 Harbor,harbor_intro,3,Mira,上からすすいで、順に下へ進めてね。
+854d7f26d4bd050c,L01 Harbor,harbor_intro,4,Pip,<i>レモン</i>の匂いがするものなの？
+# --- evening: harbor_evening ---
+23ab71941415466b,L01 Harbor,harbor_evening,1,Pip,桟橋の明かりが、いまついたよ。
+ae3aca8dc1f9a0f8,L01 Harbor,harbor_evening,2,Pip,<size=70%>（ひそひそ）寝てるのかな？
+5ff5281d4320e092,L01 Harbor,harbor_evening,3,Mira,今日はおつかれさま。明日も同じ時間に？
