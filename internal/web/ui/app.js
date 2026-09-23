@@ -77,9 +77,13 @@
     */
     panelFold: document.getElementById("panel-fold"),
     panelMore: document.getElementById("panel-more"),
-    /* 書き出しの畳みと、その中の2つのボタン（exportCsv を見よ）。 */
-    exportFold: document.getElementById("export-fold"),
+    /*
+      書き出し。帯のボタンと、それが開くメニュー、その中の2つのボタン
+      （exportCsv を見よ）。結果の欄（exportState）はメニューの外、帯の中にある。
+    */
+    exportOpen: document.getElementById("export-open"),
     exportTitle: document.getElementById("export-title"),
+    exportMenu: document.getElementById("export-menu"),
     exportHelp: document.getElementById("export-help"),
     exportPublished: document.getElementById("export-published"),
     exportPublishedLabel: document.getElementById("export-published-label"),
@@ -495,7 +499,7 @@
     */
     foldTitle(el.finderNoteTitle, "circle-info", t("ui.finder_note_title"));
     foldTitle(el.keysTitle, "keyboard", t("ui.keys_title"));
-    foldTitle(el.exportTitle, "floppy-disk", t("ui.export_title"));
+    el.exportTitle.textContent = t("ui.export_title");
     el.exportHelp.textContent = t("ui.export_help");
     el.exportPublishedLabel.textContent = t("ui.export_published");
     el.exportPublishedNote.textContent = t("ui.export_published_note");
@@ -504,7 +508,7 @@
     el.panelMore.textContent = t("ui.panel_more");
     /*
       文言が入ったので出す。入るまでは hidden にしてある（index.html）。
-      空の summary は、名前を持たない焦点の止まり場になる。
+      空の summary と空のボタンは、名前を持たない焦点の止まり場になる。
 
       一帯（#panel-fold）はここでは出さない。あの summary の主役は目録の文では
       なく、いま読み書きしているファイルの名前で、それが入るのは /api/lines を
@@ -512,7 +516,7 @@
     */
     el.keysFold.hidden = false;
     el.finderFold.hidden = false;
-    el.exportFold.hidden = false;
+    el.exportOpen.hidden = false;
     /*
       「1行もありません」はここでは入れない。applyView が、出す行が0のときだけ
       入れて、そうでないときは空にする。中身の入れ替えで出し入れするので、
@@ -1693,10 +1697,34 @@
     });
   }
 
-  /* 書き出しの結果を、ボタンのすぐ下に出す。押した場所の近くで答える。 */
+  /*
+    書き出しの結果を、帯の中（押したボタンのすぐ下）に出す。メニューの中には
+    置かない。選んだ時点でメニューは閉じ、閉じたメニューの中身は支援技術の木から
+    外れるので、そこでは見えも告知されもしない。
+
+    うまくいかなかったときは、失敗の理由（#message）と同じ出し方にする。色だけに
+    頼らないのも同じで、文言がそのまま理由になっている。
+  */
   function setExportState(text, bad) {
     el.exportState.textContent = text ? text : "";
-    el.exportState.className = bad ? "export-state bad" : "export-state";
+    el.exportState.className = bad ? "notice export-state error" : "notice export-state";
+  }
+
+  /*
+    書き出しのメニューを閉じる。2つのうちどちらかを選んだら閉じる。開いたままだと、
+    名前を付けて保存のダイアログと結果の欄の手前にメニューが居座る。焦点は、
+    メニューを開いた帯のボタンへ戻る（popover の既定）。
+
+    popover を持たないブラウザーでは、メニューは帯の中にそのまま出ていて、
+    閉じるものが無い。
+  */
+  function closeExportMenu() {
+    if (typeof el.exportMenu.hidePopover !== "function") {
+      return;
+    }
+    if (el.exportMenu.matches(":popover-open")) {
+      el.exportMenu.hidePopover();
+    }
   }
 
   function updateExportButtons() {
@@ -2756,9 +2784,11 @@
         el.conflictKeep.addEventListener("click", keepMine);
         el.conflictTake.addEventListener("click", takeFile);
         el.exportPublished.addEventListener("click", function () {
+          closeExportMenu();
           exportCsv("published");
         });
         el.exportWorking.addEventListener("click", function () {
+          closeExportMenu();
           exportCsv("working");
         });
         window.addEventListener("beforeunload", function (e) {
