@@ -419,8 +419,23 @@ func keyOf(t *testing.T, s *server, line int) string {
 // 落ちたのは保存が失敗しなかったからで、製品側は正しく保存できていた。
 // 「書けない状態」を作れていないのに、書けなかったときの振る舞いを見ていた。
 //
-// 実際に書けなくなったことを確かめてから返す。root で走るとどちらの手も効かず、
-// 同じことがまた起きるためである。効かないときは試験を飛ばす。
+// 実際に書けなくなったことを、2段で確かめてから返す。
+//
+//  1. 閉じたことが効いているかを、製品と関係の無い手で見る。POSIX では
+//     ディレクトリに新しいファイルを作れないこと、Windows ではファイルを
+//     書き込み用に開けないことである。作れた・開けたなら、root で走っているなど
+//     閉じても効かない環境なので、試験を飛ばす。
+//  2. 製品が保存に使う経路そのもの（[publish.WriteBytes]）でも書いてみる。
+//     1段目が通ったのにこちらが通るなら、製品の書き方が変わって、ここで閉じた
+//     相手が効かなくなっている（一時ファイルを経ずに直接書き換える形に戻ると、
+//     POSIX では 0o555 のディレクトリの中でも上書きが通る）。飛ばさずに落とす。
+//
+// 2段目だけで確かめていたころは、通ったら飛ばしていた。環境のせいなのか製品が
+// 変わったのかを見分けられず、製品が変わったときも「root で走っている」と読んで
+// 飛ばす。go test は飛ばした試験を成功として数えるので、書けなかったときの
+// 振る舞いを誰も見ていない状態が、CI を緑のまま続く。製品の経路で確かめるのは、
+// 判定を書き写すと書き方が変わったときにここだけ古いままになるからで、その変化を
+// 落ちて知らせるのが2段目の役目である。
 func makeReadOnly(t *testing.T, path string) {
 	t.Helper()
 
@@ -441,12 +456,37 @@ func makeReadOnly(t *testing.T, path string) {
 	// t.Cleanup は後入れ先出しなので、ここは TempDir の削除より先に走る。
 	t.Cleanup(func() { _ = os.Chmod(target, open) })
 
-	// 確かめ方は、製品が保存に使う経路そのものである。判定を書き写すと、
-	// 書き方が変わったときにここだけ古いままになる。
+	if stillWritable(target, path) {
+		t.Skipf("%s を閉じても書けてしまう。root で走っていると効かない", target)
+	}
 	// 書くのはいま入っている中身なので、通ってしまってもファイルは変わらない。
 	if err := publish.WriteBytes(path, before); err == nil {
-		t.Skipf("%s を書けない状態にできない。root で走っていると効かない", target)
+		t.Fatalf("%s を閉じたのに、製品の書き込みの経路が通った。一時ファイルを経ずに"+
+			"直接書き換える形になっていないか。書き方を変えたなら、ここで閉じる相手も合わせる", target)
 	}
+}
+
+// stillWritable は、[makeReadOnly] が target を閉じたあとも path を書き換えられる
+// 環境かを返す。製品のコードは通さない。
+//
+// POSIX はディレクトリに新しいファイルを作れるか、Windows は path を書き込み用に
+// 開けるかを見る。どちらも中身は書かない。
+func stillWritable(target, path string) bool {
+	if runtime.GOOS == "windows" {
+		probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return false
+		}
+		_ = probe.Close()
+		return true
+	}
+	probe, err := os.CreateTemp(target, "probe*")
+	if err != nil {
+		return false
+	}
+	_ = probe.Close()
+	_ = os.Remove(probe.Name())
+	return true
 }
 
 // newEditGame は [newEditRoot] と同じ形の作業コピーをゲーム側に作る。
