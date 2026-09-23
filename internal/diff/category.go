@@ -172,8 +172,12 @@ var categoryTable = map[Category]categoryInfo{
 	},
 	CatCarryover: {
 		// note は空。行ごとに引き継ぎ先が違うので、Finding.Note へ1件ずつ入れる。
+		//
+		// 台詞IDも要る。新旧を台詞IDで突き合わせるので、いまの再生順に台詞IDが
+		// 無ければ1件も見つけられない。旧版の側で同じ状態を保留にしている
+		// （loadOldOrder の hasLineIDKeys）のと同じ理由で、0 件と書かずに止める。
 		name: "引き継ぎ候補", id: "carryover", status: StatusReview,
-		needsOrderKeys: true, needsOldOrder: true,
+		needsOrderKeys: true, needsOrderLineIDs: true, needsOldOrder: true,
 		detail: []string{
 			"原文が変わってキーが変わった行の、引き継ぎ先の見当です。",
 			"1つ前の版の再生順を git から読み、新旧を台詞ID (line_id) で突き合わせて求めます。",
