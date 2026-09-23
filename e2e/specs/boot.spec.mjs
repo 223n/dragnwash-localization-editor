@@ -498,7 +498,8 @@ test("畳みは目録が届いたら出し、ファイルの畳みだけは行�
   // 目録は届いて、行はまだ届いていない。
   await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
   await expect(page.locator("#message")).toHaveText(msg("ja", "ui.loading"));
-  for (const id of ["#keys-fold", "#finder-fold", "#export-fold"]) {
+  // 書き出しの入口は帯のボタン（#export-open）で、畳みと同じく文言が入ったら出す。
+  for (const id of ["#keys-fold", "#finder-fold", "#export-open"]) {
     await expect(page.locator(id), id).toHaveJSProperty("hidden", false);
   }
   await expect(page.locator("#keys-title")).toHaveText(msg("ja", "ui.keys_title"));
@@ -525,7 +526,8 @@ test("目録を取れないときも黙らず、名前の無い畳みを出さ�
   const lines = watchRequests(page, "/api/lines");
   await page.goto(server.url);
   await expect(page.locator("#message")).not.toBeEmpty();
-  for (const id of ["#keys-fold", "#finder-fold", "#export-fold", "#panel-fold"]) {
+  // 名前の入らない帯のボタン（#export-open）も出さない。名前の無い焦点の止まり場になる。
+  for (const id of ["#keys-fold", "#finder-fold", "#export-open", "#panel-fold"]) {
     await expect(page.locator(id), id).toHaveJSProperty("hidden", true);
   }
   await expect(page.locator("#locale option")).toHaveCount(0);

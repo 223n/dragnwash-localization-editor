@@ -465,29 +465,33 @@ test.describe("狭い画面の引き出し", () => {
   });
 
   // 閉じた引き出しは transform で画面の外へ出してあるだけなので、中身がタブ順に残って
-  // いた。#reload から Tab で進むと、画面の外の閉じるボタン・検索の欄・条件のチップに
+  // いた。帯の最後のボタン（#export-open）から Tab で進むと、画面の外の閉じるボタン・検索の欄・条件のチップに
   // 焦点が入り、見えない検索の欄に打った字で一覧だけが黙って絞られた。閉じているあいだは
   // 入れさせない（app.js の syncInert）。開けば入れる。
   test("閉じているあいだは Tab で引き出しの中へ入らず、開けば入る", async ({ app }) => {
     await expectDrawerClosed(app);
     const inSidebar = () => app.evaluate(() => document.querySelector("#sidebar").contains(document.activeElement));
 
-    await app.locator("#reload").focus();
+    await app.locator("#export-open").focus();
     await app.keyboard.press("Tab");
     // 引き出しを飛ばして、一覧の最初の訳の欄へ進む（焦点が入ると入力欄に差し替わる）。
+    // 閉じた書き出しのメニュー（popover）の中身も Tab の順には入らない。
     expect(await inSidebar()).toBe(false);
     await expect(rowByLine(app, L.hello).locator("textarea.editor")).toBeFocused();
     await expectDrawerClosed(app);
     await expect(sidebar(app)).toHaveAttribute("inert", "");
     await editor(app).press("Escape");
 
-    // 開けば入れる。#menu から #locale、#reload と進み、その次が引き出しの閉じるボタン。
+    // 開けば入れる。#menu から #locale、#reload、#export-open と進み、その次が引き出しの
+    // 閉じるボタン。
     await menu(app).click();
     await expectDrawerOpen(app);
     await expect(sidebar(app)).not.toHaveAttribute("inert");
     await menu(app).focus();
-    await app.keyboard.press("Tab");
-    await app.keyboard.press("Tab");
+    for (const id of ["#locale", "#reload", "#export-open"]) {
+      await app.keyboard.press("Tab");
+      await expect(app.locator(id)).toBeFocused();
+    }
     await app.keyboard.press("Tab");
     await expect(app.locator("#sidebar-close")).toBeFocused();
     await app.keyboard.press("Tab");
@@ -540,10 +544,10 @@ test.describe("広い画面の左の列", () => {
 
   // 閉じた引き出しに焦点を入れさせない守り（inert）は、狭い画面の引き出しのためのもの。
   // 広い画面の列は画面に出ているので、Tab で入れなければならない。閉じるボタンは広い画面
-  // では描かないので、#reload の次は検索の欄になる。
-  test("列は Tab で入れ、#reload の次が検索の欄になる", async ({ app }) => {
+  // では描かないので、帯の最後のボタン（#export-open）の次は検索の欄になる。
+  test("列は Tab で入れ、帯の最後のボタンの次が検索の欄になる", async ({ app }) => {
     await expect(sidebar(app)).not.toHaveAttribute("inert");
-    await app.locator("#reload").focus();
+    await app.locator("#export-open").focus();
     await app.keyboard.press("Tab");
     await expect(search(app)).toBeFocused();
   });

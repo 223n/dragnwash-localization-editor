@@ -1,4 +1,4 @@
-// 書き出し（左の列の「別の場所へ保存」）が、押した時点の訳をそのままの形で渡すことを見る。
+// 書き出し（上の帯の「別に保存」）が、押した時点の訳をそのままの形で渡すことを見る。
 //
 // 書き出しは、待ち受けがファイルを読んで返したものを、ブラウザーへ「これを保存して」と
 // 渡すだけの道である（app.js の exportCsv、internal/web の export.go）。保存先を決めるのは
@@ -11,7 +11,7 @@
 //                  残っていても書き出さず、何を片付ければよいかを言う。
 //   そのまま渡す   working はいま書き込んでいるファイルのバイトそのまま、published は
 //                  dwloc publish が書くのと同じバイト。どちらもリポジトリは書き換えない。
-//   黙らない       守り（失われる訳、巻き戻り）に当たったら理由をボタンの下に出す。
+//   黙らない       守り（失われる訳、巻き戻り）に当たったら理由を帯の中（#export-state）に出す。
 //                  逆に、人が保存ダイアログを閉じたときは「書き出しました」と言わない。
 //
 // 中身は画面の表示ではなく、ブラウザーへ渡ったバイトで見る。headless の Chromium では
@@ -52,8 +52,9 @@ test.use({
   repo: sampleRepo({ workingCopy: sampleWorkingCopy({ bom: true, eol: mixedEol }) }),
 });
 
-// #export-state の「うまくいかなかった」の印（app.js の setExportState）。
-const BAD = /(^|\s)bad(\s|$)/;
+// #export-state の「うまくいかなかった」の印と、「時間で消える」の印（app.js の setExportState）。
+const BAD = /(^|\s)error(\s|$)/;
+const TIMED = /(^|\s)timed(\s|$)/;
 
 // wrongKey はファイルに無いキー。保存の要求をこれに差し替えると、待ち受けは
 // 「この行はずれています」で書かずに断る（行ごとの失敗を本物の応答で作る）。
@@ -129,11 +130,29 @@ async function removePicker(page) {
 
 // ---- 画面の操作 ----
 
-// openExport は書き出しの畳みを開く。畳みは目録が入ると出る（app.js の applyCatalog）。
+// openExport は帯の「別に保存」を押して、2つの選び方のメニュー（popover）を開く。
+// ボタンは目録が入ると出る（app.js の applyCatalog）。
 async function openExport(page) {
-  await page.locator("#export-title").click();
+  await exportOpen(page).click();
   await expect(page.locator("#export-published")).toBeVisible();
   await expect(page.locator("#export-working")).toBeVisible();
+}
+
+function exportOpen(page) {
+  return page.locator("#export-open");
+}
+
+function exportMenuIsOpen(page) {
+  return page.locator("#export-menu").evaluate((menu) => menu.matches(":popover-open"));
+}
+
+// choose は書き出しの形を選ぶ。選ぶとメニューは閉じる（app.js の closeExportMenu）ので、
+// 閉じていれば開き直してから押す。
+async function choose(page, form) {
+  if (!(await exportMenuIsOpen(page))) {
+    await openExport(page);
+  }
+  await (form === "working" ? workingButton(page) : publishedButton(page)).click();
 }
 
 function exportState(page) {
@@ -279,7 +298,7 @@ test.describe("保存先を尋ねられるブラウザー（showSaveFilePicker �
     expect(working.includes("\r\n")).toBe(true);
 
     await openExport(page);
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
     await expect(exportState(page)).not.toHaveClass(BAD);
 
@@ -325,7 +344,7 @@ test.describe("保存先を尋ねられるブラウザー（showSaveFilePicker �
     expect(expected.includes(typed)).toBe(true);
 
     await openExport(page);
-    await publishedButton(page).click();
+    await choose(page, "published");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
 
     const log = await pickerLog(page);
@@ -346,11 +365,11 @@ test.describe("保存先を尋ねられるブラウザー（showSaveFilePicker �
     await openApp(page, server);
     await openExport(page);
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
 
     await setPickerMode(page, "abort");
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect.poll(async () => (await pickerLog(page)).calls.length).toBe(2);
     await waitExportSettled(page);
     expect(await exportState(page).textContent()).toBe("");
@@ -368,7 +387,7 @@ test.describe("保存先を尋ねられるブラウザー（showSaveFilePicker �
     await openExport(page);
 
     const downloaded = page.waitForEvent("download");
-    await workingButton(page).click();
+    await choose(page, "working");
     const download = await downloaded;
     expect(download.suggestedFilename()).toBe("ja.working.csv");
     const body = await readFile(await download.path());
@@ -388,7 +407,7 @@ test.describe("保存先を尋ねられないブラウザー（showSaveFilePicke
     await openExport(page);
 
     const downloaded = page.waitForEvent("download");
-    await workingButton(page).click();
+    await choose(page, "working");
     const download = await downloaded;
     expect(download.suggestedFilename()).toBe("ja.working.csv");
     const body = await readFile(await download.path());
@@ -421,7 +440,7 @@ test.describe("保存先を尋ねられないブラウザー（showSaveFilePicke
     await openExport(page);
 
     const downloaded = page.waitForEvent("download");
-    await workingButton(page).click();
+    await choose(page, "working");
     const download = await downloaded;
     const url = download.url();
     expect(url.startsWith("blob:"), `blob の URL で落としていない: ${url}`).toBe(true);
@@ -445,7 +464,6 @@ test.describe("未保存の訳があるとき", () => {
     const before = await server.readRoot(workingRel);
     let down = true;
     await page.route("**/api/rows", (route) => (down ? route.abort("connectionrefused") : route.continue()));
-    await openExport(page);
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
     await editor(page).press("Escape");
@@ -455,7 +473,7 @@ test.describe("未保存の訳があるとき", () => {
 
     down = false;
     const seen = watchApi(page);
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
     expect(seen.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /api/rows", "GET /api/export"]);
 
@@ -484,11 +502,10 @@ test.describe("未保存の訳があるとき", () => {
       await hold.promise;
       await route.continue().catch(() => {});
     });
-    await openExport(page);
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
     // ボタンを押すと焦点が移り、欄から離れたところで保存が走り出す（まだ返らない）。
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_wait"));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -497,7 +514,7 @@ test.describe("未保存の訳があるとき", () => {
 
     hold.release();
     await waitForSaved(page);
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
     const log = await pickerLog(page);
     expect(log.written).toHaveLength(1);
@@ -514,14 +531,13 @@ test.describe("未保存の訳があるとき", () => {
     await openPaused(page, server);
     const before = await server.readRoot(workingRel);
     await page.route("**/api/rows", (route) => route.abort("connectionrefused"));
-    await openExport(page);
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
     await editor(page).press("Escape");
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
 
     const seen = watchApi(page);
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_wait"));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -548,7 +564,6 @@ test.describe("未保存の訳があるとき", () => {
     await openPaused(page, server);
     let down = true;
     await page.route("**/api/rows", (route) => (down ? route.abort("connectionrefused") : route.continue()));
-    await openExport(page);
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
     await editor(page).press("Escape");
@@ -558,7 +573,7 @@ test.describe("未保存の訳があるとき", () => {
     await server.writeRoot(workingRel, withTranslation(await server.readRoot(workingRel), SAMPLE_LINES.goodbye, theirs));
     down = false;
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(page.locator("#conflict")).toBeVisible();
     await waitExportSettled(page);
     expect((await pickerLog(page)).calls, "競合を選ぶ前に中身を渡した").toHaveLength(0);
@@ -568,7 +583,7 @@ test.describe("未保存の訳があるとき", () => {
     await expect(exportState(page)).toHaveClass(BAD);
 
     // 競合が出たままもう一度押しても、書き出さない。
-    await workingButton(page).click();
+    await choose(page, "working");
     await waitExportSettled(page);
     expect((await pickerLog(page)).calls, "競合が出たまま押し直したら中身を渡した").toHaveLength(0);
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_conflict"));
@@ -590,14 +605,13 @@ test.describe("未保存の訳があるとき", () => {
       body.edits = (body.edits ?? []).map((edit) => ({ ...edit, key: wrongKey }));
       await route.continue({ postData: JSON.stringify(body) });
     });
-    await openExport(page);
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
     await editor(page).press("Escape");
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_failed"));
     const before = await server.readRoot(workingRel);
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_row_failed"));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -612,7 +626,7 @@ test.describe("未保存の訳があるとき", () => {
     await typeTranslation(page, SAMPLE_LINES.goodbye, SAMPLE.goodbye.ja);
     await editor(page).press("Escape");
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
     const log = await pickerLog(page);
     expect(log.written).toHaveLength(1);
@@ -628,7 +642,6 @@ test.describe("未保存の訳があるとき", () => {
     // 409 にならずに保存される。
     await openPaused(page, server);
     const seen = watchApi(page);
-    await openExport(page);
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, "さようなら。");
     // 送る前に、よそが goodbye の行ごと消した。
@@ -649,7 +662,7 @@ test.describe("未保存の訳があるとき", () => {
     await expect(page.locator("#orphans")).toBeVisible();
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_orphans"));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -677,7 +690,7 @@ test("書き出しているあいだは、2つのボタンを押せない", asyn
   );
   await openExport(page);
 
-  await publishedButton(page).click();
+  await choose(page, "published");
   await expect(publishedButton(page)).toBeDisabled();
   await expect(workingButton(page)).toBeDisabled();
   await expect.poll(() => exports.length).toBe(1);
@@ -716,7 +729,7 @@ test.describe("コミット済みの訳が作業コピーに無いとき", () =>
     await openApp(page, server);
     await openExport(page);
 
-    await publishedButton(page).click();
+    await choose(page, "published");
     await expect(exportState(page)).toHaveText(msg("ja", "error.export_would_lose", { count: 1 }));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -725,7 +738,7 @@ test.describe("コミット済みの訳が作業コピーに無いとき", () =>
 
     // 止めるのは publish の形のときだけ。いま編集しているファイルはそのまま出せ、
     // 前の理由は次の書き出しで消える（残すと、成功したのに失敗の文が出たままになる）。
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
     await expect(exportState(page)).not.toHaveClass(BAD);
     const log = await pickerLog(page);
@@ -754,7 +767,7 @@ test.describe("ゲームに入っている翻訳がコミット済みより古�
     const before = await snapshot(server.root);
     await openExport(page);
 
-    await publishedButton(page).click();
+    await choose(page, "published");
     await expect(exportState(page)).toHaveText(msg("ja", "error.export_would_roll_back", { count: 1 }));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -775,7 +788,7 @@ test.describe("書き出しを取りにいけなかったとき", () => {
     );
     await openExport(page);
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_failed"));
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
@@ -794,7 +807,7 @@ test.describe("書き出しを取りにいけなかったとき", () => {
     );
     await openExport(page);
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
     expect((await pickerLog(page)).calls).toHaveLength(0);
@@ -808,7 +821,7 @@ test.describe("書き出しを取りにいけなかったとき", () => {
     await openApp(page, server);
     await openExport(page);
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveClass(BAD);
     await waitExportSettled(page);
     const log = await pickerLog(page);
@@ -856,7 +869,7 @@ test("応答の名前が決めた形でなければ、strings.csv の名前で�
 
   for (const [i, c] of cases.entries()) {
     current = c;
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect.poll(async () => (await pickerLog(page)).calls.length).toBe(i + 1);
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
     await waitExportSettled(page);
@@ -877,13 +890,13 @@ test.describe("ロケールを選ぶ前", () => {
     await expect(page.locator("#message")).toHaveText(msg("ja", "ui.select_locale"));
     await openExport(page);
 
-    await workingButton(page).click();
+    await choose(page, "working");
     await waitExportSettled(page);
     expect(await exportState(page).textContent()).toBe("");
 
     await page.locator("#locale").selectOption("he");
     await expect(page.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 1 }));
-    await workingButton(page).click();
+    await choose(page, "working");
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
 
     // 取りにいったのは選んだあとの1回だけ。
@@ -891,5 +904,57 @@ test.describe("ロケールを選ぶ前", () => {
     const log = await pickerLog(page);
     expect(log.calls.map((c) => c.suggestedName)).toEqual(["strings.csv"]);
     expect(log.written[0].equals(await server.readRoot("Translations/he/strings.csv"))).toBe(true);
+  });
+});
+
+// 書き出しの入口は帯のボタン1つで、2つの選び方はそれが開くメニュー（popover）にある。
+// メニューは最前面の層に開くので、開いたままだと一覧の行を覆う。選んだら閉じ、焦点は
+// 開いた帯のボタンへ戻す（app.js の closeExportMenu）。結果はメニューの外、帯の中の
+// #export-state に出す。閉じたメニューの中身は支援技術の木から外れるので、中に出すと
+// 見えも告知されもしない。
+//
+// うまくいった知らせは、帯の下の残り時間が尽きたら消す。貼り付く帯に居座ると、その
+// ぶん一覧が狭くなるためである。失敗の理由は消さない。読み終わる前に消えると、何が
+// 起きたかを知るすべが無くなる（app.js の setExportState と animationend）。
+test.describe("帯のメニューと結果の知らせ", () => {
+  test("選ぶとメニューを閉じて焦点を帯のボタンへ戻し、うまくいった知らせは時間で消える", async ({
+    page,
+    server,
+  }) => {
+    await stubPicker(page);
+    await openApp(page, server);
+    await openExport(page);
+
+    await workingButton(page).click();
+    await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
+    expect(await exportMenuIsOpen(page)).toBe(false);
+    await expect(exportOpen(page)).toBeFocused();
+    await expect(exportState(page)).toHaveClass(TIMED);
+    await expect(exportState(page)).not.toHaveClass(BAD);
+
+    // 残り時間の帯（CSS のアニメーション）が尽きたら消える。
+    await expect(exportState(page)).toBeEmpty({ timeout: 15_000 });
+    await expect(exportState(page)).not.toHaveClass(TIMED);
+    // 消えたのは知らせだけで、書き出した中身はそのまま渡っている。
+    expect((await pickerLog(page)).written).toHaveLength(1);
+  });
+
+  test("失敗の理由は時間で消さない", async ({ page, server }) => {
+    await stubPicker(page);
+    await openApp(page, server);
+    await page.route(
+      (url) => url.pathname === "/api/export",
+      (route) => route.fulfill({ status: 500, contentType: "text/plain; charset=utf-8", body: "" }),
+    );
+
+    await choose(page, "working");
+    await expect(exportState(page)).toHaveText(msg("ja", "ui.export_failed"));
+    await expect(exportState(page)).toHaveClass(BAD);
+    await expect(exportState(page)).not.toHaveClass(TIMED);
+
+    // 残り時間の帯は付かないが、何かのアニメーションの終わりが届いても消さない。
+    await exportState(page).dispatchEvent("animationend");
+    await expect(exportState(page)).toHaveText(msg("ja", "ui.export_failed"));
+    await expect(exportState(page)).toHaveClass(BAD);
   });
 });
