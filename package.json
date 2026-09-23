@@ -13,15 +13,20 @@
     "lint:md:fix": "markdownlint-cli2 --fix",
     "lint:ja": "textlint .",
     "lint:ja:fix": "textlint --fix .",
+    "test": "npm run test:go && npm run test:e2e",
+    "test:go": "node scripts/go-coverage.mjs --run",
     "test:e2e": "node e2e/coverage.mjs clean && playwright test -c e2e && node e2e/coverage.mjs report",
     "test:e2e:report": "node e2e/coverage.mjs report"
   },
   "coverageThresholds": {
+    "go": {
+      "statements": 97
+    },
     "e2e": {
-      "lines": 0,
-      "statements": 0,
-      "functions": 0,
-      "branches": 0
+      "lines": 96.5,
+      "statements": 96.5,
+      "functions": 97,
+      "branches": 98
     }
   },
   "devDependencies": {
