@@ -19,16 +19,22 @@ import (
 // 待たない（Wait を呼ばない）のは、xdg-open も open もすぐ戻るが、
 // rundll32 は開いたあとも居残ることがあるため。待つと待ち受けの開始が遅れる。
 func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
+	return browserCommand(runtime.GOOS, url).Start()
+}
+
+// browserCommand は goos で url を開くコマンドを組み立てる。起動はしない。
+//
+// 組み立てと起動を分けてあるのは、試験で引数の並びを見るためである。起動まで
+// 行う形のままだと、確かめるには本物のブラウザーを開くしかない。
+func browserCommand(goos, url string) *exec.Cmd {
+	switch goos {
 	case "windows":
 		// url.dll の FileProtocolHandler は、既定のブラウザーを引くための
 		// Windows の標準の入口。cmd /c start と違い、シェルの解釈が入らない。
-		cmd = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
+		return exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
 	case "darwin":
-		cmd = exec.Command("open", url)
+		return exec.Command("open", url)
 	default:
-		cmd = exec.Command("xdg-open", url)
+		return exec.Command("xdg-open", url)
 	}
-	return cmd.Start()
 }
