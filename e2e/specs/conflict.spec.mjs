@@ -354,9 +354,12 @@ test("よそが別の行だけを書き換えた 409 のあとも、打ってい
 
 // 打っていた行そのものをよそが書き換えていたら、その行は競合になり、選ぶまで開かない
 // （openEditor）。入力欄は開き直せないので、以前は焦点が body へ落ち、続けて打った字は
-// 黙ってどこにも入らなかった（上の試験と同じ事故の形）。焦点を引き止めの最初のボタンへ
-// 移し、次にすることを画面にも読み上げにも出す（app.js の onConflict）。
-test("打っていた行そのものが競合したら、焦点を引き止めの最初のボタンへ移す", async ({ page, server }) => {
+// 黙ってどこにも入らなかった（上の試験と同じ事故の形）。焦点を引き止めの枠へ移し、
+// 次にすることを画面にも読み上げにも出す（app.js の onConflict）。
+//
+// ボタンへは移さない。打ち続けた Space や Enter がボタンを押し、よその訳を読まずに
+// どちらかを選んでしまう。続けて打っても何も選ばれないことまで見る。
+test("打っていた行そのものが競合したら、焦点を引き止めの枠へ移し、続けて打っても何も選ばない", async ({ page, server }) => {
   await openPaused(page, server);
   await typeTranslation(page, L.goodbye, "さような");
   const external = copy(hello(), goodbye("またね。"), wonderful());
@@ -368,10 +371,24 @@ test("打っていた行そのものが競合したら、焦点を引き止め�
 
   await expect(conflictBox(page)).toBeVisible();
   await expect(conflictValues(page, L.goodbye)).toHaveText(["またね。", "さような"]);
-  // 競合した行は開き直さない。焦点は body ではなく、引き止めの最初のボタンにある。
+  // 競合した行は開き直さない。焦点は body ではなく、引き止めの枠にある。
   await expect(editor(page)).toHaveCount(0);
-  await expect(keepButton(page)).toBeFocused();
+  await expect(conflictBox(page)).toBeFocused();
   expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
+
+  // 打ち続けても（Space と Enter を含む）どちらのボタンも押されない。
+  await page.keyboard.type("ら ");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await page.clock.runFor(pastAutosave);
+  await expect(conflictBox(page)).toBeVisible();
+  await expect(conflictValues(page, L.goodbye)).toHaveText(["またね。", "さような"]);
+
+  // Tab で最初のボタンへ進める。
+  await conflictBox(page).focus();
+  await page.keyboard.press("Tab");
+  await expect(keepButton(page)).toBeFocused();
+
   // 何も選んでいないので、送ったのは 409 になった1回だけ。ファイルはよそが書いたまま。
   expect(await rowPosts(page)).toBe(1);
   await expectFile(server, external);
