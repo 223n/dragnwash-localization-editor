@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // TestWorkingCopyWithoutKeyColumn は、key 列を持たない作業コピーの行を
@@ -167,7 +169,7 @@ func TestUnreadableOrderSuspendsJudgement(t *testing.T) {
 			rep := Compare(repo, nil)
 			sum := rep.Locales[0]
 
-			for _, c := range []Category{CatVanished, CatScriptGap, CatUnknownOrigin, CatStrayLineID} {
+			for _, c := range []Category{CatVanished, CatScriptGap, CatUnknownOrigin, CatStrayLineID, CatNotPublished} {
 				if sum.canJudge(c) {
 					t.Errorf("%s を判定してしまっている", c)
 				}
@@ -185,6 +187,76 @@ func TestUnreadableOrderSuspendsJudgement(t *testing.T) {
 			}
 			if !strings.Contains(b.String(), "再生順を読めていません") {
 				t.Errorf("再生順を読めないことを伝えていない:\n%s", b.String())
+			}
+		})
+	}
+}
+
+// TestNotPublishedNeedsOrderKeys は、「どのロケールにも訳が無い行」を、再生順の
+// キーを読めていないときに「0 件」ではなく保留にすることを確かめる。
+//
+// このカテゴリの行は再生順のキーからしか生まれない。公開ファイルにあるキーは
+// 必ずどこかのロケールが持っているので、「他のロケールにあって無い行」へ回る。
+// キーを読めていなければ1件も見つけようがないのに 0 件と書くと、訳の無い行は
+// 無いと読まれる。引き継ぎ候補に台詞IDを要るものとして足したとき
+// （TestCarryoverNeedsOrderLineIDs）と同じ理屈である。
+//
+// 読めているときは今までどおり数えること。保留に倒しすぎると、実データで
+// 13ロケールとも出ている32件が画面と端末から消える。
+func TestNotPublishedNeedsOrderKeys(t *testing.T) {
+	published := publishedHeader + keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,こんにちは\n"
+	label := pad(CatNotPublished.String(), categoryNameWidth())
+
+	tests := []struct {
+		name      string
+		order     string
+		wantJudge bool
+		wantLine  string
+	}{
+		{
+			// Goodbye は再生順にだけあり、どのロケールにも訳が無い。
+			name:      "キーを読めていれば数える",
+			order:     orderTwo,
+			wantJudge: true,
+			wantLine:  label + "1 件",
+		},
+		{
+			name:     "再生順が無ければ保留にする",
+			wantLine: label + "判定していません（再生順を読めていません）",
+		},
+		{
+			name:     "key 列を引けなければ保留にする",
+			order:    "section,phase,node,order,line_id,hashkey,speaker,condition\n" + "L01 Ryan,intro,N1,1,line:aaaa1111," + keyBye + ",Ryan,\n",
+			wantLine: label + "判定していません（再生順を読めていません）",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := map[string]string{"Translations/ja/strings.csv": published}
+			if tt.order != "" {
+				files["data/script_order.csv"] = tt.order
+			}
+			rep := Compare(newRepo(t, files, false), nil)
+			sum := rep.Locales[0]
+
+			if got := sum.CanJudge(CatNotPublished); got != tt.wantJudge {
+				t.Fatalf("判定したか = %v, want %v", got, tt.wantJudge)
+			}
+			if !tt.wantJudge {
+				if why := sum.JudgeBlockReason(CatNotPublished); why.ID != reason.JudgeOrderUnreadable {
+					t.Errorf("理由が違う: %q (%q)", why.ID, why.Text)
+				}
+			}
+
+			var b strings.Builder
+			if err := rep.WriteText(&b, TextOptions{}); err != nil {
+				t.Fatalf("WriteText が失敗した: %v", err)
+			}
+			if !strings.Contains(b.String(), tt.wantLine) {
+				t.Errorf("%q が出ていない:\n%s", tt.wantLine, b.String())
+			}
+			if !tt.wantJudge && strings.Contains(b.String(), label+"0 件") {
+				t.Errorf("判定できないのに 0 件と書いている:\n%s", b.String())
 			}
 		})
 	}

@@ -210,7 +210,12 @@ var categoryTable = map[Category]categoryInfo{
 		},
 	},
 	CatNotPublished: {
-		name: "どのロケールにも訳が無い行", id: "not_published", status: StatusInfo,
+		// 再生順のキーが要る。このカテゴリの行は再生順のキーからしか生まれない
+		// （公開ファイルにあるキーは必ずどこかのロケールが持っているので、
+		// 「他のロケールにあって無い行」へ回る）。キーを読めていなければ1件も
+		// 見つけられないのに、0 件と書くと訳の無い行は無いと読まれる。引き継ぎ
+		// 候補に台詞IDを要るものとして足したのと同じ理由で、0 件と書かずに止める。
+		name: "どのロケールにも訳が無い行", id: "not_published", status: StatusInfo, needsOrderKeys: true,
 		note: noteNotPublished, noteID: reason.NoteNotPublished,
 	},
 	CatScriptGap: {
