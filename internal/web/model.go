@@ -555,15 +555,6 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 	return notes
 }
 
-// reasonText は internal/diff と internal/edit が返した理由を、画面に出す文面にする。
-//
-// 識別子があれば目録を引き、無ければ元の日本語をそのまま返す。目録に鍵が無い
-// ときも同じで、鍵をそのまま画面に出すことはしない。訳されていない文が出るほうが、
-// 何も出ないよりよい。
-//
-// 落ちたことに人が気づく必要は無い。鍵の抜けは [reason.All] をなぞる試験が
-// 見つけるし、識別子を持たない理由（[diff.OldOrderSource] を差し替えた
-// 呼び出し側が作る誤り）はそもそも訳しようがない。
 // findingNote は行に添える注記を返す。
 //
 // [diff.Finding] は日本語の Note と識別子つきの NoteReason を別々に持つ。
@@ -576,6 +567,15 @@ func (s *server) findingNote(cat *Catalog, f diff.Finding) string {
 	return s.reasonText(cat, f.NoteReason)
 }
 
+// reasonText は internal/diff と internal/edit が返した理由を、画面に出す文面にする。
+//
+// 識別子があれば目録を引き、無ければ元の日本語をそのまま返す。目録に鍵が無い
+// ときも同じで、鍵をそのまま画面に出すことはしない。訳されていない文が出るほうが、
+// 何も出ないよりよい。
+//
+// 落ちたことに人が気づく必要は無い。鍵の抜けは [reason.All] をなぞる試験が
+// 見つけるし、識別子を持たない理由（[diff.OldOrderSource] を差し替えた
+// 呼び出し側が作る誤り）はそもそも訳しようがない。
 func (s *server) reasonText(cat *Catalog, why reason.Reason) string {
 	if why.ID == "" {
 		return why.Text
