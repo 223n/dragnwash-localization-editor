@@ -462,6 +462,23 @@ test.describe("ロケールを省いて起動したとき", () => {
       await expect(page.locator("#locale option")).toHaveText(["he", "ja"]);
     });
   }
+
+  // 読み直すのは画面に出ているロケールで、欄の値ではない（app.js の読み直し）。まだ何も
+  // 出ていないときは読み直すものが無いので、何もしない。最初の読み込みが返る前に押しても、
+  // 選んだロケールの読み込みを取りやめて「ロケールを選んでください」へ戻したりしない。
+  test("最初の読み込みが返る前に読み直しを押しても、選んだロケールをそのまま読み終える", async ({ app }) => {
+    const lines = await holdLines(app);
+    await app.locator("#locale").selectOption("ja");
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await app.locator("#reload").click();
+    await expect(app.locator("#locale")).toHaveValue("ja");
+
+    lines.release("ja");
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+    await expect(app.locator("#locale")).toHaveValue("ja");
+    await expect(app.locator("#message")).toBeEmpty();
+    expect(lines.asked).toEqual(["ja"]);
+  });
 });
 
 // 畳みの summary は焦点を受ける。文言が入る前に出すと、名前の無い開閉要素が焦点の順に
@@ -1259,5 +1276,100 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
     await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
     expect(lines).toEqual(["ja"]);
+  });
+
+  // 切り替えを選んで返事を待っているあいだに読み直しを押すと、切り替えは読み直しに任せて
+  // 何もしない（askDiscard が stale を返す）。以前は読み直しが欄の値（切り替え先）を読んだ。
+  // 送れたときは、切り替え先を前のロケールの条件と検索語を付けたまま読んだ（切り替えなら
+  // 外す。「ロケールの切り替え」の試験）。読み直すのは画面に出ているロケールで、欄も押した
+  // 時点でそこへ戻す（app.js の読み直し）。
+  test("切り替えの返事を待つあいだに読み直しを押すと、画面に出ているロケールを条件と検索語を付けたまま読み直す", async ({
+    app,
+  }) => {
+    const hold = gate();
+    await app.route(
+      isPath("/api/rows"),
+      async (route) => {
+        await hold.promise;
+        await route.continue();
+      },
+      { times: 1 },
+    );
+    const dialogs = watchDialogs(app, false);
+    const lines = [];
+    app.on("request", (req) => {
+      const url = new URL(req.url());
+      if (url.pathname === "/api/lines") {
+        lines.push(url.searchParams.get("locale"));
+      }
+    });
+
+    // 原文で絞る。he のファイルに Goodbye. の行は無いので、持ち越せば he の一覧は 0 行になる。
+    await app.locator("#search").fill(SAMPLE.goodbye.source);
+    await expect(app.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 1 }));
+    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
+    await editor(app).press("Escape");
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
+    await app.locator("#locale").selectOption("he");
+    await app.locator("#reload").click();
+    // 押した時点で切り替えは取りやめになり、欄も画面に出ているロケールへ戻る。
+    await expect(app.locator("#locale")).toHaveValue("ja");
+    hold.release();
+
+    await expect.poll(() => lines).toEqual(["ja"]);
+    await waitForSaved(app);
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+    await expect(app.locator("#locale")).toHaveValue("ja");
+    await expect(app.locator("#search")).toHaveValue(SAMPLE.goodbye.source);
+    await expect(app.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 1 }));
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    expect(lines).toEqual(["ja"]);
+    expect(dialogs).toHaveLength(0);
+  });
+
+  // 送れずに訳が残ったときは、読み直しを尋ねる。以前は断ると、欄だけが切り替え先を指した
+  // まま残り、一覧・ファイルの名前・送り直しの宛先は前のロケールのままだった。そこで欄から
+  // 前のロケールを選び直すと「切り替えると消えます」と尋ねられ、受けると、画面に出ている
+  // ロケールのまま、送り直している訳を捨てた。断ったのだから、欄も画面に出ているロケールを指す。
+  test("切り替えの返事を待つあいだに読み直しを押し、送れずに読み直しを断っても、欄は画面に出ているロケールを指す", async ({
+    app,
+    server,
+  }) => {
+    const before = await server.readRoot(workingRel);
+    const hold = gate();
+    let first = true;
+    const posted = [];
+    await app.route(isPath("/api/rows"), async (route) => {
+      posted.push(JSON.parse(route.request().postData() ?? "{}").locale);
+      if (first) {
+        first = false;
+        await hold.promise;
+      }
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ message: msg("ja", "error.save_failed") }),
+      });
+    });
+    const dialogs = watchDialogs(app, false);
+    const lines = watchRequests(app, "/api/lines");
+
+    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
+    await editor(app).press("Escape");
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
+    await app.locator("#locale").selectOption("he");
+    await app.locator("#reload").click();
+    hold.release();
+
+    await expect.poll(() => dialogs.length).toBe(1);
+    expect(dialogs[0]).toEqual({ type: "confirm", message: msg("ja", "ui.discard_confirm") });
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_retrying"));
+    await expect(app.locator("#locale")).toHaveValue("ja");
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    expect(lines).toHaveLength(0);
+    expect(dialogs).toHaveLength(1);
+    expect(posted.every((locale) => locale === "ja")).toBe(true);
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
 });

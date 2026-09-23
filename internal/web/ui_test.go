@@ -888,6 +888,13 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if strings.Contains(js[at:at+tail], "clearFinder()") {
 		t.Error("読み直しで条件まで外している。同じロケールを見続けている")
 	}
+	// 読み直すのは画面に出ているロケールで、欄の値ではないこと。
+	//
+	// 実際に起きた: 切り替えを選んで送り終えるのを待っているあいだに読み直しを
+	// 押すと、欄に残った切り替え先を、前のロケールの条件と検索語を付けたまま読んだ。
+	if !strings.Contains(js[at:at+tail], "load(state.locale)") {
+		t.Error("読み直しが画面に出ているロケール（state.locale）を読んでいない")
+	}
 	// 0行のときの文言。
 	if !strings.Contains(js, `t("ui.no_rows")`) {
 		t.Error("1行も出なかったときの文言が無い")
