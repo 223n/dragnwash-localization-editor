@@ -212,6 +212,8 @@
 
     #message と同じく hidden は出し入れせず、中身の入れ替えで出し入れする。
     空のときは app.css の .notice:empty が余白と下線を落とすので、高さは0になる。
+    うまくいったという知らせだけは、下の残り時間の帯が尽きたら消える
+    （app.css の .export-state.timed）。失敗の理由は消さない。
   -->
   <p id="export-state" class="notice export-state" role="status"></p>
 

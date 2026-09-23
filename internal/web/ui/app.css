@@ -1274,8 +1274,58 @@ button {
   .notice:empty が余白と線ごと消す。
 */
 .export-state {
+  position: relative;
   border-bottom: 1px solid var(--line);
   font-size: 13px;
+}
+
+/*
+  うまくいったときだけ（.timed）、下の縁に残り時間の帯を出す。帯が尽きると
+  app.js が animationend を受けて中身を空にし、1行ごと消える。失敗の理由には
+  付けない（setExportState）。
+
+  ポインターを載せているあいだは止める。読んでいる途中で消えないようにする
+  ためで、外すと続きから減る。
+
+  帯は ::after にする。読み上げの見張り（role="status"）の中に要素を足すと、
+  中身が変わったものとして読まれうる。幅は論理プロパティで縮めるので、
+  右から左へ書く言語では右から左へ縮む。
+*/
+.export-state.timed::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-end: 0;
+  inline-size: 100%;
+  block-size: 3px;
+  background: var(--primary);
+  animation: export-timer 6s linear forwards;
+}
+
+.export-state.timed:hover::after {
+  animation-play-state: paused;
+}
+
+@keyframes export-timer {
+  to {
+    inline-size: 0;
+  }
+}
+
+/*
+  動きを減らす設定の人には、帯を縮めずに薄くしていく。止めてしまうと
+  animationend が来ず、知らせが消えなくなる。
+*/
+@media (prefers-reduced-motion: reduce) {
+  .export-state.timed::after {
+    animation-name: export-timer-fade;
+  }
+}
+
+@keyframes export-timer-fade {
+  to {
+    opacity: 0.15;
+  }
 }
 
 /* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */

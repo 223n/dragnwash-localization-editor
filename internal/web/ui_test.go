@@ -271,8 +271,53 @@ func TestExportMenuLivesInTheBar(t *testing.T) {
 			t.Errorf("%s を選んだときにメニューを閉じていない", form)
 		}
 	}
-	if body := functionBody(t, js, "setExportState"); strings.Count(body, `"notice export-state`) != 2 {
+	if body := functionBody(t, js, "setExportState"); !strings.Contains(body, `var name = "notice export-state";`) {
 		t.Error("書き出しの結果の欄から .notice を外している。空のときに高さが残る")
+	}
+}
+
+// TestOnlyExportDoneGoesAway は、書き出しの結果のうち「書き出しました」だけが
+// 残り時間の帯を添えて消え、失敗の理由は残ることを見る。
+//
+// うまくいった知らせは、次に書き出すまで貼り付く帯の下に1行居座っていた。
+// そのぶん一覧が狭くなるので、帯が尽きたら消す。失敗の理由と「送り終わって
+// から押して」は消さない。読み終わる前に消えると、何が起きたかを知るすべが
+// 無くなる。
+func TestOnlyExportDoneGoesAway(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	// .timed を付けるのは、失敗でなく、中身があるときだけ。
+	body := functionBody(t, js, "setExportState")
+	at := strings.Index(body, `name += " timed";`)
+	if at < 0 {
+		t.Fatal("うまくいった知らせに .timed を付けていない。消えない")
+	}
+	if !strings.Contains(body[:at], "if (bad) {") || !strings.Contains(body[:at], "} else if (text) {") {
+		t.Error(".timed を失敗の理由や空の欄にも付けうる形になっている")
+	}
+
+	// 帯が尽きたら消す。消すのは .timed のときだけ。
+	if !regexp.MustCompile(`el\.exportState\.addEventListener\("animationend", function \(\) \{\s*` +
+		`if \(el\.exportState\.classList\.contains\("timed"\)\) \{\s*setExportState\("", false\);`).MatchString(js) {
+		t.Error("残り時間の帯が尽きても、うまくいった知らせを消していない")
+	}
+
+	// 見た目の側。帯は ::after で、読み上げの見張りの中に要素を足さない。
+	// ポインターを載せたら止める。動きを減らす設定でも animationend が
+	// 来るよう、止めずに別の動き（薄くする）に替える。
+	css := uiSource(t, "ui/app.css")
+	for _, want := range []string{
+		".export-state.timed::after {",
+		"animation: export-timer ",
+		".export-state.timed:hover::after {\n  animation-play-state: paused;",
+		"animation-name: export-timer-fade;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css に %q が無い", want)
+		}
+	}
+	if strings.Contains(css, ".export-state.timed::after {\n    animation: none") {
+		t.Error("動きを減らす設定で帯の動きを止めている。animationend が来ず、知らせが消えない")
 	}
 }
 

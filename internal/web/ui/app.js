@@ -1704,10 +1704,22 @@
 
     うまくいかなかったときは、失敗の理由（#message）と同じ出し方にする。色だけに
     頼らないのも同じで、文言がそのまま理由になっている。
+
+    うまくいったときだけ .timed を付ける。下に残り時間の帯が出て（app.css）、
+    帯が尽きたら消える（boot の animationend）。帯は貼り付いているので、
+    「書き出しました」が次の書き出しまで居座ると、そのぶん一覧が狭くなる。
+    失敗の理由と「送り終わってから押して」は消さない。読み終わる前に消えると、
+    何が起きたかを知るすべが無くなる。
   */
   function setExportState(text, bad) {
+    var name = "notice export-state";
+    if (bad) {
+      name += " error";
+    } else if (text) {
+      name += " timed";
+    }
     el.exportState.textContent = text ? text : "";
-    el.exportState.className = bad ? "notice export-state error" : "notice export-state";
+    el.exportState.className = name;
   }
 
   /*
@@ -2790,6 +2802,16 @@
         el.exportWorking.addEventListener("click", function () {
           closeExportMenu();
           exportCsv("working");
+        });
+        /*
+          残り時間の帯が尽きたら「書き出しました」を消す。帯は .timed の
+          ::after なので、終わりの知らせはこの要素に届く。.timed を見直すのは、
+          消すのがうまくいった知らせだけで、失敗の理由ではないことを確かめるため。
+        */
+        el.exportState.addEventListener("animationend", function () {
+          if (el.exportState.classList.contains("timed")) {
+            setExportState("", false);
+          }
         });
         window.addEventListener("beforeunload", function (e) {
           if (!hasUnsaved()) {
