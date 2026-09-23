@@ -86,6 +86,25 @@ func TestRunEditRejectsUnknownLocale(t *testing.T) {
 	}
 }
 
+// TestRunEditLocaleWithoutTranslations は、--locale を照合する段で Translations を
+// 読めなければ、待ち受けを始めずに終了コード2で止まることを見る。
+//
+// 待ち受けを立ててから止めると、URL が出たあとに落ちる。開いた画面が何も
+// 出せないまま残る。
+func TestRunEditLocaleWithoutTranslations(t *testing.T) {
+	root := makeTree(t, map[string]string{"data/script_order.csv": diffOrderCSV})
+	code, stdout, stderr := runEditArgs(t, "--root", root, "--locale", "ja", "--no-browser")
+	if code != exitError {
+		t.Fatalf("終了コードが %d、%d を期待\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "Translations を読めません") {
+		t.Errorf("理由が出ていない:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "http://127.0.0.1:") {
+		t.Errorf("待ち受けを始めている:\n%s", stdout)
+	}
+}
+
 func TestRunEditAcceptsLocaleCaseInsensitively(t *testing.T) {
 	// pt-BR や zh-Hant のように大文字を含む名前があり、Windows では大小が
 	// 保たれないまま打たれることがある。publish / diff と同じ緩め方にする。

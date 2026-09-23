@@ -8,7 +8,7 @@ Changes to this repository are accepted through issues and pull requests.
 
 1. Open an issue before you make the change and write what you want to change. Small fixes are fine without an issue
 1. Create a working branch from `develop` (`feature/name-of-the-change`)
-1. Make the change and confirm that `npm run lint` passes
+1. Make the change and confirm that `npm test` and `npm run lint` pass. How to run the tests is described under "Tests and coverage" in the [README](README.en.md)
 1. Open a pull request against `develop`. Follow the template and write what you changed and why
 
 ## How branches are used

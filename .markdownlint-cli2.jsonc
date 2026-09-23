@@ -8,5 +8,13 @@
     "extends": "@223n/lint-config-ja/config/markdownlint.jsonc"
   },
   "globs": ["**/*.md"],
-  "ignores": ["node_modules/**", "docs/port-spec.md"]
+  // 試験の出力も外す。Playwright は失敗した試験ごとに error-context.md を書く。
+  "ignores": [
+    "node_modules/**",
+    "docs/port-spec.md",
+    "coverage/**",
+    "test-results/**",
+    "**/playwright-report/**",
+    "**/blob-report/**"
+  ]
 }

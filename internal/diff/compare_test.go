@@ -1,13 +1,17 @@
 package diff
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/order"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // テストで使う英文とそのキー。key.For を通して作るので、ハッシュを手で書かない。
@@ -64,6 +68,17 @@ func newRepo(t *testing.T, files map[string]string, useWorking bool) *Repo {
 // newRepoWith は [newRepo] と同じものを、指定を変えて読み込む。
 func newRepoWith(t *testing.T, files map[string]string, opt Options) *Repo {
 	t.Helper()
+	repo, err := LoadWith(writeTree(t, files), opt)
+	if err != nil {
+		t.Fatalf("読み込みに失敗した: %v", err)
+	}
+	return repo
+}
+
+// writeTree は一時ディレクトリに files を書き、そのルートを返す。読み込みはしない。
+// 読み込みが失敗することを確かめるテストのために [newRepoWith] から分けてある。
+func writeTree(t *testing.T, files map[string]string) string {
+	t.Helper()
 	root := t.TempDir()
 	for name, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(name))
@@ -74,11 +89,7 @@ func newRepoWith(t *testing.T, files map[string]string, opt Options) *Repo {
 			t.Fatalf("ファイルを書けない: %v", err)
 		}
 	}
-	repo, err := LoadWith(root, opt)
-	if err != nil {
-		t.Fatalf("読み込みに失敗した: %v", err)
-	}
-	return repo
+	return root
 }
 
 // counts は1ロケール分の件数を取り出す。
@@ -513,4 +524,307 @@ func TestLoad(t *testing.T) {
 			t.Fatal("エラーにならない")
 		}
 	})
+
+	t.Run("再生順の列名の重複はエラー", func(t *testing.T) {
+		// 再生順を読めないまま進めると、「再生順に無い」を根拠にするカテゴリが
+		// 全部止まる。黙って0行として扱わず、読めないことを呼び出し側へ返す。
+		root := writeTree(t, map[string]string{
+			"data/script_order.csv":       "section,key,key\nL01 Ryan," + keyHello + "," + keyBye + "\n",
+			"Translations/ja/strings.csv": publishedHeader,
+		})
+		_, err := Load(root, true)
+		if err == nil {
+			t.Fatal("エラーにならない")
+		}
+		var dup *csvfile.DuplicateColumnError
+		if !errors.As(err, &dup) {
+			t.Errorf("列名の重複として伝わっていない: %v", err)
+		}
+		if !strings.Contains(err.Error(), "再生順のデータを読めません") {
+			t.Errorf("何を読めなかったかが文面に無い: %v", err)
+		}
+	})
+
+	t.Run("作業コピーの列名の重複はファイルの場所を添えて返す", func(t *testing.T) {
+		// パスを文面に埋めず FileError で持ち回ることを確かめる。cmd/dwloc は
+		// これを取り出してルートからの相対パスに直す。手元の絶対パスには
+		// 利用者名が入ることがあり、CIのログへそのまま出ると漏れる。
+		root := writeTree(t, map[string]string{
+			"data/script_order.csv":                   orderCSV1,
+			"Translations/ja/strings.csv":             publishedHeader,
+			"Translations/_discovered/ja.working.csv": "key,key,translation\na,b,c\n",
+		})
+		_, err := Load(root, true)
+		var fileErr *FileError
+		if !errors.As(err, &fileErr) {
+			t.Fatalf("FileError ではない: %v", err)
+		}
+		want := filepath.Join(root, publish.TranslationsDir, publish.DiscoveredDir, "ja"+publish.WorkingSuffix)
+		if fileErr.Path != want {
+			t.Errorf("場所が違う:\n got  %s\n want %s", fileErr.Path, want)
+		}
+		// Unwrap で元の誤りまで辿れること。cmd/dwloc は種類を見て文面を選ぶ。
+		var dup *csvfile.DuplicateColumnError
+		if !errors.As(err, &dup) {
+			t.Errorf("元の誤りまで辿れない: %v", err)
+		}
+		if got, wantText := fileErr.Error(), filepath.ToSlash(want)+": "+fileErr.Err.Error(); got != wantText {
+			t.Errorf("文面が違う:\n got  %s\n want %s", got, wantText)
+		}
+	})
+
+	t.Run("--no-working なら壊れた作業コピーで止まらない", func(t *testing.T) {
+		// --no-working は「公開ファイルだけで何が言えるか」を見るための指定。
+		// 読まないと言ったファイルが壊れているせいで、報告そのものが出なくなっては困る。
+		root := writeTree(t, map[string]string{
+			"data/script_order.csv":                   orderCSV1,
+			"Translations/ja/strings.csv":             publishedHeader,
+			"Translations/_discovered/ja.working.csv": "key,key,translation\na,b,c\n",
+		})
+		repo, err := Load(root, false)
+		if err != nil {
+			t.Fatalf("読み込みに失敗した: %v", err)
+		}
+		loc := repo.Locales[0]
+		if !loc.WorkingExists || loc.HasWorking {
+			t.Errorf("作業コピーの有無の扱いが違う: exists=%v read=%v", loc.WorkingExists, loc.HasWorking)
+		}
+	})
+
+	t.Run("はみ出しの記録の列名の重複はファイルの場所を添えて返す", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"data/script_order.csv":                     orderCSV1,
+			"Translations/ja/strings.csv":               publishedHeader,
+			"Translations/_discovered/layout_risks.csv": "source_en,source_en,ratio\na,b,1.5\n",
+		})
+		_, err := Load(root, true)
+		var fileErr *FileError
+		if !errors.As(err, &fileErr) {
+			t.Fatalf("FileError ではない: %v", err)
+		}
+		want := filepath.Join(root, publish.TranslationsDir, publish.DiscoveredDir, LayoutRisksFile)
+		if fileErr.Path != want {
+			t.Errorf("場所が違う:\n got  %s\n want %s", fileErr.Path, want)
+		}
+	})
+
+	t.Run("--no-working なら壊れたはみ出しの記録で止まらない", func(t *testing.T) {
+		// はみ出しの記録はゲームが測った値で、--no-working の外にある。
+		// 見るのはファイルの有無だけ（「ありません」と「読みませんでした」を
+		// 書き分けるため）なので、中身が壊れていても読み込みは止めない。
+		root := writeTree(t, map[string]string{
+			"data/script_order.csv":                     orderCSV1,
+			"Translations/ja/strings.csv":               publishedHeader,
+			"Translations/_discovered/layout_risks.csv": "source_en,source_en,ratio\na,b,1.5\n",
+		})
+		repo, err := Load(root, false)
+		if err != nil {
+			t.Fatalf("読まないはずの記録が壊れていて止まった: %v", err)
+		}
+		loc := repo.Locales[0]
+		if !loc.LayoutRisksExist {
+			t.Error("記録があることを見ていない")
+		}
+		if loc.HasLayoutRisks || len(loc.LayoutRisks) != 0 {
+			t.Errorf("--no-working で記録を読んでいる: %+v", loc.LayoutRisks)
+		}
+		rep := Compare(repo, nil)
+		if why := rep.Locales[0].JudgeBlockReason(CatLayoutRisk); why.ID != reason.JudgeLayoutRisksNotRead {
+			t.Errorf("理由が違う: %q (%q)", why.ID, why.Text)
+		}
+	})
+
+	t.Run("Translations 直下のファイルはロケールにしない", func(t *testing.T) {
+		// 実データの Translations/ignore.txt がこれにあたる。publish も対象に
+		// しないので、「訳が1件もないロケール」として名前を出すと嘘になる。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderCSV1,
+			"Translations/ja/strings.csv": publishedHeader,
+			"Translations/ignore.txt":     "*Sample*\n",
+		}, true)
+		if len(repo.EmptyLocales) != 0 {
+			t.Errorf("ファイルを空のロケールとして数えている: %q", repo.EmptyLocales)
+		}
+		if len(repo.Locales) != 1 || repo.Locales[0].Name != "ja" {
+			t.Errorf("ロケールの列挙が違う: %+v", repo.Locales)
+		}
+	})
+}
+
+// TestReadUnreadableFile は、読めないファイルを「無い」に倒さないことを確かめる。
+//
+// readRowsFile と readLayoutRisks は、ファイルが無いときだけ nil を返す約束である。
+// 読めない（ここではディレクトリが置かれている）のに nil を返すと、公開ファイルなら
+// 「訳が1件も無い」、はみ出しの記録なら「測っていない」と報告することになる。
+func TestReadUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+
+	if rows, err := readRowsFile(dir); err == nil {
+		t.Errorf("ディレクトリを読めたことにしている: %d 行", len(rows))
+	}
+	if risks, err := readLayoutRisks(dir); err == nil {
+		t.Errorf("ディレクトリを読めたことにしている: %v", risks)
+	}
+
+	missing := filepath.Join(dir, "missing.csv")
+	if rows, err := readRowsFile(missing); err != nil || rows != nil {
+		t.Errorf("無いファイルは0行のはず: rows=%v err=%v", rows, err)
+	}
+	if risks, err := readLayoutRisks(missing); err != nil || risks != nil {
+		t.Errorf("無いファイルは nil のはず: risks=%v err=%v", risks, err)
+	}
+}
+
+// TestReportedLocales は --locale の名前の照合を確かめる。
+//
+// 完全一致を先に試し、外れたときだけ大文字小文字を無視する（cmd/dwloc と同じ方針）。
+// 無視を先にすると、pt-BR と pt-br が並ぶリポジトリで片方を指したつもりが両方出る。
+func TestReportedLocales(t *testing.T) {
+	locales := []Locale{{Name: "de"}, {Name: "ja"}, {Name: "pt-BR"}, {Name: "pt-br"}}
+
+	tests := []struct {
+		name   string
+		report []string
+		want   []bool
+	}{
+		{name: "指定が無ければ全部", report: nil, want: []bool{true, true, true, true}},
+		{name: "完全一致", report: []string{"ja"}, want: []bool{false, true, false, false}},
+		{name: "大文字でも当たる", report: []string{"JA"}, want: []bool{false, true, false, false}},
+		{name: "完全一致があれば綴りの違う方は出さない", report: []string{"pt-br"}, want: []bool{false, false, false, true}},
+		{name: "完全一致が無ければ大文字小文字を無視して全部", report: []string{"PT-BR"}, want: []bool{false, false, true, true}},
+		{name: "当たらない名前は黙って無視する", report: []string{"xx"}, want: []bool{false, false, false, false}},
+		{name: "複数を並べられる", report: []string{"de", "Ja"}, want: []bool{true, true, false, false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reportedLocales(locales, tt.report)
+			if len(got) != len(tt.want) {
+				t.Fatalf("長さが違う: got %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("%s: got %v, want %v", locales[i].Name, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestRowCountByStatus は締めの1行に使う「行の数」の数え方を固定する。
+//
+// 同じロケールの同じキーは1行と数え、ロケールが違えば別の行と数える。キーが空の
+// Finding（key 列が壊れた作業コピーの行）は1件ずつ別に数える。空どうしを同じ行と
+// 見なすと、何行壊れていても1行に潰れ、直す行数を少なく伝えることになる。
+func TestRowCountByStatus(t *testing.T) {
+	rep := &Report{Findings: []Finding{
+		{Locale: "ja", Category: CatVanished, Key: keyHello},
+		{Locale: "ja", Category: CatCarryover, Key: keyHello}, // 同じ行の別の見方
+		{Locale: "de", Category: CatVanished, Key: keyHello},  // ロケールが違えば別の行
+		{Locale: "ja", Category: CatDropped, Key: ""},
+		{Locale: "ja", Category: CatDropped, Key: ""},
+		{Locale: "ja", Category: CatUntranslated, Key: keyBye}, // 要作業は数えない
+	}}
+
+	if got := rep.RowCountByStatus(StatusReview); got != 4 {
+		t.Errorf("要確認の行数 = %d, want 4", got)
+	}
+	if got := rep.CountByStatus(StatusReview); got != 5 {
+		t.Errorf("要確認ののべ件数 = %d, want 5", got)
+	}
+	if got := rep.RowCountByStatus(StatusTodo); got != 1 {
+		t.Errorf("要作業の行数 = %d, want 1", got)
+	}
+	if got := rep.RowCountByStatus(StatusInfo); got != 0 {
+		t.Errorf("参考の行数 = %d, want 0", got)
+	}
+}
+
+// TestCompareEmptyKeyDroppedRowsAreCountedApart は、key 列が空の壊れた行が
+// 締めの1行で1行に潰れないことを、読み込みから通して確かめる。
+func TestCompareEmptyKeyDroppedRowsAreCountedApart(t *testing.T) {
+	repo := newRepo(t, map[string]string{
+		"data/script_order.csv":       orderCSV1,
+		"Translations/ja/strings.csv": publishedHeader + keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,こんにちは\n",
+		// key も source_en も空で訳だけがある行が2つ。publish はどちらも捨てる。
+		"Translations/_discovered/ja.working.csv": workingHeader +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ",こんにちは\n" +
+			",,,,,,勝手に足した訳1\n" +
+			",,,,,,勝手に足した訳2\n",
+	}, true)
+	rep := Compare(repo, nil)
+
+	if got := rep.Locales[0].Counts[CatDropped]; got != 2 {
+		t.Fatalf("publish で捨てられる行 = %d 件, want 2", got)
+	}
+	var b strings.Builder
+	if err := rep.WriteText(&b, TextOptions{}); err != nil {
+		t.Fatalf("WriteText が失敗した: %v", err)
+	}
+	if !strings.Contains(b.String(), "要確認が 2 行あります。") {
+		t.Errorf("壊れた行を1行に潰している:\n%s", b.String())
+	}
+}
+
+// TestComparePositionSpeakers は、再生順から借りる話者が publish と同じ値になる
+// ことを確かめる。同じ英文を2人が話すなら全員を連結し、話者のいない行は空のまま。
+// 公開ファイルの speaker 列と見比べたときに食い違わないようにするため。
+func TestComparePositionSpeakers(t *testing.T) {
+	repo := newRepo(t, map[string]string{
+		"data/script_order.csv": orderFile(
+			orderRow{"L01 Ryan", "intro", "Ryan_1_intro", "1", "line:aaaa1111", keyHello, "Ryan", ""},
+			orderRow{"L02 Kobold", "", "Kobold_1", "4", "line:bbbb2222", keyHello, "Kobold", ""},
+			orderRow{"L01 Ryan", "intro", "Ryan_1_intro", "2", "line:cccc3333", keyBye, "", ""},
+		),
+		// de だけが keyHello を持つ。ja には「他のロケールにあって無い行」として出る。
+		"Translations/de/strings.csv": publishedHeader + keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan/Kobold,Hallo\n",
+		"Translations/ja/strings.csv": publishedHeader,
+	}, false)
+	rep := Compare(repo, []string{"ja"})
+
+	var gap, none Finding
+	for _, f := range rep.Findings {
+		switch {
+		case f.Category == CatLocaleGap && f.Key == keyHello:
+			gap = f
+		case f.Category == CatNotPublished && f.Key == keyBye:
+			none = f
+		}
+	}
+	if gap.Key == "" || none.Key == "" {
+		t.Fatalf("前提の Finding が無い: %+v", rep.Findings)
+	}
+	if want := "Ryan" + order.SpeakerSeparator + "Kobold"; gap.Speaker != want {
+		t.Errorf("話者の連結が違う: got %q, want %q", gap.Speaker, want)
+	}
+	// 位置は最初の出現から取る。publish が公開ファイルに書くのも最初の出現。
+	if gap.Section != "L01 Ryan" || gap.Node != "Ryan_1_intro" || gap.OrderText != "1" {
+		t.Errorf("位置が最初の出現ではない: %q / %q / %q", gap.Section, gap.Node, gap.OrderText)
+	}
+	if none.Speaker != "" {
+		t.Errorf("話者のいない行に話者が入っている: %q", none.Speaker)
+	}
+}
+
+// TestCompareWithoutOrder は、再生順を持たない Repo を渡しても止まらず、
+// 再生順を根拠にするカテゴリを判定しないことを確かめる。
+//
+// Load は Order を nil にしないが、Repo は外から組み立てられる。nil を渡されて
+// 落ちると、画面ごと開けなくなる。
+func TestCompareWithoutOrder(t *testing.T) {
+	rows, err := ReadRows([]byte(publishedHeader + keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,こんにちは\n"))
+	if err != nil {
+		t.Fatalf("見本を読めない: %v", err)
+	}
+	rep := Compare(&Repo{Locales: []Locale{{Name: "ja", Published: rows}}}, nil)
+
+	if rep.OrderRows != 0 || rep.OrderKeys != 0 || rep.OrderLineIDs != 0 {
+		t.Errorf("再生順の数が 0 ではない: %d / %d / %d", rep.OrderRows, rep.OrderKeys, rep.OrderLineIDs)
+	}
+	sum := rep.Locales[0]
+	if sum.CanJudge(CatVanished) {
+		t.Error("再生順が無いのに台本から消えた行を判定している")
+	}
+	if len(rep.Findings) != 0 {
+		t.Errorf("報告が出ている: %+v", rep.Findings)
+	}
 }

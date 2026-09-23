@@ -10,7 +10,8 @@ import (
 // 元実装の ConvertFrom-Csv は「メンバー "a" は既に存在します」という例外を投げ、
 // tools/hash-strings.ps1 は $ErrorActionPreference = 'Stop' を設定しているため、
 // そこで処理全体が止まる（移植仕様「公開CSV生成 / 敵対検証」[low]）。
-// 同名かどうかの判定は大文字小文字を区別しない。
+// 同名かどうかの判定は大文字小文字を区別しない。空の列名は重複に数えない
+// （元実装は既定名 H1, H2 ... を振るため）。
 type DuplicateColumnError struct {
 	// Name は重複した列名。2つ目に現れた側の綴り。
 	Name string
@@ -131,9 +132,16 @@ func ReadPowerShellRowsNumbered(data []byte) ([]NumberedRow, error) {
 
 // checkDuplicateColumns はヘッダーに同名の列（大文字小文字違いを含む）が
 // あればエラーを返す。
+//
+// 空の列名は数えない。ConvertFrom-Csv は空の列名に H1, H2 ... の既定名を振って
+// 警告を出すだけで、重複としては止まらない（pwsh 7.6.6 で実測）。
+// "key,translation,,," のように空の列が2つ以上あるファイルを、元実装は公開できる。
 func checkDuplicateColumns(header []string) error {
 	seen := make(map[string]struct{}, len(header))
 	for _, name := range header {
+		if name == "" {
+			continue
+		}
 		folded := FoldASCII(name)
 		if _, dup := seen[folded]; dup {
 			return &DuplicateColumnError{Name: name}

@@ -85,7 +85,8 @@
     max-height: 50vh まで伸びるからである。固定値にしていたときは、帯が
     伸びた場面でちょうど足りなくなった。詳しくは watchTopHeight を見よ。
     var() の第2引数（10em＝140px）は、測れなかったとき（ResizeObserver が無い）に
-    使われる既定値である。
+    使われる既定値である。競合も行き先の無い訳も出ていないときの、いちばん狭い幅
+    （320px）の帯（121.4px）を覆う高さにしてある（internal/web の doc.go）。
 
     --thead-height は列の見出し（.thead）の高さ。帯の下に貼り付くので、焦点の
     入る要素はこのぶんも避ける。1行で折り返さないので固定値でよい。狭い画面では
@@ -94,6 +95,12 @@
   --top-gap: 8px;
   --thead-height: 2.4em;
   --sidebar-width: 300px;
+  /*
+    広い画面で、左の列を帯の下からどれだけ離して貼り付けるか。.shell の余白と
+    同じ値で、列が貼り付く前（頁の先頭）も貼り付いたあとも、列の上端は
+    帯の下端からこの距離にある。絞り込みの一帯（.finder）の余白もこの値から作る。
+  */
+  --sidebar-gap: 16px;
 }
 
 /*
@@ -505,8 +512,29 @@ button {
   margin-top: 0.3em;
 }
 
-.conflict button {
-  margin-inline-end: 8px;
+/*
+  競合の2つのボタン。帯（.top）の見える範囲の下端に貼り付ける。
+
+  帯は max-height: 50vh で止めてあり、あふれたぶんは帯の中で送る。引き止めは
+  帯の先頭に出してある（#conflict の order）が、狭くて低い画面では説明の文
+  （ui.conflict_help）が長く折り返し、ボタンが帯の見える範囲の下へ出た。
+  実測（Chromium）で、320x500 の帯は 0〜250px、「ファイルの訳を採る」は
+  248〜279px にあり、elementFromPoint が当たらなかった（320x480、360x480、
+  414x480 も同じ）。帯の中を送れば届くが、送れることは画面のどこにも出ない。
+
+  貼り付けは帯の中で効く（帯が送りの箱なので）。ボタンがもともと見える範囲に
+  あるときは動かない。見える範囲の下にあるときだけ、下端に留まって説明の文の
+  上に重なる。重なった文は帯の中を送れば読める。地色を敷くのは、下の文を
+  透かさないためである。
+*/
+.conflict-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 4px;
+  background: var(--review-bg);
 }
 
 /*
@@ -534,7 +562,7 @@ button {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  padding: 16px;
+  padding: var(--sidebar-gap);
 }
 
 /*
@@ -550,8 +578,8 @@ button {
 .sidebar {
   flex: 0 0 var(--sidebar-width);
   position: sticky;
-  top: calc(var(--top-height, 10em) + 16px);
-  max-height: calc(100vh - var(--top-height, 10em) - 32px);
+  top: calc(var(--top-height, 10em) + var(--sidebar-gap));
+  max-height: calc(100vh - var(--top-height, 10em) - 2 * var(--sidebar-gap));
   overflow: auto;
   min-width: 0;
 }
@@ -594,12 +622,18 @@ button {
   絞り込みと検索。左の列の先頭。貼り付く帯（.top）の中には入れない。
 
   余白（scroll-margin-top）は、スラッシュの近道で送られてきたときに帯の裏へ
-  潜らないため。広い画面では列自身が帯の下に貼り付いているので使われないが、
-  列が引き出しになる狭い画面と、列が自分の中でスクロールしているときのために
-  残してある。
+  潜らないため。値は列が貼り付く位置（.sidebar の top）とそろえる。
+
+  広い画面では、列の先頭にあるこの一帯は、帯の下端から --sidebar-gap のところに
+  いつもある。scrollIntoView は、列の中だけでなく頁そのものも「余白のぶんだけ
+  下」へ送ろうとする。余白を --top-gap（8px）にしていたころは、貼り付いた位置
+  （16px）との差の 8px を頁のスクロールで埋めにいき、スラッシュを押すたびに一覧が
+  8px ずつ下へずれた（1280x720、scrollY 3000 → 3008）。列は貼り付いているので、
+  頁を送っても一帯は動かず、差は何度押しても埋まらない。そろえておけば、頁は
+  動かず、列の中だけが先頭へ戻る。
 */
 .finder {
-  scroll-margin-top: calc(var(--top-height, 10em) + var(--top-gap));
+  scroll-margin-top: calc(var(--top-height, 10em) + var(--sidebar-gap));
 }
 
 .search {
@@ -1090,9 +1124,16 @@ button {
 /*
   訳の欄。焦点が入ると入力欄へ差し替わるので、差し替わったことが
   枠で分かるようにする。幅は元の欄と同じ（grid の列に収まる）。
+
+  空白は詰めずに出す（pre-wrap）。入力欄（.editor）と同じ折り返しにそろえる
+  約束で、既定の white-space: normal のままだと、訳の先頭の空白が消え、続いた
+  空白が1つに詰まって描かれる。textContent は正しいのに、開く前と開いたあとで
+  見え方が変わり、前後に空白のある訳（internal/edit が引用して守っている）を
+  翻訳者が画面で見分けられない。
 */
 .row .translation {
   border-radius: 4px;
+  white-space: pre-wrap;
 }
 
 /*
@@ -1368,6 +1409,17 @@ button {
 
 .row-note .note-label {
   color: var(--muted);
+}
+
+/*
+  競合の行に並べる「ファイルの訳 / あなたの訳」と、行き先の無い訳。訳の欄
+  （.row .translation）と同じく、空白を詰めずに出す（pre-wrap）。既定の
+  white-space: normal のままだと、空白だけが違う2つの訳が同じに見え、どちらを
+  残すか選ぶ材料にならない。行き先の無い訳は、翻訳者が控える最後の写しである。
+*/
+.row-note .note-value,
+.orphans-list .note-value {
+  white-space: pre-wrap;
 }
 
 /*

@@ -198,7 +198,7 @@ func diffReasons(t *testing.T) []reason.Reason {
 	}
 	sources := []diff.OldOrderSource{
 		fail(diff.ErrNoGit), fail(diff.ErrNoRepository), fail(diff.ErrNotTracked),
-		fail(diff.ErrOnlyOneVersion), fail(diff.ErrGitFailed),
+		fail(diff.ErrNotCommitted), fail(diff.ErrOnlyOneVersion), fail(diff.ErrGitFailed),
 		// 取り出せたが再生順として読めない（列名が重複している）。
 		func(string, string) ([]byte, error) { return []byte("key,key\na,b\n"), nil },
 		// 読めたが台詞IDとキーの組が無い。
@@ -224,6 +224,11 @@ func diffReasons(t *testing.T) []reason.Reason {
 	ready := base
 	ready.OrderKeys, ready.OrderLineIDs, ready.HasWorking = true, true, true
 	out = append(out, ready.JudgeBlockReason(diff.CatCarryover))
+	// 再生順のキーは読めていて、台詞IDだけが無いとき。キーも無いとき（上の
+	// base）とは理由を分けてある。
+	noLineIDs := ready
+	noLineIDs.OrderLineIDs = false
+	out = append(out, noLineIDs.JudgeBlockReason(diff.CatStrayLineID))
 	// 再生順に norm 列が無いとき。作業コピーは読めているので、引き継ぎ元だけが
 	// 判定できない。
 	out = append(out, ready.JudgeBlockReason(diff.CatCarryFrom))

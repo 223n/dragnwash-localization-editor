@@ -1,10 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
 
 // 原文とそのキー。作業コピーの key 列と source_en から計算したハッシュが
@@ -354,4 +358,206 @@ func TestPublishRunsWhenTheGameIsCurrent(t *testing.T) {
 	}
 	after := readFile(t, root, jaPublishedPath)
 	checkContains(t, "公開ファイル", after, []string{"ゲームで直した訳", "やあ！"})
+}
+
+// manyKeys は n 件のキーを返す。見本を数十行に増やすときに使う。
+//
+// ハッシュを直書きしないのは [helloKey] と同じ理由で、internal/key で計算する。
+func manyKeys(n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = key.For(fmt.Sprintf("Line %02d", i+1))
+	}
+	return keys
+}
+
+// publishedRows は keys の各行に「prefix + 通し番号」の訳を入れた公開ファイルを作る。
+// section は UI にしておく。再生順に無いキーでも、見出しの下へ回るだけで落ちない。
+func publishedRows(keys []string, prefix string) string {
+	var b strings.Builder
+	b.WriteString("key,section,node,order,speaker,translation\n")
+	for i, k := range keys {
+		fmt.Fprintf(&b, "%s,UI,,,UI,%s%02d\n", k, prefix, i+1)
+	}
+	return b.String()
+}
+
+// TestPublishLossReportIsCappedAndWritesNoLocale は、失われる訳が多いときの報告と、
+// ほかのロケールまで止まることを見る。
+//
+// 一覧は先頭の publishLossListMax 件で切る。全部並べると、先に出した「なぜ
+// 止めたか」が流れて消える。切ったぶんは件数で必ず伝える。
+//
+// 止めるときはどのロケールも書かない。失われない de だけ書くと、コミットする
+// 中身が「de だけ新しい」半端な版になる。de の見出しも出さない。失うものが無い
+// ロケールを並べると、どこを直せばよいかがぼやける。
+func TestPublishLossReportIsCappedAndWritesNoLocale(t *testing.T) {
+	keys := manyKeys(publishLossListMax + 5)
+	jaPublished := publishedRows(keys, "訳")
+	dePublished := publish.HeaderLine + "\n" +
+		helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hallo\n"
+	root := makeTree(t, map[string]string{
+		"data/script_order.csv":       scriptOrderCSV,
+		"Translations/ja/strings.csv": jaPublished,
+		"Translations/de/strings.csv": dePublished,
+		// ja の作業コピーは途中まで。公開ファイルにある行が1つも無い。
+		"Translations/_discovered/ja.working.csv": workingCSV,
+	})
+
+	code, stdout, stderr := runCLI("publish", "--root", root)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+	}
+	total := len(keys)
+	checkContains(t, "標準エラー", stderr, []string{
+		fmt.Sprintf("ja: Translations/ja/strings.csv（%d 件）", total),
+		fmt.Sprintf("ほかに %d 件あります。", total-publishLossListMax),
+		fmt.Sprintf("失われる訳が %d 件あります。", total),
+	})
+	if got := strings.Count(stderr, "行目 "); got != publishLossListMax {
+		t.Errorf("並べた行が %d 件、%d 件を期待\n%s", got, publishLossListMax, stderr)
+	}
+	if strings.Contains(stderr, "de: ") {
+		t.Errorf("失うものが無い de の見出しが出ている:\n%s", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+	}
+	if got := readFile(t, root, "Translations/ja/strings.csv"); got != jaPublished {
+		t.Errorf("ja が変わっている:\n%s", got)
+	}
+	if got := readFile(t, root, "Translations/de/strings.csv"); got != dePublished {
+		t.Errorf("失うものが無い de だけ書いている:\n%s", got)
+	}
+}
+
+// TestPublishBaseDriftReportIsCapped は、ゲーム側が古いときの報告の見本が
+// 切り詰められ、残りが件数で出ることを見る。
+//
+// 土台がずれているときは、たいてい版まるごとがずれていて件数が数百になる。
+// 見本だけを並べ、残りは「ほかに N 件」で伝える。件数が出ないと、1件直せば
+// 済む話に見える。
+func TestPublishBaseDriftReportIsCapped(t *testing.T) {
+	// internal/publish が持ち帰る見本は5件。1件多く食い違わせる。
+	const samples = 5
+	keys := manyKeys(samples + 1)
+	repoPublished := publishedRows(keys, "新しい訳")
+	root := makeTree(t, map[string]string{
+		"data/script_order.csv": scriptOrderCSV,
+		jaPublishedPath:         repoPublished,
+	})
+	game := makeGame(t, map[string]string{
+		"Translations/ja/strings.csv":             publishedRows(keys, "古い訳"),
+		"Translations/_discovered/ja.working.csv": workingCSV,
+	})
+
+	code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{
+		"ゲームに入っている翻訳が古いので",
+		fmt.Sprintf("ja（%d 件）", len(keys)),
+		"ほかに 1 件あります。",
+	})
+	if got := strings.Count(stderr, "コミット済み 「"); got != samples {
+		t.Errorf("見本が %d 件、%d 件を期待\n%s", got, samples, stderr)
+	}
+	if after := readFile(t, root, jaPublishedPath); after != repoPublished {
+		t.Errorf("止めたのに公開ファイルが変わっている:\n%s", after)
+	}
+}
+
+// TestPublishStopsWhenTheGameBaseIsBroken は、ゲーム側の公開ファイルを読めないとき、
+// 確かめられなかったとして終了コード2で止まることを見る。
+//
+// 「そろっているか分からない」を「そろっている」と同じ扱いにすると、壊れた
+// ゲーム側のファイルがあるときだけ、巻き戻りの守りが素通りする。
+func TestPublishStopsWhenTheGameBaseIsBroken(t *testing.T) {
+	root := longRepo(t)
+	game := makeGame(t, map[string]string{
+		// 列名が重複したヘッダー。publish の読み方が例外にする唯一の壊れ方。
+		"Translations/ja/strings.csv": "key,key,node,order,speaker,translation\n" +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,<i>ずいぶんと長い訳がここにあります。</i>\n",
+		"Translations/_discovered/ja.working.csv": workingBoth,
+	})
+	before := publishOnce(t, root)
+
+	code, stdout, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitError {
+		t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"ゲーム側とそろっているか確かめられません"})
+	if stdout != "" {
+		t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+	}
+	if after := readFile(t, root, jaPublishedPath); after != before {
+		t.Errorf("止めたのに公開ファイルが変わっている:\n%s", after)
+	}
+}
+
+// newLocaleRepo は、公開ファイルをまだ1度も書いていないロケールを持つリポジトリを作る。
+//
+// Translations/ja はあるが strings.csv は無い。新しい言語を始めた翻訳者が
+// ディレクトリだけを作り、訳はゲームの中で入れている、という形である。
+// publish はリポジトリ側のディレクトリだけを列挙するので、ディレクトリは要る。
+func newLocaleRepo(t *testing.T) string {
+	t.Helper()
+
+	return makeTree(t, map[string]string{
+		"data/script_order.csv": "section,phase,node,order,line_id,key,speaker,condition\n" +
+			"L01 Ryan,intro,Ryan_1_intro,1,line:aaaaaaaa," + keyHello + ",Ryan,\n" +
+			"L01 Ryan,intro,Ryan_1_intro,2,line:bbbbbbbb," + keyHiThere + ",Kobold,\n",
+		"Translations/ja/.gitkeep": "",
+	})
+}
+
+// TestPublishWritesTheFirstFileOfANewLocaleFromTheGame は、公開ファイルがまだ無い
+// ロケールでも、ゲーム側の作業コピーから最初の1つを書き出せることを見る。
+//
+// 以前は「ゲームに入っている翻訳が古いか」を確かめる段で、コミット済みの公開
+// ファイルを読めないことを理由に終了コード2で止まっていた。コミット済みが無ければ
+// 巻き戻る先も無いので、確かめるものが無い。失われる訳の確かめ
+// （publish.CheckTargetLoss）も、出力先が無いときは「失うものが無い」と扱っている。
+// 片方だけが止めると、新しい言語はゲームで入れた訳をコミットする側へ1行も
+// 届けられない（--no-game にすると入力そのものが見つからない）。
+func TestPublishWritesTheFirstFileOfANewLocaleFromTheGame(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// gameBase はゲーム側の Translations/ja/strings.csv。空なら置かない。
+		gameBase string
+	}{
+		{"ゲーム側にも公開ファイルが無い", ""},
+		{"ゲーム側には公開ファイルがある", gameSamePublished},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newLocaleRepo(t)
+			files := map[string]string{
+				"Translations/_discovered/ja.working.csv": workingBoth,
+			}
+			if tc.gameBase != "" {
+				files["Translations/ja/strings.csv"] = tc.gameBase
+			}
+			game := makeGame(t, files)
+
+			// --dry-run でも同じ判定をする。本番だけが通る、を作らない。
+			code, stdout, stderr := runCLI("publish", "--root", root, "--game", game, "--dry-run")
+			if code != exitOK {
+				t.Fatalf("--dry-run の終了コード = %d\n%s", code, stderr)
+			}
+			// 出力先がまだ無いので「変更あり」。読めないことを「変更なし」に倒さない。
+			checkContains(t, "--dry-run の標準出力", stdout, []string{"変更あり", "1 件中 1 件が変わります"})
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(jaPublishedPath))); !os.IsNotExist(err) {
+				t.Fatalf("--dry-run なのに公開ファイルができている（err = %v）", err)
+			}
+
+			code, stdout, stderr = runCLI("publish", "--root", root, "--game", game)
+			if code != exitOK {
+				t.Fatalf("終了コード = %d\n%s", code, stderr)
+			}
+			checkContains(t, "標準出力", stdout, []string{"ja.working.csv", "1 件を書き出しました。"})
+			checkContains(t, "公開ファイル", readFile(t, root, jaPublishedPath),
+				[]string{keyHello, "もしもし？", keyHiThere, "やあ！"})
+		})
+	}
 }

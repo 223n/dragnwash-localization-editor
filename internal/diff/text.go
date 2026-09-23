@@ -51,11 +51,20 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 	}
 	fmt.Fprintf(b, "再生順      %s   %d 行 / キー %d 種 / 台詞ID %d 件\n",
 		orderPath, r.OrderRows, r.OrderKeys, r.OrderLineIDs)
-	if r.OrderKeys == 0 || r.OrderLineIDs == 0 {
+	switch {
+	case r.OrderKeys == 0:
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
 		// どれも成り立たない。判定を止めてあることを、件数より先に言う。
 		b.WriteString("            再生順を読めていません。台本から消えた行などは判定しません。\n")
 		b.WriteString("            data/script_order.csv の場所と、key 列・line_id 列を確かめてください。\n")
+	case r.OrderLineIDs == 0:
+		// キーは読めていて、台詞IDだけが無い。台本から消えた行はキーだけで
+		// 判定でき、件数も出る。上と同じく「台本から消えた行などは判定しません」と
+		// 書くと、すぐ下の件数と食い違う。止まるのは台詞IDを要るカテゴリだけなので、
+		// そのカテゴリを名指しする。
+		fmt.Fprintf(b, "            再生順に台詞ID (line_id) がありません。%sは判定しません。\n",
+			lineIDCategoryNames())
+		b.WriteString("            data/script_order.csv の line_id 列を確かめてください。\n")
 	}
 
 	if len(r.Locales) < r.ReadLocales {
@@ -68,6 +77,21 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 		// 「訳が1件も無い」という最大の要作業なので、必ず名前を出す。
 		fmt.Fprintf(b, "            訳が1件もないロケール: %s\n", strings.Join(r.EmptyLocales, "、"))
 	}
+}
+
+// lineIDCategoryNames は、再生順の台詞IDが無いと判定できないカテゴリの名前を
+// 「」で囲み、表示順に「と」でつないで返す。
+//
+// 名前を文面に書き込まず表（[categoryTable] の needsOrderLineIDs）から引くのは、
+// 印を足し引きしたときに、見出しだけが古い名指しのまま残らないようにするため。
+// どのカテゴリかは [OrderLineIDCategories] に尋ねる。画面の断り書きと csv の警告も
+// 同じ関数から引くので、3つの名指しはずれない。
+func lineIDCategoryNames() string {
+	var names []string
+	for _, c := range OrderLineIDCategories() {
+		names = append(names, "「"+c.String()+"」")
+	}
+	return strings.Join(names, "と")
 }
 
 // writeTextLocale は1ロケール分を書く。
@@ -180,9 +204,17 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 // 両方を要るので、順が食い違うと「再生順は読めているのに再生順を読めていません」
 // と書くことになる。
 //
+// 再生順については、キーが無いのか台詞IDだけが無いのかで理由を分ける。台詞IDだけが
+// 無いとき、台本から消えた行などはキーだけで判定でき、件数も出る。そこで「再生順を
+// 読めていません」と書くと、その件数と食い違う。text 形式は見出しで補えるが、
+// csv の標準エラー（cmd/dwloc の warnHeldLineIDCategories）には見出しが無く、
+// この文面だけが出る。キーも無いときは、台詞IDだけを要るカテゴリ（台本に無い
+// 台詞ID行）も「再生順を読めていません」にする。見出しと画面の断り書きがそう書く
+// ので、ここだけ台詞IDのことを言うと、line_id 列だけを直しに行かせることになる。
+//
 // 文字列ではなく [reason.Reason] を返すのは、画面（internal/web）が目録で文面を
 // 差し替えるためである。日本語の文面は Text に入ったまま残るので、この関数を
-// %s で書式に渡す CLI 側の出力は1バイトも変わらない。
+// %s で書式に渡す CLI 側は、文字列を返していたころと同じ文面を出す。
 func judgeBlockReason(sum Summary, c Category) reason.Reason {
 	if c.needsWorking() && !sum.HasWorking {
 		if sum.WorkingExists {
@@ -191,7 +223,10 @@ func judgeBlockReason(sum Summary, c Category) reason.Reason {
 		return reason.New(reason.JudgeWorkingMissing, "作業コピーがありません")
 	}
 	if (c.needsOrderKeys() && !sum.OrderKeys) || (c.needsOrderLineIDs() && !sum.OrderLineIDs) {
-		return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
+		if !sum.OrderKeys {
+			return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
+		}
+		return reason.New(reason.JudgeOrderNoLineIDs, "再生順に台詞ID (line_id) がありません")
 	}
 	if c.needsLayoutRisks() && !sum.HasLayoutRisks {
 		if sum.LayoutRisksExist {

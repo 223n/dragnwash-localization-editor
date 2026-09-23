@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,6 +162,8 @@ func TestExportNameIsSafeForTheHeader(t *testing.T) {
 		{filepath.Join("a", "strings.csv"), "strings.csv"},
 		{filepath.Join("a", "ja.working.csv"), "ja.working.csv"},
 		{filepath.Join("a", "pt-BR.working.csv"), "pt-BR.working.csv"},
+		// 数字も通す字に入っている。落とすと名前ごと strings.csv になる。
+		{filepath.Join("a", "strings_v2.csv"), "strings_v2.csv"},
 		{filepath.Join("a", `bad".csv`), "strings.csv"},
 		{filepath.Join("a", "bad\n.csv"), "strings.csv"},
 		{filepath.Join("a", "日本語.csv"), "strings.csv"},
@@ -289,5 +292,189 @@ func TestExportChecksTheBaseBeforeTheLosses(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "巻き戻") {
 		t.Errorf("土台の食い違いより先に、失われる訳を出している: %q", rec.Body.String())
+	}
+}
+
+// TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame は、公開ファイルが
+// まだ無いロケールでも、ゲーム側の作業コピーから公開の形を書き出せることを見る。
+//
+// Translations/ja はあるが strings.csv は無い。新しい言語を始めた翻訳者が
+// ディレクトリだけを作り、訳はゲームの中で入れている、という形である。
+// 以前は土台の確かめ（[publish.CheckBase]）の前にコミット済みの公開ファイルを
+// 読み、無いことを読めないことと同じに扱って 500 を返していた。コミット済みが
+// 無ければ巻き戻る先も無いので、確かめるものが無い。dwloc publish も同じ状態を
+// 通す（cmd/dwloc の TestPublishWritesTheFirstFileOfANewLocaleFromTheGame）。
+// 片方だけが止めると、同じ状態で publish は書けるのに画面からは書き出せない。
+func TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame(t *testing.T) {
+	working := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+		keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！",
+		"",
+	}, "\n")
+	for _, tc := range []struct {
+		name string
+		// gameBase はゲーム側の Translations/ja/strings.csv。空なら置かない。
+		gameBase string
+	}{
+		{"ゲーム側にも公開ファイルが無い", ""},
+		{"ゲーム側には公開ファイルがある", strings.Join([]string{
+			"key,section,node,order,speaker,translation",
+			keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+			"",
+		}, "\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newTestRoot(t)
+			published := filepath.Join(root, "Translations", "ja", "strings.csv")
+			if err := os.Remove(published); err != nil {
+				t.Fatal(err)
+			}
+			game := t.TempDir()
+			files := map[string]string{
+				filepath.Join("Translations", "_discovered", "ja.working.csv"): working,
+			}
+			if tc.gameBase != "" {
+				files[filepath.Join("Translations", "ja", "strings.csv")] = tc.gameBase
+			}
+			for rel, body := range files {
+				path := filepath.Join(game, rel)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := newTestServer(t, Options{Root: root, Game: game, UILang: "ja"})
+			if s.target("ja") == nil || s.target("ja").GameBase == "" {
+				t.Fatal("前提が崩れている。ゲーム側の作業コピーを読んでいない")
+			}
+
+			rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("状態コードが %d、200 を期待:\n%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="strings.csv"` {
+				t.Errorf("Content-Disposition が %q", got)
+			}
+			body := rec.Body.String()
+			for _, want := range []string{keyKept, "もしもし？", keyKept2, "こんにちは！"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("書き出したものに %q が無い:\n%s", want, body)
+				}
+			}
+			// 書き出しは中身を返すだけで、リポジトリへは1バイトも書かない。
+			if _, err := os.Stat(published); !os.IsNotExist(err) {
+				t.Errorf("書き出しなのに公開ファイルができている（err = %v）", err)
+			}
+		})
+	}
+}
+
+func TestExportFailsWithoutLeakingThePath(t *testing.T) {
+	// 起動したあとに読めなくなったときは 500 を返す。誤りの中身（パスを含む）は
+	// 返さず、端末の記録にもロケールと形しか書かない。どこで止まったかは、
+	// 記録の1行と、試せる形がもう1つあること（working / published）で追える。
+	//
+	// ゲーム側の2つは、公開の形にする前に見る土台の確かめ（[publish.CheckBase]）が
+	// 読めなかった場合である。確かめられないまま出すと、巻き戻ったCSVを
+	// 書き出せてしまう。dwloc publish も同じ場面で書かずに終わる。
+	sameAsRepo := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+		"",
+	}, "\n")
+	breakWith := func(t *testing.T, path string, dir bool) {
+		t.Helper()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if !dir {
+			return
+		}
+		// 同じ名前のディレクトリを置く。あるのに読めない、という形になる。
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name   string
+		form   string
+		game   bool
+		damage func(t *testing.T, s *server, root string)
+	}{
+		{"編集中のファイルが消えた", exportFormWorking, false, func(t *testing.T, s *server, _ string) {
+			breakWith(t, inputPath(t, s, "ja"), false)
+		}},
+		{"公開の形: 入力が消えた", exportFormPublished, false, func(t *testing.T, s *server, _ string) {
+			breakWith(t, inputPath(t, s, "ja"), false)
+		}},
+		{"公開の形: 再生順を読めない", exportFormPublished, false, func(t *testing.T, _ *server, root string) {
+			breakWith(t, filepath.Join(root, "data", "script_order.csv"), true)
+		}},
+		// 消えた（無い）のではなく、あるのに読めない。無いときは新しい言語の最初の
+		// 書き出しとして通す（TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame）。
+		{"公開の形: コミット済みの公開ファイルを読めない", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
+			breakWith(t, s.target("ja").Output, true)
+		}},
+		{"公開の形: ゲーム側の土台を読めない", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
+			breakWith(t, s.target("ja").GameBase, true)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var log strings.Builder
+			root := newTestRoot(t)
+			opt := Options{Root: root, UILang: "ja", Stderr: &log}
+			if tc.game {
+				opt.Game = newGameWithBase(t, sameAsRepo, sameAsRepo)
+			}
+			s := newTestServer(t, opt)
+			if tc.game && s.target("ja").GameBase == "" {
+				t.Fatal("前提が崩れている。ゲーム側の作業コピーを読んでいない")
+			}
+			tc.damage(t, s, root)
+
+			rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form="+tc.form, true, nil)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("状態コードが %d、500 を期待:\n%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if want := s.cat.T(s.cat.lookup("ja"), "error.export_failed"); !strings.Contains(body, want) {
+				t.Errorf("書き出せなかったと言っていない: %q", body)
+			}
+			if got := rec.Header().Get("Content-Disposition"); got != "" {
+				t.Errorf("失敗したのに保存させようとしている: %q", got)
+			}
+			for _, leak := range []string{root, filepath.ToSlash(root), ".csv"} {
+				if strings.Contains(body, leak) || strings.Contains(log.String(), leak) {
+					t.Errorf("応答か記録にパスが出ている（%q）\n応答: %q\n記録: %q", leak, body, log.String())
+				}
+			}
+			if want := "export failed locale=ja form=" + tc.form; !strings.Contains(log.String(), want) {
+				t.Errorf("記録に %q が無い: %q", want, log.String())
+			}
+		})
+	}
+}
+
+func TestExportWriteFailureIsRecordedWithoutContent(t *testing.T) {
+	// 送っている途中で切れた（保存のダイアログで取り消した、タブを閉じた）。
+	// 記録には書けなかったことだけを残し、CSV の中身は書かない。
+	var log strings.Builder
+	s := newTestServer(t, Options{UILang: "ja", Stderr: &log})
+	w := newBrokenWriter()
+
+	s.handleExport(w, httptest.NewRequest(http.MethodGet, "/api/export?locale=ja&form=working", nil))
+
+	if !strings.Contains(log.String(), "dwloc edit: write failed") {
+		t.Errorf("書けなかったことが記録に無い: %q", log.String())
+	}
+	for _, secret := range []string{jaVanished, "もしもし", "設定", keyKept} {
+		if strings.Contains(log.String(), secret) {
+			t.Errorf("記録に行の中身が出ている（%q）: %q", secret, log.String())
+		}
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -196,5 +198,109 @@ func TestDisplayPath(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(root), "よそ", "f.csv")
 	if got := show.of(outside); got != outside {
 		t.Errorf("of(外) = %q, want %q", got, outside)
+	}
+}
+
+// TestDisplayPathOtherVolume は、ルートと別のドライブにあるパスをそのまま返すことを見る。
+// filepath.Rel はドライブが違うと失敗する。Translations の下にほかのドライブへの
+// リンクがあると当たる。元実装の relative_to も ValueError になり、そのまま出す。
+func TestDisplayPathOtherVolume(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("ドライブ名があるのは Windows だけ")
+	}
+	root := t.TempDir()
+	other := "Z:"
+	if strings.EqualFold(filepath.VolumeName(root), other) {
+		other = "Y:"
+	}
+	path := other + `\よそ\f.csv`
+	if got := newDisplay(root).of(path); got != path {
+		t.Errorf("of(別ドライブ) = %q, want %q", got, path)
+	}
+}
+
+// TestGitTrackedFallsBackToExistence は git を起動できないときの判定を見る。
+//
+// 規則（移植仕様「形式検証 R7」）: 起動できなければ「存在すれば追跡されている」に
+// 倒す。手元の作業コピーを誤検出してでも、原文の混入を見逃さない側を選んでいる。
+// root が無いと git の有無にかかわらず起動に失敗するので、git の無い環境でも
+// 同じ結果になる。
+func TestGitTrackedFallsBackToExistence(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "無いディレクトリ")
+	dir := t.TempDir()
+	existing := filepath.Join(dir, LocalFile)
+	writeFile(t, existing, "key,source_en,translation\n")
+
+	isTracked := GitTracked(root)
+	if !isTracked(existing) {
+		t.Error("git を起動できないのに、あるファイルを追跡されていないと判定した")
+	}
+	if isTracked(filepath.Join(dir, "そんなファイルは無い.csv")) {
+		t.Error("git を起動できないのに、無いファイルを追跡されていると判定した")
+	}
+}
+
+// TestCheckTreeUnreadablePublished は、strings.csv があるのに読めないとき、
+// 問題の一覧ではなくエラーを返すことを見る。
+//
+// 読めなかったファイルを問題0件や "no strings.csv" に落とすと、検査していない
+// ファイルがCIを通る。ディレクトリになった strings.csv は「Stat では在るが
+// 中身は読めない」という形で、どの OS でも作れる。
+func TestCheckTreeUnreadablePublished(t *testing.T) {
+	root := t.TempDir()
+	published := filepath.Join(root, TranslationsDir, "ja", PublishedFile)
+	if err := os.MkdirAll(published, 0o755); err != nil {
+		t.Fatalf("%s が作れない: %v", published, err)
+	}
+
+	got, err := CheckTree(root, trackedSet())
+	if err == nil {
+		t.Fatalf("エラーにならなかった（問題 = %#v）", problemStrings(got))
+	}
+	if got != nil {
+		t.Errorf("エラーと一緒に問題を返した: %#v", problemStrings(got))
+	}
+	// どれが読めなかったかを、報告と同じリポジトリ相対のパスで言う。
+	if want := "Translations/ja/strings.csv"; !strings.Contains(err.Error(), want) {
+		t.Errorf("エラー = %q, want %q を含む", err, want)
+	}
+}
+
+// TestCheckTreeUnreadableDiscovered は、_discovered があるのに中を読めないとき、
+// エラーを返すことを見る。
+//
+// ここを黙って飛ばすと、原文つきの作業コピーがコミットされていても検査を
+// すり抜ける。原文を公開リポジトリに漏らさないというこの検査の目的に反する。
+// 読めないディレクトリは chmod で作るので、Windows と root では作れず飛ばす。
+func TestCheckTreeUnreadableDiscovered(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows では chmod でディレクトリを読めなくできない")
+	}
+	root := t.TempDir()
+	discovered := filepath.Join(root, TranslationsDir, DiscoveredDir)
+	working := filepath.Join(discovered, "ja.working.csv")
+	writeFile(t, working, "key,source_en,translation\n")
+	writeFile(t, filepath.Join(root, TranslationsDir, "ja", PublishedFile),
+		"key,translation\n"+keyA+",やあ\n")
+
+	if err := os.Chmod(discovered, 0o000); err != nil {
+		t.Fatalf("%s の権限を変えられない: %v", discovered, err)
+	}
+	// 後始末で消せるように戻す。t.Cleanup は後入れ先出しなので、
+	// t.TempDir の削除より先に走る。
+	t.Cleanup(func() { _ = os.Chmod(discovered, 0o755) })
+	if _, err := os.ReadDir(discovered); err == nil {
+		t.Skip("読めない状態にできなかったので飛ばす。root で走っていると効かない")
+	}
+
+	got, err := CheckTree(root, trackedSet(working))
+	if err == nil {
+		t.Fatalf("エラーにならなかった（問題 = %#v）", problemStrings(got))
+	}
+	if got != nil {
+		t.Errorf("エラーと一緒に問題を返した: %#v", problemStrings(got))
+	}
+	if want := "Translations/_discovered"; !strings.Contains(err.Error(), want) {
+		t.Errorf("エラー = %q, want %q を含む", err, want)
 	}
 }

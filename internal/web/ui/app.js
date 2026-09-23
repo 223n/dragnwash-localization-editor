@@ -156,6 +156,20 @@
                     保存の応答が「もう画面のものではない」と分かるようにする。
     state.saveError 要求そのものが落ちているか（届かない、404、503）。行ごとの
                     理由（state.failed）とは別に持つ。
+    state.inflight  いま送っている訳（行番号 → 値）。送っていなければ null。
+                    返るまでのあいだ、その行の「ファイルの値」は entry.saved では
+                    なくこちらになる見込みなので、onInput が未保存かどうかを決める
+                    ときに見る。
+    state.sending   いま送っている保存の終わり（Promise）。読み直しと切り替えが、
+                    送り終えるのを待ってから尋ねるために持つ（settle を見よ）。
+    state.asking    読み直しと切り替えを押した回数。送り終えるのを待っている
+                    あいだにもう一度押されたら、前に押したほうは何もしない。
+    state.discarding 捨てると答えた読み直し（切り替え）の最中の印。立っている
+                    あいだは保存を送らない（flush を見よ）。読めたら捨て、読めなければ
+                    倒して送り直しへ戻す（load を見よ）。
+    state.loading   最後に始めた読み込みの札（{ locale: 読みにいったロケール }）。
+                    読んでいなければ null。応答は、札がこれと同じときだけ描く
+                    （load を見よ）。ロケールの欄もこれを見てそろえる（syncLocale）。
   */
   var state = {
     locale: "",
@@ -180,12 +194,23 @@
     gen: 0,
     editing: null,
     composing: false,
-    /* 変換が確定した時刻。確定の Enter を行送りに使わないために控える。 */
-    composedAt: 0,
+    /*
+      変換が確定した時刻（performance.now）。確定の Enter を行送りに使わないために
+      控える。測り方は composedGrace に書いてある。
+
+      始めは -Infinity にしておく。performance.now は頁を開いた瞬間を 0 に数えるので、
+      0 で始めると、開いてすぐの Enter まで確定の直後に見える。
+    */
+    composedAt: -Infinity,
     searchComposing: false,
     searchTimer: null,
     saving: false,
     saveError: false,
+    inflight: null,
+    sending: null,
+    asking: 0,
+    discarding: null,
+    loading: null,
     /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
     exporting: false,
     timer: null,
@@ -252,6 +277,11 @@
     この値で実機が通ることは確かめてある（Windows の実機の IME、dwloc 0.4.1、
     2026-09-17）。変換の確定で行が飛ばず、そのあとの Enter で次の行へ進んだ。
     短くするなら、実機の IME で間隔を測ってからにすること。
+
+    間は performance.now で測る。Date.now（壁時計）で測ると、確定と Enter の
+    あいだに OS の時計が後ろへ動いたとき（NTP の段差、休止からの復帰）、差が
+    負のまま 100 を超えるまで Enter の行送りが効かなくなる。時計を1時間戻せば、
+    1時間効かない。performance.now は後ろへ戻らない。
   */
   var composedGrace = 100;
 
@@ -363,11 +393,18 @@
     scrollIntoView も起きないので困らない。
 
     ResizeObserver が無い環境では変数が入らない。そのときは CSS の var() の
-    第2引数（既定値）がそのまま効く。既定値は、競合も行き先の無い訳も出て
-    いないときの高さに合わせてある。
+    第2引数（既定値の 10em＝140px）がそのまま効く。既定値は、競合も行き先の無い
+    訳も出ていないときの、いちばん狭い幅（320px）の帯（121.4px）を覆う高さに
+    してある。競合や行き先の無い訳が出て帯が伸びたぶんは覆えない。
   */
   function watchTopHeight() {
-    if (!el.top) {
+    /*
+      測る前に見張りの有無を確かめる。測ってから確かめていたころは、
+      ResizeObserver が無い環境でも、目録が届く前（ロケールの一覧も文言も空）の
+      低い帯を1度だけ測った値が残り、既定値が効かなかった（実測: 375x812 で
+      --top-height は 63px、帯は 117.8px）。
+    */
+    if (!el.top || typeof ResizeObserver !== "function") {
       return;
     }
     var apply = function () {
@@ -379,9 +416,6 @@
       document.documentElement.style.setProperty("--top-height", h + "px");
     };
     apply();
-    if (typeof ResizeObserver !== "function") {
-      return;
-    }
     /*
       帯の高さは、競合の引き止めや行き先の無い訳が出入りしたときだけでなく、
       窓の幅が変わって中身が折り返したときにも変わる。どちらも ResizeObserver
@@ -1346,7 +1380,15 @@
     var entry = state.rows.get(n);
     if (entry) {
       setShownText(entry, clean);
-      if (clean === entry.saved) {
+      /*
+        保存値と同じなら未保存から外す。ただし、その行をいま送っている最中は
+        外さない。entry.saved は送る前の古い値で、応答が返ればファイルは送った
+        値になる。そこで「保存値へ戻した」を未保存から外すと、ファイルには送った
+        値が残ったまま画面は「保存済み」になり、戻した訳は二度と送られない
+        （実際に起きた）。控えておけば、応答のあとで送った値と違うので残り、
+        次の保存で送られる（applyResults と onSaved）。
+      */
+      if (clean === entry.saved && !(state.inflight && state.inflight.has(n))) {
         state.pending.delete(n);
       } else {
         state.pending.set(n, clean);
@@ -1403,7 +1445,7 @@
   editor.addEventListener("compositionend", function () {
     state.composing = false;
     /* 確定の時刻を控える。直後に来る Enter を行送りに使わないため。 */
-    state.composedAt = Date.now();
+    state.composedAt = performance.now();
     onInput();
   });
 
@@ -1428,7 +1470,7 @@
         改行が入らないよう preventDefault だけはして、ここで戻す。
         待ちの長さと理由は composedGrace に書いてある。
       */
-      if (Date.now() - state.composedAt < composedGrace) {
+      if (performance.now() - state.composedAt < composedGrace) {
         return;
       }
       var from = state.editing;
@@ -1579,7 +1621,30 @@
     if (state.composing) {
       return Promise.resolve();
     }
+    /*
+      読み直し（切り替え）で「その訳は消えます」と尋ね、翻訳者が受けたあとは送らない。
+      送ると、捨てると答えた訳がファイルに入り、尋ねた文と結果が逆になる。読み込みの
+      あいだにも送り直しの時計は切れるので、ここで止める。読めなければ load が
+      送り直しへ戻す。
+    */
+    if (state.discarding) {
+      return Promise.resolve();
+    }
     if (state.saving || state.mine || state.pending.size === 0) {
+      if (!state.saving && !state.mine && state.saveError) {
+        /*
+          送り直しを待っているあいだに、送るものが無くなった（保存値へ打ち戻した、
+          競合で「ファイルの訳を採る」を選んだ、など）。落ちていた要求はもう無い
+          ので、「保存できません（もう一度試しています）」を下ろす。下ろさないと、
+          閉じても何も失われないのに、翻訳者は存在しない失敗を直しにいく。
+          scheduleRetry の早い戻りと同じ扱いで、1行ずつの理由（state.failed）は
+          そちらの表示に任せる。
+        */
+        state.saveError = false;
+        state.retry = 0;
+        showMessage("");
+        updateStatus();
+      }
       return Promise.resolve();
     }
     var edits = [];
@@ -1605,14 +1670,19 @@
     */
     var gen = state.gen;
     state.saving = true;
+    state.inflight = sent;
     updateStatus();
     /*
       送り終わりを返す。書き出し（exportCsv）が、送っていない訳を落としたまま
-      ファイルを読まないようにするためだけにある。ほかの呼び出し側はどこも
-      戻り値を見ていないので、返すようにしても振る舞いは変わらない。
-      失敗も下の catch が受け止めるので、ここが投げっぱなしになることは無い。
+      ファイルを読まないようにするためと、読み直し（settle）が送り終えるのを
+      待ってから尋ねるためにある。失敗も下の catch が受け止めるので、ここが
+      投げっぱなしになることは無い。
+
+      state.sending にも持たせる。送っている最中に呼ばれた flush は、上の早い戻りで
+      すぐに解ける（書き出しはそれを「まだ送っている」と読む）。送り終わりそのものを
+      待ちたい側は、こちらを待つ。
     */
-    return postJSON("/api/rows", {
+    state.sending = postJSON("/api/rows", {
       locale: state.locale,
       baseVersion: state.version,
       edits: edits
@@ -1623,6 +1693,7 @@
           updateStatus();
           return;
         }
+        state.inflight = null;
         onSaved(res, sent);
       })
       .catch(function () {
@@ -1635,10 +1706,12 @@
           updateStatus();
           return;
         }
+        state.inflight = null;
         showMessage(t("ui.save_failed_detail"));
         scheduleRetry();
         updateStatus();
       });
+    return state.sending;
   }
 
   /*
@@ -1668,6 +1741,35 @@
     setExportState("", false);
 
     flush().then(function () {
+      if (state.mine) {
+        /*
+          競合している。送った訳が 409 で返ると、onConflict がそれを state.mine へ
+          移して state.pending から外すので、下の判定だけでは「送りきった」に見える。
+          そのまま取りにいくと、選ぶ前のよその訳の中身を「書き出しました」と渡す。
+          書き出したものの中では、黙って破棄したのと同じになる。どちらを残すかを
+          選んでもらってから、押し直してもらう。
+
+          「送っています」とは言わない。競合のあいだは自動保存を止めていて、
+          何も送っていない。
+        */
+        setExportState(t("ui.export_conflict"), true);
+        return null;
+      }
+      /*
+        保存できない行と、行き先の無い訳も、競合と同じくファイルに入っていない訳で
+        ある（hasUnsaved が未保存に数えるのと同じ考え）。そのまま取りにいくと、画面に
+        出ているその訳の入らない中身を「書き出しました」と渡す。送り直しでは片付かない
+        （保存できない行は自動保存の対象から外してあり、行き先の無い訳は載せる行が
+        無い）ので、「送っています」とも言わない。何を片付ければ書き出せるかを言う。
+      */
+      if (state.failed.size) {
+        setExportState(t("ui.export_row_failed"), true);
+        return null;
+      }
+      if (state.orphans.length) {
+        setExportState(t("ui.export_orphans"), true);
+        return null;
+      }
       if (state.saving || state.pending.size > 0) {
         /*
           まだ送り終わっていない。待って勝手に書き出すのではなく、押し直して
@@ -1689,7 +1791,12 @@
           }
         })
         .catch(function (err) {
-          setExportState(err && err.message ? err.message : t("ui.export_failed"), true);
+          /*
+            待ち受けが返した理由（目録の文）だけをそのまま出す。ブラウザーが投げた
+            誤り（届かなかったときの "Failed to fetch"、保存ダイアログの書き込みの
+            失敗など）は、目録に無い英文なので出さず、目録の文で伝える。
+          */
+          setExportState(err && err.fromServer ? err.message : t("ui.export_failed"), true);
         });
     }).then(function () {
       state.exporting = false;
@@ -1747,6 +1854,9 @@
   /*
     中身を取りにいく。誤りのときは本文が理由そのものなので、そのまま投げる。
     状態コードだけを出しても、翻訳者には直しようがない。
+
+    投げる誤りには fromServer の印を付ける。exportCsv が出してよいのは、この
+    印の付いた文（待ち受けが目録から組んだもの）だけである。
   */
   function fetchCsv(form) {
     var url = "/api/export?locale=" + encodeURIComponent(state.locale) +
@@ -1754,7 +1864,9 @@
     return fetch(url, { credentials: "same-origin" }).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (text) {
-          throw new Error(text ? text.trim() : t("ui.export_failed"));
+          var err = new Error(text ? text.trim() : t("ui.export_failed"));
+          err.fromServer = true;
+          throw err;
         });
       }
       var name = nameFromDisposition(res.headers.get("Content-Disposition"));
@@ -1769,10 +1881,18 @@
     [A-Za-z0-9._-] だけなので（internal/web の exportName）、当てるのも
     その形に限る。当たらなければ決め打ちにする。応答の文字列がそのまま
     ファイル名になる道を作らない。
+
+    字の種類だけでなく、exportName と同じく、先頭がドットの名前（".csv"、"..")と
+    ".." を含む名前も落とす。字の種類だけで見ていたころは、".." がそのまま保存の
+    ダイアログへ渡った。待ち受けがこの名前を返すことは無いが、守りを待ち受けと
+    同じ規則にそろえておく。
   */
   function nameFromDisposition(value) {
     var found = value ? /filename="([A-Za-z0-9._-]+)"/.exec(value) : null;
-    return found ? found[1] : "strings.csv";
+    if (!found || found[1].charAt(0) === "." || found[1].indexOf("..") >= 0) {
+      return "strings.csv";
+    }
+    return found[1];
   }
 
   /*
@@ -1937,8 +2057,16 @@
         if (entry) {
           entry.saved = r.translation;
           if (state.editing !== r.line) {
-            /* ファイルから読み直した値を出す。画面とファイルを同じにする。 */
-            setShownText(entry, r.translation);
+            /*
+              ファイルから読み直した値を出す。画面とファイルを同じにする。
+
+              ただし、送ったあとに打ち直した訳が未保存として残っていれば、そちらを
+              出す（shownValue）。行には「未保存」の印が付いたままで、次の保存で
+              送るのもそちらである。ファイルの値で描き直すと、欄と入力欄と送り直して
+              いる訳が別物になり、次の保存が落ちたときに翻訳者が見ている訳が
+              どこにも無い値になる。
+            */
+            setShownText(entry, shownValue(r.line, r.translation));
           }
           renderBadgesForKey(entry, r.badges);
           setRowNote(entry, r.warning ? r.warning : "");
@@ -2127,16 +2255,88 @@
 
     var mine = remap(clashed, oldKeys, body.current);
     var keep = remap(untouched, oldKeys, body.current);
+    /*
+      保存できなかった訳（state.failed）も、同じ規則でキーから載せ直す。値は
+      { reason, value } のまま移す。行番号のままにしていたころは、よそが上に
+      1行足しただけで、goodbye の訳が hello の行に「保存できない行」として出た。
+      そのまま hello の行を1字直すと、goodbye の訳が hello のキーへ保存され、
+      hello の訳は消えた（実際に起きた）。載せる先を決められないものは、
+      ほかと同じく行き先の無い訳として出す。
+    */
+    var failed = remap(state.failed, oldKeys, body.current);
+
+    /*
+      入力欄で打っている最中なら、その行も同じ規則で引き直しておく。描き直しは
+      一覧を作り直すので、入力欄はいったん外れる。開き直さないと、焦点は body へ
+      落ち、続けて打った字はどこにも入らないのに、保存の欄は「保存済み」と言う
+      （keepAlways に書いた事故と同じ形。実際に起きた）。
+    */
+    var typing = null;
+    var caret = null;
+    var wasTyping = state.editing !== null && document.activeElement === editor;
+    if (wasTyping) {
+      remap(new Map([[state.editing, true]]), oldKeys, body.current).edits.forEach(function (value, line) {
+        typing = line;
+      });
+      caret = { start: editor.selectionStart, end: editor.selectionEnd };
+    }
 
     state.mine = mine.edits.size ? mine.edits : null;
     state.pending = keep.edits;
+    state.failed = failed.edits;
     addOrphans(mine.lost);
     addOrphans(keep.lost);
-    render(body.current);
+    addOrphans(failed.lost.map(function (item) {
+      return { key: item.key, text: item.text.value };
+    }));
+    /*
+      描き直すあいだは、入力欄の blur で保存へ回さない。入力欄を頁から外すと
+      Chromium は blur を出し、commitEditor がその場で flush する。それでは
+      下の「すぐに送らず自動保存の時計を通す」が破れる。
+    */
+    editor.removeEventListener("blur", commitEditor);
+    try {
+      render(body.current);
+    } finally {
+      editor.addEventListener("blur", commitEditor);
+    }
+    /*
+      打っていた行を開き直し、キャレットも戻す。競合した行（isLocked）は
+      openEditor が開かない。どちらを残すか選ぶまで編集させないためである。
+
+      描き直しで隠れた行には差し込まない。未保存の訳がある行は keepAlways が
+      出すので、隠れるのは打った訳が保存値と同じ行だけで、失う訳は無い。
+      隠れた行へ差し込むと、焦点は入らず高さ0の入力欄が残る（reviewClosed を見よ）。
+    */
+    var reopen = typing !== null ? state.rows.get(typing) : null;
+    if (reopen && !reopen.row.hidden) {
+      openEditor(typing);
+      if (state.editing === typing) {
+        editor.setSelectionRange(caret.start, caret.end);
+      }
+    }
     if (state.mine) {
       showMessage(body.message ? body.message : t("ui.save_conflict"));
       el.conflict.hidden = false;
       updateStatus();
+      /*
+        打っていた行そのものが競合した（または行き先を失った）ときは、入力欄を
+        開き直せない。焦点は body へ落ち、そのあと打った字は黙ってどこにも入らない
+        （keepAlways に書いた事故と同じ形）。引き止めの枠そのものへ焦点を移す。
+        字は入らないままだが、焦点がどこにあり次に何を選ぶのかが、画面にも読み上げ
+        にも出る。
+
+        ボタンには移さない。翻訳者は打っている最中なので、続けて打った Space や
+        Enter（日本語の入力では変換と確定に使う）がそのボタンを押す。最初の
+        ボタンは「自分の訳を上に載せる」で、よそが書いた訳を読まないまま上書き
+        することになる。枠は tabindex="-1" で、打鍵では何も押されない。Tab で
+        最初のボタンへ進める。
+
+        出してから移す。hidden のままの要素には焦点が入らない。
+      */
+      if (wasTyping && state.editing === null) {
+        el.conflict.focus();
+      }
       return;
     }
     showMessage("");
@@ -2505,20 +2705,35 @@
     チップの checked と一覧は前のロケールのまま残った（実測で「チップ2つが
     選ばれたまま、一覧も表示中の行数も前のロケールのまま」になった）。
     失敗したときは何も変わっていないのが正しい。
+
+    保存の世代と送り直しの時計も、読めたときだけ片付ける（下の .then）。読む前に
+    片付けていたころは、読み込みに失敗すると送り直しの時計が止まったまま戻らず、
+    画面は「未保存 1 件」と言ったまま、その訳を二度と送らなかった（原因が消えた
+    あとも、同じ行を打ち直すまでファイルに入らない）。retryDelays の「諦めない」が、
+    失敗した読み直しを1回挟むだけで破れていた。
+
+    描くのは、最後に始めた読み込みの応答だけにする（state.loading の札）。返る前に
+    もう1つ選ぶと（欄に焦点を置いて↓を続けて押すと起きる）、応答は選んだ順にも
+    逆の順にも返る。どちらも描いていたころは、あとから返ったほうが一覧・ファイルの
+    名前・保存の宛先（state.locale）を決め、欄は別のロケールを指したまま残った。
+    欄に出ているロケールを選び直しても change は起きないので、欄が指すロケールへは
+    欄からたどり着けない。欄は、描いたあとと失敗したあとに必ずそろえる（syncLocale）。
   */
   function load(locale, resetFinder) {
     /*
-      世代を1つ進める。進めておくと、送りかけの保存の応答が返ってきたときに
-      「もう画面のものではない」と分かる。別ロケールの版と件数を載せない。
+      捨てると答えたあとの読み込みか（askDiscard が立てた印）。読めたら捨て、
+      読めなければ倒して送り直しへ戻す（stopHolding）。
     */
-    state.gen = state.gen + 1;
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-    state.retry = 0;
-    state.saveError = false;
+    var holding = state.discarding;
+    /*
+      この読み込みの札。先に始めた読み込みの札はここで置き換わり、その応答は
+      描かれなくなる。空のロケール（選ぶ前へ戻した）は読みにいかないので札を持たない。
+    */
+    var ticket = locale ? { locale: locale } : null;
+    state.loading = ticket;
+    syncLocale();
     if (!locale) {
+      stopHolding(holding);
       clear(el.list);
       el.rows.textContent = "";
       showMessage(t("ui.select_locale"));
@@ -2528,7 +2743,58 @@
     /* URL に載せるのはロケール名だけ。原文も訳も URL には載せない。 */
     getJSON("/api/lines?locale=" + encodeURIComponent(locale))
       .then(function (data) {
+        if (state.loading !== ticket) {
+          /*
+            あとから別の読み込みが始まっている。描かない。世代も送り直しの時計も
+            進めない。まだ画面に出ているのは前の内容で、あとの読み込みが片付ける。
+
+            捨てると答えた印の後始末だけはする（stopHolding）。印がまだこの読み込みの
+            ものなら倒して送り直しへ戻す。あとの切り替えで捨てると答え直していれば、
+            印はそちらのものに替わっているので触らない（stopHolding は自分の印の
+            ときだけ倒す）。そちらを倒すと、あとの読み込みが返るまでに保存へ回った
+            訳が送られ、捨てると答えた訳がファイルに入る。
+            あとの読み込みが同じ印を持ったままなのは、あとで押したときに捨てる訳が
+            もう無く、尋ねなかったとき（askDiscard）だけである。そのとき印が止めて
+            いるのは、そのあと打った訳の保存だけなので、倒して送らせてよい。
+          */
+          stopHolding(holding);
+          return;
+        }
+        /*
+          世代を1つ進める。進めておくと、送りかけの保存の応答が返ってきたときに
+          「もう画面のものではない」と分かる。別ロケールの版と件数を載せない。
+
+          読めたここで進める。読み込みの途中に返った応答は、まだ画面に出ている
+          （前の）内容のものなので、そのまま載せてよい。
+        */
+        state.gen = state.gen + 1;
+        if (state.timer) {
+          clearTimeout(state.timer);
+          state.timer = null;
+        }
+        state.retry = 0;
+        state.saveError = false;
+        /* 送りかけの訳は前の内容のもので、応答も上の世代で捨てる。 */
+        state.inflight = null;
         showMessage("");
+        /*
+          選んだあとは「ロケールを選んでください」を選択肢から外す。起動時に
+          ロケールを指定したときと同じ並びになる（fillLocales）。
+
+          残しておくと、行が並んでいるのに空へ戻せる。戻すと一覧だけが消え、
+          ファイルの名前・条件のチップ・件数・「表示中 N 行」・抱えている訳は
+          前のロケールのまま残った。state.locale も前のロケールのままなので、
+          書き出しや保存は画面に出ていないロケールへ向かう。片付ける先を1つずつ
+          足すより、戻す道そのものを作らない。
+
+          外すのは空の選択肢1つだけで、欄の値は描いたあとでそろえる（syncLocale）。
+          選択肢を組み直して値もここで決めていたころは、組み直しが最初の応答でしか
+          走らず、あとから返った応答は欄に触れずに一覧だけを描いた。
+        */
+        var blank = el.locale.querySelector('option[value=""]');
+        if (blank) {
+          el.locale.removeChild(blank);
+        }
         /*
           条件を外すのはここ。render より先に外すと、チップも一覧も新しい
           ロケールのぶんが最初から外れた形で描かれる（buildFilters は
@@ -2541,20 +2807,79 @@
         state.failed = new Map();
         state.mine = null;
         state.orphans = [];
+        /* 捨てると答えた訳は、ここで捨て終わった。送らない印も倒す。 */
+        if (state.discarding === holding) {
+          state.discarding = null;
+        }
         renderOrphans();
         el.conflict.hidden = true;
         render(data);
+        /*
+          札を下ろすのは描き終えてから。描く途中で投げたら、下の .catch がこの
+          読み込みの失敗として受ける（札がまだ残っているので、あとの読み込みの
+          ものと取り違えない）。
+        */
+        state.loading = null;
+        syncLocale();
       })
       .catch(function () {
+        /*
+          読めなかったので何も捨てていない。捨てると答えた印を倒し、送り直しへ戻す。
+          あとから別の読み込みが始まっていても同じにする（理由は上の .then の注記）。
+        */
+        stopHolding(holding);
+        if (state.loading !== ticket) {
+          /*
+            あとから別の読み込みが始まっている。失敗を出さない。あとの読み込みが
+            読めていれば、読めている画面の上に「読めませんでした」が載る。
+          */
+          return;
+        }
+        state.loading = null;
         /*
           失敗の中身は出さない。翻訳者にできるのは読み直すことだけ。
           ロケールの欄は元に戻す。戻さないと、欄だけが新しいロケールを指した
           まま中身は前のロケール、という食い違いが画面に残る。
         */
-        el.locale.value = state.locale;
+        syncLocale();
         showMessage(t("ui.load_failed"));
         updateStatus();
       });
+  }
+
+  /*
+    ロケールの欄を、画面が向かっている先にそろえる。読んでいる最中なら最後に
+    始めた読み込みの行き先、読んでいなければ画面に出ているロケール（state.locale）。
+
+    欄はこの画面でいちばん目立つ「どのロケールを見ているか」の表示である。一覧と
+    別のロケールを指していると、翻訳者は別のロケールのつもりで訳を打つ。欄に
+    出ているロケールを選び直しても change は起きないので、自分では直せない。
+  */
+  function syncLocale() {
+    el.locale.value = state.loading ? state.loading.locale : state.locale;
+  }
+
+  /*
+    捨てると答えたのに、捨てずに終わった（読めなかった）。止めていた送り直しを戻す。
+
+    読み込みのあいだに送り直しの時計が切れていたら、flush は送らずに戻っており、
+    時計はもう無い。引き直さないと、原因が消えてもその訳は二度と送られない
+    （retryDelays の「諦めない」が破れる）。時計がまだ残っていれば、それに任せる。
+    holding が空（捨てると答えていない読み込み）なら何もしない。
+  */
+  function stopHolding(holding) {
+    if (!holding || state.discarding !== holding) {
+      return;
+    }
+    state.discarding = null;
+    if (state.timer || state.mine || state.pending.size === 0) {
+      return;
+    }
+    if (state.saveError) {
+      scheduleRetry();
+      return;
+    }
+    schedule();
   }
 
   /*
@@ -2637,7 +2962,27 @@
   function setDrawer(open) {
     document.body.classList.toggle("sidebar-open", open);
     el.backdrop.hidden = !open;
+    syncInert();
     syncMenu();
+  }
+
+  /*
+    狭い画面で引き出しが閉じているあいだは、列の中身に焦点を入れさせない（inert）。
+
+    閉じた引き出しは transform で画面の外へ出してあるだけで、中身はタブ順に残る。
+    入れさせていたころは、#reload から Tab で進むと、画面の外にある閉じるボタン・
+    検索の欄・条件のチップに焦点が入った。見えない検索の欄に字を打つと、一覧だけが
+    黙って絞られる。開けば入れる。広い画面では列は画面に出ているので、入れさせる。
+
+    閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした
+    要素からは焦点が外れ、body へ落ちる。
+  */
+  function syncInert() {
+    var shut = narrow.matches && !sidebarOpen();
+    if (shut && el.sidebar.contains(document.activeElement)) {
+      el.menu.focus();
+    }
+    el.sidebar.inert = shut;
   }
 
   function toggleSidebar() {
@@ -2661,6 +3006,7 @@
   narrow.addEventListener("change", function () {
     setDrawer(false);
   });
+  syncInert();
   syncMenu();
 
   /*
@@ -2719,14 +3065,54 @@
   });
 
   /*
-    読み直しとロケールの切り替えは、未保存の訳を消す。消す前に必ず尋ねる。
-    自動保存があるので未保存が残るのは、保存できなかったときと競合中だけである。
+    いま送っている保存と、まだ送っていない訳を送り終えるまで待つ。
+
+    送っている最中の flush は早く戻る（書き出しはそれを「まだ送っている」と読む）
+    ので、送り終わりそのもの（state.sending）を先に待つ。そのあとの flush が、
+    送っているあいだに打ち足されたぶんと、送り直しを待っていた訳を送る。落ちても
+    投げない（flush の catch が受け止め、送り直しの時計を引き直す）。
   */
-  function confirmDiscard() {
-    if (!hasUnsaved()) {
-      return true;
-    }
-    return window.confirm(t("ui.discard_confirm"));
+  function settle() {
+    var sending = state.saving && state.sending ? state.sending : Promise.resolve();
+    return sending.then(function () {
+      return flush();
+    });
+  }
+
+  /*
+    読み直しとロケールの切り替えは、未保存の訳を消す。消す前に必ず尋ねる。
+    key は尋ねる文（読み直しは ui.discard_confirm、切り替えは ui.switch_confirm）。
+
+    尋ねるのは、送れるものを送り終えてからにする。押した時点で決めていたころは、
+    打った直後に押すと、欄から離れたときの保存（blur）が返る前か後かで、尋ねたり
+    尋ねなかったりした。尋ねた文は「その訳は消えます」なのに、その訳は送られて
+    ファイルに残った。送り終えてから決めれば、尋ねるのは送っても残るもの（保存
+    できない行、競合、行き先の無い訳、届かなかった訳）があるときだけになる。
+
+    受けたら state.discarding を立てる。読み込みのあいだに送り直しの時計が切れても、
+    捨てると答えた訳は送らない（flush）。立てたあとは必ず load を呼ぶこと。
+
+    返すのは次のどれか。
+      "go"     読んでよい（捨てるものが無いか、捨てると答えた）
+      "keep"   断った。何も変えない
+      "stale"  送り終えるのを待っているあいだに、また押された。そちらに任せる
+  */
+  function askDiscard(key) {
+    state.asking = state.asking + 1;
+    var ask = state.asking;
+    return settle().then(function () {
+      if (ask !== state.asking) {
+        return "stale";
+      }
+      if (!hasUnsaved()) {
+        return "go";
+      }
+      if (!window.confirm(t(key))) {
+        return "keep";
+      }
+      state.discarding = {};
+      return "go";
+    });
   }
 
   function boot() {
@@ -2742,33 +3128,87 @@
         showGamePath(data.game);
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
-          if (!confirmDiscard()) {
-            el.locale.value = state.locale;
-            return;
-          }
           /*
-            前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
-            「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
-            言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
-            ものなので、ロケールが変われば外すのが素直である。
-            読み直し（el.reload）では外さない。同じロケールを見続けている。
-
-            外すのは load に任せる。読めたときだけ外させるためで、ここで先に
-            外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
-            チップと一覧は前のロケールのまま残る（load を見よ）。
+            選んだロケールはここで控える。尋ねるのは送り終えてからなので、そのあいだに
+            先に始めた読み込みが返ると、欄は描いたロケールへそろえ直される（load）。
+            欄の値を読み直すと、選んでいないロケールを読みにいく。
           */
-          load(el.locale.value, true);
+          var chosen = el.locale.value;
+          askDiscard("ui.switch_confirm").then(function (answer) {
+            if (answer === "stale") {
+              /*
+                あとから押されたほうに任せる。欄にも触らない。あとから選び直したなら
+                欄はもうそのロケールを指しており、読み直しなら押した時点で欄を
+                そろえてある。
+              */
+              return;
+            }
+            if (answer === "keep") {
+              /*
+                断ったので何も変えない。欄は選ぶ前に指していた先へ戻す。読んでいる
+                最中ならその行き先で、画面に出ている前のロケールではない。前のロケールへ
+                戻すと、読み込みが返ったときに欄と一覧が食い違う。
+              */
+              syncLocale();
+              return;
+            }
+            /*
+              前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
+              「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
+              言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
+              ものなので、ロケールが変われば外すのが素直である。
+              読み直し（el.reload）では外さない。同じロケールを見続けている。
+
+              外すのは load に任せる。読めたときだけ外させるためで、ここで先に
+              外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
+              チップと一覧は前のロケールのまま残る（load を見よ）。
+            */
+            load(chosen, true);
+          });
         });
         el.reload.addEventListener("click", function () {
-          if (!confirmDiscard()) {
+          /*
+            読み直すのは画面に出ているロケール（state.locale）で、欄の値ではない。
+
+            切り替えを選んで、送り終えるのを待っているあいだに押すと、その切り替えは
+            この読み直しに取って代わられる（askDiscard が stale を返す）。欄の値を
+            読んでいたころは、欄に残った切り替え先を、前のロケールの条件と検索語を
+            付けたまま読んだ（切り替えなら外す）。送れずに読み直しを尋ねて断られると、
+            欄だけが切り替え先を指したまま残り、一覧・ファイルの名前・送り直しの宛先は
+            前のロケールのままだった。そこで欄から前のロケールを選び直すと「切り替えると
+            消えます」と尋ね、受けると、同じロケールのまま送り直している訳を捨てた。
+
+            欄は押した時点でそろえる（syncLocale）。取って代わられた切り替えはもう
+            起きないので、その行き先を欄に残さない。そろえておけば、断ったとき
+            （keep）も、あとから押されたとき（stale）も、欄に触らなくてよい。
+
+            まだ何も出ていない（--locale を省いて起動し、最初の読み込みが返る前）なら、
+            読み直すものが無い。load("") を呼ぶと、読んでいる最初のロケールを
+            取りやめて「ロケールを選んでください」へ戻してしまう。
+          */
+          if (!state.locale) {
             return;
           }
-          load(el.locale.value);
+          syncLocale();
+          askDiscard("ui.discard_confirm").then(function (answer) {
+            if (answer !== "go") {
+              return;
+            }
+            load(state.locale);
+          });
         });
         el.filterClear.addEventListener("click", function () {
           /* 条件も検索語もまとめて外す。「全部見たい」は1手でできるようにする。 */
           clearFinder();
-          buildFilters(state.data ? state.data.counts : []);
+          /*
+            チップは組み直さず、選択だけを外す。組み直すと、数と添え書きが
+            最後に読み込んだときの件数（state.data.counts）に戻る。保存の応答で
+            待ち受けが数え直した数（updateChipRows）が消え、件数の欄とも別の
+            時点の数になる。
+          */
+          el.filters.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+            box.checked = false;
+          });
           applyView();
         });
         /*

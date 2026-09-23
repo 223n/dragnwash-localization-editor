@@ -3,7 +3,11 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -338,5 +342,164 @@ func TestErrorBodiesHaveNoRowContent(t *testing.T) {
 				t.Errorf("%s の応答に行の中身が出ている: %q", target, body)
 			}
 		}
+	}
+}
+
+func TestAssetsAreServedAsEmbedded(t *testing.T) {
+	// 資産は埋め込んだものを1バイトも変えず、決まった Content-Type で返す。
+	// 守りのヘッダーで nosniff を付けているので、型を取り違えるとブラウザーは
+	// スクリプトも様式も読まずに捨てる。画面が白いまま何も動かない。
+	s := newTestServer(t, Options{})
+	cases := []struct {
+		target, file, contentType string
+	}{
+		{"/", "ui/index.html", "text/html; charset=utf-8"},
+		{"/app.css", "ui/app.css", "text/css; charset=utf-8"},
+		{"/app.js", "ui/app.js", "text/javascript; charset=utf-8"},
+	}
+	for _, tc := range cases {
+		rec := do(t, s, http.MethodGet, tc.target, true, nil)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: 状態コードが %d", tc.target, rec.Code)
+			continue
+		}
+		if got := rec.Header().Get("Content-Type"); got != tc.contentType {
+			t.Errorf("%s: Content-Type が %q、%q を期待", tc.target, got, tc.contentType)
+		}
+		want := uiSource(t, tc.file)
+		if rec.Body.String() != want {
+			t.Errorf("%s: 中身が埋め込んだ %s と違う", tc.target, tc.file)
+		}
+		if got := rec.Header().Get("Content-Length"); got != itoa(len(want)) {
+			t.Errorf("%s: Content-Length が %q、%d を期待", tc.target, got, len(want))
+		}
+	}
+
+	// 結んでいない経路を資産として引いても返さない。要求のパスから資産を
+	// 組み立てる場所は無い、ということを経路の側でも確かめる。
+	rec := httptest.NewRecorder()
+	s.handleAsset("/ui/i18n/ja.json")(rec, httptest.NewRequest(http.MethodGet, "/ui/i18n/ja.json", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("結んでいない資産が %d を返した", rec.Code)
+	}
+}
+
+func TestLinesWhenTheFileHasGone(t *testing.T) {
+	// 起動したあとにファイルが無くなった（手で消した、フォルダーごと動かした）。
+	// 500 を返し、誤りの中身は返さない。中身にはパスが入り、パスには利用者名が
+	// 入ることがある。端末の記録にもロケール名しか書かない。
+	var log strings.Builder
+	root := newTestRoot(t)
+	s := newTestServer(t, Options{Root: root, UILang: "ja", Stderr: &log})
+	if err := os.Remove(inputPath(t, s, "ja")); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, s, http.MethodGet, "/api/lines?locale=ja", true, nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("状態コードが %d、500 を期待", rec.Code)
+	}
+	body := rec.Body.String()
+	if want := s.cat.T(s.cat.lookup("ja"), "error.read_failed"); !strings.Contains(body, want) {
+		t.Errorf("読めなかったと言っていない: %q", body)
+	}
+	for _, leak := range []string{root, filepath.ToSlash(root), "strings.csv"} {
+		if strings.Contains(body, leak) || strings.Contains(log.String(), leak) {
+			t.Errorf("応答か記録にパスが出ている（%q）\n応答: %q\n記録: %q", leak, body, log.String())
+		}
+	}
+	if !strings.Contains(log.String(), "open failed locale=ja") {
+		t.Errorf("記録に失敗が出ていない: %q", log.String())
+	}
+	// 他のロケールは読める。1つが読めないからといって画面全体を止めない。
+	if rec := do(t, s, http.MethodGet, "/api/lines?locale=he", true, nil); rec.Code != http.StatusOK {
+		t.Errorf("he まで %d になった", rec.Code)
+	}
+}
+
+func TestLinesWithoutAStartupSummary(t *testing.T) {
+	// 起動時の突き合わせにそのロケールが無い（publish.DiscoverTargets と
+	// internal/diff の見え方が食い違った）。行は出すが、件数は空のまま返す。
+	// 数字を作れば、それが画面の独自判断になる。保存の応答も同じ扱いにする。
+	s := newTestServer(t, Options{Root: newEditRoot(t), UILang: "ja"})
+	delete(s.summaries, "ja")
+
+	got := getLines(t, s, "ja")
+	if len(got.Counts) != 0 {
+		t.Errorf("起動時の件数が無いのに件数を返した: %+v", got.Counts)
+	}
+	if got.Rows == 0 || len(got.Lines) == 0 {
+		t.Error("件数が無いだけで行まで出さなくなった")
+	}
+
+	rec := save(t, s, "ja", got.Version, rowEdit{Line: 6, Translation: jaTyped})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("保存の状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	saved := decode[rowsResponse](t, rec.Body.Bytes())
+	if !saved.Results[0].Saved {
+		t.Errorf("保存できていない: %+v", saved.Results[0])
+	}
+	if len(saved.Counts) != 0 {
+		t.Errorf("保存の応答で件数を作った: %+v", saved.Counts)
+	}
+}
+
+// brokenWriter は書き込みが必ず失敗する http.ResponseWriter。
+//
+// 応答を送っている途中でブラウザーのタブが閉じられた、という形を作る。
+type brokenWriter struct {
+	header http.Header
+	status int
+}
+
+func newBrokenWriter() *brokenWriter {
+	return &brokenWriter{header: http.Header{}}
+}
+
+func (w *brokenWriter) Header() http.Header { return w.header }
+
+func (w *brokenWriter) WriteHeader(status int) { w.status = status }
+
+func (w *brokenWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write: broken pipe")
+}
+
+func TestWriteFailureIsRecordedWithoutContent(t *testing.T) {
+	// 送っている途中で切れても、状態コードはもう送ってあるので書き換えない。
+	// 端末には「書けなかった」ことだけを残し、応答の中身（訳）は書かない。
+	cases := []struct {
+		name       string
+		write      func(s *server, w http.ResponseWriter)
+		wantStatus int
+	}{
+		{"状態コード 200", func(s *server, w http.ResponseWriter) {
+			s.writeJSON(w, rowResult{Line: 6, Translation: jaTyped})
+		}, 0},
+		{"状態コードを指定", func(s *server, w http.ResponseWriter) {
+			s.writeJSONStatus(w, http.StatusConflict, rowResult{Line: 6, Translation: jaTyped})
+		}, http.StatusConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var log strings.Builder
+			s := newTestServer(t, Options{Stderr: &log})
+			w := newBrokenWriter()
+
+			tc.write(s, w)
+
+			if !strings.Contains(log.String(), "dwloc edit: write failed") {
+				t.Errorf("書けなかったことが記録に無い: %q", log.String())
+			}
+			if strings.Contains(log.String(), jaTyped) {
+				t.Errorf("記録に訳が出ている: %q", log.String())
+			}
+			if w.status != tc.wantStatus {
+				t.Errorf("状態コードが %d、%d を期待", w.status, tc.wantStatus)
+			}
+			if got := w.header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+				t.Errorf("Content-Type が %q", got)
+			}
+		})
 	}
 }
