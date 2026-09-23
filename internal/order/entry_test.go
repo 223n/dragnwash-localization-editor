@@ -227,3 +227,52 @@ func TestParseEntriesOrderTextIsRaw(t *testing.T) {
 		t.Errorf("Order = %d, want 7", got[0].Order)
 	}
 }
+
+// TestParseEntriesLineKeyColumns は norm / fp / nlen 列の読み方を確かめる。
+//
+// internal/diff は nlen が linekey.MinFuzzyLength 以上の行だけを指紋で突き合わせる。
+// 読める nlen を 0 に落とすと、言い回しが変わった台詞の訳が何も言わずに引き継がれ
+// なくなる。読めない nlen を 0 にせず巨大値にすると、短い台詞まで突き合わせに入る。
+// 値は internal/linekey の見本 "Wash the dragon, then rinse!" のもの。
+func TestParseEntriesLineKeyColumns(t *testing.T) {
+	const (
+		header = "section,phase,node,order,line_id,key,speaker,condition,norm,fp,nlen\n"
+		prefix = "L01 Ryan,intro,Ryan_1_intro,1,line:a8779ebf,0da72197e898ebe1,Ryan,,"
+		norm   = "2b0163d969143127"
+		fp     = "c291a81964e2e55a"
+	)
+	tests := []struct {
+		name     string
+		csv      string
+		wantNorm string
+		wantFP   string
+		wantNLen int
+	}{
+		{"3列とも読む", header + prefix + norm + "," + fp + ",26\n", norm, fp, 26},
+		{"nlen の前後の空白は許す", header + prefix + norm + "," + fp + ", 26\t\n", norm, fp, 26},
+		{"nlen が空なら0", header + prefix + norm + "," + fp + ",\n", norm, fp, 0},
+		{"nlen が数でなければ0", header + prefix + norm + "," + fp + ",abc\n", norm, fp, 0},
+		{"nlen が小数なら0", header + prefix + norm + "," + fp + ",26.0\n", norm, fp, 0},
+		{"nlen がint32を超えれば0", header + prefix + norm + "," + fp + ",3000000000\n", norm, fp, 0},
+		{
+			name:     "3列が無い版では空と0",
+			csv:      "section,phase,node,order,line_id,key,speaker,condition\n" + prefix + "\n",
+			wantNorm: "", wantFP: "", wantNLen: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseEntries(rowsFromCSV(tt.csv))
+			if len(got) != 1 {
+				t.Fatalf("件数 = %d, want 1（nlen が読めなくても行は残る）", len(got))
+			}
+			e := got[0]
+			if e.Norm != tt.wantNorm || e.FP != tt.wantFP {
+				t.Errorf("Norm, FP = %q, %q, want %q, %q", e.Norm, e.FP, tt.wantNorm, tt.wantFP)
+			}
+			if e.NLen != tt.wantNLen {
+				t.Errorf("NLen = %d, want %d", e.NLen, tt.wantNLen)
+			}
+		})
+	}
+}

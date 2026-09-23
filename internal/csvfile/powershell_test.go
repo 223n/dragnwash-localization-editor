@@ -139,6 +139,20 @@ func TestReadPowerShellRows(t *testing.T) {
 		}
 	})
 
+	// '#' を除いた残りは2行以上あるが、すべて空行でヘッダーが見つからない形。
+	// 元実装の Read-Csv も0行を返して止まらない（pwsh 7.6.6 で実測）。
+	t.Run("空行しか残らなければ0行", func(t *testing.T) {
+		for _, text := range []string{"\n\n", "\r\n\r\n\r\n", "# a\n\n\n"} {
+			rows, err := ReadPowerShellRows([]byte(text))
+			if err != nil {
+				t.Fatalf("ReadPowerShellRows(%q) が失敗した: %v", text, err)
+			}
+			if len(rows) != 0 {
+				t.Errorf("ReadPowerShellRows(%q) の行数 = %d, want 0", text, len(rows))
+			}
+		}
+	})
+
 	t.Run("空行と空白だけの行は落ちる", func(t *testing.T) {
 		rows := mustReadPowerShell(t, "key,translation\n\na,b\n   \nc,d\n")
 		if len(rows) != 2 {
@@ -219,6 +233,86 @@ func TestReadPowerShellRows(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestReadPowerShellRowsNumbered は、各行に添える物理行番号を確かめる。
+//
+// この番号は internal/publish が「何行目の訳が失われるか」を人に示すのに使う。
+// '#' の行・空行・空白だけの行を数え落とすと、指した行に別の訳が書いてあり、
+// 利用者は失われる訳を見誤る。終端の3種（CRLF / CR / LF）と、末尾に改行が
+// 無い最終行も1行として数えることをここで見る。
+func TestReadPowerShellRowsNumbered(t *testing.T) {
+	text := bom +
+		"# 見出し\r\n" + // 1
+		"\r\n" + // 2 ヘッダー探索で飛ばす空行
+		"key,translation\r\n" + // 3 ヘッダー
+		"a,1\r\n" + // 4
+		"# --- node ---\n" + // 5
+		"\n" + // 6 空行
+		"   \n" + // 7 空白だけの行（レコードにならない）
+		"b,2\r" + // 8 CR 単独の終端
+		"c,3" // 9 末尾に改行が無い
+
+	numbered, err := ReadPowerShellRowsNumbered([]byte(text))
+	if err != nil {
+		t.Fatalf("ReadPowerShellRowsNumbered が失敗した: %v", err)
+	}
+	want := []struct {
+		key, translation string
+		line             int
+	}{
+		{"a", "1", 4},
+		{"b", "2", 8},
+		{"c", "3", 9},
+	}
+	if len(numbered) != len(want) {
+		t.Fatalf("行数 = %d, want %d", len(numbered), len(want))
+	}
+	for i, w := range want {
+		got := numbered[i]
+		if got.Get("key") != w.key || got.Get("translation") != w.translation {
+			t.Errorf("[%d] = (%q, %q), want (%q, %q)",
+				i, got.Get("key"), got.Get("translation"), w.key, w.translation)
+		}
+		if got.Line != w.line {
+			t.Errorf("[%d].Line = %d, want %d", i, got.Line, w.line)
+		}
+	}
+
+	// 番号なしの読み方は同じ行を同じ順に返す。規則が片方だけで直る形を防ぐ。
+	rows := mustReadPowerShell(t, text)
+	if len(rows) != len(numbered) {
+		t.Fatalf("ReadPowerShellRows の行数 = %d, want %d", len(rows), len(numbered))
+	}
+	for i := range rows {
+		if !slices.Equal(rows[i].Columns(), numbered[i].Columns()) ||
+			rows[i].Get("key") != numbered[i].Get("key") ||
+			rows[i].Get("translation") != numbered[i].Get("translation") {
+			t.Errorf("[%d] の中身が番号つきと違う", i)
+		}
+	}
+}
+
+// TestDuplicateColumnErrorMessage は、重複した列名が文言に引用符つきで出ることを見る。
+// 利用者は文言だけを頼りにヘッダーを直す。空白だけの列名も見分けられるよう、
+// 名前は %q で囲む。
+func TestDuplicateColumnErrorMessage(t *testing.T) {
+	tests := []struct {
+		label  string
+		column string
+		want   string
+	}{
+		{"ふつうの列名", "KEY", `ヘッダーの列名 "KEY" が重複している`},
+		{"空白だけの列名", " ", `ヘッダーの列名 " " が重複している`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			err := error(&DuplicateColumnError{Name: tt.column})
+			if got := err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func mustReadPowerShell(t *testing.T, text string) []Row {

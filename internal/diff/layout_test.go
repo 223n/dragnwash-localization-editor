@@ -1,9 +1,11 @@
 package diff
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
@@ -46,6 +48,16 @@ func TestParseLayoutRisks(t *testing.T) {
 	}
 	if risks[1].RatioText != "n/a" || risks[1].Ratio != 0 {
 		t.Errorf("読めない比の扱いが違う: %q / %v", risks[1].RatioText, risks[1].Ratio)
+	}
+}
+
+// TestParseLayoutRisksDuplicateColumn は、列名が重複した記録をエラーにすることを
+// 確かめる。どちらの列を読むか決められないまま読むと、別の列の値で行を結び付ける。
+func TestParseLayoutRisksDuplicateColumn(t *testing.T) {
+	_, err := ParseLayoutRisks([]byte("source_en,source_en,ratio\na,b,1.5\n"))
+	var dup *csvfile.DuplicateColumnError
+	if !errors.As(err, &dup) {
+		t.Fatalf("csvfile.DuplicateColumnError ではない: %v", err)
 	}
 }
 
@@ -182,6 +194,96 @@ func TestCompareLayoutRisk(t *testing.T) {
 		}
 		if why := sum.JudgeBlockReason(CatLayoutRisk); why.ID != reason.JudgeLayoutRisksNotRead {
 			t.Errorf("理由が違う: %q (%q)", why.ID, why.Text)
+		}
+	})
+
+	t.Run("比の大きい行が先にあれば後の小さい行で置き換えない", func(t *testing.T) {
+		// 並びに関わらず最大を採ること。先に大きいほうが来る並びで、後の小さい
+		// 行に上書きされると、いちばんはみ出す場所を見落とす。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderTwo,
+			"Translations/ja/strings.csv": published,
+			"Translations/_discovered/layout_risks.csv": layoutRisksHeader +
+				layoutRow(srcHello, "こんにちは", "y", "90", "30", "3.0", "Canvas/B") +
+				layoutRow(srcHello, "こんにちは", "x", "240", "180", "1.33", "Canvas/A"),
+		}, true)
+		rep := Compare(repo, nil)
+		if f := findingOf(t, rep, CatLayoutRisk); !strings.Contains(f.Note, "3.0") {
+			t.Errorf("比の大きい行を採っていない: %q", f.Note)
+		}
+	})
+
+	t.Run("比が同じなら先の行を採る", func(t *testing.T) {
+		// 実行ごとに報告が変わらないように、同点は先に書かれた行で決める。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderTwo,
+			"Translations/ja/strings.csv": published,
+			"Translations/_discovered/layout_risks.csv": layoutRisksHeader +
+				layoutRow(srcHello, "こんにちは", "x", "240", "120", "2.0", "Canvas/A") +
+				layoutRow(srcHello, "こんにちは", "y", "60", "30", "2.0", "Canvas/B"),
+		}, true)
+		rep := Compare(repo, nil)
+		f := findingOf(t, rep, CatLayoutRisk)
+		if f.NoteReason.ID != reason.NoteLayoutRisk {
+			t.Fatalf("注記が違う: %q", f.NoteReason.ID)
+		}
+		if !strings.Contains(f.Note, "x 方向") || !strings.Contains(f.Note, "240") {
+			t.Errorf("先の行を採っていない: %q", f.Note)
+		}
+	})
+
+	t.Run("訳が空の行には付けない", func(t *testing.T) {
+		// 訳の無いまま測った記録（原文が出ていた）と、まだ訳の無い作業コピーの行は
+		// 空どうしで一致してしまう。訳が無ければ短くする相手がいない。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderTwo,
+			"Translations/ja/strings.csv": published,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyBye + ",L01 Ryan,Ryan_1_intro,2,Kobold," + srcBye + ",\n",
+			"Translations/_discovered/layout_risks.csv": layoutRisksHeader +
+				layoutRow(srcBye, "", "x", "240", "180", "1.33", "Canvas/Label"),
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatLayoutRisk]; got != 0 {
+			t.Errorf("訳の無い行に付けた: got %d", got)
+		}
+	})
+
+	t.Run("作業コピーに同じキーが2行あっても1件", func(t *testing.T) {
+		// 画面はバッジをキー単位で付けるので、2回数えると件数とバッジが食い違う。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderTwo,
+			"Translations/ja/strings.csv": published,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ",こんにちは\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ",こんにちは\n",
+			"Translations/_discovered/layout_risks.csv": layoutRisksHeader +
+				layoutRow(srcHello, "こんにちは", "x", "240", "180", "1.33", "Canvas/Label"),
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatLayoutRisk]; got != 1 {
+			t.Errorf("件数が違う: got %d, want 1", got)
+		}
+	})
+
+	t.Run("publish が捨てる作業コピーの行には付けない", func(t *testing.T) {
+		// key と原文のハッシュが食い違う行は publish が捨てる。訳を短くしても
+		// 公開ファイルには載らないので、先に「publish で捨てられる行」を直す。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       orderTwo,
+			"Translations/ja/strings.csv": published,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				keyThanks + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ",こんにちは\n",
+			"Translations/_discovered/layout_risks.csv": layoutRisksHeader +
+				layoutRow(srcHello, "こんにちは", "x", "240", "180", "1.33", "Canvas/Label"),
+		}, true)
+		rep := Compare(repo, nil)
+		got := counts(t, rep, "ja")
+		if got[CatDropped] != 1 {
+			t.Fatalf("前提が崩れている: publish で捨てられる行 = %d 件, want 1", got[CatDropped])
+		}
+		if got[CatLayoutRisk] != 0 {
+			t.Errorf("捨てられる行に付けた: got %d", got[CatLayoutRisk])
 		}
 	})
 

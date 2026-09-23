@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // writeTemp はテスト用のファイルを作ってパスを返す。
@@ -260,5 +261,58 @@ func TestSaveCreatesNoLeftovers(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("余計なファイルが残った: %v", names)
+	}
+}
+
+// TestSaveAfterRevertingDoesNotWrite は、書き換えてから元の値へ戻したときに
+// 書かず、Dirty を下ろすことを見る。
+//
+// 自動保存では、打ち直して元の訳に戻すことがふつうに起きる。Dirty は立った
+// ままなので、中身で判断しないと、何も変わっていないファイルを書き直して
+// ゲームのホットリロードを無駄に起こす。Dirty が残ると、画面は「未保存」を
+// 出し続ける。
+//
+// 更新時刻は過去に倒してから比べる（[TestSaveWithoutChangesKeepsModTime] と
+// 同じ理由。直前に書いたファイルでは刻みが同じになり、偽の合格になる）。
+func TestSaveAfterRevertingDoesNotWrite(t *testing.T) {
+	path := writeTemp(t, sampleWorking)
+	past := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := Open(path)
+	if err != nil {
+		t.Fatalf("開けない: %v", err)
+	}
+	version := f.Version()
+	if err := f.SetTranslation(5, "打ち直し中"); err != nil {
+		t.Fatalf("書き換えに失敗した: %v", err)
+	}
+	if err := f.SetTranslation(5, "ああ"); err != nil {
+		t.Fatalf("元へ戻せない: %v", err)
+	}
+	if !f.Dirty() {
+		t.Fatal("前提が崩れた: 一度書き換えたのに Dirty が立っていない")
+	}
+
+	if err := f.Save(); err != nil {
+		t.Fatalf("保存に失敗した: %v", err)
+	}
+	if f.Dirty() {
+		t.Error("中身が保存先と同じなのに Dirty が残った")
+	}
+	if f.Version() != version {
+		t.Error("書いていないのに版が変わった")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Truncate(time.Second).Equal(past) {
+		t.Errorf("元へ戻しただけなのに書いた。更新時刻 %v, want %v", info.ModTime(), past)
+	}
+	if got := readFile(t, path); got != sampleWorking {
+		t.Errorf("中身が変わった: %q", got)
 	}
 }

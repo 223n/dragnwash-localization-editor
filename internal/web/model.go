@@ -543,10 +543,26 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		notes = append(notes, s.cat.T(cat, "note.layout_risks_read",
 			"path", s.displayPath(sum.LayoutRisksPath)))
 	}
-	if !sum.OrderKeys || !sum.OrderLineIDs {
+	switch {
+	case !sum.OrderKeys:
+		// 再生順のキーが無いと、「再生順に無い」を根拠にするカテゴリがどれも
+		// 成り立たない（台本から消えた行など）。
 		notes = append(notes, s.cat.T(cat, "note.order_unreadable"))
+	case !sum.OrderLineIDs:
+		// キーは読めていて、台詞IDだけが無い。台本から消えた行はキーだけで判定でき、
+		// 件数も出る。上と同じく「台本から消えた行などは判定しません」と書くと、
+		// 件数の欄と食い違う。止まるのは台詞IDを要るカテゴリだけなので、そのカテゴリを
+		// 名指しする。CLI の text 形式の見出し（internal/diff の writeTextHeader）と
+		// 同じ書き分けで、名指しも同じ表の印から引く。
+		notes = append(notes, s.cat.T(cat, "note.order_line_ids_missing",
+			"categories", s.lineIDCategoryNames(cat)))
 	}
-	if !sum.OldOrder || sum.OldOrderStale {
+	if (!sum.OldOrder || sum.OldOrderStale) && sum.OrderKeys && sum.OrderLineIDs {
+		// 1つ前の再生順のせいで止めているときだけ言う。いまの再生順のキーや
+		// 台詞IDが無いときは、引き継ぎ候補もそのせいで止まっていて、すぐ上の
+		// 断り書きが言っている。ここでも言うと、理由（JudgeBlockReason は
+		// いまの再生順の欠けを先に返す）まで同じ文が2度並ぶ。
+		//
 		// 断り書きの外枠も、その中に入る理由も、どちらも目録から引く。
 		// 内側だけ日本語のまま差し込むと、英語の文の途中に日本語が挟まる。
 		why := s.reasonText(cat, sum.JudgeBlockReason(diff.CatCarryover))
@@ -555,15 +571,21 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 	return notes
 }
 
-// reasonText は internal/diff と internal/edit が返した理由を、画面に出す文面にする。
+// lineIDCategoryNames は、再生順の台詞IDが無いと判定できないカテゴリの表示名を、
+// 目録の括り（note.category_quote）で囲み、目録のつなぎ（note.category_and）で
+// 表示順につないで返す。
 //
-// 識別子があれば目録を引き、無ければ元の日本語をそのまま返す。目録に鍵が無い
-// ときも同じで、鍵をそのまま画面に出すことはしない。訳されていない文が出るほうが、
-// 何も出ないよりよい。
-//
-// 落ちたことに人が気づく必要は無い。鍵の抜けは [reason.All] をなぞる試験が
-// 見つけるし、識別子を持たない理由（[diff.OldOrderSource] を差し替えた
-// 呼び出し側が作る誤り）はそもそも訳しようがない。
+// どのカテゴリかは [diff.OrderLineIDCategories] から引く。画面側で並べ直すと、
+// 表の印を変えたときに断り書きだけが古い名指しのまま残る。括りとつなぎも目録から
+// 引くのは、「」と「と」が言語ごとに違うからである。
+func (s *server) lineIDCategoryNames(cat *Catalog) string {
+	var names []string
+	for _, c := range diff.OrderLineIDCategories() {
+		names = append(names, s.cat.T(cat, "note.category_quote", "name", s.categoryLabel(cat, c)))
+	}
+	return strings.Join(names, s.cat.T(cat, "note.category_and"))
+}
+
 // findingNote は行に添える注記を返す。
 //
 // [diff.Finding] は日本語の Note と識別子つきの NoteReason を別々に持つ。
@@ -576,6 +598,15 @@ func (s *server) findingNote(cat *Catalog, f diff.Finding) string {
 	return s.reasonText(cat, f.NoteReason)
 }
 
+// reasonText は internal/diff と internal/edit が返した理由を、画面に出す文面にする。
+//
+// 識別子があれば目録を引き、無ければ元の日本語をそのまま返す。目録に鍵が無い
+// ときも同じで、鍵をそのまま画面に出すことはしない。訳されていない文が出るほうが、
+// 何も出ないよりよい。
+//
+// 落ちたことに人が気づく必要は無い。鍵の抜けは [reason.All] をなぞる試験が
+// 見つけるし、識別子を持たない理由（[diff.OldOrderSource] を差し替えた
+// 呼び出し側が作る誤り）はそもそも訳しようがない。
 func (s *server) reasonText(cat *Catalog, why reason.Reason) string {
 	if why.ID == "" {
 		return why.Text

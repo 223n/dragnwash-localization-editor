@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -533,6 +537,133 @@ func TestEditRefusesGameAndNoGameTogether(t *testing.T) {
 	// 待ち受けを立てない。立ててから止めると、URL が出たあとに落ちる。
 	if strings.Contains(stdout, "http://127.0.0.1:") {
 		t.Errorf("待ち受けを始めている:\n%s", stdout)
+	}
+}
+
+// TestWriteGameErrorNotFound は、--game auto が空振りしたときの案内を見る。
+//
+// 入口から試さないのは、--game auto が gamedir.Find を直に呼び、実機の Steam を
+// 見に行くからである（[TestMain] の注意書き）。案内の選び分けだけをここで見る。
+//
+// macOS では「ゲームを起動して Export working copy を押す」が実行できない案内に
+// なる（Mod が macOS で動かない）。文面を分けたことが崩れると、押せないボタンを
+// 押させる行き止まりに戻る。
+func TestWriteGameErrorNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"番兵そのもの", gamedir.ErrNotFound},
+		// 包まれていても同じ案内にする。gamedir が文脈を足しても、次にやることは変わらない。
+		{"包まれた番兵", fmt.Errorf("探した結果: %w", gamedir.ErrNotFound)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			writeGameError(tc.err, &buf)
+			got := buf.String()
+
+			checkContains(t, "案内", got, []string{"ゲームのフォルダーが見つかりません", "--game <フォルダー>"})
+			if runtime.GOOS == "darwin" {
+				checkContains(t, "案内", got, []string{"macOS", "dwloc 自身は動きます"})
+				return
+			}
+			// macOS 以外では、次にやることはゲーム内での書き出しである。
+			checkContains(t, "案内", got, []string{"F1 → Translation → Export working copy"})
+			if strings.Contains(got, "macOS") {
+				t.Errorf("macOS 以外で macOS 向けの案内が出ている:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestWriteGameErrorUnknown は、名前の付いていない理由でも黙って終わらないことを見る。
+//
+// internal/gamedir が新しい誤りを増やしたとき、ここが何も書かないと、終了コード2
+// だけが残って理由が画面のどこにも出ない。
+func TestWriteGameErrorUnknown(t *testing.T) {
+	var buf bytes.Buffer
+	writeGameError(errors.New("読み取りの権限がありません"), &buf)
+	checkContains(t, "案内", buf.String(),
+		[]string{"ゲームのフォルダーを決められません", "読み取りの権限がありません"})
+}
+
+// TestResolveGameEmptyValue は、値が空なら探しも書きもしないことを見る。
+//
+// resolveGame は --game を打ったときだけの部品で、空のときの自動検出は
+// resolveGameAuto の役目である。ここが空で探しに行くと、自動検出が2度走り、
+// 探し先の1行も2度出る。
+func TestResolveGameEmptyValue(t *testing.T) {
+	calls := 0
+	was := findGame
+	t.Cleanup(func() { findGame = was })
+	findGame = func() []gamedir.Plugin {
+		calls++
+		return nil
+	}
+
+	var buf bytes.Buffer
+	path, ok := resolveGame("", &buf)
+	if !ok || path != "" {
+		t.Errorf("resolveGame(\"\") = (%q, %v), 期待 (\"\", true)", path, ok)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("何か書いている:\n%s", buf.String())
+	}
+	if calls != 0 {
+		t.Errorf("自動検出を %d 回呼んでいる", calls)
+	}
+}
+
+// TestPublishStopsBeforeReadingWhenTheGameIsWrong は、ゲームのフォルダーを決め
+// られなかった publish が、何も書かずに終了コード2で止まることを見る。
+//
+// 止まらずに進むと、打った場所とは別の入力（リポジトリの中だけ）で書き出す。
+// 翻訳者はゲームで入れた訳が入ったつもりで、入っていない公開ファイルを
+// コミットすることになる。
+func TestPublishStopsBeforeReadingWhenTheGameIsWrong(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// args は publish と --root のあとに置く引数。{game} はゲームのフォルダーに置き換える。
+		args []string
+		want []string
+	}{
+		{
+			name: "--game と --no-game を一緒に打った",
+			args: []string{"--game", "{game}", "--no-game"},
+			want: []string{"--game と --no-game は一緒に指定できません"},
+		},
+		{
+			name: "--game が目印の無い場所を指している",
+			args: []string{"--game", "{empty}"},
+			want: []string{"Translations/_discovered がありません"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := gameRepo(t)
+			game := makeGame(t, map[string]string{
+				"Translations/_discovered/ja.working.csv": gameWorkingCSV,
+			})
+			empty := t.TempDir()
+			before := readFile(t, root, "Translations/ja/strings.csv")
+
+			args := []string{"publish", "--root", root}
+			for _, a := range tc.args {
+				a = strings.ReplaceAll(a, "{game}", game)
+				a = strings.ReplaceAll(a, "{empty}", empty)
+				args = append(args, a)
+			}
+			code, stdout, stderr := runCLI(args...)
+			if code != exitError {
+				t.Fatalf("終了コード = %d、%d を期待\n%s", code, exitError, stderr)
+			}
+			checkContains(t, "標準エラー", stderr, tc.want)
+			if stdout != "" {
+				t.Errorf("失敗したのに標準出力へ書いている:\n%s", stdout)
+			}
+			if after := readFile(t, root, "Translations/ja/strings.csv"); after != before {
+				t.Errorf("止めたのに公開ファイルが変わっている:\n%s", after)
+			}
+		})
 	}
 }
 

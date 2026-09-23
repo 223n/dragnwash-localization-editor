@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // samplePublished は実データと同じ姿の小さな公開ファイル。
@@ -534,5 +535,95 @@ func assertNotEditable(t *testing.T, err error, line int) {
 	}
 	if e.Reason == "" {
 		t.Error("理由が空")
+	}
+}
+
+// TestReadOnlyCause は、読み取り専用にした理由を文面と識別子の両方で持ち、
+// それがデータ行にも同じものとして載ることを見る。
+//
+// 画面はファイルの理由を目録で訳して出し、行の理由も同じ鍵で引く。ファイルと
+// 行で別の理由を持つと、同じファイルについて見出しと行で違うことを言う。
+func TestReadOnlyCause(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantID   string
+		wantArgs []string
+	}{
+		{
+			name:    "ヘッダー行が無い",
+			content: "# コメントだけ\n\n",
+			wantID:  reason.EditNoHeader,
+		},
+		{
+			// 行番号は物理行で数える。コメントを飛ばした位置ではない。
+			// ヘッダー行そのものは引用して渡す（目録の側で引用符を変えさせない）。
+			name:     "受理されないヘッダー",
+			content:  "# 先頭のコメント\nfoo,bar\n1,2\n",
+			wantID:   reason.EditBadHeader,
+			wantArgs: []string{"line", "2", "text", `"foo,bar"`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := Parse([]byte(tt.content))
+			if !f.ReadOnly() {
+				t.Fatal("読み取り専用にならなかった")
+			}
+			cause := f.ReadOnlyCause()
+			if cause.ID != tt.wantID {
+				t.Errorf("識別子が %q、期待 %q", cause.ID, tt.wantID)
+			}
+			if !slices.Equal(cause.Args, tt.wantArgs) {
+				t.Errorf("置換が %q、期待 %q", cause.Args, tt.wantArgs)
+			}
+			if cause.Text != f.ReadOnlyReason() {
+				t.Errorf("文面が2つに割れている: ReadOnlyReason %q / Cause.Text %q",
+					f.ReadOnlyReason(), cause.Text)
+			}
+			for _, line := range f.Lines() {
+				if line.Kind == KindData && (line.Cause.ID != cause.ID || line.Reason != cause.Text) {
+					t.Errorf("%d行目の理由がファイルの理由と違う: %+v", line.Number, line.Cause)
+				}
+			}
+			// 書き込みの誤りにも同じ理由が載る。CLI はこの文面をそのまま出す。
+			err := f.SetTranslation(3, "x")
+			if !errors.Is(err, ErrReadOnly) || !strings.Contains(err.Error(), cause.Text) {
+				t.Errorf("SetTranslation = %v、ErrReadOnly と理由 %q を期待", err, cause.Text)
+			}
+		})
+	}
+
+	t.Run("編集できるファイルでは空", func(t *testing.T) {
+		f := Parse([]byte(sampleWorking))
+		if !f.ReadOnlyCause().Empty() {
+			t.Errorf("読み取り専用でないのに理由がある: %+v", f.ReadOnlyCause())
+		}
+	})
+}
+
+// TestLineOutOfRange は、無い行番号を引いても落ちずに「無い」と返すことを見る。
+//
+// 行番号は画面から届く値で、ファイルを読み直したあとの古い番号や、壊れた要求の
+// 値も来る。範囲の外で添字を引くと、1つの要求でサーバーごと落ちる。
+func TestLineOutOfRange(t *testing.T) {
+	f := Parse([]byte(sampleWorking))
+	total := len(f.Lines())
+
+	for _, n := range []int{0, -1, total + 1, 1 << 30} {
+		line, ok := f.Line(n)
+		if ok {
+			t.Errorf("Line(%d) が見つかったことになっている: %+v", n, line)
+		}
+		if line.Number != 0 || line.Text != "" || line.Fields != nil {
+			t.Errorf("Line(%d) がゼロ値でない: %+v", n, line)
+		}
+	}
+	// 境目の内側は引ける。
+	for _, n := range []int{1, total} {
+		if line, ok := f.Line(n); !ok || line.Number != n {
+			t.Errorf("Line(%d) = %+v, %v", n, line, ok)
+		}
 	}
 }

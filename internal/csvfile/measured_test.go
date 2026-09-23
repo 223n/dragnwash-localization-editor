@@ -1,6 +1,7 @@
 package csvfile
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -80,6 +81,74 @@ func TestReadPowerShellRowsHeaderSelection(t *testing.T) {
 			}
 			if ok && got != tt.wantKey {
 				t.Errorf("key = %q, want %q", got, tt.wantKey)
+			}
+		})
+	}
+}
+
+// TestReadPowerShellRowsEmptyColumnNames は、空の列名が重複の判定に入らないことを
+// 固定する。
+//
+// ConvertFrom-Csv は空の列名に H1, H2 ... の既定名を振り、警告を出すだけで
+// 止まらない（pwsh 7.6.6 で、移植元の Read-Csv を $ErrorActionPreference = 'Stop'
+// のまま実測）。表計算ソフトで保存すると "key,translation,,," のように空の列が
+// 末尾に付くことがある。空の名前どうしを重複と数えると、元実装なら公開できる
+// ファイルでこちらだけが止まる。空白の列名は空ではないので、重複すれば止まる。
+func TestReadPowerShellRowsEmptyColumnNames(t *testing.T) {
+	tests := []struct {
+		name string
+		csv  string
+		// wantDup は重複として返るべき列名。空なら成功を期待する。
+		wantDup string
+	}{
+		{
+			name: "末尾に空の列が並ぶ",
+			csv:  "key,translation,,,\nabc,あ,,,\n",
+		},
+		{
+			name: "先頭に空の列が並ぶ",
+			csv:  ",,key,translation\nx,y,abc,あ\n",
+		},
+		{
+			name: "空の引用フィールドが並ぶ",
+			csv:  `"","",key,translation` + "\nx,y,abc,あ\n",
+		},
+		{
+			name:    "空白の列名は重複になる",
+			csv:     `" "," ",key,translation` + "\nx,y,abc,あ\n",
+			wantDup: " ",
+		},
+		{
+			name:    "空の列をはさんでも同名の列は重複になる",
+			csv:     "key,,KEY,translation\nabc,x,abc,あ\n",
+			wantDup: "KEY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows, err := ReadPowerShellRows([]byte(tt.csv))
+			if tt.wantDup != "" {
+				var dup *DuplicateColumnError
+				if !errors.As(err, &dup) {
+					t.Fatalf("err = %v, want *DuplicateColumnError", err)
+				}
+				if dup.Name != tt.wantDup {
+					t.Errorf("重複した列名 = %q, want %q", dup.Name, tt.wantDup)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadPowerShellRows が失敗した: %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("行数 = %d, want 1", len(rows))
+			}
+			if got := rows[0].Get("key"); got != "abc" {
+				t.Errorf("Get(key) = %q, want %q", got, "abc")
+			}
+			if got := rows[0].Get("translation"); got != "あ" {
+				t.Errorf("Get(translation) = %q, want %q", got, "あ")
 			}
 		})
 	}

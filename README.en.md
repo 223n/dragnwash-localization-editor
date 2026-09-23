@@ -739,6 +739,17 @@ Pressing it opens a menu where you choose the form.
 The browser asks you where to save it.  
 This tool does not take a destination path, so there is no field on the screen to type one into.
 
+When you press it, any translations not yet sent are sent first, and then it exports.  
+If a translation shown on screen is still not in the file, it does not export.  
+The reason appears under the button, so sort it out and press again.
+
+| When it does not export | How to sort it out |
+| ---- | ---- |
+| Translations are still being sent, or could not be sent | Wait until they have been sent |
+| There is a conflict | Pick which translation to keep |
+| A row cannot be saved | Fix it using the reason shown on the row |
+| A translation has no row to go to | Copy it down, then reload |
+
 There are two forms you can export.
 
 | What you choose | What comes out |
@@ -912,12 +923,16 @@ What `diff` shows are candidates, not certainties.
 It does not rewrite translations, so check the content before you move anything.
 
 `publish` assembles everything it targets before writing anything out.  
-If even one thing fails, it writes nothing.  
+If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
-The write goes through a temporary file, so the original file survives even if it stops partway.
+Each file is written through a temporary file, so a file it could not write keeps its original content.  
+However, if writing fails partway (no write permission, not enough disk space, and so on), it does not roll back.  
+The locales it wrote before that keep their new content, and it stops with exit code `2`.  
+Each locale it wrote is printed as one line on standard output.  
+All of them passed the checks above, so no translation is lost.
 
 You can narrow what it targets with `--locale`.  
 With `--path` it stops scanning `Translations` and converts only the file you name.
@@ -1054,7 +1069,7 @@ How the options were compared is in the research report.
 
 | Tool | What it is for |
 | ---- | ---- |
-| Node 22 or later | Used to check the Japanese documents |
+| Node 22 or later | Used to check the Japanese documents and to run the E2E tests |
 | Go 1.27.1 or later | Used for the implementation. It is pinned in `go.mod` |
 
 ### Building it yourself
@@ -1105,6 +1120,39 @@ CI builds all six targets, so writing anything that uses `CGO` will pass locally
 There are tests that refer to the original repository.  
 They run when you put its path in `DRAGNWASH_SOURCE_REPO`.  
 Without it, they look in the default location and are skipped if nothing is found.
+
+### Tests and coverage
+
+There are two kinds of tests.  
+The Go tests, and end-to-end (E2E) tests that drive the screen (`internal/web/ui`) in a browser.  
+The E2E tests run in Playwright's Chromium.
+
+```bash
+npm ci
+npx playwright install chromium   # first time only. On Linux, add --with-deps
+npm run test:go                   # Go tests and coverage
+npm run test:e2e                  # E2E tests of the screen and coverage of app.js
+npm test                          # both
+```
+
+`npm run test:go` runs `go test ./cmd/... ./internal/...` with coverage and prints the figure for each package and the total.  
+The profile is left in `coverage/go/cover.out`.
+
+`npm run test:e2e` builds `dwloc` into a temporary directory, creates a sample translation repository in a separate temporary directory for each test, and starts `dwloc edit` on it.  
+It neither reads nor writes the contents of your checkout.  
+Coverage of `app.js` is counted on lines, leaving out comments and blank lines.  
+The report is written to `coverage/e2e/index.html`.  
+To use a `dwloc` you have already built, put its path in `DWLOC_BIN`.  
+A relative path is taken from the root of the repository.
+
+When you run a narrowed set of specs with `npx playwright test -c e2e <spec>`, first remove the raw data of earlier runs with `node e2e/coverage.mjs clean`.  
+Aggregate the results afterwards with `npm run test:e2e:report`.  
+If raw data from an earlier run is left behind, the aggregation stops without counting.
+
+Both fail when coverage falls below `coverageThresholds` in `package.json`.  
+The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
+Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
+When you add tests and the figures go up, raise the thresholds too.
 
 ### Checking the Japanese documents
 
@@ -1238,7 +1286,7 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
 | `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the safety of the workflows with CodeQL |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |

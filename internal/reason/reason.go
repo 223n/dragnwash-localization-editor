@@ -75,8 +75,18 @@ const (
 	JudgeWorkingNotRead = "judge_working_not_read"
 	// JudgeWorkingMissing は作業コピーのファイルが無いこと。
 	JudgeWorkingMissing = "judge_working_missing"
-	// JudgeOrderUnreadable は再生順のキーか台詞IDを読めていないこと。
+	// JudgeOrderUnreadable は再生順のキーを読めていないこと。
+	//
+	// 台詞IDだけを要るカテゴリでも、キーも読めていなければこちらになる。再生順が
+	// 丸ごと読めていないときに台詞IDのことだけを言うと、直すべきものを取り違える。
 	JudgeOrderUnreadable = "judge_order_unreadable"
+	// JudgeOrderNoLineIDs は再生順のキーは読めているが、台詞ID (line_id) が
+	// 1件も無いこと。
+	//
+	// JudgeOrderUnreadable と分けてあるのは、キーだけで判定できるカテゴリ
+	// （台本から消えた行など）には件数が出ているからである。同じ「再生順を
+	// 読めていません」と書くと、その件数と食い違う。
+	JudgeOrderNoLineIDs = "judge_order_no_line_ids"
 	// JudgeOldOrderUnreadable は1つ前の版の再生順を取り出せていないこと。
 	// より細かい理由が分かるときは OldOrder* のほうが入る。
 	JudgeOldOrderUnreadable = "judge_old_order_unreadable"
@@ -97,7 +107,11 @@ const (
 	// OldOrderNoRepository は git リポジトリでないか、コミットが無いこと。
 	OldOrderNoRepository = "old_order_no_repository"
 	// OldOrderNotTracked は再生順が git の管理下に無いこと。
+	// git add もしていないか、リポジトリの外にある。
 	OldOrderNotTracked = "old_order_not_tracked"
+	// OldOrderNotCommitted は再生順を git add しただけで、まだコミットしていないこと。
+	// git はこれを追跡中と答えるので、OldOrderNotTracked とは分けてある。
+	OldOrderNotCommitted = "old_order_not_committed"
 	// OldOrderOnlyOneVersion は再生順の履歴が1版しか無いこと。
 	OldOrderOnlyOneVersion = "old_order_only_one_version"
 	// OldOrderGitFailed は git は動いたが取り出しに失敗したこと。
@@ -241,11 +255,12 @@ const (
 
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
-	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOldOrderUnreadable,
-	JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
+	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOrderNoLineIDs,
+	JudgeOldOrderUnreadable, JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
 
-	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderOnlyOneVersion,
-	OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs, OldOrderStale,
+	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderNotCommitted,
+	OldOrderOnlyOneVersion, OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs,
+	OldOrderStale,
 
 	NoteUntranslated, NoteVanished, NoteStrayLineID, NoteNotPublished,
 	NoteScriptGap, NoteUnknownOrigin,

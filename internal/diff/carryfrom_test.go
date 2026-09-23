@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/linekey"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
@@ -76,10 +77,14 @@ var carryPublished = publishedHeader +
 	key.For(srcWashOld) + ",L01 Ryan,Wash_1,1,Kobold,お湯が冷める前にスポンジを取ってください\n"
 
 // workingRow は作業コピーの1行を組み立てる。
+//
+// 値は publish と同じ規則で引用する。srcGateOld のようにカンマを含む原文を
+// そのまま連ねると列がずれ、原文の後半が訳の列に入る。そうなると「訳が空の行」を
+// 試しているつもりの試験が、訳のある行として別の理由で通ってしまう。
 func workingRow(node, orderText, speaker, source, translation string) string {
-	return strings.Join([]string{
+	return csvfile.JoinFields(
 		key.For(source), "L01 Ryan", node, orderText, speaker, source, translation,
-	}, ",") + "\n"
+	) + "\n"
 }
 
 func TestCarryFromCandidates(t *testing.T) {
@@ -325,6 +330,74 @@ func TestCarryFromCandidates(t *testing.T) {
 			t.Errorf("件数が違う: got %d, want 1", got)
 		}
 	})
+
+	t.Run("公開ファイルが無いロケールでは出さない", func(t *testing.T) {
+		// 引き継ぎ元は同じロケールの公開ファイルの訳だけ。他のロケールに訳が
+		// あっても、それはこのロケールへ持ってくる訳ではない。
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv":       carryOrderFile(carryOrderRows...),
+			"Translations/de/strings.csv": carryPublished,
+			"Translations/ja/.keep":       "",
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				workingRow("Gate_1", "1", "Ryan", srcGateNew, ""),
+		}, true)
+		rep := Compare(repo, []string{"ja"})
+		sum := rep.Locales[0]
+		if !sum.CanJudge(CatCarryFrom) {
+			t.Fatal("作業コピーも norm 列もあるのに判定していない")
+		}
+		if got := sum.Counts[CatCarryFrom]; got != 0 {
+			t.Errorf("他のロケールの訳を引き継ぎ元にした: got %d", got)
+		}
+	})
+
+	t.Run("正規化すると空になる原文は突き合わせない", func(t *testing.T) {
+		// 記号だけの台詞は正規化すると空になり、どれも同じ norm（空文字のハッシュ）
+		// を持つ。突き合わせると "..." の訳を "!!!" に持ってくることになる。
+		rows := append([]carryRow{}, carryOrderRows...)
+		rows = append(rows, carryRow{node: "Gate_1", orderText: "2", lineID: "line:dots0001", source: "...", speaker: "Ryan"})
+		if linekey.Normalize("...") != "" || linekey.Normalize("!!!") != "" {
+			t.Fatal("見本の作り方が間違っている: 正規化しても空にならない")
+		}
+		repo := newRepo(t, map[string]string{
+			"data/script_order.csv": carryOrderFile(rows...),
+			"Translations/ja/strings.csv": carryPublished +
+				key.For("...") + ",L01 Ryan,Gate_1,2,Ryan,……\n",
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				workingRow("Gate_1", "3", "Ryan", "!!!", ""),
+		}, true)
+		rep := Compare(repo, nil)
+		if got := counts(t, rep, "ja")[CatCarryFrom]; got != 0 {
+			t.Errorf("記号だけの台詞どうしを結び付けた: got %d", got)
+		}
+	})
+}
+
+// TestPublishedTranslations は、引き継ぎ元の訳を引く表の作り方を固定する。
+//
+// ハッシュ行だけを入れる。台詞ID行は同じ英文を話者ごとに訳し分けるための行で、
+// キーの訳そのものではない。同じキーが2行あれば先に出たほうを採る。
+func TestPublishedTranslations(t *testing.T) {
+	rows, err := ReadRows([]byte(publishedHeader +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,一つ目\n" +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,二つ目\n" +
+		"line:aaaa1111,L01 Ryan,Ryan_1_intro,1,Ryan,台詞ID行の訳\n" +
+		"English,,,,,壊れた行の訳\n" +
+		keyBye + ",L01 Ryan,Ryan_1_intro,2,Ryan,\n"))
+	if err != nil {
+		t.Fatalf("見本を読めない: %v", err)
+	}
+
+	got := publishedTranslations(Locale{Published: rows})
+	want := map[string]string{keyHello: "一つ目", keyBye: ""}
+	if len(got) != len(want) {
+		t.Fatalf("件数が違う: got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if tr, ok := got[k]; !ok || tr != v {
+			t.Errorf("%s: got %q (%v), want %q", k, tr, ok, v)
+		}
+	}
 }
 
 // TestCarryFromSpeakerBreaksTies は、指紋が同じ距離で並んだときに話者で絞ることを見る。

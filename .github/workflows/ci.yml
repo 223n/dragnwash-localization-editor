@@ -1,9 +1,10 @@
 name: CI
 
-# 4つの検査をする。
+# 5つの検査をする。
 #   lint-ja         文書の書式（markdownlint）と日本語の書き方（textlint）。
 #                   規則は公開されている共有設定 @223n/lint-config-ja にあり、ここには「何を検査するか」だけを書く
-#   go              Goの書式（gofmt）、静的解析（go vet）、テスト、全対象向けのビルド
+#   go              Goの書式（gofmt）、静的解析（go vet）、テストとカバレッジの閾値、全対象向けのビルド
+#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値
 #   lint-workflows  ワークフローの構文と型（actionlint）
 #   zizmor          ワークフローの安全性（zizmor）。アクションの SHA 固定、権限、危険な書き方を見る
 on:
@@ -88,7 +89,18 @@ jobs:
 
       - name: テストする
         # 元リポジトリを参照するテストは、ここには元リポジトリが無いので自動で飛ぶ
-        run: go test ./cmd/... ./internal/... -count=1
+        run: go test ./cmd/... ./internal/... -count=1 -coverprofile=coverage.out
+
+      - name: Nodeを用意
+        # カバレッジの集計スクリプトを動かすためだけに使う。npm の依存は要らない
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: カバレッジを確かめる
+        # 閾値は package.json の coverageThresholds.go にある。
+        # 下回ると失敗し、パッケージごとの数字をジョブの要約に出す
+        run: node scripts/go-coverage.mjs coverage.out
 
       - name: 全対象向けにビルドする
         # 単一バイナリで配布するという前提が崩れていないことを見る。
@@ -100,6 +112,42 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null ./cmd/dwloc
             echo "ok ${target}"
           done
+
+  e2e:
+    name: 画面のE2E
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Goを用意
+        # テストの前に dwloc をビルドし、それを待ち受けとして起動する
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Nodeを用意
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 依存を入れる
+        run: npm ci
+
+      - name: ブラウザーを入れる
+        # Chromium だけを入れる。--with-deps は OS のライブラリも apt で入れるので、
+        # セルフホストのランナーでは sudo を使える必要がある
+        run: npx playwright install --with-deps chromium
+
+      - name: E2Eテストをする
+        # 閾値は package.json の coverageThresholds.e2e にある。
+        # 下回ると失敗し、app.js のカバレッジをジョブの要約に出す
+        run: npm run test:e2e
 
   lint-workflows:
     name: ワークフローの構文検査

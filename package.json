@@ -12,12 +12,32 @@
     "lint:md": "markdownlint-cli2",
     "lint:md:fix": "markdownlint-cli2 --fix",
     "lint:ja": "textlint .",
-    "lint:ja:fix": "textlint --fix ."
+    "lint:ja:fix": "textlint --fix .",
+    "test": "npm run test:go && npm run test:e2e",
+    "test:go": "node scripts/go-coverage.mjs --run",
+    "test:e2e": "node e2e/coverage.mjs clean && playwright test -c e2e && node e2e/coverage.mjs report",
+    "test:e2e:report": "node e2e/coverage.mjs report"
+  },
+  "coverageThresholds": {
+    "go": {
+      "statements": 97
+    },
+    "e2e": {
+      "lines": 96.5,
+      "statements": 96.5,
+      "functions": 97,
+      "branches": 98
+    }
   },
   "devDependencies": {
     "@223n/lint-config-ja": "^1.1.0",
+    "@playwright/test": "^1.63.0",
+    "istanbul-lib-coverage": "^3.2.2",
+    "istanbul-lib-report": "^3.0.1",
+    "istanbul-reports": "^3.2.0",
     "markdownlint-cli2": "^0.23.2",
-    "textlint": "^15.8.0"
+    "textlint": "^15.8.0",
+    "v8-to-istanbul": "^9.3.0"
   },
   "overrides": {
     "smol-toml": "^1.7.1"

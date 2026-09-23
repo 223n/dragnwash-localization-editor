@@ -221,21 +221,31 @@
     競合（409）の引き止め。手前でファイルが変わったとき、どちらの編集を載せるかを
     人に選ばせる。黙って上書きも、黙って破棄もしない。ボタンは2つとも type="button"
     で、form は使わない（CSP の form-action 'none' と、CSRF の入口を増やさないため）。
+
+    tabindex="-1" は、打っていた行が競合したときに焦点をここへ移すため（app.js の
+    onConflict）。Tab の順には入らない。
   -->
-  <section id="conflict" class="conflict" hidden>
+  <section id="conflict" class="conflict" tabindex="-1" aria-labelledby="conflict-title" hidden>
     <p class="lead">
       <svg class="icon" aria-hidden="true"><use href="#i-code-merge"/></svg>
       <span id="conflict-title"></span>
     </p>
     <p id="conflict-help"></p>
-    <button id="conflict-keep" class="btn btn-primary" type="button">
-      <svg class="icon" aria-hidden="true"><use href="#i-user-pen"/></svg>
-      <span id="conflict-keep-label"></span>
-    </button>
-    <button id="conflict-take" class="btn" type="button">
-      <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
-      <span id="conflict-take-label"></span>
-    </button>
+    <!--
+      2つのボタンは1つの箱にまとめ、帯の中で下端に貼り付ける（app.css の
+      .conflict-actions）。狭くて低い画面では、説明の文が長く折り返して、
+      ボタンが帯の見える範囲の下へ出る。
+    -->
+    <div class="conflict-actions">
+      <button id="conflict-keep" class="btn btn-primary" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-user-pen"/></svg>
+        <span id="conflict-keep-label"></span>
+      </button>
+      <button id="conflict-take" class="btn" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
+        <span id="conflict-take-label"></span>
+      </button>
+    </div>
   </section>
 
   <!--

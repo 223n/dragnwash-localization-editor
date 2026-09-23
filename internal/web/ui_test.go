@@ -3,6 +3,7 @@ package web
 import (
 	"io/fs"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -400,6 +401,139 @@ func TestScrollMarginIsOnTheFocusedElement(t *testing.T) {
 	}
 }
 
+// TestTopHeightDefaultIsTheSameEverywhere は、--top-height の既定値（CSS の var() の
+// 第2引数）が app.css のどこでも同じで、それを説明する3か所（app.css の注記、app.js の
+// watchTopHeight の注記、doc.go）も同じ値を言っていることを見る。
+//
+// 実際に起きた: app.css は 10em なのに、doc.go は「第2引数（8em）」と書き、帯の 49.4px に
+// 合わせたと説明していた。既定値は ResizeObserver が無い環境で実際に効く値なので、
+// 説明が違うと、直す人が間違った前提で値を動かす。
+func TestTopHeightDefaultIsTheSameEverywhere(t *testing.T) {
+	css := uiSource(t, "ui/app.css")
+	values := make(map[string]bool)
+	for _, m := range regexp.MustCompile(`var\(--top-height, ([0-9.]+[a-z]+)\)`).FindAllStringSubmatch(css, -1) {
+		values[m[1]] = true
+	}
+	if len(values) != 1 {
+		t.Fatalf("app.css の --top-height の既定値が1つにそろっていない: %v", values)
+	}
+	var def string
+	for v := range values {
+		def = v
+	}
+
+	doc, err := os.ReadFile("doc.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	said := regexp.MustCompile(`第2引数（(?:既定値の )?([0-9.]+[a-z]+)`)
+	for name, text := range map[string]string{
+		"app.css の注記": css,
+		"app.js":      uiSource(t, "ui/app.js"),
+		"doc.go":      string(doc),
+	} {
+		found := said.FindAllStringSubmatch(text, -1)
+		if len(found) == 0 {
+			t.Errorf("%s が --top-height の既定値を書いていない", name)
+		}
+		for _, m := range found {
+			if m[1] != def {
+				t.Errorf("%s が既定値を %s と書いている。app.css は %s", name, m[1], def)
+			}
+		}
+	}
+}
+
+// TestDiscardAsksAfterSending は、読み直しと切り替えが、送れるものを送り終えてから
+// 尋ね、受けたあとは捨てると答えた訳を送らないことを見る。
+//
+// 実際に起きた: 押した時点で未保存があるかを見て尋ねていたので、打った直後に押すと、
+// 欄から離れたときの保存（blur）が返る前か後かで尋ねたり尋ねなかったりした。尋ねた文は
+// 「その訳は消えます」なのに、その訳は送られてファイルに入った。受けたあとも、読み込みが
+// 返るまでに送り直しの時計が切れると、捨てると答えた訳が送られた。振る舞いは E2E の
+// boot.spec.mjs が見ている。
+func TestDiscardAsksAfterSending(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, "function askDiscard(")
+	if start < 0 {
+		t.Fatal("askDiscard が無い")
+	}
+	end := strings.Index(js[start:], "\n  }")
+	if end < 0 {
+		t.Fatal("askDiscard の終わりが分からない")
+	}
+	body := js[start : start+end]
+	settle := strings.Index(body, "settle().then(")
+	confirm := strings.Index(body, "window.confirm(")
+	if settle < 0 || confirm < 0 || confirm < settle {
+		t.Error("askDiscard が送り終えるのを待たずに尋ねている")
+	}
+	if !strings.Contains(body, "state.discarding = {}") {
+		t.Error("受けたあとに、捨てると答えた訳を送らない印を立てていない")
+	}
+
+	// 送り終わりそのものを待てること（送っている最中の flush は早く戻る）。
+	if !strings.Contains(js, "state.sending = postJSON(") {
+		t.Error("flush が送り終わりを控えていない。送っている最中の保存を待てない")
+	}
+	// 捨てると答えたあとは送らない。印を見るのは、送る要求を組むより前であること。
+	fl := strings.Index(js, "function flush()")
+	if fl < 0 {
+		t.Fatal("flush が無い")
+	}
+	hold := strings.Index(js[fl:], "if (state.discarding) {")
+	post := strings.Index(js[fl:], "state.sending = postJSON(")
+	if hold < 0 || post < 0 || hold > post {
+		t.Error("flush が、捨てると答えた訳を送る前に止めていない")
+	}
+	// 読めなかったら送り直しへ戻すこと（諦めない）。
+	ld := strings.Index(js, "function load(locale, resetFinder)")
+	if ld < 0 {
+		t.Fatal("load が無い")
+	}
+	fail := strings.Index(js[ld:], ".catch(function ()")
+	if fail < 0 || !strings.Contains(js[ld+fail:ld+fail+800], "stopHolding(holding)") {
+		t.Error("読み込みに失敗したときに、止めていた送り直しを戻していない")
+	}
+}
+
+// TestExportStopsWhileTranslationsAreOutsideTheFile は、ファイルに入っていない訳
+// （競合・保存できない行・行き先の無い訳）が残っているあいだ、書き出しが中身を
+// 取りにいかないことを見る。
+//
+// 実際に起きた: 書き出しは未保存（state.pending）と送信中だけを見ていたので、保存
+// できない行や行き先の無い訳が残っていても、その訳の入らない中身を「書き出しました」と
+// 渡した。hasUnsaved が未保存に数えるものは、書き出しでも止める。
+func TestExportStopsWhileTranslationsAreOutsideTheFile(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	start := strings.Index(js, "function exportCsv(")
+	if start < 0 {
+		t.Fatal("exportCsv が無い")
+	}
+	end := strings.Index(js[start:], "\n  }")
+	if end < 0 {
+		t.Fatal("exportCsv の終わりが分からない")
+	}
+	body := js[start : start+end]
+	fetch := strings.Index(body, "return fetchCsv(form)")
+	if fetch < 0 {
+		t.Fatal("exportCsv が中身を取りにいっていない")
+	}
+	for _, want := range []string{"if (state.mine) {", "if (state.failed.size) {", "if (state.orphans.length) {"} {
+		at := strings.Index(body, want)
+		if at < 0 || at > fetch {
+			t.Errorf("exportCsv が取りにいく前に %q を見ていない", want)
+		}
+	}
+	for _, key := range []string{"ui.export_conflict", "ui.export_row_failed", "ui.export_orphans"} {
+		if !strings.Contains(body, `t("`+key+`")`) {
+			t.Errorf("exportCsv が止めた理由（%s）を出していない", key)
+		}
+	}
+}
+
 // TestEmptyTranslationIsClickable は、訳が空の行にも的があることを見る。
 //
 // 実際に起きた: 幅900px以下（flex に変わる側）で、訳が空の欄の高さが枠線ぶんの
@@ -713,18 +847,26 @@ func TestConflictRowIsNotEditableUntilChosen(t *testing.T) {
 // 全部すり抜けて次の行が開いた。翻訳者から見ると、変換を確定しただけで行が飛ぶ。
 // ja / ko / zh-Hans / zh-Hant のためにこの入力方式を選んでいるので、ここが
 // 崩れると選定の根拠が失われる。
+//
+// 時刻は performance.now で測ること。Date.now（壁時計）で測ると、確定と Enter の
+// あいだに OS の時計が後ろへ動いたとき（NTP の段差、休止からの復帰）、差が負のまま
+// 猶予を超えるまで Enter の行送りが効かなくなる。時計を1時間戻せば1時間効かない。
 func TestComposedEnterDoesNotAdvance(t *testing.T) {
 	js := uiSource(t, "ui/app.js")
 
-	if !strings.Contains(js, "state.composedAt = Date.now()") {
-		t.Error("compositionend の時刻を控えていない")
+	if !strings.Contains(js, "state.composedAt = performance.now()") {
+		t.Error("compositionend の時刻を performance.now で控えていない")
+	}
+	if strings.Contains(js, "state.composedAt = Date.now()") ||
+		strings.Contains(js, "Date.now() - state.composedAt") {
+		t.Error("確定の時刻を Date.now で測っている。壁時計が戻ると Enter が長く効かなくなる")
 	}
 	start := strings.Index(js, `editor.addEventListener("keydown"`)
 	if start < 0 {
 		t.Fatal("入力欄の keydown が無い")
 	}
 	block := js[start:]
-	guard := strings.Index(block, "Date.now() - state.composedAt < composedGrace")
+	guard := strings.Index(block, "performance.now() - state.composedAt < composedGrace")
 	if guard < 0 {
 		t.Fatal("確定直後の Enter を見分けていない")
 	}
@@ -857,7 +999,9 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if end < 0 {
 		t.Fatal("ロケールの切り替えの終わりが分からない")
 	}
-	if !strings.Contains(js[start:start+end], "load(el.locale.value, true)") {
+	// 読むのは change の時点で控えた値（chosen）。尋ねるのは送り終えてからなので、
+	// そのあいだに欄の値は変わりうる（app.js の load が欄を描いたロケールへそろえる）。
+	if !strings.Contains(js[start:start+end], "load(chosen, true)") {
 		t.Error("ロケールを切り替えても条件と検索語が残る。前のロケールの条件を持ち越す")
 	}
 	// 外すのは切り替えの手前ではなく、読めたときだけ。
@@ -892,6 +1036,13 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	}
 	if strings.Contains(js[at:at+tail], "clearFinder()") {
 		t.Error("読み直しで条件まで外している。同じロケールを見続けている")
+	}
+	// 読み直すのは画面に出ているロケールで、欄の値ではないこと。
+	//
+	// 実際に起きた: 切り替えを選んで送り終えるのを待っているあいだに読み直しを
+	// 押すと、欄に残った切り替え先を、前のロケールの条件と検索語を付けたまま読んだ。
+	if !strings.Contains(js[at:at+tail], "load(state.locale)") {
+		t.Error("読み直しが画面に出ているロケール（state.locale）を読んでいない")
 	}
 	// 0行のときの文言。
 	if !strings.Contains(js, `t("ui.no_rows")`) {
