@@ -328,6 +328,9 @@ func (s *server) run() error {
 
 	s.idle.touch()
 	go s.watchIdle()
+	// どの道で抜けても暇の見張りを止める。止めないと、Ctrl+C や待ち受けの失敗で
+	// 抜けたあとも見張りが回り続け、暇になった時点で stopReason を書き換えにくる。
+	defer s.stopOnce.Do(func() { close(s.stop) })
 
 	select {
 	case err := <-done:
@@ -336,7 +339,12 @@ func (s *server) run() error {
 		}
 		return err
 	case <-ctx.Done():
-		s.stopReason = s.t("server.interrupted")
+		// 理由を書くのも見張りと同じ stopOnce の中で行う。同時に暇になっても、
+		// 書くのはどちらか一方だけになる。
+		s.stopOnce.Do(func() {
+			s.stopReason = s.t("server.interrupted")
+			close(s.stop)
+		})
 	case <-s.stop:
 	}
 
