@@ -1,0 +1,17 @@
+key,section,node,order,speaker,source_en,translation
+
+# ===== Chapter 1: The Harbor Wash =====
+# --- morning: harbor_intro ---
+39f1bc8d00590f24,L01 Harbor,harbor_intro,1,Mira,Welcome to the harbor wash! First customer of the day?,港の洗車場へようこそ！今日いちばんのお客さんかい？
+03e605dbe442f229,L01 Harbor,harbor_intro,2,Pip,The foam machine is humming again.,泡の機械がまたうなってるよ。
+5e1923a9fad44d5a,L01 Harbor,harbor_intro,3,Mira,"Rinse from the top, then work your way down.",上からすすいで、順に下へ進めてね。
+854d7f26d4bd050c,L01 Harbor,harbor_intro,4,Pip,Is it supposed to smell like <i>lemons</i>?,<i>レモン</i>の匂いがするものなの？
+75db4903a2261443,L01 Harbor,harbor_intro,5,Old Cogg,"Back in my day, we scrubbed with sand.",
+f8d045c9d525557a,L01 Harbor,harbor_intro,6,Mira,Don't forget the wheels.,
+
+# --- evening: harbor_evening ---
+23ab71941415466b,L01 Harbor,harbor_evening,1,Pip,The lights along the pier just came on.,桟橋の明かりが、いまついたよ。
+ae3aca8dc1f9a0f8,L01 Harbor,harbor_evening,2,Pip,<size=70%>(whispering)</size> Is he asleep?,<size=70%>（ひそひそ）寝てるのかな？
+5ff5281d4320e092,L01 Harbor,harbor_evening,3,Mira,Good work today. Same time tomorrow?,今日はおつかれさま。明日も同じ時間に？
+9c3b04459be28dd5,L01 Harbor,harbor_evening,4,Old Cogg,Mind the tide on your way home.,
+

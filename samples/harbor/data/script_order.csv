@@ -1,0 +1,11 @@
+section,phase,node,order,line_id,key,speaker,condition
+L01 Harbor,morning,harbor_intro,1,line:00000001,39f1bc8d00590f24,Mira,
+L01 Harbor,morning,harbor_intro,2,line:00000002,03e605dbe442f229,Pip,
+L01 Harbor,morning,harbor_intro,3,line:00000003,5e1923a9fad44d5a,Mira,
+L01 Harbor,morning,harbor_intro,4,line:00000004,854d7f26d4bd050c,Pip,
+L01 Harbor,morning,harbor_intro,5,line:00000005,75db4903a2261443,Old Cogg,
+L01 Harbor,morning,harbor_intro,6,line:00000006,f8d045c9d525557a,Mira,
+L01 Harbor,evening,harbor_evening,1,line:00000007,23ab71941415466b,Pip,
+L01 Harbor,evening,harbor_evening,2,line:00000008,ae3aca8dc1f9a0f8,Pip,
+L01 Harbor,evening,harbor_evening,3,line:00000009,5ff5281d4320e092,Mira,
+L01 Harbor,evening,harbor_evening,4,line:00000010,9c3b04459be28dd5,Old Cogg,
