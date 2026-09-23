@@ -696,6 +696,11 @@ Open the `URL` printed on standard output in a browser and every row of one loca
 Select the translation column to edit it.  
 It saves automatically when you stop typing.
 
+![The whole editing screen. The filter and the search are in the left column, and each row shows the speaker, the source and the translation. Untranslated rows carry a badge](docs/images/edit-overview-en.png)
+
+The screenshots use made-up lines written for this explanation.  
+None of the game's script is shown.
+
 When it saves to the working copy, the game reloads it in about two seconds.  
 You can translate, check it on screen and repeat, with no restart.  
 It works when the game is running, that language is selected, and `Developer tools` is on.  
@@ -716,6 +721,8 @@ There is no switch inside the screen.
 Selecting the translation column turns that spot into an input box.  
 The input box wraps to the length of the translation, and its height grows with the content.  
 You can fix a translation that does not fit the column while seeing all of it, without scrolling sideways.
+
+![A translation column opened as an input box. The save state at the top right reads "unsaved: 1"](docs/images/edit-editing-en.png)
 
 A translation cannot contain a line break.  
 `Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
@@ -738,6 +745,8 @@ The controls on the screen are as follows.
 Pressing it opens a menu where you choose the form.  
 The browser asks you where to save it.  
 This tool does not take a destination path, so there is no field on the screen to type one into.
+
+![The menu opened from "Save a copy" in the top bar. You choose between the form of the published file and the file being edited as it is](docs/images/edit-export-en.png)
 
 When you press it, any translations not yet sent are sent first, and then it exports.  
 If a translation shown on screen is still not in the file, it does not export.  
@@ -837,6 +846,8 @@ A row in conflict (the file changed underneath you) cannot be edited until you c
 Pressing the translation column on that row does not open the input box; the row says that you can edit it once you have chosen which side to keep.  
 Typing into an undecided row could mean either "put my translation on top" or "take the translation from the file".  
 Rows that are not in conflict can still be edited as usual while the prompt is up.
+
+![The conflict prompt. Two buttons appear at the top of the bar, and the row in conflict shows the translation in the file and yours side by side](docs/images/edit-conflict-en.png)
 
 Besides a conflict, there are two other reasons saving stops.  
 Both appear when the rows in the file changed while you were editing.  
