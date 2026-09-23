@@ -151,7 +151,10 @@ func gitPreviousRevision(root, spec string) (string, error) {
 	}
 	parent := revs[0] + "^"
 	// 親が無い（最初のコミットで入ったきり）なら比べる相手がいない。
-	check := exec.Command("git", "rev-parse", "--verify", "--quiet", parent)
+	// 親はあってもそこに再生順が無い（2つ目以降のコミットで足したきり）のも
+	// 同じことなので、親そのものではなく親の中の再生順があるかを確かめる。
+	// 親だけを見ると、後者を git show の失敗（ErrGitFailed）として報告してしまう。
+	check := exec.Command("git", "rev-parse", "--verify", "--quiet", parent+":"+spec)
 	check.Dir = root
 	if err := check.Run(); err != nil {
 		var exitErr *exec.ExitError
