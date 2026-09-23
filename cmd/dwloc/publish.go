@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,6 +308,11 @@ dwloc:       ゲームへ最新の翻訳を入れ直してから、もう一度�
 //
 // そろっていれば exitOK です。1件でも食い違えば exitProblems（1）で、
 // どのロケールも書きません。読めなくて確かめられなかったときだけが 2 です。
+//
+// コミット済みの公開ファイルがまだ無いロケール（新しい言語の最初の publish）は
+// 確かめずに通します。巻き戻る先が無いからです。publish.CheckTargetLoss が
+// 出力先の無いときを「失うものが無い」と扱うのと同じ考えです。ここで止めると、
+// ゲームで入れた新しい言語の訳が、コミットする側へ1行も届きません。
 func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) int {
 	var found []publish.BaseResult
 	for _, t := range targets {
@@ -313,6 +320,9 @@ func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) in
 			continue
 		}
 		current, err := os.ReadFile(t.Output)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			fmt.Fprintf(stderr,
 				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
