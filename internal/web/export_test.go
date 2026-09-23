@@ -295,6 +295,83 @@ func TestExportChecksTheBaseBeforeTheLosses(t *testing.T) {
 	}
 }
 
+// TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame は、公開ファイルが
+// まだ無いロケールでも、ゲーム側の作業コピーから公開の形を書き出せることを見る。
+//
+// Translations/ja はあるが strings.csv は無い。新しい言語を始めた翻訳者が
+// ディレクトリだけを作り、訳はゲームの中で入れている、という形である。
+// 以前は土台の確かめ（[publish.CheckBase]）の前にコミット済みの公開ファイルを
+// 読み、無いことを読めないことと同じに扱って 500 を返していた。コミット済みが
+// 無ければ巻き戻る先も無いので、確かめるものが無い。dwloc publish も同じ状態を
+// 通す（cmd/dwloc の TestPublishWritesTheFirstFileOfANewLocaleFromTheGame）。
+// 片方だけが止めると、同じ状態で publish は書けるのに画面からは書き出せない。
+func TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame(t *testing.T) {
+	working := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+		keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！",
+		"",
+	}, "\n")
+	for _, tc := range []struct {
+		name string
+		// gameBase はゲーム側の Translations/ja/strings.csv。空なら置かない。
+		gameBase string
+	}{
+		{"ゲーム側にも公開ファイルが無い", ""},
+		{"ゲーム側には公開ファイルがある", strings.Join([]string{
+			"key,section,node,order,speaker,translation",
+			keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+			"",
+		}, "\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newTestRoot(t)
+			published := filepath.Join(root, "Translations", "ja", "strings.csv")
+			if err := os.Remove(published); err != nil {
+				t.Fatal(err)
+			}
+			game := t.TempDir()
+			files := map[string]string{
+				filepath.Join("Translations", "_discovered", "ja.working.csv"): working,
+			}
+			if tc.gameBase != "" {
+				files[filepath.Join("Translations", "ja", "strings.csv")] = tc.gameBase
+			}
+			for rel, body := range files {
+				path := filepath.Join(game, rel)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := newTestServer(t, Options{Root: root, Game: game, UILang: "ja"})
+			if s.target("ja") == nil || s.target("ja").GameBase == "" {
+				t.Fatal("前提が崩れている。ゲーム側の作業コピーを読んでいない")
+			}
+
+			rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("状態コードが %d、200 を期待:\n%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="strings.csv"` {
+				t.Errorf("Content-Disposition が %q", got)
+			}
+			body := rec.Body.String()
+			for _, want := range []string{keyKept, "もしもし？", keyKept2, "こんにちは！"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("書き出したものに %q が無い:\n%s", want, body)
+				}
+			}
+			// 書き出しは中身を返すだけで、リポジトリへは1バイトも書かない。
+			if _, err := os.Stat(published); !os.IsNotExist(err) {
+				t.Errorf("書き出しなのに公開ファイルができている（err = %v）", err)
+			}
+		})
+	}
+}
+
 func TestExportFailsWithoutLeakingThePath(t *testing.T) {
 	// 起動したあとに読めなくなったときは 500 を返す。誤りの中身（パスを含む）は
 	// 返さず、端末の記録にもロケールと形しか書かない。どこで止まったかは、
@@ -337,8 +414,10 @@ func TestExportFailsWithoutLeakingThePath(t *testing.T) {
 		{"公開の形: 再生順を読めない", exportFormPublished, false, func(t *testing.T, _ *server, root string) {
 			breakWith(t, filepath.Join(root, "data", "script_order.csv"), true)
 		}},
-		{"公開の形: コミット済みの公開ファイルが消えた", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
-			breakWith(t, s.target("ja").Output, false)
+		// 消えた（無い）のではなく、あるのに読めない。無いときは新しい言語の最初の
+		// 書き出しとして通す（TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame）。
+		{"公開の形: コミット済みの公開ファイルを読めない", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
+			breakWith(t, s.target("ja").Output, true)
 		}},
 		{"公開の形: ゲーム側の土台を読めない", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
 			breakWith(t, s.target("ja").GameBase, true)
