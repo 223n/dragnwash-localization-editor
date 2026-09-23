@@ -46,6 +46,13 @@ var samples = []struct {
 		"6aea87f148de67bc", "c2578e190552ee7f",
 	},
 	{"a\tb", "a b", "c8687a08aa5d6ed2", "e63f991904833892"},
+	// U+001C〜U+001F は Python の isspace() では空白で、Go の unicode.IsSpace では
+	// 空白でない。空白として扱わないと語がつながり（"washthedragon..."）、
+	// norm も fp も元実装とずれる。
+	{
+		"Wash\x1cthe\x1ddragon,\x1ethen\x1frinse!", "wash the dragon then rinse",
+		"2b0163d969143127", "c291a81964e2e55a",
+	},
 	{" leading and trailing ", "leading and trailing", "2f5342d289b88dce", "c3020219257ea321"},
 	// 閉じないタグは、そこから先が全部落ちる。
 	{"<i>", "", "e3b0c44298fc1c14", "0000000000000000"},
