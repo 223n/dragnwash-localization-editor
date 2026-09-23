@@ -5,6 +5,7 @@
 //   DWLOC_BIN          使う dwloc の実行ファイル。あればビルドを省く（Linux のコンテナで
 //                      ホストが作ったバイナリを使うため）
 //   DWLOC_E2E_RAW      カバレッジの生データの置き場（既定: coverage/e2e-raw）
+//   DWLOC_E2E_REPORT   集計した報告（html と lcov）の置き場（既定: coverage/e2e）
 //   DWLOC_E2E_OUTPUT   Playwright の outputDir（既定: test-results/e2e/<実行ごとの ID>）
 //
 // 生データも outputDir も、同時に走る別の実行とぶつからないようにしてある。
@@ -22,7 +23,12 @@ export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 export const appJs = join(root, "internal", "web", "ui", "app.js");
 
 // reportDir は集計した報告（html と lcov）の置き場。
-export const reportDir = join(root, "coverage", "e2e");
+//
+// 環境変数で変えられるのは、1つのスペックだけの数字を別の置き場で見るためである。
+// 同時に走る別の集計と同じ場所へ書くと、報告が混ざる。
+export const reportDir = process.env.DWLOC_E2E_REPORT
+  ? resolve(process.env.DWLOC_E2E_REPORT)
+  : join(root, "coverage", "e2e");
 
 // outputBase は Playwright の出力をまとめる親。フル実行の前にここごと消す。
 export const outputBase = join(root, "test-results", "e2e");
