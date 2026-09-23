@@ -340,11 +340,21 @@ func TestGameSaveLogHasNoRowContent(t *testing.T) {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
 	// 書けなかったときの記録にも中身を出さない。
+	//
+	// 1回目と違う訳を送る。同じ訳だと中身が保存先と一致して書きに行かない
+	// （edit.File.Save は一致すれば書かずに成功を返す）ので、書けない状態でも
+	// 保存が通り、失敗の記録が1行も出ないまま下の確かめが通っていた。
+	const retyped = "打ち直した訳。"
 	makeReadOnly(t, workingCopyPath(game))
 	version = currentVersion(t, s)
-	save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: jaTyped})
+	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: retyped})
+	// 前提: 保存が失敗し、その記録が書かれていること。通ってしまうと、下の確かめは
+	// 書けなかったときの記録を1行も見ないまま通る。
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(log.String(), "save failed locale=ja") {
+		t.Fatalf("前提が崩れている: 保存が失敗していない（状態コード %d）\n%s", rec.Code, log.String())
+	}
 
-	for _, secret := range []string{jaTyped, "Hello?", "Hi there!", "もしもし？"} {
+	for _, secret := range []string{jaTyped, retyped, "Hello?", "Hi there!", "もしもし？"} {
 		if strings.Contains(log.String(), secret) {
 			t.Errorf("記録に行の中身が出ている（%q）:\n%s", secret, log.String())
 		}
