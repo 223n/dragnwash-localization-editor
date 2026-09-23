@@ -6,7 +6,10 @@
 //                      ホストが作ったバイナリを使うため）。相対パスはリポジトリのルートから引く
 //   DWLOC_E2E_RAW      カバレッジの生データの置き場（既定: coverage/e2e-raw）
 //   DWLOC_E2E_REPORT   集計した報告（html と lcov）の置き場（既定: coverage/e2e）
-//   DWLOC_E2E_OUTPUT   Playwright の outputDir（既定: test-results/e2e/<実行ごとの ID>）
+//                      この2つは clean と report が丸ごと消す。まだ無いか空のディレクトリを
+//                      指す。目印の無い、中身のあるディレクトリを指すと、消さずに止める
+//   DWLOC_E2E_OUTPUT   Playwright の outputDir（既定: test-results/e2e/<実行ごとの ID>）。
+//                      中身は Playwright が実行の始めに消す
 //   DWLOC_E2E_RUN      実行ごとの ID。設定を読むときに作ってワーカーへ渡す（runId）。
 //                      外から渡すと、別々の実行の生データを見分けられなくなる
 //
@@ -38,21 +41,46 @@ export function givenBinary() {
   return given ? resolve(root, given) : null;
 }
 
-// reportDir は集計した報告（html と lcov）の置き場。
+// 置き場（place）は { dir, name, fromEnv, marker } で表す。dir はパス、name は置き場を
+// 変える環境変数の名前（知らせるときに使う）、fromEnv は環境変数で変えているか、
+// marker は目印のファイル名。
+//
+// 目印は、この試験の仕組みが置き場を使い始めるときに置く。clean と report は置き場を
+// 丸ごと消すので、環境変数で変えた置き場は、目印があるか空のときだけ使う
+// （support/owned-dir.mjs）。指した先に関係の無いファイルがあれば、消さずに止める。
+function place(name, fallback, marker) {
+  const value = process.env[name];
+  return value
+    ? { dir: resolve(value), name, fromEnv: true, marker }
+    : { dir: fallback, name, fromEnv: false, marker };
+}
+
+// RAW_MARKER と REPORT_MARKER は目印のファイル名。置き場ごとに分けるのは、生データと
+// 報告に同じディレクトリを指したとき、片方の目印でもう片方を消さないためである。
+export const RAW_MARKER = ".dwloc-e2e-raw";
+export const REPORT_MARKER = ".dwloc-e2e-report";
+
+// reportPlace は集計した報告（html と lcov）の置き場。reportDir はそのパス。
 //
 // 環境変数で変えられるのは、1つのスペックだけの数字を別の置き場で見るためである。
-// 同時に走る別の集計と同じ場所へ書くと、報告が混ざる。
-export const reportDir = process.env.DWLOC_E2E_REPORT
-  ? resolve(process.env.DWLOC_E2E_REPORT)
-  : join(root, "coverage", "e2e");
+// 同時に走る別の集計と同じ場所へ書くと、報告が混ざる。指す先は、報告のためだけの
+// ディレクトリ（まだ無いか、空のもの）にする。
+export const reportPlace = place("DWLOC_E2E_REPORT", join(root, "coverage", "e2e"), REPORT_MARKER);
+export const reportDir = reportPlace.dir;
 
 // outputBase は Playwright の出力をまとめる親。フル実行の前にここごと消す。
+// 環境変数では変えられないので、目印は見ない。
 export const outputBase = join(root, "test-results", "e2e");
+export const outputPlace = { dir: outputBase, name: "Playwright の出力の置き場", fromEnv: false, marker: null };
 
-// rawDir はカバレッジの生データの置き場を返す。
+// rawPlace はカバレッジの生データの置き場を返す。rawDir はそのパス。指す先は、生データの
+// ためだけのディレクトリ（まだ無いか、空のもの）にする。
+export function rawPlace() {
+  return place("DWLOC_E2E_RAW", join(root, "coverage", "e2e-raw"), RAW_MARKER);
+}
+
 export function rawDir() {
-  const fromEnv = process.env.DWLOC_E2E_RAW;
-  return fromEnv ? resolve(fromEnv) : join(root, "coverage", "e2e-raw");
+  return rawPlace().dir;
 }
 
 // runId は実行ごとの ID（DWLOC_E2E_RUN）を返す。

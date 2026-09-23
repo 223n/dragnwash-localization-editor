@@ -4,6 +4,9 @@
 //   node e2e/coverage.mjs clean    生データと前回の報告と Playwright の出力を消す（フル実行の前だけ）
 //   node e2e/coverage.mjs report   生データを集計して報告を書き、閾値と比べる
 //
+// 生データと報告の置き場を環境変数で変えたときは、この試験の仕組みが使い始めた置き場
+// （目印のあるもの）か、空のディレクトリしか使わない（support/owned-dir.mjs）。
+//
 // 生データは試験の page フィクスチャ（support/coverage.mjs）が、頁ごとに V8 の形で
 // 書き出したものである。ここでそれを v8-to-istanbul で internal/web/ui/app.js に
 // 対応づけ、istanbul の CoverageMap に合算する。
@@ -30,7 +33,6 @@
 // functions / branches）。GITHUB_STEP_SUMMARY があれば、ジョブの要約に表を足す。
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import libCoverage from "istanbul-lib-coverage";
@@ -39,14 +41,23 @@ import reports from "istanbul-reports";
 import v8toIstanbul from "v8-to-istanbul";
 
 import { codeLines } from "./support/code-lines.mjs";
-import { appJs, outputBase, rawDir, reportDir, root } from "./support/paths.mjs";
+import { assertApart, claimPlace, inspectPlace, removePlace } from "./support/owned-dir.mjs";
+import { appJs, outputPlace, rawPlace, reportDir, reportPlace, root } from "./support/paths.mjs";
 
 // metrics は比べる4つの指標。表と閾値の並びもこの順にする。
 const metrics = ["lines", "statements", "functions", "branches"];
 
+// clean は生データ、報告、Playwright の出力の置き場を消す。環境変数で変えた置き場は、
+// この試験の仕組みが使い始めたもの（目印のあるもの）だけを消す（support/owned-dir.mjs）。
+//
+// 先に全部を確かめてから消す。途中で止めると、消した置き場と残った置き場が半端に混ざる。
 async function clean() {
-  for (const dir of [rawDir(), reportDir, outputBase]) {
-    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  const places = [rawPlace(), reportPlace, outputPlace];
+  for (const place of places) {
+    await inspectPlace(place);
+  }
+  for (const place of places) {
+    await removePlace(place);
   }
 }
 
@@ -206,7 +217,12 @@ function writeStepSummary(summary, thresholds, files, entries) {
 }
 
 async function report() {
-  const dir = rawDir();
+  const rawAt = rawPlace();
+  const dir = rawAt.dir;
+  // 報告の置き場は書く前に丸ごと消すので、消してよいかを集計の前に確かめる。生データが
+  // その中にあると、読んだばかりの生データまで消える。
+  assertApart(rawAt, reportPlace);
+  await inspectPlace(reportPlace);
   const raw = readRaw(dir);
   if (raw.length === 0) {
     console.error(`カバレッジの生データがありません: ${dir}`);
@@ -219,8 +235,8 @@ async function report() {
   const { map, entries } = await buildMap(raw, source);
   const lines = keepCodeLines(map, source);
 
-  await rm(reportDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  await mkdir(reportDir, { recursive: true });
+  await removePlace(reportPlace);
+  await claimPlace(reportPlace);
   console.log(`生データ ${raw.length} ファイル、${entries} 件を合算しました（${relative(root, dir)}）`);
   console.log(`行と文は、コメントと空行を除いた ${lines.after} 行で数えています（全 ${lines.before} 行）`);
   writeReports(map);

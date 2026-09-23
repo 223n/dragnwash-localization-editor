@@ -11,15 +11,23 @@
 // ビルドしたパスは DWLOC_E2E_BIN でワーカーへ渡す。ワーカーは globalSetup の
 // あとに起動し、ランナーの環境を受け継ぐ。返した関数が後始末になり、一時
 // ディレクトリを消す。
+//
+// ビルドの前に、カバレッジの生データの置き場を確かめて目印を置く（support/owned-dir.mjs）。
+// DWLOC_E2E_RAW が関係の無いファイルのあるディレクトリを指していたら、試験を1つも
+// 走らせないうちに止める。生データを書き込んでから clean で断ると、書き込んだ生データが
+// 手元のファイルに混ざったまま残る。
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { givenBinary, root } from "./support/paths.mjs";
+import { claimPlace } from "./support/owned-dir.mjs";
+import { givenBinary, rawPlace, root } from "./support/paths.mjs";
 
 export default async function globalSetup() {
+  await claimPlace(rawPlace());
+
   const given = givenBinary();
   if (given) {
     if (!existsSync(given)) {
