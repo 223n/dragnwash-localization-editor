@@ -2,7 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +14,10 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/223n/dragnwash-localization-editor/internal/diff"
+	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // 保存の試験で使う原文。キーはこの原文から計算するので、突き合わせが
@@ -605,5 +611,198 @@ func TestReadOnlyFileCannotBeSaved(t *testing.T) {
 	}
 	if after := readFile(t, path); after != before {
 		t.Error("読み取り専用のファイルが書き換わった")
+	}
+}
+
+func TestSaveBodyLimit(t *testing.T) {
+	// 本文はちょうど上限までは受け、1バイトでも超えたら1バイトも書かずに断る。
+	// 上限はファイル全部を1回で送っても届く大きさにしてあるので、それより
+	// 大きい本文は手が滑ったものである。待ち受けに記憶を食い尽くさせない。
+	cases := []struct {
+		name string
+		size int
+		want int
+	}{
+		{"ちょうど上限", maxRowsBody, http.StatusOK},
+		{"上限を1バイト超える", maxRowsBody + 1, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, Options{Root: newEditRoot(t), UILang: "ja"})
+			path := inputPath(t, s, "ja")
+			before := readFile(t, path)
+
+			// JSON の後ろの空白は読み飛ばされるので、中身を変えずに大きさだけ変えられる。
+			body := saveBody(t, "ja", getLines(t, s, "ja").Version, rowEdit{Line: 6, Translation: jaTyped})
+			body += strings.Repeat(" ", tc.size-len(body))
+
+			rec := doPost(t, s, "/api/rows", body, nil)
+			if rec.Code != tc.want {
+				t.Fatalf("状態コードが %d、%d を期待\n%.200s", rec.Code, tc.want, rec.Body.String())
+			}
+			after := readFile(t, path)
+			if tc.want != http.StatusOK {
+				if after != before {
+					t.Error("断ったのにファイルが変わった")
+				}
+				got := decode[errorResponse](t, rec.Body.Bytes())
+				if want := s.cat.T(s.cat.lookup("ja"), "error.bad_request"); got.Message != want {
+					t.Errorf("文面が %q、%q を期待", got.Message, want)
+				}
+				return
+			}
+			if !strings.Contains(after, jaTyped) {
+				t.Error("上限ちょうどの本文が保存されていない")
+			}
+		})
+	}
+}
+
+func TestSaveEditsLimit(t *testing.T) {
+	// 1回で受ける行数もちょうど上限までにする。超えたら1行も書かない。
+	// 途中まで書いて残りを落とすと、どこまで入ったのかを画面が知るすべが無い。
+	cases := []struct {
+		name  string
+		edits int
+		want  int
+	}{
+		{"ちょうど上限", maxRowsEdits, http.StatusOK},
+		{"上限を1行超える", maxRowsEdits + 1, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, Options{Root: newEditRoot(t)})
+			path := inputPath(t, s, "ja")
+			before := readFile(t, path)
+
+			edits := make([]rowEdit, tc.edits)
+			for i := range edits {
+				edits[i] = rowEdit{Line: 6, Translation: jaTyped}
+			}
+			rec := save(t, s, "ja", getLines(t, s, "ja").Version, edits...)
+			if rec.Code != tc.want {
+				t.Fatalf("状態コードが %d、%d を期待\n%.200s", rec.Code, tc.want, rec.Body.String())
+			}
+			after := readFile(t, path)
+			if tc.want != http.StatusOK {
+				if after != before {
+					t.Error("断ったのにファイルが変わった")
+				}
+				return
+			}
+			if got := decode[rowsResponse](t, rec.Body.Bytes()); len(got.Results) != tc.edits {
+				t.Errorf("結果が %d 行、%d 行を期待", len(got.Results), tc.edits)
+			}
+			if !strings.Contains(after, jaTyped) {
+				t.Error("上限ちょうどの要求が保存されていない")
+			}
+		})
+	}
+}
+
+func TestSaveWhenTheFileHasGone(t *testing.T) {
+	// 保存しようとしたらファイルが無くなっていた（手で消した、フォルダーごと動かした）。
+	// 500 を返し、ファイルを作り直さない。画面が読んだときの版を確かめられない
+	// ので、書いてよい根拠が無い。作り直せば、画面に出ている行だけのファイルが
+	// 黙って置かれる。
+	var log strings.Builder
+	s := newTestServer(t, Options{Root: newEditRoot(t), UILang: "ja", Stderr: &log})
+	path := inputPath(t, s, "ja")
+	version := getLines(t, s, "ja").Version
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := save(t, s, "ja", version, rowEdit{Line: 6, Translation: jaTyped})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("状態コードが %d、500 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[errorResponse](t, rec.Body.Bytes())
+	if want := s.cat.T(s.cat.lookup("ja"), "error.read_failed"); got.Message != want {
+		t.Errorf("文面が %q、%q を期待", got.Message, want)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("無くなったファイルを作り直した（%v）", err)
+	}
+	if !strings.Contains(log.String(), "open failed locale=ja") {
+		t.Errorf("記録に失敗が出ていない: %q", log.String())
+	}
+	if strings.Contains(log.String(), jaTyped) || strings.Contains(log.String(), "working.csv") {
+		t.Errorf("記録に訳かパスが出ている: %q", log.String())
+	}
+}
+
+func TestAddWarning(t *testing.T) {
+	// 行の断りは上書きせずに連ねる。先に付いた断り（値を整えた、など）を消すと、
+	// 翻訳者は自分の訳が書き換わったことに気づけない。区切りは空白1つで、
+	// 画面はこれを行の下に1行で出す。
+	cases := []struct {
+		name   string
+		before string
+		add    string
+		want   string
+	}{
+		{"最初の断り", "", "値を整えました。", "値を整えました。"},
+		{"先の断りに連ねる", "値を整えました。", "もう1つ。", "値を整えました。 もう1つ。"},
+		{"空の断りは足さない", "値を整えました。", "", "値を整えました。"},
+		{"空に空を足しても空", "", "", ""},
+	}
+	for _, tc := range cases {
+		res := rowResult{Warning: tc.before}
+		addWarning(&res, tc.add)
+		if res.Warning != tc.want {
+			t.Errorf("%s: %q、%q を期待", tc.name, res.Warning, tc.want)
+		}
+	}
+}
+
+func TestEditErrorTextKeepsUnknownErrors(t *testing.T) {
+	// internal/edit の2つの型でない誤りは Error() をそのまま返す
+	// （doc.go「直していない制限」）。訳されていない文が出るほうが、何も出ない
+	// よりよい。2つの型は包まれていても見分け、外枠を目録から組み直す。
+	s := newTestServer(t, Options{UILang: "en"})
+	en := s.cat.lookup("en")
+
+	unknown := errors.New("unexpected: disk full")
+	if got := s.editErrorText(en, unknown); got != unknown.Error() {
+		t.Errorf("知らない誤りが %q、%q を期待", got, unknown.Error())
+	}
+
+	why := reason.New(reason.EditNoSuchLine, "そんな行番号は無い")
+	wrapped := fmt.Errorf("save: %w", &edit.NotEditableError{Line: 3, Reason: why.Text, Cause: why})
+	want := s.cat.T(en, "error.not_editable", "line", "3", "reason", s.reasonText(en, why))
+	if got := s.editErrorText(en, wrapped); got != want {
+		t.Errorf("包まれた NotEditableError が %q、%q を期待", got, want)
+	}
+	if hasJapanese(want) {
+		t.Errorf("英語の画面に日本語が出る: %q", want)
+	}
+}
+
+func TestRowsWithoutKeyAreNotTracked(t *testing.T) {
+	// キー列が空の行（作業コピーにはありうる）は、局所更新の控えに入れない。
+	// キーの無い行は、控えから行を引き当てられない（バッジも付かない。
+	// [server.badgesByKey]）。入れると "" という1つのキーにまとまり、
+	// キーの無い行を1行訳しただけで件数が動く。
+	s := newTestServer(t, Options{})
+	s.overlay.addUntranslated("ja", "")
+	s.overlay.addTagged("ja", "")
+	s.markFilled("ja", "", true)
+	s.markTags("ja", "", diff.CheckTags("<b>閉じていない"))
+
+	if n := len(s.overlay.untranslated["ja"]); n != 0 {
+		t.Errorf("未翻訳の控えに %d 件入った", n)
+	}
+	if n := len(s.overlay.tagged["ja"]); n != 0 {
+		t.Errorf("タグの控えに %d 件入った", n)
+	}
+	if n := len(s.filledKeys("ja")); n != 0 {
+		t.Errorf("訳が入ったキーに %d 件入った", n)
+	}
+	if n := s.tagsTouched("ja"); n != 0 {
+		t.Errorf("タグを判定し直した行に %d 件入った", n)
+	}
+	if n := s.tagDelta("ja"); n != 0 {
+		t.Errorf("タグの件数が %d 動いた", n)
 	}
 }
