@@ -107,7 +107,11 @@ const (
 	// OldOrderNoRepository は git リポジトリでないか、コミットが無いこと。
 	OldOrderNoRepository = "old_order_no_repository"
 	// OldOrderNotTracked は再生順が git の管理下に無いこと。
+	// git add もしていないか、リポジトリの外にある。
 	OldOrderNotTracked = "old_order_not_tracked"
+	// OldOrderNotCommitted は再生順を git add しただけで、まだコミットしていないこと。
+	// git はこれを追跡中と答えるので、OldOrderNotTracked とは分けてある。
+	OldOrderNotCommitted = "old_order_not_committed"
 	// OldOrderOnlyOneVersion は再生順の履歴が1版しか無いこと。
 	OldOrderOnlyOneVersion = "old_order_only_one_version"
 	// OldOrderGitFailed は git は動いたが取り出しに失敗したこと。
@@ -254,8 +258,9 @@ var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOrderNoLineIDs,
 	JudgeOldOrderUnreadable, JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
 
-	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderOnlyOneVersion,
-	OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs, OldOrderStale,
+	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderNotCommitted,
+	OldOrderOnlyOneVersion, OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs,
+	OldOrderStale,
 
 	NoteUntranslated, NoteVanished, NoteStrayLineID, NoteNotPublished,
 	NoteScriptGap, NoteUnknownOrigin,

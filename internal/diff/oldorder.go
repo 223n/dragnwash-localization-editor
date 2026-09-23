@@ -29,8 +29,16 @@ var (
 	// ErrNoRepository は root が git リポジトリでないか、コミットが1つも無いこと。
 	ErrNoRepository = errors.New("git リポジトリではないか、コミットがありません")
 	// ErrNotTracked は再生順が git の管理下に無いこと。
-	// git add しただけで、まだ一度もコミットしていない（HEAD に無い）ときも含む。
+	// git add もしていない（インデックスにも HEAD にも無い）か、リポジトリの外にある。
 	ErrNotTracked = errors.New("再生順が git の管理下にありません")
+	// ErrNotCommitted は再生順を git add しただけで、まだ一度もコミットしていない
+	// （インデックスにはあるが HEAD に無い）こと。
+	//
+	// ErrNotTracked と分けてあるのは、利用者が取るべき手が違うからである。git は
+	// この状態を追跡中と答える（git status は新しいファイル、git ls-files は成功）。
+	// 「管理下にありません」と書くと git add し直させるが、それでは何も変わらない。
+	// 要るのはコミットである。
+	ErrNotCommitted = errors.New("再生順がまだコミットされていません")
 	// ErrOnlyOneVersion は再生順の履歴が1版しか無いこと。
 	// 最初のコミットの直後がこれにあたる。比べる相手がいない。
 	ErrOnlyOneVersion = errors.New("再生順の履歴が1版しかありません")
@@ -80,12 +88,16 @@ func GitOldOrder(root, orderPath string) ([]byte, error) {
 		// 「差分あり」を返す。そのまま git show すると失敗し、「git から取り出せ
 		// ません」と git の故障を疑わせる理由になる。gitPreviousRevision が親の
 		// 中を確かめるのと同じく、HEAD の中の再生順があるかを先に確かめる。
+		//
+		// ここで HEAD に無いなら、再生順はインデックスにある。git diff HEAD は
+		// インデックスにも HEAD にも無いファイル（git add していないもの）を
+		// 比べないので、それなら「差分なし」になり、この枝へは来ない。
 		check := exec.Command("git", "rev-parse", "--verify", "--quiet", "HEAD:"+spec)
 		check.Dir = root
 		if err := check.Run(); err != nil {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
-				return nil, ErrNotTracked
+				return nil, ErrNotCommitted
 			}
 			return nil, ErrNoGit
 		}

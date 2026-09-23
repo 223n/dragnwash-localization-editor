@@ -178,7 +178,11 @@ func TestGitOldOrderBlocked(t *testing.T) {
 		// 作業ツリーの再生順は HEAD と違う（HEAD に無い）ので、git diff は
 		// 「差分あり」を返す。そのまま HEAD の版を git show すると失敗し、
 		// 「git から取り出せません」と git の故障を疑わせる理由になる。
-		// 比べる相手になるコミット済みの版がまだ無いので、管理下に無いと返す。
+		//
+		// 「管理下にありません」とも書かない。git add した再生順は git status で
+		// 新しいファイルと出て、git ls-files でも追跡中と答える（validate.GitTracked
+		// もこの答えを「追跡している」の定義にしている）。そう書くと利用者は
+		// git add し直すが、何も変わらない。要るのはコミットなので、そう伝える。
 		root := gitRepo(t)
 		if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("よみもの\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -189,8 +193,11 @@ func TestGitOldOrderBlocked(t *testing.T) {
 		runGit(t, root, "add", "data/script_order.csv")
 
 		got, err := GitOldOrder(root, path)
-		if !errors.Is(err, ErrNotTracked) {
-			t.Errorf("理由が違う: got %v, want %v", err, ErrNotTracked)
+		if !errors.Is(err, ErrNotCommitted) {
+			t.Errorf("理由が違う: got %v, want %v", err, ErrNotCommitted)
+		}
+		if errors.Is(err, ErrNotTracked) {
+			t.Errorf("git add 済みの再生順を管理下に無いと言っている: %v", err)
 		}
 		if got != nil {
 			t.Errorf("取り出せないのに中身を返している:\n%s", got)
@@ -268,7 +275,7 @@ func TestGitOldOrderBlocked(t *testing.T) {
 		if got != nil {
 			t.Errorf("中身を返している: %q", got)
 		}
-		for _, sentinel := range []error{ErrNoGit, ErrNoRepository, ErrNotTracked, ErrOnlyOneVersion, ErrGitFailed} {
+		for _, sentinel := range []error{ErrNoGit, ErrNoRepository, ErrNotTracked, ErrNotCommitted, ErrOnlyOneVersion, ErrGitFailed} {
 			if errors.Is(err, sentinel) {
 				t.Errorf("git の理由として扱っている: %v", err)
 			}
@@ -344,6 +351,7 @@ func TestLoadOldOrderReason(t *testing.T) {
 		{name: "git が無い", err: ErrNoGit, wantID: reason.OldOrderNoGit},
 		{name: "リポジトリでない", err: ErrNoRepository, wantID: reason.OldOrderNoRepository},
 		{name: "管理下に無い", err: ErrNotTracked, wantID: reason.OldOrderNotTracked},
+		{name: "まだコミットしていない", err: ErrNotCommitted, wantID: reason.OldOrderNotCommitted},
 		{name: "履歴が1版しかない", err: ErrOnlyOneVersion, wantID: reason.OldOrderOnlyOneVersion},
 		{name: "取り出しに失敗した", err: ErrGitFailed, wantID: reason.OldOrderGitFailed},
 		{name: "包まれた番兵も見分ける", err: fmt.Errorf("手元の事情: %w", ErrNotTracked), wantID: reason.OldOrderNotTracked},

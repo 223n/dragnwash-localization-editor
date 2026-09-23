@@ -172,6 +172,7 @@
     "reason.old_order_no_git": "git could not be run",
     "reason.old_order_no_repository": "Not a git repository, or it has no commits",
     "reason.old_order_not_tracked": "The play order is not tracked by git",
+    "reason.old_order_not_committed": "The play order has not been committed yet",
     "reason.old_order_only_one_version": "The play order has only one version in its history",
     "reason.old_order_git_failed": "git could not produce the previous play order",
     "reason.old_order_unreadable": "The previous play order could not be parsed",

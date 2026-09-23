@@ -198,7 +198,7 @@ func diffReasons(t *testing.T) []reason.Reason {
 	}
 	sources := []diff.OldOrderSource{
 		fail(diff.ErrNoGit), fail(diff.ErrNoRepository), fail(diff.ErrNotTracked),
-		fail(diff.ErrOnlyOneVersion), fail(diff.ErrGitFailed),
+		fail(diff.ErrNotCommitted), fail(diff.ErrOnlyOneVersion), fail(diff.ErrGitFailed),
 		// 取り出せたが再生順として読めない（列名が重複している）。
 		func(string, string) ([]byte, error) { return []byte("key,key\na,b\n"), nil },
 		// 読めたが台詞IDとキーの組が無い。

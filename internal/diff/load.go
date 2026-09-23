@@ -263,6 +263,8 @@ func oldOrderReasonID(err error) string {
 		return reason.OldOrderNoRepository
 	case errors.Is(err, ErrNotTracked):
 		return reason.OldOrderNotTracked
+	case errors.Is(err, ErrNotCommitted):
+		return reason.OldOrderNotCommitted
 	case errors.Is(err, ErrOnlyOneVersion):
 		return reason.OldOrderOnlyOneVersion
 	case errors.Is(err, ErrGitFailed):
