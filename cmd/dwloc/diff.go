@@ -152,19 +152,6 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 			"dwloc: 警告: %s から再生順を読めません。台本から消えた行などは判定しません。\n",
 			displayPath(*root, repo.OrderPath))
 	}
-	if *format == diffFormatCSV && repo.OldOrder == nil {
-		// 1つ前の再生順を取り出せなかった場合です。引き継ぎ候補は判定せず、
-		// text 形式なら「判定していません（理由）」と本文に書きます。csv には
-		// その1行を置く場所がありません。行が1つも無いだけだと「引き継ぎ先は
-		// 無い」と読まれ、翻訳者は移すべき訳をそのまま捨てます。
-		//
-		// text 形式で重ねて出さないのは、本文がロケールごとに同じことを既に
-		// 書いているからです。git を使っていない利用者の毎回の実行に、
-		// 読む必要のない警告を足すことになります。
-		fmt.Fprintf(stderr, "dwloc: 警告: 引き継ぎ候補は判定しません（%s）。\n",
-			oldOrderReasonText(repo))
-		fmt.Fprintf(stderr, "dwloc:       carryover の行が無いことは、引き継ぎ先が無いという意味ではありません。\n")
-	}
 	if len(repo.EmptyLocales) > 0 {
 		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
 		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
@@ -189,8 +176,11 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	if *format == diffFormatCSV {
 		// csv には「判定していません」が出ません。行が無いことと、判定して
 		// いないことが見分けられないので、保留は必ず標準エラーへ書きます。
-		// text 形式では同じことを標準出力の本文に書いてあるので、繰り返しません。
-		warnHeldCarryover(repo, report, stderr)
+		//
+		// text 形式では重ねて出しません。本文がロケールごとに同じことを既に
+		// 書いているからです。git を使っていない利用者の毎回の実行に、
+		// 読む必要のない警告を足すことになります。
+		warnHeldCarryover(report, stderr)
 	}
 
 	if *format == diffFormatCSV {
@@ -252,17 +242,6 @@ func checkDiffLocales(found []diff.Locale, empty []string, want []string) error 
 	return err
 }
 
-// oldOrderReasonText は1つ前の再生順を読めなかった理由を返します。
-//
-// internal/diff は理由を必ず埋めますが、空のまま「（）」と書くと理由を
-// 取り違えたように見えるので、ここで最後の受け皿を用意しておきます。
-func oldOrderReasonText(repo *diff.Repo) string {
-	if repo.OldOrderReason != "" {
-		return repo.OldOrderReason
-	}
-	return "1つ前の再生順を読めません"
-}
-
 // hasOrderKeys は再生順のキーを1種でも読めたかを返します。
 //
 // 行数ではなくキーの種類数で見ます。行はあるのに key 列を引けないファイル
@@ -294,21 +273,52 @@ func diffErrorText(root string, err error) string {
 // csv 形式のためにあります。csv は Finding を1行ずつ並べるだけなので、
 // 「候補が0件だった」と「候補を判定していない」が同じ姿（行が無い）になります。
 // 黙っていると「移すべき訳は無い」と読まれ、消えた行の訳を捨てる判断に直結します。
-func warnHeldCarryover(repo *diff.Repo, report *diff.Report, stderr io.Writer) {
-	if repo.OldOrder == nil {
-		fmt.Fprintf(stderr, "dwloc: 1つ前の再生順を読めないので、引き継ぎ候補は判定しません: %s\n",
-			repo.OldOrderReason)
+//
+// 保留したかどうかと理由は、ロケールごとの要約（[diff.Summary.CanJudge] と
+// [diff.Summary.JudgeBlockReason]）から取ります。text 形式の本文の
+// 「判定していません（理由）」と同じ判断・同じ文面になります。1つ前の再生順が
+// 無いことだけを見ていたころは、いまの再生順に台詞IDが無くて保留したときに
+// 何も書かず、一方で1つ前の再生順が無いときは別の場所と2度書いていました。
+// 理由が空のときの受け皿も JudgeBlockReason が持っているので、「（）」には
+// なりません。
+//
+// 同じ理由のロケールは1行にまとめます。報告するロケールが全部同じ理由なら、
+// ロケール名は書きません。git を使っていない利用者の毎回の実行に、全ロケールの
+// 名前を並べることになるためです。
+//
+// 再生順のキーを読めていないロケールは飛ばします。runDiff が先に「再生順を
+// 読めません。台本から消えた行などは判定しません」と書いていて、引き継ぎ候補も
+// そこに入るからです。同じ理由を2度書くことになります。
+func warnHeldCarryover(report *diff.Report, stderr io.Writer) {
+	type held struct {
+		why     string
+		locales []string
+	}
+	var groups []held
+	index := make(map[string]int)
+	for _, sum := range report.Locales {
+		if sum.CanJudge(diff.CatCarryover) || !sum.OrderKeys {
+			continue
+		}
+		why := sum.JudgeBlockReason(diff.CatCarryover).Text
+		i, ok := index[why]
+		if !ok {
+			i = len(groups)
+			index[why] = i
+			groups = append(groups, held{why: why})
+		}
+		groups[i].locales = append(groups[i].locales, sum.Locale)
+	}
+	if len(groups) == 0 {
 		return
 	}
-	var stale []string
-	for _, sum := range report.Locales {
-		if sum.OldOrderStale {
-			stale = append(stale, sum.Locale)
+	for _, g := range groups {
+		if len(g.locales) == len(report.Locales) {
+			fmt.Fprintf(stderr, "dwloc: 警告: 引き継ぎ候補は判定しません（%s）。\n", g.why)
+			continue
 		}
+		fmt.Fprintf(stderr, "dwloc: 警告: %s の引き継ぎ候補は判定しません（%s）。\n",
+			strings.Join(g.locales, ", "), g.why)
 	}
-	if len(stale) > 0 {
-		fmt.Fprintf(stderr,
-			"dwloc: 読めた1つ前の再生順が、いまの版と同じ内容に見えます。引き継ぎ候補は判定しません: %s\n",
-			strings.Join(stale, ", "))
-	}
+	fmt.Fprintf(stderr, "dwloc:       carryover の行が無いことは、引き継ぎ先が無いという意味ではありません。\n")
 }

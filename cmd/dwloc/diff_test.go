@@ -437,8 +437,11 @@ func TestRunDiffCSVWarnsWhenOldOrderLooksStale(t *testing.T) {
 	if code != exitProblems {
 		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
 	}
-	checkContains(t, "stderr", stderr,
-		[]string{"いまの版と同じ内容に見えます。引き継ぎ候補は判定しません: ja"})
+	// 報告するのは ja だけなので、ロケール名は添えない（全ロケールが同じ理由）。
+	checkContains(t, "stderr", stderr, []string{
+		"警告: 引き継ぎ候補は判定しません（読めた1つ前の再生順が、いまの版と同じ内容に見えます）。",
+		"引き継ぎ先が無いという意味ではありません",
+	})
 	if strings.Contains(stdout, ",carryover,") {
 		t.Errorf("判定していないのに carryover の行がある:\n%s", stdout)
 	}
@@ -454,16 +457,137 @@ func TestRunDiffCSVWarnsWhenOldOrderLooksStale(t *testing.T) {
 	checkContains(t, "stdout", stdout, []string{"判定していません（読めた1つ前の再生順が、いまの版と同じ内容に見えます"})
 }
 
-// TestOldOrderReasonTextFallback は、理由が空でも「（）」と書かないことを見る。
+// TestRunDiffCSVWarnsWhenOrderHasNoLineIDs は、いまの再生順に台詞IDが無いせいで
+// 引き継ぎ候補を保留したときも、csv では標準エラーで伝えることを見る。
 //
-// internal/diff は理由を必ず埋める約束だが、空のまま出すと理由を取り違えたように
-// 見える。最後の受け皿の文面が出ること。
-func TestOldOrderReasonTextFallback(t *testing.T) {
-	if got := oldOrderReasonText(&diff.Repo{OldOrderReason: "git を実行できません"}); got != "git を実行できません" {
-		t.Errorf("理由がそのまま出ていない: %q", got)
+// 1つ前の再生順は読めているので、旧再生順の有無だけを見ていると警告が出ない。
+// 再生順のキーは読めているので、再生順を読めないという警告も出ない。そのまま
+// だと csv には台本から消えた行だけが並び、carryover の行が無いことが
+// 「引き継ぎ先は無い」と読まれ、翻訳者は消えた行の訳を捨てる。
+func TestRunDiffCSVWarnsWhenOrderHasNoLineIDs(t *testing.T) {
+	root := diffCarryTree(t)
+	// ゲーム更新のあとの再生順から、台詞IDだけが抜けた形。まだコミットしない。
+	noLineIDs := "section,phase,node,order,line_id,key,speaker,condition\n" +
+		"L01 Ryan,intro,Ryan_1_intro,1,," + diffHelloKey + ",Ryan,\n" +
+		"L01 Ryan,intro,Ryan_1_intro,2,," + diffCarryToKey + ",Ryan,\n"
+	if err := os.WriteFile(filepath.Join(root, "data", "script_order.csv"), []byte(noLineIDs), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got := oldOrderReasonText(&diff.Repo{}); got != "1つ前の再生順を読めません" {
-		t.Errorf("受け皿の文面 = %q", got)
+
+	code, stdout, stderr := runCLI("diff", "--root", root, "--format", "csv")
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+	}
+	// 前提: 台本から消えた行はキーだけで判定できるので、csv に出ている。
+	if !strings.Contains(stdout, "ja,vanished,review,"+diffCarryFromKey+",") {
+		t.Fatalf("前提が崩れている: 台本から消えた行が無い:\n%s", stdout)
+	}
+	if strings.Contains(stdout, ",carryover,") {
+		t.Errorf("判定していないのに carryover の行がある:\n%s", stdout)
+	}
+	checkContains(t, "stderr", stderr, []string{
+		"警告: 引き継ぎ候補は判定しません（再生順を読めていません）。",
+		"引き継ぎ先が無いという意味ではありません",
+	})
+	if n := strings.Count(stderr, "引き継ぎ候補は判定しません"); n != 1 {
+		t.Errorf("保留を %d 回書いている:\n%s", n, stderr)
+	}
+
+	// text 形式は本文に理由を書くので、標準エラーへ重ねない。
+	code, stdout, stderr = runCLI("diff", "--root", root)
+	if code != exitProblems {
+		t.Fatalf("text の終了コード = %d, 期待 %d\nstderr:\n%s", code, exitProblems, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("text 形式で標準エラーへ何か出ている:\n%s", stderr)
+	}
+	checkContains(t, "stdout", stdout, []string{"判定していません（再生順を読めていません）"})
+}
+
+// TestWarnHeldCarryover は、csv 形式で引き継ぎ候補の保留を標準エラーへ書く
+// 書き方を固定する。
+//
+// 見ているのは4つ。保留は理由ごとに1行だけ書くこと（同じ保留を別の文面で
+// 重ねない）。理由は text 形式の本文と同じ判断から取ること（旧再生順の有無だけを
+// 見ると、台詞IDが無くて保留したときに黙る）。理由が空でも「（）」と書かないこと
+// （空のまま出すと理由を取り違えたように見える）。再生順のキーを読めていない
+// ときは、runDiff が先に書く再生順の警告に任せること。
+func TestWarnHeldCarryover(t *testing.T) {
+	// ready は判定の材料が全部そろったロケールの要約。各場合はここから欠く。
+	ready := func(locale string) diff.Summary {
+		return diff.Summary{Locale: locale, OrderKeys: true, OrderLineIDs: true, OldOrder: true}
+	}
+	const tail = "dwloc:       carryover の行が無いことは、引き継ぎ先が無いという意味ではありません。\n"
+
+	tests := []struct {
+		name    string
+		locales []diff.Summary
+		want    string
+	}{
+		{
+			name:    "全部判定できていれば何も書かない",
+			locales: []diff.Summary{ready("de"), ready("ja")},
+			want:    "",
+		},
+		{
+			name: "1つ前の再生順が無ければ理由を1行だけ書く",
+			locales: func() []diff.Summary {
+				out := []diff.Summary{ready("de"), ready("ja")}
+				for i := range out {
+					out[i].OldOrder = false
+					out[i].OldOrderReason = diff.ErrNoRepository.Error()
+				}
+				return out
+			}(),
+			want: "dwloc: 警告: 引き継ぎ候補は判定しません（git リポジトリではないか、コミットがありません）。\n" + tail,
+		},
+		{
+			name: "理由が空でも括弧の中を空にしない",
+			locales: func() []diff.Summary {
+				s := ready("ja")
+				s.OldOrder = false
+				return []diff.Summary{s}
+			}(),
+			want: "dwloc: 警告: 引き継ぎ候補は判定しません（1つ前の再生順を読めていません）。\n" + tail,
+		},
+		{
+			name: "いまの再生順に台詞IDが無ければ、旧再生順が読めていても書く",
+			locales: func() []diff.Summary {
+				s := ready("ja")
+				s.OrderLineIDs = false
+				return []diff.Summary{s}
+			}(),
+			want: "dwloc: 警告: 引き継ぎ候補は判定しません（再生順を読めていません）。\n" + tail,
+		},
+		{
+			name: "一部のロケールだけ保留なら、そのロケールを名指しする",
+			locales: func() []diff.Summary {
+				stale := ready("ja")
+				stale.OldOrderStale = true
+				stale.OldOrderReason = "読めた1つ前の再生順が、いまの版と同じ内容に見えます"
+				return []diff.Summary{ready("de"), stale}
+			}(),
+			want: "dwloc: 警告: ja の引き継ぎ候補は判定しません（読めた1つ前の再生順が、いまの版と同じ内容に見えます）。\n" + tail,
+		},
+		{
+			name: "再生順のキーを読めていなければ、再生順の警告に任せる",
+			locales: func() []diff.Summary {
+				s := ready("ja")
+				s.OrderKeys, s.OrderLineIDs, s.OldOrder = false, false, false
+				s.OldOrderReason = diff.ErrNoGit.Error()
+				return []diff.Summary{s}
+			}(),
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var errOut bytes.Buffer
+			warnHeldCarryover(&diff.Report{Locales: tt.locales}, &errOut)
+			if got := errOut.String(); got != tt.want {
+				t.Errorf("標準エラーが違う\n--- 得たもの ---\n%s--- 期待 ---\n%s", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -853,6 +977,11 @@ func TestRunDiffCarryoverHeldWithoutGit(t *testing.T) {
 		"引き継ぎ候補は判定しません", "git リポジトリではないか、コミットがありません",
 		"引き継ぎ先が無いという意味ではありません",
 	})
+	// 同じ保留を別の文面で2度書かない。以前は runDiff と warnHeldCarryover の
+	// 両方が書いていて、しかも後者は理由の受け皿を通していなかった。
+	if n := strings.Count(stderr, "引き継ぎ候補は判定しません"); n != 1 {
+		t.Errorf("保留を %d 回書いている:\n%s", n, stderr)
+	}
 	if strings.Contains(stdout, "carryover") {
 		t.Errorf("判定していないのに carryover の行がある:\n%s", stdout)
 	}
