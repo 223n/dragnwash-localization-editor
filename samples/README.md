@@ -19,7 +19,9 @@
 見本には、画面に出したいものをわざと残してあります。  
 未翻訳の行は3つ、原文とタグの違う行は1つです。  
 そのため`dwloc diff`は終了コード1で終わります。  
-`dwloc validate`は問題を出さず、`dwloc publish --dry-run`は変更なしで終わります。
+写しで走らせると、`dwloc validate`は問題を出さず、`dwloc publish --dry-run`は変更なしで終わります。  
+`samples/harbor`のまま`dwloc validate`を掛けると、終了コード1で終わります。  
+作業コピーをこのリポジトリにコミットしてあり、コミットしてはいけないファイルとして数えるためです。
 
 ## 画面を試す
 
@@ -70,6 +72,10 @@ npm run screenshots
 
 `section`は、`L01 Harbor`の形か、英数字と`_`だけにします。  
 それ以外の形は`dwloc validate`が指摘します。
+
+リリースのワークフローは、配る書庫をこの見本の写しで動かして確かめます。  
+直したあとも、写しで`dwloc validate`が問題を出さず、`dwloc publish --no-game --dry-run`が変更なしで終わる形を保ってください。  
+崩れると、Goのテスト`TestSampleHarborPassesReleaseChecks`（`cmd/dwloc/samples_test.go`）が落ちます。
 
 撮り直しの台本は、`ja.working.csv`の10行目の訳が空いていることを前提にしています。  
 行を足したり並べ替えたりしたら、`screenshots.mjs`の行番号も直してください。
