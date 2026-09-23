@@ -401,6 +401,66 @@ func TestRunPublishReportsWriteFailure(t *testing.T) {
 	}
 }
 
+// TestRunPublishWriteFailureKeepsEarlierLocales は、複数ロケールの書き出しの途中で
+// 失敗したときの実際の振る舞いと、使い方の説明が食い違わないことを見る。
+//
+// 組み立ての失敗なら何も書かない（TestRunPublishWritesNothingWhenOneTargetFails）。
+// 書き出しの失敗（権限・ディスク不足など）は組み立てのあとで起き、巻き戻しは
+// しないので、先に書いたロケールは新しい内容のまま残る。説明が「1件でも失敗
+// すれば何も書きません」のままだと、利用者は先に書いたロケールも古いままだと
+// 思い込み、コミットする中身を取り違える。
+func TestRunPublishWriteFailureKeepsEarlierLocales(t *testing.T) {
+	if runtime.GOOS != "windows" && os.Geteuid() == 0 {
+		t.Skip("root は書き込みの権限を無視するので、失敗を作れない")
+	}
+	// 書き出しはディレクトリ名順。aa を書いたあと、zz で落とす。
+	root := publishTree(t, "aa", "zz")
+	dir := filepath.Join(root, "Translations", "zz")
+	path := filepath.Join(dir, "strings.csv")
+	// TestRunPublishReportsWriteFailure と同じ作り方。Windows は読み取り専用の
+	// ファイルへの置き換えを断り、Linux と macOS は書けないディレクトリに
+	// 一時ファイルを作れない。
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o755)
+		_ = os.Chmod(path, 0o644)
+	})
+
+	code, stdout, stderr := runCLI("publish", "--root", root)
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{"Translations/zz/strings.csv を書き出せません"})
+	// 先に書いた aa は新しい内容のまま残り、そのことが標準出力に出る。
+	checkContains(t, "stdout", stdout, []string{"Translations/aa/strings.csv"})
+	if strings.Contains(stdout, "件を書き出しました") {
+		t.Errorf("失敗したのに全部書き出したと言っている:\n%s", stdout)
+	}
+	if got := readFile(t, root, "Translations/aa/strings.csv"); got == workingCSV || !strings.Contains(got, helloKey) {
+		t.Errorf("aa が新しい内容になっていない:\n%s", got)
+	}
+	if got := readFile(t, root, "Translations/zz/strings.csv"); got != workingCSV {
+		t.Errorf("書き出せなかった zz が変わっている:\n%s", got)
+	}
+
+	// 使い方の説明が、この振る舞いを読み取れる文面になっていること。
+	_, usage, _ := runCLI("publish", "--help")
+	if strings.Contains(usage, "1件でも失敗すれば何も書きません") {
+		t.Errorf("書き出しの途中の失敗でも何も書かないように読める:\n%s", usage)
+	}
+	checkContains(t, "publish の説明", usage, []string{
+		"組み立てで1件でも失敗すれば",
+		"書き出しの途中で失敗したとき",
+		"新しい内容のまま残り",
+		"標準出力",
+	})
+}
+
 func TestSelectLocales(t *testing.T) {
 	targets := []publish.Target{
 		{Locale: "de"},

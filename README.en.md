@@ -911,12 +911,16 @@ What `diff` shows are candidates, not certainties.
 It does not rewrite translations, so check the content before you move anything.
 
 `publish` assembles everything it targets before writing anything out.  
-If even one thing fails, it writes nothing.  
+If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
-The write goes through a temporary file, so the original file survives even if it stops partway.
+Each file is written through a temporary file, so a file it could not write keeps its original content.  
+However, if writing fails partway (no write permission, not enough disk space, and so on), it does not roll back.  
+The locales it wrote before that keep their new content, and it stops with exit code `2`.  
+Each locale it wrote is printed as one line on standard output.  
+All of them passed the checks above, so no translation is lost.
 
 You can narrow what it targets with `--locale`.  
 With `--path` it stops scanning `Translations` and converts only the file you name.
