@@ -24,3 +24,10 @@ node_modules/
 
 # 実行の記録
 /logs/
+
+# 試験の出力。カバレッジの報告と生データ（coverage/）と、Playwright の出力（test-results/）。
+# playwright-report/ と blob-report/ は既定の設定では作らないが、--reporter=html などで作られる
+/coverage/
+/test-results/
+playwright-report/
+blob-report/

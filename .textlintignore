@@ -5,3 +5,9 @@ docs/port-spec.md
 # 英語版の文書。textlint の規則は日本語向けで、英語の一文一行は文字数の上限に掛かる
 *.en.md
 **/*.en.md
+
+# 試験の出力。Playwright は失敗した試験ごとに error-context.md を書く
+coverage/**
+test-results/**
+**/playwright-report/**
+**/blob-report/**
