@@ -168,6 +168,7 @@ func pick(found []Plugin, notFound error) (Plugin, error) {
 }
 
 // SteamLibraries は Steam のライブラリを並べる。並びは見つけた順で、重複は畳む。
+// 実在しないライブラリ（外付けドライブを外した、など）は並べない。
 //
 // 先頭は Steam を入れた場所そのもの。libraryfolders.vdf はそこにしか無いので、
 // ここを外すと別ドライブのライブラリも辿れなくなる。
@@ -178,7 +179,11 @@ func SteamLibraries() []string {
 			continue
 		}
 		out = append(out, root)
-		out = append(out, libraryFolders(root)...)
+		for _, lib := range libraryFolders(root) {
+			if isDir(lib) {
+				out = append(out, lib)
+			}
+		}
 	}
 	return dedupeStrings(out)
 }
