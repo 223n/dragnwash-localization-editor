@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
@@ -78,6 +79,8 @@ git が無い、git リポジトリでない、再生順の履歴が1版しか�
 「引き継ぎ候補」を 0 件とは書かず、理由を添えて保留します。--format csv では
 書く場所が無いので、その保留を標準エラーへ書きます。carryover の行が無いこと
 だけを見て「引き継ぎ先は無い」と読まないでください。
+再生順に台詞ID (line_id) が無いときは「台本に無い台詞ID行」も保留し、
+--format csv では同じく標準エラーへ書きます。
 
 data/script_order.csv が更新されたあと、dwloc publish より先に走らせてください。
 publish は再生順に置けなかった行の section 列を 'UI' に書き直すため、
@@ -175,12 +178,13 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 	if *format == diffFormatCSV {
 		// csv には「判定していません」が出ません。行が無いことと、判定して
-		// いないことが見分けられないので、保留は必ず標準エラーへ書きます。
+		// いないことが見分けられないので、台詞IDを要るカテゴリ（引き継ぎ候補と
+		// 台本に無い台詞ID行）の保留は必ず標準エラーへ書きます。
 		//
 		// text 形式では重ねて出しません。本文がロケールごとに同じことを既に
 		// 書いているからです。git を使っていない利用者の毎回の実行に、
 		// 読む必要のない警告を足すことになります。
-		warnHeldCarryover(report, stderr)
+		warnHeldLineIDCategories(report, stderr)
 	}
 
 	if *format == diffFormatCSV {
@@ -268,57 +272,158 @@ func diffErrorText(root string, err error) string {
 	return err.Error()
 }
 
-// warnHeldCarryover は、引き継ぎ候補を保留したことを標準エラーへ書きます。
+// warnHeldLineIDCategories は、再生順の台詞IDを要るカテゴリ（いまは引き継ぎ候補と
+// 台本に無い台詞ID行）を保留したことを標準エラーへ書きます。
 //
 // csv 形式のためにあります。csv は Finding を1行ずつ並べるだけなので、
-// 「候補が0件だった」と「候補を判定していない」が同じ姿（行が無い）になります。
-// 黙っていると「移すべき訳は無い」と読まれ、消えた行の訳を捨てる判断に直結します。
+// 「0件だった」と「判定していない」が同じ姿（行が無い）になります。黙っていると、
+// 引き継ぎ候補なら「移すべき訳は無い」と読まれ、消えた行の訳を捨てる判断に
+// 直結します。台本に無い台詞ID行なら、publish が末尾のブロックへ回す行を
+// 見落とします。
+//
+// 台詞IDを要るカテゴリを受け持つのは、再生順のキーを読めていても止まることが
+// あるからです。キーを読めていれば runDiff の「再生順を読めません」は出ないので、
+// ここで書かなければ誰も書きません。引き継ぎ候補は1つ前の再生順も要るので、
+// そちらの理由で止めたときもここで書きます。引き継ぎ候補だけを見ていたころは、
+// 台詞IDが無いときに台本に無い台詞ID行の保留を書いていませんでした。
 //
 // 保留したかどうかと理由は、ロケールごとの要約（[diff.Summary.CanJudge] と
 // [diff.Summary.JudgeBlockReason]）から取ります。text 形式の本文の
-// 「判定していません（理由）」と同じ判断・同じ文面になります。1つ前の再生順が
-// 無いことだけを見ていたころは、いまの再生順に台詞IDが無くて保留したときに
-// 何も書かず、一方で1つ前の再生順が無いときは別の場所と2度書いていました。
-// 理由が空のときの受け皿も JudgeBlockReason が持っているので、「（）」には
-// なりません。
+// 「判定していません（理由）」と同じ判断・同じ文面になります。理由が空のときの
+// 受け皿も JudgeBlockReason が持っているので、「（）」にはなりません。
 //
-// 同じ理由のロケールは1行にまとめます。報告するロケールが全部同じ理由なら、
-// ロケール名は書きません。git を使っていない利用者の毎回の実行に、全ロケールの
-// 名前を並べることになるためです。
+// 同じ理由で止めたカテゴリは1行にまとめ、同じ行になるロケールも1行にまとめます。
+// 報告するロケールが全部同じなら、ロケール名は書きません。git を使っていない
+// 利用者の毎回の実行に、全ロケールの名前を並べることになるためです。
+// 台詞IDが無いときは2つのカテゴリが同じ理由で止まるので、1行で済みます。
 //
 // 再生順のキーを読めていないロケールは飛ばします。runDiff が先に「再生順を
-// 読めません。台本から消えた行などは判定しません」と書いていて、引き継ぎ候補も
-// そこに入るからです。同じ理由を2度書くことになります。
-func warnHeldCarryover(report *diff.Report, stderr io.Writer) {
+// 読めません。台本から消えた行などは判定しません」と書いていて、どちらの
+// カテゴリもそこに入るからです。同じ理由を2度書くことになります。
+func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
+	cats := lineIDCategories(report)
 	type held struct {
 		why     string
+		cats    []diff.Category
 		locales []string
 	}
 	var groups []held
 	index := make(map[string]int)
+	// どこかのロケールで止めたカテゴリ。締めの1行で csv の category 列の値を並べる。
+	anyHeld := make(map[diff.Category]bool)
 	for _, sum := range report.Locales {
-		if sum.CanJudge(diff.CatCarryover) || !sum.OrderKeys {
+		if !sum.OrderKeys {
 			continue
 		}
-		why := sum.JudgeBlockReason(diff.CatCarryover).Text
-		i, ok := index[why]
-		if !ok {
-			i = len(groups)
-			index[why] = i
-			groups = append(groups, held{why: why})
+		// このロケールで止めたカテゴリを、理由ごとに寄せる。
+		var whys []string
+		byWhy := make(map[string][]diff.Category)
+		for _, c := range cats {
+			if sum.CanJudge(c) {
+				continue
+			}
+			why := sum.JudgeBlockReason(c).Text
+			if _, ok := byWhy[why]; !ok {
+				whys = append(whys, why)
+			}
+			byWhy[why] = append(byWhy[why], c)
+			anyHeld[c] = true
 		}
-		groups[i].locales = append(groups[i].locales, sum.Locale)
+		for _, why := range whys {
+			key := why + "\x00" + joinCategoryIDs(byWhy[why])
+			i, ok := index[key]
+			if !ok {
+				i = len(groups)
+				index[key] = i
+				groups = append(groups, held{why: why, cats: byWhy[why]})
+			}
+			groups[i].locales = append(groups[i].locales, sum.Locale)
+		}
 	}
 	if len(groups) == 0 {
 		return
 	}
 	for _, g := range groups {
+		names := joinCategoryNames(g.cats)
 		if len(g.locales) == len(report.Locales) {
-			fmt.Fprintf(stderr, "dwloc: 警告: 引き継ぎ候補は判定しません（%s）。\n", g.why)
+			fmt.Fprintf(stderr, "dwloc: 警告: %sは判定しません（%s）。\n", names, g.why)
 			continue
 		}
-		fmt.Fprintf(stderr, "dwloc: 警告: %s の引き継ぎ候補は判定しません（%s）。\n",
-			strings.Join(g.locales, ", "), g.why)
+		fmt.Fprintf(stderr, "dwloc: 警告: %s の%sは判定しません（%s）。\n",
+			strings.Join(g.locales, ", "), names, g.why)
 	}
-	fmt.Fprintf(stderr, "dwloc:       carryover の行が無いことは、引き継ぎ先が無いという意味ではありません。\n")
+	var heldCats []diff.Category
+	for _, c := range cats {
+		if anyHeld[c] {
+			heldCats = append(heldCats, c)
+		}
+	}
+	fmt.Fprintf(stderr, "dwloc:       %s の行が無いことは、0 件という意味ではありません。\n",
+		joinCategoryIDs(heldCats))
+}
+
+// judgeReady は、判定の材料を全部そろえたロケールの要約です。
+//
+// [lineIDCategories] が、ここから台詞IDだけを欠いて、どのカテゴリが止まるかを
+// 尋ねるために使います。internal/diff が判定の材料を増やしたら、ここにも足します。
+// 足し忘れると、その材料を要るカテゴリがここで判定できないことになり、
+// 台詞IDを要るかどうかを尋ねられなくなります（TestLineIDCategories が気づかせます）。
+var judgeReady = diff.Summary{
+	HasWorking:     true,
+	OrderKeys:      true,
+	OrderLineIDs:   true,
+	OrderNorms:     true,
+	HasLayoutRisks: true,
+	OldOrder:       true,
+}
+
+// lineIDCategories は、再生順の台詞IDが無いと判定できないカテゴリを、値の順に返します。
+//
+// internal/diff はその印（カテゴリの表の needsOrderLineIDs）を外へ出していないので、
+// [diff.Summary.CanJudge] に尋ねて引き出します。材料を全部そろえた要約
+// （[judgeReady]）では判定でき、そこから台詞IDだけを欠くと判定できなくなる
+// カテゴリが、それに当たります。名前を CLI 側に並べて持つと、表の印を足し引き
+// したときに、警告だけが古い名指しのまま残ります。text 形式の見出しも、同じ理由で
+// 名前を表から引いています。
+//
+// 候補のカテゴリは要約の Counts から取ります。Counts には全カテゴリが入る約束です。
+// 並びは値の順で、いまの2つは text 形式の見出しの並び（表示順）と同じです。
+func lineIDCategories(report *diff.Report) []diff.Category {
+	noLineIDs := judgeReady
+	noLineIDs.OrderLineIDs = false
+	seen := make(map[diff.Category]bool)
+	var out []diff.Category
+	for _, sum := range report.Locales {
+		for c := range sum.Counts {
+			if seen[c] {
+				continue
+			}
+			seen[c] = true
+			if judgeReady.CanJudge(c) && !noLineIDs.CanJudge(c) {
+				out = append(out, c)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// joinCategoryNames はカテゴリの日本語名を「」で囲み、「と」でつなぎます。
+// text 形式の見出し（「再生順に台詞ID (line_id) がありません。…は判定しません。」）と
+// 同じ書き方です。
+func joinCategoryNames(cats []diff.Category) string {
+	names := make([]string, len(cats))
+	for i, c := range cats {
+		names[i] = "「" + c.String() + "」"
+	}
+	return strings.Join(names, "と")
+}
+
+// joinCategoryIDs はカテゴリの csv の識別子（category 列の値）を「 と 」でつなぎます。
+func joinCategoryIDs(cats []diff.Category) string {
+	ids := make([]string, len(cats))
+	for i, c := range cats {
+		ids[i] = c.ID()
+	}
+	return strings.Join(ids, " と ")
 }
