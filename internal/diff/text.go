@@ -51,11 +51,20 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 	}
 	fmt.Fprintf(b, "再生順      %s   %d 行 / キー %d 種 / 台詞ID %d 件\n",
 		orderPath, r.OrderRows, r.OrderKeys, r.OrderLineIDs)
-	if r.OrderKeys == 0 || r.OrderLineIDs == 0 {
+	switch {
+	case r.OrderKeys == 0:
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
 		// どれも成り立たない。判定を止めてあることを、件数より先に言う。
 		b.WriteString("            再生順を読めていません。台本から消えた行などは判定しません。\n")
 		b.WriteString("            data/script_order.csv の場所と、key 列・line_id 列を確かめてください。\n")
+	case r.OrderLineIDs == 0:
+		// キーは読めていて、台詞IDだけが無い。台本から消えた行はキーだけで
+		// 判定でき、件数も出る。上と同じく「台本から消えた行などは判定しません」と
+		// 書くと、すぐ下の件数と食い違う。止まるのは台詞IDを要るカテゴリだけなので、
+		// そのカテゴリを名指しする。
+		fmt.Fprintf(b, "            再生順に台詞ID (line_id) がありません。%sは判定しません。\n",
+			lineIDCategoryNames())
+		b.WriteString("            data/script_order.csv の line_id 列を確かめてください。\n")
 	}
 
 	if len(r.Locales) < r.ReadLocales {
@@ -68,6 +77,21 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 		// 「訳が1件も無い」という最大の要作業なので、必ず名前を出す。
 		fmt.Fprintf(b, "            訳が1件もないロケール: %s\n", strings.Join(r.EmptyLocales, "、"))
 	}
+}
+
+// lineIDCategoryNames は、再生順の台詞IDが無いと判定できないカテゴリの名前を
+// 「」で囲み、表示順に「と」でつないで返す。
+//
+// 名前を文面に書き込まず表（[categoryTable] の needsOrderLineIDs）から引くのは、
+// 印を足し引きしたときに、見出しだけが古い名指しのまま残らないようにするため。
+func lineIDCategoryNames() string {
+	var names []string
+	for _, c := range categories {
+		if c.needsOrderLineIDs() {
+			names = append(names, "「"+c.String()+"」")
+		}
+	}
+	return strings.Join(names, "と")
 }
 
 // writeTextLocale は1ロケール分を書く。

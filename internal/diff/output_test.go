@@ -314,6 +314,108 @@ func TestWriteTextWithoutLocales(t *testing.T) {
 	}
 }
 
+// TestWriteTextHeaderNamesWhatIsHeld は、全体の見出しが「判定しません」と書く範囲を、
+// 再生順のキーが無いときと台詞IDだけが無いときで書き分けることを確かめる。
+//
+// 台詞IDだけが無いとき、台本から消えた行はキーだけで判定でき、件数も出る。
+// そこで「台本から消えた行などは判定しません」と書くと、すぐ下の件数と食い違い、
+// どちらを信じればよいか分からなくなる。止まるのは台詞IDを要るカテゴリだけなので、
+// 見出しもそのカテゴリを名指しする。名指しは categoryTable の印と一致させ、
+// 表を変えたときに見出しだけが古いまま残らないようにする。
+func TestWriteTextHeaderNamesWhatIsHeld(t *testing.T) {
+	const keysMissing = "再生順を読めていません。台本から消えた行などは判定しません。"
+	const lineIDsMissing = "再生順に台詞ID (line_id) がありません。「引き継ぎ候補」と「台本に無い台詞ID行」は判定しません。"
+	// keyBye は再生順に無く、section が UI でない。台本から消えた行になる。
+	published := publishedHeader +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,こんにちは\n" +
+		keyBye + ",L01 Ryan,Ryan_1_intro,2,Kobold,さようなら\n"
+
+	tests := []struct {
+		name    string
+		order   string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "キーも台詞IDも読めていれば断らない",
+			order:   orderCSV1,
+			notWant: []string{keysMissing, lineIDsMissing, "確かめてください"},
+		},
+		{
+			name:    "再生順が無ければ、キーの要るカテゴリごと止めたと書く",
+			want:    []string{keysMissing, "key 列・line_id 列を確かめてください。"},
+			notWant: []string{lineIDsMissing},
+		},
+		{
+			name: "台詞IDだけが無ければ、台詞IDの要るカテゴリだけを名指しする",
+			order: orderFile(
+				orderRow{"L01 Ryan", "intro", "Ryan_1_intro", "1", "", keyHello, "Ryan", ""},
+			),
+			want:    []string{lineIDsMissing, "data/script_order.csv の line_id 列を確かめてください。"},
+			notWant: []string{keysMissing, "key 列"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := map[string]string{"Translations/ja/strings.csv": published}
+			if tt.order != "" {
+				files["data/script_order.csv"] = tt.order
+			}
+			rep := Compare(newRepo(t, files, false), nil)
+
+			var b strings.Builder
+			if err := rep.WriteText(&b, TextOptions{}); err != nil {
+				t.Fatalf("WriteText が失敗した: %v", err)
+			}
+			// 全体の見出しは、最初のロケールの見出しより前。
+			header, _, found := strings.Cut(b.String(), "\nja  ")
+			if !found {
+				t.Fatalf("ロケールの見出しが無い:\n%s", b.String())
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(header, want) {
+					t.Errorf("見出しに %q が無い:\n%s", want, header)
+				}
+			}
+			for _, bad := range tt.notWant {
+				if strings.Contains(header, bad) {
+					t.Errorf("見出しに %q が出ている:\n%s", bad, header)
+				}
+			}
+		})
+	}
+
+	t.Run("台詞IDだけが無いときの名指しは表の印と一致する", func(t *testing.T) {
+		rep := Compare(newRepo(t, map[string]string{
+			"data/script_order.csv": orderFile(
+				orderRow{"L01 Ryan", "intro", "Ryan_1_intro", "1", "", keyHello, "Ryan", ""},
+			),
+			"Translations/ja/strings.csv": published,
+		}, false), nil)
+		sum := rep.Locales[0]
+
+		var b strings.Builder
+		if err := rep.WriteText(&b, TextOptions{}); err != nil {
+			t.Fatalf("WriteText が失敗した: %v", err)
+		}
+		header, body, _ := strings.Cut(b.String(), "\nja  ")
+		for _, c := range categories {
+			named := strings.Contains(header, "「"+c.String()+"」")
+			if c.needsOrderLineIDs() != named {
+				t.Errorf("%s: 台詞IDが要る = %v なのに、見出しで名指ししたか = %v", c, c.needsOrderLineIDs(), named)
+			}
+			// 名指ししたものは本当に保留になっていること。
+			if named && sum.CanJudge(c) {
+				t.Errorf("%s: 判定しないと書いたのに判定している", c)
+			}
+		}
+		// 台本から消えた行はキーだけで判定でき、件数が出る。見出しと食い違わないこと。
+		if want := pad(CatVanished.String(), categoryNameWidth()) + "1 件"; !strings.Contains(body, want) {
+			t.Errorf("%q が出ていない:\n%s", want, body)
+		}
+	})
+}
+
 // TestWriteTextLocaleHeader はロケールごとの見出し（公開ファイル・作業コピー・
 // はみ出しの記録の行）の書き分けを確かめる。
 func TestWriteTextLocaleHeader(t *testing.T) {
