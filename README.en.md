@@ -1154,6 +1154,13 @@ The thresholds are the figures measured under the same conditions as CI (Linux, 
 Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
 When you add tests and the figures go up, raise the thresholds too.
 
+### Trying the screen with the sample
+
+[samples/harbor](samples/harbor) is a made-up translation repository for trying out the screen.  
+You can open the `edit` screen without the original repository or the game.  
+The screenshots in the README are taken with this sample too (`npm run screenshots` retakes them).  
+How to use it is described in [samples/README.en.md](samples/README.en.md).
+
 ### Checking the Japanese documents
 
 Markdown formatting is checked with `markdownlint` and Japanese writing with `textlint`.  

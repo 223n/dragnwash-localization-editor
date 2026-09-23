@@ -16,7 +16,8 @@
     "test": "npm run test:go && npm run test:e2e",
     "test:go": "node scripts/go-coverage.mjs --run",
     "test:e2e": "node e2e/coverage.mjs clean && playwright test -c e2e && node e2e/coverage.mjs report",
-    "test:e2e:report": "node e2e/coverage.mjs report"
+    "test:e2e:report": "node e2e/coverage.mjs report",
+    "screenshots": "node samples/screenshots.mjs"
   },
   "coverageThresholds": {
     "go": {

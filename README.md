@@ -1154,6 +1154,13 @@ npm test                          # 両方
 手元では元リポジトリを読むテストも走るので、Goの数字はCIより少し高く出ます。  
 テストを足して数字が上がったら、閾値も上げてください。
 
+### 見本で画面を試す
+
+[samples/harbor](samples/harbor)は、画面を試すための架空の翻訳リポジトリです。  
+元リポジトリやゲームが無くても、`edit`の画面を開けます。  
+READMEの画面の例も、この見本で撮っています（`npm run screenshots`で撮り直せます）。  
+使い方は[samples/README.md](samples/README.md)にあります。
+
 ### 日本語の文書を検査する
 
 Markdownの書式を`markdownlint`で、日本語の書き方を`textlint`で検査します。  
