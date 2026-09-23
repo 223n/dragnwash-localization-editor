@@ -216,7 +216,9 @@ body {
 
   だから、ここへ入れるものは増やさない。max-height の中でスクロールアウトした
   ボタンは、貼り付いていても押せない。絞り込みは左の列（.sidebar）にあって、
-  この帯には入っていない。
+  この帯には入っていない。書き出しの結果（#export-state）だけは足したが、
+  ふだんは空で高さが0になる。書き出しのメニューは popover で、帯の外の層に
+  開くので、帯の高さに関わらない（.export-menu）。
 
   そのうえで、競合の引き止めだけは帯の先頭に出す（#conflict の order）。
   画面が狭い・低いと bar が何段にも折り返し、その下にある引き止めが 50vh の
@@ -359,7 +361,6 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-inline-start: auto;
   padding: 2px 10px;
   border-radius: 999px;
   border: 1px solid currentColor;
@@ -1180,17 +1181,82 @@ button {
 }
 
 /*
-  書き出しの一帯。2つの選び方を縦に積み、それぞれの下に「何が出てくるか」を
-  添える。ボタンの名前だけでは、公開ファイルの形といま直しているファイルの
-  違いが読めない。
-
-  ボタンは列の幅いっぱいにする。左の列は狭く、2つを横に並べると文言が折り返って
-  どちらが何だか分からなくなる。
+  帯の「別に保存」。ここから後ろ（保存の状態）を帯の末尾へ寄せる。
+  開閉は右端の山形で示す。畳み（.fold）と同じ出し方である。
 */
+.export-open {
+  margin-inline-start: auto;
+}
+
+.export-open .chev {
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .export-open .chev {
+    transition: none;
+  }
+}
+
+/*
+  書き出しのメニュー（popover）。2つの選び方を縦に積み、それぞれの下に
+  「何が出てくるか」を添える。ボタンの名前だけでは、公開ファイルの形といま
+  直しているファイルの違いが読めない。
+
+  display は書かない。閉じた popover を隠しているのはブラウザーの
+  [popover]:not(:popover-open) { display: none } で、作者の指定のほうが強い。
+  ここで display を書くと、閉じていてもメニューが出たままになる。
+*/
+.export-menu {
+  width: min(360px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--drawer-shadow);
+  font-size: 13px;
+}
+
+/*
+  置き場所。ブラウザーの既定では popover は画面の真ん中に出るので、帯のすぐ下の
+  末尾の側（ボタンのある側）へ寄せる。帯の高さは app.js が測った --top-height を
+  使うので、競合の引き止めが出て帯が伸びても、その下に開く。
+
+  popover を持たないブラウザーでは効かせない。効かせると、閉じる手段の無い
+  メニューが画面の上に貼り付いたままになる。効かせなければ帯の中に並ぶ。
+*/
+@supports selector(:popover-open) {
+  .export-menu {
+    position: fixed;
+    inset: auto;
+    inset-block-start: calc(var(--top-height, 10em) + 4px);
+    inset-inline-end: 16px;
+    margin: 0;
+    max-height: calc(100vh - var(--top-height, 10em) - 16px);
+    overflow: auto;
+  }
+
+  .export-open:has(+ .export-menu:popover-open) .chev {
+    transform: rotate(180deg);
+  }
+}
+
+.export-help {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .export-choice + .export-choice {
   margin-top: 12px;
 }
 
+/*
+  ボタンはメニューの幅いっぱいにする。2つを横に並べると文言が折り返って
+  どちらが何だか分からなくなる。
+*/
 .export-choice .btn {
   width: 100%;
   justify-content: flex-start;
@@ -1203,20 +1269,63 @@ button {
 }
 
 /*
-  結果の1行。うまくいったときとそうでないときで色を変えるが、色だけに頼らない
-  （文言がそのまま理由になっている）。空のときは余白ごと消す。
+  結果の1行。帯の中に出す（index.html の #export-state）。うまくいかなかった
+  ときは .notice.error の出し方になる（app.js の setExportState）。空のときは
+  .notice:empty が余白と線ごと消す。
 */
 .export-state {
-  margin: 12px 0 0;
+  position: relative;
+  border-bottom: 1px solid var(--line);
   font-size: 13px;
 }
 
-.export-state:empty {
-  margin: 0;
+/*
+  うまくいったときだけ（.timed）、下の縁に残り時間の帯を出す。帯が尽きると
+  app.js が animationend を受けて中身を空にし、1行ごと消える。失敗の理由には
+  付けない（setExportState）。
+
+  ポインターを載せているあいだは止める。読んでいる途中で消えないようにする
+  ためで、外すと続きから減る。
+
+  帯は ::after にする。読み上げの見張り（role="status"）の中に要素を足すと、
+  中身が変わったものとして読まれうる。幅は論理プロパティで縮めるので、
+  右から左へ書く言語では右から左へ縮む。
+*/
+.export-state.timed::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-end: 0;
+  inline-size: 100%;
+  block-size: 3px;
+  background: var(--primary);
+  animation: export-timer 6s linear forwards;
 }
 
-.export-state.bad {
-  color: var(--failed);
+.export-state.timed:hover::after {
+  animation-play-state: paused;
+}
+
+@keyframes export-timer {
+  to {
+    inline-size: 0;
+  }
+}
+
+/*
+  動きを減らす設定の人には、帯を縮めずに薄くしていく。止めてしまうと
+  animationend が来ず、知らせが消えなくなる。
+*/
+@media (prefers-reduced-motion: reduce) {
+  .export-state.timed::after {
+    animation-name: export-timer-fade;
+  }
+}
+
+@keyframes export-timer-fade {
+  to {
+    opacity: 0.15;
+  }
 }
 
 /* 未保存の行と、保存できなかった行。印は枠と文言の両方で出す。 */

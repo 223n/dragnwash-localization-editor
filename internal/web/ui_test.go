@@ -110,18 +110,24 @@ func TestSaveRetryDoesNotGiveUp(t *testing.T) {
 
 // topRegion は index.html の `<div class="top">` から、それに対応する閉じ div
 // までを返す。
+func topRegion(t *testing.T, html string) string {
+	t.Helper()
+	return divRegion(t, html, `<div class="top">`)
+}
+
+// divRegion は html の中の open で始まる div から、それに対応する閉じ div
+// までを返す。
 //
 // 入れ子の div を数える。数えずに最初の `</div>` で切ると、.top の中に div を
 // 1つ置いた瞬間に範囲が途中で終わり、message / conflict / orphans が
 // 「一帯の外にある」という、事実と違う理由で落ちる。前の段は index.html に
 // 「ここに div を置くな」というコメントを足して避けていたが、それは試験の
 // 都合を骨組みに持ち込んでいる。
-func topRegion(t *testing.T, html string) string {
+func divRegion(t *testing.T, html, open string) string {
 	t.Helper()
-	const open = `<div class="top">`
 	start := strings.Index(html, open)
 	if start < 0 {
-		t.Fatal("index.html に貼り付ける一帯（.top）が無い")
+		t.Fatalf("%s が無い", open)
 	}
 	depth := 0
 	for i := start; i < len(html); i++ {
@@ -136,7 +142,7 @@ func topRegion(t *testing.T, html string) string {
 			}
 		}
 	}
-	t.Fatal(".top の閉じ div が見つからない")
+	t.Fatalf("%s の閉じ div が見つからない", open)
 	return ""
 }
 
@@ -169,6 +175,149 @@ func TestAlertsStayOnScreen(t *testing.T) {
 	}
 	if !strings.Contains(css[block:block+200], "position: sticky") {
 		t.Error(".top が貼り付いていない")
+	}
+}
+
+// TestExportMenuLivesInTheBar は、書き出しの入口が帯（.bar）にあり、結果の欄が
+// メニューの外にあることを見る。
+//
+// 書き出しは左の列の畳みに置いていたが、帯へ移した。帯は行のどこを見ていても
+// 画面に残るので、1721行の途中からでも押せる。帯にはボタン1つだけを置き、
+// 2つの選び方と説明はメニューに入れる。
+//
+// メニューは popover にする。帯（.top）は max-height: 50vh と overflow: auto で
+// 止めてあるので、帯の中に絶対配置で開くと帯の縁で切れる。popover は最前面の
+// 層に出るので切れない。
+//
+// 閉じた popover は描かれず、支援技術の木からも外れる。選んだ時点でメニューを
+// 閉じるので、結果の欄を中に置くと、結果が見えも告知されもしない。
+func TestExportMenuLivesInTheBar(t *testing.T) {
+	html := uiSource(t, "ui/index.html")
+
+	bar := between(t, html, `<header class="bar">`, "</header>")
+	// 目録が届くまでは hidden。文言の無いボタンを焦点の順に並べない。
+	if !strings.Contains(bar, `<button id="export-open" class="btn export-open" type="button" popovertarget="export-menu" hidden>`) {
+		t.Error("帯に書き出しのボタンが無いか、開くメニュー（popovertarget）が結ばれていない")
+	}
+	menu := divRegion(t, bar, `<div id="export-menu" class="export-menu" popover>`)
+	for _, id := range []string{"export-help", "export-published", "export-working"} {
+		if !strings.Contains(menu, `id="`+id+`"`) {
+			t.Errorf("#%s が書き出しのメニューの中に無い", id)
+		}
+	}
+	for _, bad := range []string{"aria-live", `role="status"`, `role="alert"`} {
+		if strings.Contains(menu, bad) {
+			t.Errorf("書き出しのメニューの中に %s がある。閉じているあいだ木から外れて告知されない", bad)
+		}
+	}
+
+	// 結果の欄は帯の中、メニューの外。.notice を付けておくと、空のとき
+	// .notice:empty が高さを0にする。
+	if !strings.Contains(topRegion(t, html), `<p id="export-state" class="notice export-state" role="status">`) {
+		t.Error("書き出しの結果の欄が帯の中に無い")
+	}
+
+	// 左の列には残さない。2か所にあると、どちらが本物か分からない。
+	sidebar := between(t, html, `<aside id="sidebar" class="sidebar">`, "</aside>")
+	if strings.Contains(sidebar, `id="export-`) {
+		t.Error("左の列に書き出しが残っている")
+	}
+
+	// 見た目の側。閉じた popover を隠しているのはブラウザーの既定
+	// （[popover]:not(:popover-open) { display: none }）で、作者の指定のほうが
+	// 強い。.export-menu に display を書くと、閉じていても出たままになる。
+	css := uiSource(t, "ui/app.css")
+	blocks := 0
+	for rest := css; ; {
+		at := strings.Index(rest, ".export-menu {")
+		if at < 0 {
+			break
+		}
+		end := strings.Index(rest[at:], "}")
+		if end < 0 {
+			t.Fatal(".export-menu の終わりが分からない")
+		}
+		block := rest[at : at+end]
+		if strings.Contains(block, "display:") {
+			t.Errorf(".export-menu に display がある。閉じていてもメニューが出たままになる: %s", block)
+		}
+		blocks++
+		rest = rest[at+end:]
+	}
+	if blocks == 0 {
+		t.Fatal("app.css に .export-menu が無い")
+	}
+	// 置き場所は popover を持つブラウザーでだけ効かせる。持たないブラウザーで
+	// 効かせると、閉じる手段の無いメニューが画面の上に貼り付いたままになる。
+	// 帯の下へ開くために、帯の実測の高さを使う。
+	supports := between(t, css, "@supports selector(:popover-open) {", "\n}")
+	for _, want := range []string{".export-menu {", "position: fixed", "var(--top-height,"} {
+		if !strings.Contains(supports, want) {
+			t.Errorf("popover の置き場所の指定に %q が無い", want)
+		}
+	}
+	if first := between(t, css, ".export-menu {", "}"); strings.Contains(first, "position:") {
+		t.Error("popover の置き場所を @supports の外で決めている")
+	}
+
+	// 画面側。目録が届いたらボタンを出す。選んだらメニューを閉じてから書き出す。
+	// 結果の欄には .notice を付けたままにする。
+	js := uiSource(t, "ui/app.js")
+	if !strings.Contains(functionBody(t, js, "applyCatalog"), "el.exportOpen.hidden = false;") {
+		t.Error("目録が届いても書き出しのボタンを出していない")
+	}
+	for _, form := range []string{"published", "working"} {
+		if !regexp.MustCompile(`closeExportMenu\(\);\s*exportCsv\("` + form + `"\);`).MatchString(js) {
+			t.Errorf("%s を選んだときにメニューを閉じていない", form)
+		}
+	}
+	if body := functionBody(t, js, "setExportState"); !strings.Contains(body, `var name = "notice export-state";`) {
+		t.Error("書き出しの結果の欄から .notice を外している。空のときに高さが残る")
+	}
+}
+
+// TestOnlyExportDoneGoesAway は、書き出しの結果のうち「書き出しました」だけが
+// 残り時間の帯を添えて消え、失敗の理由は残ることを見る。
+//
+// うまくいった知らせは、次に書き出すまで貼り付く帯の下に1行居座っていた。
+// そのぶん一覧が狭くなるので、帯が尽きたら消す。失敗の理由と「送り終わって
+// から押して」は消さない。読み終わる前に消えると、何が起きたかを知るすべが
+// 無くなる。
+func TestOnlyExportDoneGoesAway(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	// .timed を付けるのは、失敗でなく、中身があるときだけ。
+	body := functionBody(t, js, "setExportState")
+	at := strings.Index(body, `name += " timed";`)
+	if at < 0 {
+		t.Fatal("うまくいった知らせに .timed を付けていない。消えない")
+	}
+	if !strings.Contains(body[:at], "if (bad) {") || !strings.Contains(body[:at], "} else if (text) {") {
+		t.Error(".timed を失敗の理由や空の欄にも付けうる形になっている")
+	}
+
+	// 帯が尽きたら消す。消すのは .timed のときだけ。
+	if !regexp.MustCompile(`el\.exportState\.addEventListener\("animationend", function \(\) \{\s*` +
+		`if \(el\.exportState\.classList\.contains\("timed"\)\) \{\s*setExportState\("", false\);`).MatchString(js) {
+		t.Error("残り時間の帯が尽きても、うまくいった知らせを消していない")
+	}
+
+	// 見た目の側。帯は ::after で、読み上げの見張りの中に要素を足さない。
+	// ポインターを載せたら止める。動きを減らす設定でも animationend が
+	// 来るよう、止めずに別の動き（薄くする）に替える。
+	css := uiSource(t, "ui/app.css")
+	for _, want := range []string{
+		".export-state.timed::after {",
+		"animation: export-timer ",
+		".export-state.timed:hover::after {\n  animation-play-state: paused;",
+		"animation-name: export-timer-fade;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css に %q が無い", want)
+		}
+	}
+	if strings.Contains(css, ".export-state.timed::after {\n    animation: none") {
+		t.Error("動きを減らす設定で帯の動きを止めている。animationend が来ず、知らせが消えない")
 	}
 }
 
