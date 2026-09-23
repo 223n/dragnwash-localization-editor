@@ -414,26 +414,21 @@ func TestWriteTargetKeepsOutputOnFailure(t *testing.T) {
 	})
 
 	t.Run("公開ファイルは読めるが置き場に書けない", func(t *testing.T) {
-		// 組み立てまでは通り、書き出しの段で止まる形。ディレクトリの書き込み権で
-		// 止めるので、読み取り専用属性でファイルの作成を止めない Windows では作れない。
-		if runtime.GOOS == "windows" {
-			t.Skip("Windows ではディレクトリへの書き込みを権限で止められない")
-		}
+		// 組み立てまでは通り、書き出しの段で止まる形。
 		root := t.TempDir()
 		input := filepath.Join(root, "in.csv")
 		writeFile(t, input, "key,translation\n0000000000000001,新しい訳\n")
 		dir := filepath.Join(root, TranslationsDir, "ja")
 		output := filepath.Join(dir, StringsFile)
 		writeFile(t, output, published)
-		if err := os.Chmod(dir, 0o555); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		forbidNewFiles(t, dir)
 
 		stats, err := WriteTarget(nil, Target{Locale: "ja", Input: input, Output: output})
 		if err == nil {
-			// root で走るとディレクトリの権限が効かない。
-			t.Skip("この環境では書けない状態にできなかったので飛ばす")
+			// 置き場に新しいファイルを作れないことは確かめてある。それでも通るのは、
+			// 一時ファイルを経ずに公開ファイルを直接書き換えたときだけである。
+			t.Fatalf("新しいファイルを作れない置き場で書き出しが通った。一時ファイルを経ていない（公開ファイル: %q）",
+				readString(t, output))
 		}
 		if stats != (Stats{}) {
 			t.Errorf("書けなかったのに集計を返した: %+v", stats)
@@ -464,23 +459,16 @@ func TestWriteBytesFailsWithoutTouchingTheOriginal(t *testing.T) {
 	})
 
 	t.Run("一時ファイルを作れない", func(t *testing.T) {
-		// ディレクトリの書き込み権で止める。Windows はディレクトリの読み取り専用
-		// 属性でファイルの作成を止めないので、この形を作れない。
-		if runtime.GOOS == "windows" {
-			t.Skip("Windows ではディレクトリへの書き込みを権限で止められない")
-		}
 		dir := t.TempDir()
 		path := filepath.Join(dir, StringsFile)
 		writeFile(t, path, "古い内容\n")
-		if err := os.Chmod(dir, 0o555); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		forbidNewFiles(t, dir)
 
-		err := WriteBytes(path, []byte("新しい内容\n"))
-		if err == nil {
-			// root で走るとディレクトリの権限が効かない。
-			t.Skip("この環境では書けない状態にできなかったので飛ばす")
+		if err := WriteBytes(path, []byte("新しい内容\n")); err == nil {
+			// 置き場に新しいファイルを作れないことは確かめてある。それでも通るのは、
+			// 一時ファイルを経ずに出力先を直接書き換えたときだけである。
+			t.Fatalf("新しいファイルを作れない置き場で書き出しが通った。一時ファイルを経ていない（中身: %q）",
+				readString(t, path))
 		}
 		if got := readString(t, path); got != "古い内容\n" {
 			t.Errorf("書けなかったのに中身が変わった: %q", got)
@@ -500,6 +488,38 @@ func TestWriteBytesFailsWithoutTouchingTheOriginal(t *testing.T) {
 		}
 		assertOnlyEntries(t, dir, StringsFile)
 	})
+}
+
+// forbidNewFiles は dir に新しいファイルを作れない状態にする。作れないことを
+// 確かめられなければ、呼んだ試験を飛ばす。
+//
+// ディレクトリの書き込み権で止めるので、読み取り専用属性でファイルの作成を
+// 止めない Windows ではこの形を作れない。root で走ると権限そのものが効かない。
+//
+// 止められたかは、調べる対象（[WriteBytes] など）の成否ではなく、ここで実際に
+// ファイルを作ってみて確かめる。0o555 の中でも既にあるファイルの上書きは通る。
+// 対象の成否で代用すると、対象が一時ファイルを経ずに出力先を直接書き換える形へ
+// 戻ったときも「止められなかった環境」と読んで飛ばしてしまう。go test は飛ばした
+// 試験を成功として数えるので、守りたい性質が崩れても誰も気づけない。
+func forbidNewFiles(t *testing.T, dir string) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ではディレクトリへの書き込みを権限で止められない")
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	// 後始末で消せるように戻す。t.Cleanup は後入れ先出しなので、呼び出し側が
+	// 先に作った t.TempDir の削除より先に走る。
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	probe, err := os.CreateTemp(dir, "probe*")
+	if err == nil {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Skip("この環境ではディレクトリへの書き込みを止められないので飛ばす。root で走っていると効かない")
+	}
 }
 
 // readString はファイルを文字列で読む。読めなければその場で止める。
