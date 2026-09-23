@@ -29,6 +29,7 @@ var (
 	// ErrNoRepository は root が git リポジトリでないか、コミットが1つも無いこと。
 	ErrNoRepository = errors.New("git リポジトリではないか、コミットがありません")
 	// ErrNotTracked は再生順が git の管理下に無いこと。
+	// git add しただけで、まだ一度もコミットしていない（HEAD に無い）ときも含む。
 	ErrNotTracked = errors.New("再生順が git の管理下にありません")
 	// ErrOnlyOneVersion は再生順の履歴が1版しか無いこと。
 	// 最初のコミットの直後がこれにあたる。比べる相手がいない。
@@ -74,6 +75,20 @@ func GitOldOrder(root, orderPath string) ([]byte, error) {
 		return nil, err
 	}
 	if differs {
+		// HEAD と違うには、HEAD に再生順がまだ無い場合も入る。git add しただけで
+		// コミットしていない再生順がそれで、git diff は新しいファイルとして
+		// 「差分あり」を返す。そのまま git show すると失敗し、「git から取り出せ
+		// ません」と git の故障を疑わせる理由になる。gitPreviousRevision が親の
+		// 中を確かめるのと同じく、HEAD の中の再生順があるかを先に確かめる。
+		check := exec.Command("git", "rev-parse", "--verify", "--quiet", "HEAD:"+spec)
+		check.Dir = root
+		if err := check.Run(); err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return nil, ErrNotTracked
+			}
+			return nil, ErrNoGit
+		}
 		return gitShow(root, "HEAD:"+spec)
 	}
 	rev, err := gitPreviousRevision(root, spec)

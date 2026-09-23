@@ -174,6 +174,29 @@ func TestGitOldOrderBlocked(t *testing.T) {
 		}
 	})
 
+	t.Run("再生順を git add しただけでまだコミットしていない", func(t *testing.T) {
+		// 作業ツリーの再生順は HEAD と違う（HEAD に無い）ので、git diff は
+		// 「差分あり」を返す。そのまま HEAD の版を git show すると失敗し、
+		// 「git から取り出せません」と git の故障を疑わせる理由になる。
+		// 比べる相手になるコミット済みの版がまだ無いので、管理下に無いと返す。
+		root := gitRepo(t)
+		if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("よみもの\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, root, "add", "README.md")
+		runGit(t, root, "commit", "-m", "first")
+		path := writeOrder(t, root, orderFile(introRow("1", "line:0001", keyB)))
+		runGit(t, root, "add", "data/script_order.csv")
+
+		got, err := GitOldOrder(root, path)
+		if !errors.Is(err, ErrNotTracked) {
+			t.Errorf("理由が違う: got %v, want %v", err, ErrNotTracked)
+		}
+		if got != nil {
+			t.Errorf("取り出せないのに中身を返している:\n%s", got)
+		}
+	})
+
 	t.Run("再生順が2つ目以降のコミットで入ったきり", func(t *testing.T) {
 		// README などを先にコミットし、再生順をあとから足したリポジトリ。
 		// 足したコミットに親はあるが、親には再生順が無い。比べる相手が
