@@ -12,7 +12,7 @@
 // リポジトリの logs/ が伸びる。
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 
@@ -158,14 +158,45 @@ function waitForUrl(child, out, exited, bin) {
 
 // removeDir は見本の一時ディレクトリを消す。Windows はプロセスが終わった直後だと
 // ファイルの手放しが遅れることがあるので、何度か試す。
+//
+// 書き込み権の無いディレクトリ（試験が 0555 にしたもの）が残っていると、POSIX では中身を
+// 消せずに EACCES になる。Node の rm はこれを試し直さないので、権限を開けてから消し直す。
+// 試験が戻し忘れたときや、戻す前に時間切れになったときの立て直しである。
 async function removeDir(dir) {
-  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  const options = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 };
+  try {
+    await rm(dir, options);
+  } catch (err) {
+    if (err.code !== "EACCES" && err.code !== "EPERM") {
+      throw err;
+    }
+    // 開けられなくても消し直しは試す。消せなかったときは、その理由を投げる。
+    await openUp(dir).catch(() => {});
+    await rm(dir, options);
+  }
+}
+
+// openUp は path の下のディレクトリに持ち主の読み書きと入る権限を足し、ファイルには
+// 持ち主の書き込み権を足す。シンボリックリンクはたどらない（見本の外を書き換えない）。
+async function openUp(path) {
+  const info = await lstat(path);
+  if (info.isFile() && (info.mode & 0o200) === 0) {
+    await chmod(path, (info.mode & 0o7777) | 0o200);
+  }
+  if (!info.isDirectory()) {
+    return;
+  }
+  await chmod(path, (info.mode & 0o7777) | 0o700);
+  for (const name of await readdir(path)) {
+    await openUp(join(path, name));
+  }
 }
 
 // launchDwloc は見本を作って dwloc edit を起動し、URL が出たところで返す。
 //
 // repo は見本（repo.mjs の形）、options は DEFAULT_OPTIONS に重ねる起動の指定。
 // 返したハンドルの stop() で止めて一時ディレクトリを消す。stop は何度呼んでもよい。
+// 消す前に戻したいもの（書けなくしたディレクトリの権限など）は beforeRemove で頼む。
 export async function launchDwloc(repo, options = {}) {
   const opt = { ...DEFAULT_OPTIONS, ...options };
   // 一時ディレクトリを作る前に確かめる。作ってから投げると、それが残る。
@@ -246,6 +277,10 @@ export async function launchDwloc(repo, options = {}) {
     });
   });
 
+  // beforeRemove で頼まれた後始末。stop が待ち受けを止めたあと、一時ディレクトリを
+  // 消す前に、頼まれたのと逆の順で呼ぶ。
+  const cleanups = [];
+
   let stopped = false;
   const stop = async () => {
     if (stopped) {
@@ -270,7 +305,20 @@ export async function launchDwloc(repo, options = {}) {
         await exited;
       }
     }
+    // 後始末が投げても、残りの後始末と一時ディレクトリの削除は続ける。戻せなかった
+    // ことは、消したあとで投げて知らせる。
+    let failure = null;
+    for (const cleanup of cleanups.reverse()) {
+      try {
+        await cleanup();
+      } catch (err) {
+        failure ??= err;
+      }
+    }
     await removeDir(dir);
+    if (failure) {
+      throw failure;
+    }
   };
 
   let match;
@@ -334,5 +382,12 @@ export async function launchDwloc(repo, options = {}) {
     // exited は終わったときに { code, signal } で解ける。
     exited,
     stop,
+    // beforeRemove は、stop が一時ディレクトリを消す前に呼ぶ後始末を頼む。試験が書けなく
+    // したディレクトリの権限を戻す、などに使う。試験の finally だけで戻すと、試験が
+    // 途中で止まったまま時間切れになったとき、Playwright は finally より先にフィクスチャ
+    // （test.mjs の launch）を畳むので、閉じたままのディレクトリを消しにいってしまう。
+    beforeRemove: (cleanup) => {
+      cleanups.push(cleanup);
+    },
   };
 }

@@ -156,14 +156,25 @@ function rowMovedNote() {
 //   - Windows … ファイルの読み取り専用の属性で、置き換えが拒まれる
 //   - POSIX   … rename の可否はディレクトリの書き込み権で決まるので、ディレクトリを閉じる
 // 実際に書けなくなったかを同じ手順で確かめ、root で走っているなどで効かなければ飛ばす。
-// 戻す関数を返す。後始末（一時ディレクトリの削除）より前に必ず呼ぶこと。
+//
+// 戻す関数を返す。何度呼んでもよい。戻す処理は server の後始末にも頼んでおく。試験が
+// 戻す前で止まったまま時間切れになると、Playwright は試験の finally より先に server を
+// 畳むので、finally で戻すだけでは閉じたままのディレクトリを消しにいき、EACCES で見本が残る。
 async function makeUnwritable(server, rel) {
   const file = server.rootPath(rel);
   const windows = process.platform === "win32";
   const target = windows ? file : dirname(file);
   const [closed, open] = windows ? [0o444, 0o644] : [0o555, 0o755];
   await chmod(target, closed);
-  const restore = () => chmod(target, open);
+  let restored = false;
+  const restore = async () => {
+    if (restored) {
+      return;
+    }
+    restored = true;
+    await chmod(target, open);
+  };
+  server.beforeRemove(restore);
 
   const body = await readFile(file);
   const probe = join(dirname(file), `${basename(file)}.probe-${randomUUID()}`);

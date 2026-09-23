@@ -2,13 +2,16 @@
 //
 // ここが崩れると、画面の試験は見たいものと関係の無い理由で落ちるか、見本の一時
 // ディレクトリ（dwloc-e2e-*）を残していく。どちらも、画面の試験の側からは気付きにくい。
-import { copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { chmod, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { binaryPath } from "../support/dwloc.mjs";
+import { binaryPath, launchDwloc } from "../support/dwloc.mjs";
 import { root } from "../support/paths.mjs";
+import { sampleRepo } from "../support/repo.mjs";
 import { childEnv, describeRun, e2eDir, moduleUrl, runScript, tempEnv } from "./node.mjs";
 
 // leftovers は dir に残った見本の一時ディレクトリを返す。
@@ -22,6 +25,26 @@ async function privateTemp(testInfo) {
   const dir = testInfo.outputPath("tmp");
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+// canWrite は dir の中にファイルを作れるかを確かめる。
+async function canWrite(dir) {
+  const probe = join(dir, `probe-${randomUUID()}`);
+  try {
+    await writeFile(probe, "");
+  } catch {
+    return false;
+  }
+  await rm(probe, { force: true });
+  return true;
+}
+
+// state は promise が解けていれば "settled"、少し待っても解けなければ "pending" を返す。
+function state(promise) {
+  return Promise.race([
+    promise.then(() => "settled"),
+    new Promise((resolve) => setTimeout(() => resolve("pending"), 1_000)),
+  ]);
 }
 
 test.describe("DWLOC_BIN", () => {
@@ -93,5 +116,64 @@ test.describe("DWLOC_BIN", () => {
     // startTimeout（20秒）まで待っていないこと。
     expect(out.elapsed).toBeLessThan(10_000);
     expect(await leftovers(tmp)).toEqual([]);
+  });
+});
+
+test.describe("後始末（stop）", () => {
+  test("beforeRemove で頼んだ後始末を、待ち受けを止めたあと、一時ディレクトリを消す前に、頼んだのと逆の順で呼ぶ", async () => {
+    // 試験がディレクトリを書けなくしたまま時間切れになると、Playwright は試験の finally より
+    // 先にフィクスチャ（launch）を畳む。戻す処理をここへ頼んでおけば、消す前に戻る
+    // （save-failure.spec.mjs の makeUnwritable）。
+    const server = await launchDwloc(sampleRepo());
+    const seen = [];
+    server.beforeRemove(async () => {
+      seen.push({ name: "first", dir: existsSync(server.dir), exited: await state(server.exited) });
+    });
+    server.beforeRemove(async () => {
+      seen.push({ name: "second", dir: existsSync(server.dir), exited: await state(server.exited) });
+    });
+    await server.stop();
+    expect(seen).toEqual([
+      { name: "second", dir: true, exited: "settled" },
+      { name: "first", dir: true, exited: "settled" },
+    ]);
+    expect(existsSync(server.dir)).toBe(false);
+  });
+
+  test("頼んだ後始末が投げても、残りの後始末を呼んで一時ディレクトリを消し、そのあとで投げる", async () => {
+    // 戻せなかったことは隠さない。ただし、そのせいで見本を残すこともしない。
+    const server = await launchDwloc(sampleRepo());
+    let called = false;
+    server.beforeRemove(() => {
+      called = true;
+    });
+    server.beforeRemove(() => {
+      throw new Error("戻せなかった");
+    });
+    await expect(server.stop()).rejects.toThrow("戻せなかった");
+    expect(called).toBe(true);
+    expect(existsSync(server.dir)).toBe(false);
+  });
+
+  test("書けないディレクトリが残っていても、一時ディレクトリを消し切る", async () => {
+    // POSIX では、中身を消すのにディレクトリの書き込み権が要る。Node の rm は EACCES を
+    // 試し直さないので、戻し忘れた試験があると、見本が中身ごと /tmp に残る。
+    const server = await launchDwloc(sampleRepo());
+    const target = server.rootPath("Translations/_discovered");
+    try {
+      await chmod(target, 0o555);
+      test.skip(
+        await canWrite(target),
+        "ディレクトリの権限で書き込みを止められない（root で走っているか、Windows）。Windows の読み取り専用のファイルは Node の rm が自分で開けて消す",
+      );
+      await server.stop();
+      expect(existsSync(server.dir)).toBe(false);
+    } finally {
+      if (existsSync(server.dir)) {
+        await chmod(target, 0o755).catch(() => {});
+        await server.stop().catch(() => {});
+        await rm(server.dir, { recursive: true, force: true });
+      }
+    }
   });
 });
