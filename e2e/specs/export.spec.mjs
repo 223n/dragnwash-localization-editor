@@ -7,6 +7,8 @@
 //   先に送りきる   未保存の訳を先に送ってから取りにいく。送り切れなければ書き出さず、
 //                  押し直してもらう（ui.export_wait）。送っていない訳は、待ち受けが
 //                  読むファイルに入っていないので、書き出したものにも入らない。
+//                  送っても片付かない訳（競合・保存できない行・行き先の無い訳）が
+//                  残っていても書き出さず、何を片付ければよいかを言う。
 //   そのまま渡す   working はいま書き込んでいるファイルのバイトそのまま、published は
 //                  dwloc publish が書くのと同じバイト。どちらもリポジトリは書き換えない。
 //   黙らない       守り（失われる訳、巻き戻り）に当たったら理由をボタンの下に出す。
@@ -30,6 +32,7 @@ import {
   SAMPLE,
   SAMPLE_LINES,
   field,
+  keyFor,
   publishedFile,
   sampleRepo,
   sampleWorkingCopy,
@@ -51,6 +54,10 @@ test.use({
 
 // #export-state の「うまくいかなかった」の印（app.js の setExportState）。
 const BAD = /(^|\s)bad(\s|$)/;
+
+// wrongKey はファイルに無いキー。保存の要求をこれに差し替えると、待ち受けは
+// 「この行はずれています」で書かずに断る（行ごとの失敗を本物の応答で作る）。
+const wrongKey = keyFor("この原文は見本のどこにも無い");
 
 // ---- 保存ダイアログの差し替え ----
 
@@ -566,6 +573,91 @@ test.describe("未保存の訳があるとき", () => {
     expect((await pickerLog(page)).calls, "競合が出たまま押し直したら中身を渡した").toHaveLength(0);
     await expect(exportState(page)).toHaveText(msg("ja", "ui.export_conflict"));
   });
+
+  // 行ごとに断られた訳（保存できない行）はファイルに入っていない。画面は値ごと抱え、
+  // 自動保存の対象からだけ外している（app.js の state.failed）。そのまま取りにいくと、
+  // 画面に出ているその訳の入らない中身を「書き出しました」と渡す（hasUnsaved が未保存に
+  // 数えるのと同じ考えで止める）。送り直しでは片付かないので「送っています」とも言わない。
+  // 片付けば、同じボタンで書き出せる。
+  test("保存できない行が残っているときは書き出さずに理由を出し、片付けば書き出す", async ({ page, server }) => {
+    const typed = "さようなら。";
+    await stubPicker(page);
+    await openPaused(page, server);
+    const seen = watchApi(page);
+    // 要求のキーをファイルに無いものへ差し替え、本物の待ち受けに行ごとに断らせる。
+    await page.route("**/api/rows", async (route) => {
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      body.edits = (body.edits ?? []).map((edit) => ({ ...edit, key: wrongKey }));
+      await route.continue({ postData: JSON.stringify(body) });
+    });
+    await openExport(page);
+
+    await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
+    await editor(page).press("Escape");
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_failed"));
+    const before = await server.readRoot(workingRel);
+
+    await workingButton(page).click();
+    await expect(exportState(page)).toHaveText(msg("ja", "ui.export_row_failed"));
+    await expect(exportState(page)).toHaveClass(BAD);
+    await waitExportSettled(page);
+    expect(exportsOf(seen)).toHaveLength(0);
+    expect((await pickerLog(page)).calls).toHaveLength(0);
+    // 訳は画面に残り、ファイルは1バイトも変わっていない。
+    await expect(page.locator(`#list .cell.translation[data-line="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+
+    // 元の訳（空）へ戻すと、保存できない行ではなくなる。そうすれば書き出せる。
+    await page.unroute("**/api/rows");
+    await typeTranslation(page, SAMPLE_LINES.goodbye, SAMPLE.goodbye.ja);
+    await editor(page).press("Escape");
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
+    await workingButton(page).click();
+    await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
+    const log = await pickerLog(page);
+    expect(log.written).toHaveLength(1);
+    expect(log.written[0].equals(await server.readRoot(workingRel))).toBe(true);
+  });
+
+  // 行き先の無い訳（409 の読み直しで、載せる行がファイルから無くなった訳）もファイルに
+  // 入っていない。画面のその欄が訳の残っている最後の場所で、書き出したものには無い。
+  // 保存できない行と同じく、書き出さずに何をすればよいかを言う。
+  test("行き先の無い訳が残っているときは書き出さずに理由を出す", async ({ page, server }) => {
+    await stubPicker(page);
+    // 時計を止める。止めないと、打ってから「よその書き換え」を挟むまでに自動保存が走り、
+    // 409 にならずに保存される。
+    await openPaused(page, server);
+    const seen = watchApi(page);
+    await openExport(page);
+
+    await typeTranslation(page, SAMPLE_LINES.goodbye, "さようなら。");
+    // 送る前に、よそが goodbye の行ごと消した。
+    const external = workingCopy([
+      "",
+      "# ===== Level 1: Ryan (Sunny) =====",
+      "# --- intro: Ryan_1_intro ---",
+      { ...SAMPLE.hello, translation: SAMPLE.hello.ja },
+      { ...SAMPLE.wonderful, translation: SAMPLE.wonderful.ja },
+      "",
+    ]);
+    await server.writeRoot(workingRel, external);
+    const saving = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/api/rows" && res.request().method() === "POST",
+    );
+    await editor(page).press("Escape");
+    expect((await saving).status()).toBe(409);
+    await expect(page.locator("#orphans")).toBeVisible();
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
+
+    await workingButton(page).click();
+    await expect(exportState(page)).toHaveText(msg("ja", "ui.export_orphans"));
+    await expect(exportState(page)).toHaveClass(BAD);
+    await waitExportSettled(page);
+    expect(exportsOf(seen)).toHaveLength(0);
+    expect((await pickerLog(page)).calls).toHaveLength(0);
+    // 行き先の無い訳は出たまま。
+    await expect(page.locator("#orphans-list li")).toHaveCount(1);
+  });
 });
 
 test("書き出しているあいだは、2つのボタンを押せない", async ({ page, server }) => {
@@ -729,6 +821,10 @@ test.describe("書き出しを取りにいけなかったとき", () => {
 // 応答の文字列をそのままファイル名にしない（app.js の nameFromDisposition）。待ち受けが
 // 付ける名前は [A-Za-z0-9._-] だけなので、当てるのもその形に限り、外れたら strings.csv に
 // する。パスの区切りや引用符の混ざった名前が保存ダイアログへ渡る道を作らない。
+//
+// 字の種類が通っても、先頭がドットの名前（".."、".csv"）と ".." を含む名前は落とす。
+// 待ち受けの exportName と同じ規則である。字の種類だけで見ていたころは ".." がそのまま
+// 保存ダイアログへ渡った。
 test("応答の名前が決めた形でなければ、strings.csv の名前で保存させる", async ({ page, server }) => {
   const cases = [
     // 通す字だけの名前はそのまま（数字・ハイフン・ドット・下線）。
@@ -738,6 +834,10 @@ test("応答の名前が決めた形でなければ、strings.csv の名前で�
     { header: 'attachment; filename="..\\evil.csv"', want: "strings.csv" },
     { header: 'attachment; filename="a b.csv"', want: "strings.csv" },
     { header: 'attachment; filename="日本語.csv"', want: "strings.csv" },
+    { header: 'attachment; filename=".."', want: "strings.csv" },
+    { header: 'attachment; filename="."', want: "strings.csv" },
+    { header: 'attachment; filename=".csv"', want: "strings.csv" },
+    { header: 'attachment; filename="a..b.csv"', want: "strings.csv" },
   ];
   await stubPicker(page);
   await openApp(page, server);

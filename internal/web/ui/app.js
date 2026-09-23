@@ -156,6 +156,13 @@
                     返るまでのあいだ、その行の「ファイルの値」は entry.saved では
                     なくこちらになる見込みなので、onInput が未保存かどうかを決める
                     ときに見る。
+    state.sending   いま送っている保存の終わり（Promise）。読み直しと切り替えが、
+                    送り終えるのを待ってから尋ねるために持つ（settle を見よ）。
+    state.asking    読み直しと切り替えを押した回数。送り終えるのを待っている
+                    あいだにもう一度押されたら、前に押したほうは何もしない。
+    state.discarding 捨てると答えた読み直し（切り替え）の最中の印。立っている
+                    あいだは保存を送らない（flush を見よ）。読めたら捨て、読めなければ
+                    倒して送り直しへ戻す（load を見よ）。
   */
   var state = {
     locale: "",
@@ -180,13 +187,22 @@
     gen: 0,
     editing: null,
     composing: false,
-    /* 変換が確定した時刻。確定の Enter を行送りに使わないために控える。 */
-    composedAt: 0,
+    /*
+      変換が確定した時刻（performance.now）。確定の Enter を行送りに使わないために
+      控える。測り方は composedGrace に書いてある。
+
+      始めは -Infinity にしておく。performance.now は頁を開いた瞬間を 0 に数えるので、
+      0 で始めると、開いてすぐの Enter まで確定の直後に見える。
+    */
+    composedAt: -Infinity,
     searchComposing: false,
     searchTimer: null,
     saving: false,
     saveError: false,
     inflight: null,
+    sending: null,
+    asking: 0,
+    discarding: null,
     /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
     exporting: false,
     timer: null,
@@ -253,6 +269,11 @@
     この値で実機が通ることは確かめてある（Windows の実機の IME、dwloc 0.4.1、
     2026-09-17）。変換の確定で行が飛ばず、そのあとの Enter で次の行へ進んだ。
     短くするなら、実機の IME で間隔を測ってからにすること。
+
+    間は performance.now で測る。Date.now（壁時計）で測ると、確定と Enter の
+    あいだに OS の時計が後ろへ動いたとき（NTP の段差、休止からの復帰）、差が
+    負のまま 100 を超えるまで Enter の行送りが効かなくなる。時計を1時間戻せば、
+    1時間効かない。performance.now は後ろへ戻らない。
   */
   var composedGrace = 100;
 
@@ -364,8 +385,9 @@
     scrollIntoView も起きないので困らない。
 
     ResizeObserver が無い環境では変数が入らない。そのときは CSS の var() の
-    第2引数（既定値）がそのまま効く。既定値は、競合も行き先の無い訳も出て
-    いないときの高さに合わせてある。
+    第2引数（既定値の 10em＝140px）がそのまま効く。既定値は、競合も行き先の無い
+    訳も出ていないときの、いちばん狭い幅（320px）の帯（121.4px）を覆う高さに
+    してある。競合や行き先の無い訳が出て帯が伸びたぶんは覆えない。
   */
   function watchTopHeight() {
     /*
@@ -1415,7 +1437,7 @@
   editor.addEventListener("compositionend", function () {
     state.composing = false;
     /* 確定の時刻を控える。直後に来る Enter を行送りに使わないため。 */
-    state.composedAt = Date.now();
+    state.composedAt = performance.now();
     onInput();
   });
 
@@ -1440,7 +1462,7 @@
         改行が入らないよう preventDefault だけはして、ここで戻す。
         待ちの長さと理由は composedGrace に書いてある。
       */
-      if (Date.now() - state.composedAt < composedGrace) {
+      if (performance.now() - state.composedAt < composedGrace) {
         return;
       }
       var from = state.editing;
@@ -1591,6 +1613,15 @@
     if (state.composing) {
       return Promise.resolve();
     }
+    /*
+      読み直し（切り替え）で「その訳は消えます」と尋ね、翻訳者が受けたあとは送らない。
+      送ると、捨てると答えた訳がファイルに入り、尋ねた文と結果が逆になる。読み込みの
+      あいだにも送り直しの時計は切れるので、ここで止める。読めなければ load が
+      送り直しへ戻す。
+    */
+    if (state.discarding) {
+      return Promise.resolve();
+    }
     if (state.saving || state.mine || state.pending.size === 0) {
       if (!state.saving && !state.mine && state.saveError) {
         /*
@@ -1635,11 +1666,15 @@
     updateStatus();
     /*
       送り終わりを返す。書き出し（exportCsv）が、送っていない訳を落としたまま
-      ファイルを読まないようにするためだけにある。ほかの呼び出し側はどこも
-      戻り値を見ていないので、返すようにしても振る舞いは変わらない。
-      失敗も下の catch が受け止めるので、ここが投げっぱなしになることは無い。
+      ファイルを読まないようにするためと、読み直し（settle）が送り終えるのを
+      待ってから尋ねるためにある。失敗も下の catch が受け止めるので、ここが
+      投げっぱなしになることは無い。
+
+      state.sending にも持たせる。送っている最中に呼ばれた flush は、上の早い戻りで
+      すぐに解ける（書き出しはそれを「まだ送っている」と読む）。送り終わりそのものを
+      待ちたい側は、こちらを待つ。
     */
-    return postJSON("/api/rows", {
+    state.sending = postJSON("/api/rows", {
       locale: state.locale,
       baseVersion: state.version,
       edits: edits
@@ -1668,6 +1703,7 @@
         scheduleRetry();
         updateStatus();
       });
+    return state.sending;
   }
 
   /*
@@ -1709,6 +1745,21 @@
           何も送っていない。
         */
         setExportState(t("ui.export_conflict"), true);
+        return null;
+      }
+      /*
+        保存できない行と、行き先の無い訳も、競合と同じくファイルに入っていない訳で
+        ある（hasUnsaved が未保存に数えるのと同じ考え）。そのまま取りにいくと、画面に
+        出ているその訳の入らない中身を「書き出しました」と渡す。送り直しでは片付かない
+        （保存できない行は自動保存の対象から外してあり、行き先の無い訳は載せる行が
+        無い）ので、「送っています」とも言わない。何を片付ければ書き出せるかを言う。
+      */
+      if (state.failed.size) {
+        setExportState(t("ui.export_row_failed"), true);
+        return null;
+      }
+      if (state.orphans.length) {
+        setExportState(t("ui.export_orphans"), true);
         return null;
       }
       if (state.saving || state.pending.size > 0) {
@@ -1786,10 +1837,18 @@
     [A-Za-z0-9._-] だけなので（internal/web の exportName）、当てるのも
     その形に限る。当たらなければ決め打ちにする。応答の文字列がそのまま
     ファイル名になる道を作らない。
+
+    字の種類だけでなく、exportName と同じく、先頭がドットの名前（".csv"、"..")と
+    ".." を含む名前も落とす。字の種類だけで見ていたころは、".." がそのまま保存の
+    ダイアログへ渡った。待ち受けがこの名前を返すことは無いが、守りを待ち受けと
+    同じ規則にそろえておく。
   */
   function nameFromDisposition(value) {
     var found = value ? /filename="([A-Za-z0-9._-]+)"/.exec(value) : null;
-    return found ? found[1] : "strings.csv";
+    if (!found || found[1].charAt(0) === "." || found[1].indexOf("..") >= 0) {
+      return "strings.csv";
+    }
+    return found[1];
   }
 
   /*
@@ -2170,7 +2229,8 @@
     */
     var typing = null;
     var caret = null;
-    if (state.editing !== null && document.activeElement === editor) {
+    var wasTyping = state.editing !== null && document.activeElement === editor;
+    if (wasTyping) {
       remap(new Map([[state.editing, true]]), oldKeys, body.current).edits.forEach(function (value, line) {
         typing = line;
       });
@@ -2215,6 +2275,20 @@
       showMessage(body.message ? body.message : t("ui.save_conflict"));
       el.conflict.hidden = false;
       updateStatus();
+      /*
+        打っていた行そのものが競合した（または行き先を失った）ときは、入力欄を
+        開き直せない。焦点は body へ落ち、そのあと打った字は黙ってどこにも入らない
+        （keepAlways に書いた事故と同じ形）。引き止めの最初のボタンへ焦点を移す。
+        字は入らないままだが、焦点がどこにあり次に何を選ぶのかが、画面にも読み上げ
+        にも出る。
+
+        出してから移す。hidden のままの要素には焦点が入らない。最初のボタンは
+        「自分の訳を上に載せる」で、続けて Space や Enter を打つとこれが押される。
+        打っていた訳を捨てる側（「ファイルの訳を採る」）ではない。
+      */
+      if (wasTyping && state.editing === null) {
+        el.conflictKeep.focus();
+      }
       return;
     }
     showMessage("");
@@ -2591,7 +2665,13 @@
     失敗した読み直しを1回挟むだけで破れていた。
   */
   function load(locale, resetFinder) {
+    /*
+      捨てると答えたあとの読み込みか（askDiscard が立てた印）。読めたら捨て、
+      読めなければ倒して送り直しへ戻す（stopHolding）。
+    */
+    var holding = state.discarding;
     if (!locale) {
+      stopHolding(holding);
       clear(el.list);
       el.rows.textContent = "";
       showMessage(t("ui.select_locale"));
@@ -2643,6 +2723,10 @@
         state.failed = new Map();
         state.mine = null;
         state.orphans = [];
+        /* 捨てると答えた訳は、ここで捨て終わった。送らない印も倒す。 */
+        if (state.discarding === holding) {
+          state.discarding = null;
+        }
         renderOrphans();
         el.conflict.hidden = true;
         render(data);
@@ -2655,8 +2739,32 @@
         */
         el.locale.value = state.locale;
         showMessage(t("ui.load_failed"));
+        stopHolding(holding);
         updateStatus();
       });
+  }
+
+  /*
+    捨てると答えたのに、捨てずに終わった（読めなかった）。止めていた送り直しを戻す。
+
+    読み込みのあいだに送り直しの時計が切れていたら、flush は送らずに戻っており、
+    時計はもう無い。引き直さないと、原因が消えてもその訳は二度と送られない
+    （retryDelays の「諦めない」が破れる）。時計がまだ残っていれば、それに任せる。
+    holding が空（捨てると答えていない読み込み）なら何もしない。
+  */
+  function stopHolding(holding) {
+    if (!holding || state.discarding !== holding) {
+      return;
+    }
+    state.discarding = null;
+    if (state.timer || state.mine || state.pending.size === 0) {
+      return;
+    }
+    if (state.saveError) {
+      scheduleRetry();
+      return;
+    }
+    schedule();
   }
 
   /*
@@ -2739,7 +2847,27 @@
   function setDrawer(open) {
     document.body.classList.toggle("sidebar-open", open);
     el.backdrop.hidden = !open;
+    syncInert();
     syncMenu();
+  }
+
+  /*
+    狭い画面で引き出しが閉じているあいだは、列の中身に焦点を入れさせない（inert）。
+
+    閉じた引き出しは transform で画面の外へ出してあるだけで、中身はタブ順に残る。
+    入れさせていたころは、#reload から Tab で進むと、画面の外にある閉じるボタン・
+    検索の欄・条件のチップに焦点が入った。見えない検索の欄に字を打つと、一覧だけが
+    黙って絞られる。開けば入れる。広い画面では列は画面に出ているので、入れさせる。
+
+    閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした
+    要素からは焦点が外れ、body へ落ちる。
+  */
+  function syncInert() {
+    var shut = narrow.matches && !sidebarOpen();
+    if (shut && el.sidebar.contains(document.activeElement)) {
+      el.menu.focus();
+    }
+    el.sidebar.inert = shut;
   }
 
   function toggleSidebar() {
@@ -2763,6 +2891,7 @@
   narrow.addEventListener("change", function () {
     setDrawer(false);
   });
+  syncInert();
   syncMenu();
 
   /*
@@ -2821,14 +2950,54 @@
   });
 
   /*
-    読み直しとロケールの切り替えは、未保存の訳を消す。消す前に必ず尋ねる。
-    自動保存があるので未保存が残るのは、保存できなかったときと競合中だけである。
+    いま送っている保存と、まだ送っていない訳を送り終えるまで待つ。
+
+    送っている最中の flush は早く戻る（書き出しはそれを「まだ送っている」と読む）
+    ので、送り終わりそのもの（state.sending）を先に待つ。そのあとの flush が、
+    送っているあいだに打ち足されたぶんと、送り直しを待っていた訳を送る。落ちても
+    投げない（flush の catch が受け止め、送り直しの時計を引き直す）。
   */
-  function confirmDiscard() {
-    if (!hasUnsaved()) {
-      return true;
-    }
-    return window.confirm(t("ui.discard_confirm"));
+  function settle() {
+    var sending = state.saving && state.sending ? state.sending : Promise.resolve();
+    return sending.then(function () {
+      return flush();
+    });
+  }
+
+  /*
+    読み直しとロケールの切り替えは、未保存の訳を消す。消す前に必ず尋ねる。
+    key は尋ねる文（読み直しは ui.discard_confirm、切り替えは ui.switch_confirm）。
+
+    尋ねるのは、送れるものを送り終えてからにする。押した時点で決めていたころは、
+    打った直後に押すと、欄から離れたときの保存（blur）が返る前か後かで、尋ねたり
+    尋ねなかったりした。尋ねた文は「その訳は消えます」なのに、その訳は送られて
+    ファイルに残った。送り終えてから決めれば、尋ねるのは送っても残るもの（保存
+    できない行、競合、行き先の無い訳、届かなかった訳）があるときだけになる。
+
+    受けたら state.discarding を立てる。読み込みのあいだに送り直しの時計が切れても、
+    捨てると答えた訳は送らない（flush）。立てたあとは必ず load を呼ぶこと。
+
+    返すのは次のどれか。
+      "go"     読んでよい（捨てるものが無いか、捨てると答えた）
+      "keep"   断った。何も変えない
+      "stale"  送り終えるのを待っているあいだに、また押された。そちらに任せる
+  */
+  function askDiscard(key) {
+    state.asking = state.asking + 1;
+    var ask = state.asking;
+    return settle().then(function () {
+      if (ask !== state.asking) {
+        return "stale";
+      }
+      if (!hasUnsaved()) {
+        return "go";
+      }
+      if (!window.confirm(t(key))) {
+        return "keep";
+      }
+      state.discarding = {};
+      return "go";
+    });
   }
 
   function boot() {
@@ -2844,28 +3013,35 @@
         showGamePath(data.game);
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
-          if (!confirmDiscard()) {
-            el.locale.value = state.locale;
-            return;
-          }
-          /*
-            前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
-            「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
-            言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
-            ものなので、ロケールが変われば外すのが素直である。
-            読み直し（el.reload）では外さない。同じロケールを見続けている。
+          askDiscard("ui.switch_confirm").then(function (answer) {
+            if (answer === "stale") {
+              return;
+            }
+            if (answer === "keep") {
+              el.locale.value = state.locale;
+              return;
+            }
+            /*
+              前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
+              「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
+              言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
+              ものなので、ロケールが変われば外すのが素直である。
+              読み直し（el.reload）では外さない。同じロケールを見続けている。
 
-            外すのは load に任せる。読めたときだけ外させるためで、ここで先に
-            外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
-            チップと一覧は前のロケールのまま残る（load を見よ）。
-          */
-          load(el.locale.value, true);
+              外すのは load に任せる。読めたときだけ外させるためで、ここで先に
+              外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
+              チップと一覧は前のロケールのまま残る（load を見よ）。
+            */
+            load(el.locale.value, true);
+          });
         });
         el.reload.addEventListener("click", function () {
-          if (!confirmDiscard()) {
-            return;
-          }
-          load(el.locale.value);
+          askDiscard("ui.discard_confirm").then(function (answer) {
+            if (answer !== "go") {
+              return;
+            }
+            load(el.locale.value);
+          });
         });
         el.filterClear.addEventListener("click", function () {
           /* 条件も検索語もまとめて外す。「全部見たい」は1手でできるようにする。 */

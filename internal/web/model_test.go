@@ -202,6 +202,8 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 	working := filepath.Join(root, "Translations", "_discovered", "ja.working.csv")
 	layout := filepath.Join(root, "Translations", "_discovered", "ja.layout_risks.csv")
 	note := func(key string, kv ...string) string { return s.cat.T(ja, key, kv...) }
+	// 台詞IDだけが無いときの断りの頭。名指しの中身は TestLineIDNoteNamesWhatIsHeld が見る。
+	lineIDsHead, _, _ := strings.Cut(note("note.order_line_ids_missing"), "{categories}")
 
 	// 何もかも読めた集計。ここから1か所ずつ崩す。
 	base := func() diff.Summary {
@@ -221,7 +223,7 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 			name: "作業コピーを読んだ", hasSource: true,
 			sum:  func() diff.Summary { sum := base(); sum.HasWorking = true; return sum },
 			want: []string{note("note.working_read", "path", "Translations/_discovered/ja.working.csv")},
-			notWant: []string{note("note.order_unreadable"), note("note.no_source"),
+			notWant: []string{note("note.order_unreadable"), lineIDsHead, note("note.no_source"),
 				note("note.working_none", "path", "Translations/_discovered/ja.working.csv")},
 		},
 		{
@@ -247,13 +249,29 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 		},
 		{
 			name: "再生順のキーを読めない", hasSource: true,
-			sum:  func() diff.Summary { sum := base(); sum.OrderKeys = false; return sum },
-			want: []string{note("note.order_unreadable")},
+			sum:     func() diff.Summary { sum := base(); sum.OrderKeys = false; return sum },
+			want:    []string{note("note.order_unreadable")},
+			notWant: []string{lineIDsHead},
 		},
 		{
-			name: "再生順の台詞IDを読めない", hasSource: true,
-			sum:  func() diff.Summary { sum := base(); sum.OrderLineIDs = false; return sum },
-			want: []string{note("note.order_unreadable")},
+			// キーも台詞IDも無いときは、キーが無いほうの断りだけにする。キーが無ければ
+			// 台詞IDの要るカテゴリも止まっているので、そちらを並べても言うことが増えない。
+			name: "再生順のキーも台詞IDも読めない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.OrderKeys, sum.OrderLineIDs = false, false
+				return sum
+			},
+			want:    []string{note("note.order_unreadable")},
+			notWant: []string{lineIDsHead},
+		},
+		{
+			// キーは読めているので、台本から消えた行は判定できる。「台本から消えた行
+			// などは判定しません」と書くと、件数の欄と食い違う。
+			name: "再生順の台詞IDだけを読めない", hasSource: true,
+			sum:     func() diff.Summary { sum := base(); sum.OrderLineIDs = false; return sum },
+			want:    []string{lineIDsHead},
+			notWant: []string{note("note.order_unreadable")},
 		},
 		{
 			name: "原文の列が無い", hasSource: false,
@@ -278,6 +296,70 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 				if strings.Contains(n, root) || strings.Contains(n, filepath.ToSlash(root)) {
 					t.Errorf("絶対パスが出ている: %q", n)
 				}
+			}
+		})
+	}
+}
+
+// TestLineIDNoteNamesWhatIsHeld は、再生順のキーは読めていて台詞IDだけが無いときの
+// 断り書きが、実際に保留にしたカテゴリだけを名指しすることを見る。
+//
+// 台本から消えた行はキーだけで判定でき、件数の欄に数が出る。そこで「台本から消えた
+// 行などは判定しません」と書くと、同じ画面の件数と食い違い、どちらを信じればよいか
+// 分からなくなる（CLI の text 形式の見出しも同じ理由で書き分けた。internal/diff の
+// TestWriteTextHeaderNamesWhatIsHeld）。名指しは件数の欄の「判定していません」
+// （[diff.Summary.CanJudge] が false のカテゴリ）と一致させる。表の印を変えたときに、
+// 断り書きだけが古い名指しのまま残らないようにするためである。
+func TestLineIDNoteNamesWhatIsHeld(t *testing.T) {
+	for _, lang := range []string{"ja", "en"} {
+		t.Run(lang, func(t *testing.T) {
+			s := newTestServer(t, Options{UILang: lang})
+			cat := s.cat.lookup(lang)
+			// 台詞IDのほかは何もかも読めた集計。ほかの理由で止まるカテゴリを混ぜない。
+			sum := diff.Summary{
+				Locale: "ja", HasWorking: true, OrderKeys: true, OrderLineIDs: false,
+				OrderNorms: true, HasLayoutRisks: true, OldOrder: true,
+			}
+			head, _, _ := strings.Cut(s.cat.T(cat, "note.order_line_ids_missing"), "{categories}")
+			got := ""
+			for _, n := range s.buildNotes(cat, s.target("ja"), sum, true) {
+				if strings.HasPrefix(n, head) {
+					got = n
+				}
+			}
+			if got == "" {
+				t.Fatalf("台詞IDだけが無いことの断りが無い（頭 %q）", head)
+			}
+
+			// 全カテゴリは、実際の集計の件数から取る（件数には全カテゴリが入る）。
+			all := s.summary("ja").Counts
+			if len(all) == 0 {
+				t.Fatal("見本の集計に件数が無い")
+			}
+			named := 0
+			for c := range all {
+				quoted := s.cat.T(cat, "note.category_quote", "name", s.categoryLabel(cat, c))
+				in := strings.Contains(got, quoted)
+				if held := !sum.CanJudge(c); in != held {
+					t.Errorf("%s: 判定していない = %v なのに、断り書きで名指ししたか = %v: %q", c.ID(), held, in, got)
+				}
+				if in {
+					named++
+				}
+			}
+			if named == 0 {
+				t.Errorf("1つも名指ししていない: %q", got)
+			}
+			// 台本から消えた行はキーだけで判定できる。名指ししないことは上で見たが、
+			// 見本の集計が前提どおりであることもここで確かめておく。
+			if !sum.CanJudge(diff.CatVanished) {
+				t.Error("台本から消えた行を判定していない。集計の前提が崩れている")
+			}
+			if hasNote([]string{got}, s.cat.T(cat, "note.order_unreadable")) {
+				t.Errorf("キーが無いときの断りと同じ文になっている: %q", got)
+			}
+			if lang == "en" && hasJapanese(got) {
+				t.Errorf("英語の断り書きに日本語が混ざっている: %q", got)
 			}
 		})
 	}

@@ -117,6 +117,41 @@ func TestPlaceholdersMatch(t *testing.T) {
 	}
 }
 
+// TestSaveFailedDetailDoesNotAdviseReloading は、保存に失敗したときの案内
+// （ui.save_failed_detail）が、訳を失う「読み直し」を勧めていないことを見る。
+//
+// 要求が落ちると、画面は訳を抱えたまま自動で送り直し続ける（app.js の retryDelays）。
+// 読み直しは、まだ送れていない訳を捨てる（尋ねはするが、案内に従った人は受ける）。
+// 以前の文は「もう一度書き換えるか、読み直してください」で、翻訳者を訳を捨てる側へ
+// 導いていた。案内のとおり待てば訳がファイルに入ることは、E2E の save-failure.spec.mjs
+// （届かなかった保存は…戻れば送り直してファイルに入る）が見ている。
+func TestSaveFailedDetailDoesNotAdviseReloading(t *testing.T) {
+	c, err := loadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 勧める言い方。どちらも以前の文にあったもの。
+	advice := map[string][]string{
+		"ja": {"読み直してください"},
+		"en": {"or reload"},
+	}
+	for lang, bad := range advice {
+		cat := c.byLang[lang]
+		if cat == nil {
+			t.Fatalf("%s の目録が無い", lang)
+		}
+		text := cat.Messages["ui.save_failed_detail"]
+		if text == "" {
+			t.Fatalf("%s.json に ui.save_failed_detail が無い", lang)
+		}
+		for _, phrase := range bad {
+			if strings.Contains(text, phrase) {
+				t.Errorf("%s の ui.save_failed_detail が読み直しを勧めている（%q）: %q", lang, phrase, text)
+			}
+		}
+	}
+}
+
 // placeholders は文言に出てくる {name} を並べて返す。
 func placeholders(text string) string {
 	var names []string

@@ -543,8 +543,19 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		notes = append(notes, s.cat.T(cat, "note.layout_risks_read",
 			"path", s.displayPath(sum.LayoutRisksPath)))
 	}
-	if !sum.OrderKeys || !sum.OrderLineIDs {
+	switch {
+	case !sum.OrderKeys:
+		// 再生順のキーが無いと、「再生順に無い」を根拠にするカテゴリがどれも
+		// 成り立たない（台本から消えた行など）。
 		notes = append(notes, s.cat.T(cat, "note.order_unreadable"))
+	case !sum.OrderLineIDs:
+		// キーは読めていて、台詞IDだけが無い。台本から消えた行はキーだけで判定でき、
+		// 件数も出る。上と同じく「台本から消えた行などは判定しません」と書くと、
+		// 件数の欄と食い違う。止まるのは台詞IDを要るカテゴリだけなので、そのカテゴリを
+		// 名指しする。CLI の text 形式の見出し（internal/diff の writeTextHeader）と
+		// 同じ書き分けで、名指しも同じ表の印から引く。
+		notes = append(notes, s.cat.T(cat, "note.order_line_ids_missing",
+			"categories", s.lineIDCategoryNames(cat)))
 	}
 	if !sum.OldOrder || sum.OldOrderStale {
 		// 断り書きの外枠も、その中に入る理由も、どちらも目録から引く。
@@ -553,6 +564,21 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		notes = append(notes, s.cat.T(cat, "note.old_order_held", "reason", why))
 	}
 	return notes
+}
+
+// lineIDCategoryNames は、再生順の台詞IDが無いと判定できないカテゴリの表示名を、
+// 目録の括り（note.category_quote）で囲み、目録のつなぎ（note.category_and）で
+// 表示順につないで返す。
+//
+// どのカテゴリかは [diff.OrderLineIDCategories] から引く。画面側で並べ直すと、
+// 表の印を変えたときに断り書きだけが古い名指しのまま残る。括りとつなぎも目録から
+// 引くのは、「」と「と」が言語ごとに違うからである。
+func (s *server) lineIDCategoryNames(cat *Catalog) string {
+	var names []string
+	for _, c := range diff.OrderLineIDCategories() {
+		names = append(names, s.cat.T(cat, "note.category_quote", "name", s.categoryLabel(cat, c)))
+	}
+	return strings.Join(names, s.cat.T(cat, "note.category_and"))
 }
 
 // findingNote は行に添える注記を返す。

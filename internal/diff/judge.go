@@ -3,7 +3,8 @@ package diff
 import "github.com/223n/dragnwash-localization-editor/internal/reason"
 
 // このファイルは判定を1つも足さない。すでにある [Summary.canJudge] と
-// judgeBlockReason と [Status.id] を、パッケージの外から読めるようにするだけである。
+// judgeBlockReason と [Status.id] と、カテゴリの表の印（needsOrderLineIDs）を、
+// パッケージの外から読めるようにするだけである。
 //
 // 外へ出す理由。画面（internal/web）はカテゴリごとの件数を出すが、0 という数字には
 // 「1件も無い」と「判定していない」の2つの意味がある。後者を 0 件と書くと
@@ -15,7 +16,7 @@ import "github.com/223n/dragnwash-localization-editor/internal/reason"
 // 名指しで避けている誤りそのものである。だから判断はここに1つだけ置き、
 // 外へは読み取りの窓だけを開ける。
 //
-// 既存の関数は1行も変えていない。ここにあるのは委譲だけである。
+// 既存の関数は1行も変えていない。ここにあるのは委譲と、表の印を読むことだけである。
 
 // CanJudge はそのカテゴリを判定できたかを返す。
 //
@@ -38,6 +39,23 @@ func (s Summary) CanJudge(c Category) bool {
 // [OldOrderSource] を差し替えた呼び出し側が作った、名前の無いものが混ざる。
 func (s Summary) JudgeBlockReason(c Category) reason.Reason {
 	return judgeBlockReason(s, c)
+}
+
+// OrderLineIDCategories は、再生順の台詞IDが読めていないと判定できないカテゴリを、
+// 表示順に返す。
+//
+// 表（categoryTable の needsOrderLineIDs）の印を読むだけで、判定は足さない。
+// 画面の断り書き（internal/web の buildNotes）が、再生順のキーは読めていて台詞IDだけが
+// 無いときに、保留にしたカテゴリを名指しするために開ける。CLI の見出し
+// （lineIDCategoryNames）と同じ印を読むので、印を足し引きしても2つの名指しはずれない。
+func OrderLineIDCategories() []Category {
+	var out []Category
+	for _, c := range categories {
+		if c.needsOrderLineIDs() {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // ID は CSV に書くのと同じ ASCII 識別子を返す。

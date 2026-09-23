@@ -453,12 +453,51 @@ test.describe("狭い画面の引き出し", () => {
     await app.setViewportSize(WIDE);
     await expect(body(app)).not.toHaveClass(cls("sidebar-open"));
     await expect(backdrop(app)).toBeHidden();
-    // 広い画面の列は畳んでいないので、出ている。
+    // 広い画面の列は畳んでいないので、出ている。出ている列には焦点を入れさせる。
     await expect(sidebar(app)).toBeVisible();
+    await expect(sidebar(app)).not.toHaveAttribute("inert");
     await expect(menu(app)).toHaveAttribute("aria-expanded", "true");
 
     await app.setViewportSize({ width: 800, height: 600 });
     await expectDrawerClosed(app);
+    // 狭い画面へ戻れば、閉じた引き出しにはまた入れさせない。
+    await expect(sidebar(app)).toHaveAttribute("inert", "");
+  });
+
+  // 閉じた引き出しは transform で画面の外へ出してあるだけなので、中身がタブ順に残って
+  // いた。#reload から Tab で進むと、画面の外の閉じるボタン・検索の欄・条件のチップに
+  // 焦点が入り、見えない検索の欄に打った字で一覧だけが黙って絞られた。閉じているあいだは
+  // 入れさせない（app.js の syncInert）。開けば入れる。
+  test("閉じているあいだは Tab で引き出しの中へ入らず、開けば入る", async ({ app }) => {
+    await expectDrawerClosed(app);
+    const inSidebar = () => app.evaluate(() => document.querySelector("#sidebar").contains(document.activeElement));
+
+    await app.locator("#reload").focus();
+    await app.keyboard.press("Tab");
+    // 引き出しを飛ばして、一覧の最初の訳の欄へ進む（焦点が入ると入力欄に差し替わる）。
+    expect(await inSidebar()).toBe(false);
+    await expect(rowByLine(app, L.hello).locator("textarea.editor")).toBeFocused();
+    await expectDrawerClosed(app);
+    await expect(sidebar(app)).toHaveAttribute("inert", "");
+    await editor(app).press("Escape");
+
+    // 開けば入れる。#menu から #locale、#reload と進み、その次が引き出しの閉じるボタン。
+    await menu(app).click();
+    await expectDrawerOpen(app);
+    await expect(sidebar(app)).not.toHaveAttribute("inert");
+    await menu(app).focus();
+    await app.keyboard.press("Tab");
+    await app.keyboard.press("Tab");
+    await app.keyboard.press("Tab");
+    await expect(app.locator("#sidebar-close")).toBeFocused();
+    await app.keyboard.press("Tab");
+    await expect(search(app)).toBeFocused();
+
+    // 中に焦点があるまま閉じると、焦点は #menu へ戻る（inert の中に焦点を残さない）。
+    await app.keyboard.press("Escape");
+    await expectDrawerClosed(app);
+    await expect(sidebar(app)).toHaveAttribute("inert", "");
+    await expect(menu(app)).toBeFocused();
   });
 
   // 入力欄から #menu へ移ると、入力欄は閉じる。そのとき打った訳を送らずに引き出しの
@@ -497,6 +536,16 @@ test.describe("広い画面の左の列", () => {
     await expect(body(app)).not.toHaveClass(cls("sidebar-collapsed"));
     await expect(sidebar(app)).toBeVisible();
     await expect(menu(app)).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // 閉じた引き出しに焦点を入れさせない守り（inert）は、狭い画面の引き出しのためのもの。
+  // 広い画面の列は画面に出ているので、Tab で入れなければならない。閉じるボタンは広い画面
+  // では描かないので、#reload の次は検索の欄になる。
+  test("列は Tab で入れ、#reload の次が検索の欄になる", async ({ app }) => {
+    await expect(sidebar(app)).not.toHaveAttribute("inert");
+    await app.locator("#reload").focus();
+    await app.keyboard.press("Tab");
+    await expect(search(app)).toBeFocused();
   });
 });
 
@@ -605,6 +654,27 @@ test.describe("長い一覧の途中から", () => {
       }
     });
   }
+
+  // 広い画面では、列は帯の下に貼り付いていて、スラッシュの行き先（絞り込みの一帯）は
+  // 最初から見えている。以前は一帯の余白（scroll-margin-top）が列の貼り付く位置より
+  // 8px 狭く、scrollIntoView がその差を頁のスクロールで埋めにいった。列は貼り付いて
+  // いるので差は埋まらず、押すたびに一覧が 8px ずつ下へずれた（app.css の .finder）。
+  // 読んでいた行が押すたびに動くと、スラッシュで検索へ行って戻る流れで位置を見失う。
+  test("広い画面でスラッシュを押しても、一覧の位置は動かない", async ({ page, server }) => {
+    await page.setViewportSize(WIDE);
+    await openApp(page, server);
+    await expectTopHeightFollowsBand(page);
+    await page.evaluate(() => window.scrollTo(0, 3000));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(3000);
+
+    for (let i = 0; i < 3; i++) {
+      await pressOutside(page, "/");
+      await expect(search(page)).toBeFocused();
+      expect(await page.evaluate(() => window.scrollY), `${i + 1}回目`).toBe(3000);
+    }
+    // 列の中は先頭へ戻り、検索の欄は帯の下に見えている。
+    await expect.poll(() => reachable(page, "#search")).toBe(true);
+  });
 });
 
 // ---- beforeunload ----

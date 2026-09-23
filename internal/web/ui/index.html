@@ -163,14 +163,21 @@
       <span id="conflict-title"></span>
     </p>
     <p id="conflict-help"></p>
-    <button id="conflict-keep" class="btn btn-primary" type="button">
-      <svg class="icon" aria-hidden="true"><use href="#i-user-pen"/></svg>
-      <span id="conflict-keep-label"></span>
-    </button>
-    <button id="conflict-take" class="btn" type="button">
-      <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
-      <span id="conflict-take-label"></span>
-    </button>
+    <!--
+      2つのボタンは1つの箱にまとめ、帯の中で下端に貼り付ける（app.css の
+      .conflict-actions）。狭くて低い画面では、説明の文が長く折り返して、
+      ボタンが帯の見える範囲の下へ出る。
+    -->
+    <div class="conflict-actions">
+      <button id="conflict-keep" class="btn btn-primary" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-user-pen"/></svg>
+        <span id="conflict-keep-label"></span>
+      </button>
+      <button id="conflict-take" class="btn" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-file-import"/></svg>
+        <span id="conflict-take-label"></span>
+      </button>
+    </div>
   </section>
 
   <!--

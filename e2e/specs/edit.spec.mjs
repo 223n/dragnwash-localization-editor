@@ -111,7 +111,7 @@ function trackSaves(page) {
 // openPaused は偽の時計を入れてから画面を開き、開き終えたところで時計を止める。
 //
 // 止めたあとは page.clock.runFor で進めたぶんしか時間が流れない。自動保存の時計
-// （1.5 秒）も、変換の確定からの猶予（Date.now）も、進めない限り動かない。
+// （1.5 秒）も、変換の確定からの猶予（performance.now）も、進めない限り動かない。
 async function openPaused(page, server) {
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   await openApp(page, server);
@@ -635,6 +635,28 @@ test("確定の直後の Enter は行送りに使わず、少し置いた Enter 
   await editor(page).press("Enter");
   await expectEditorIn(page, SAMPLE_LINES.hello);
   await expect(editor(page)).toHaveValue("朝");
+
+  await page.clock.runFor(100);
+  await editor(page).press("Enter");
+  await expectEditorIn(page, SAMPLE_LINES.goodbye);
+  await expect.poll(() => lineOnDisk(server, SAMPLE_LINES.hello)).toBe(`${dataText(ROW.hello, "朝")}\n`);
+  await waitForSaved(page);
+});
+
+// 猶予は経過時間（performance.now）で測る。壁時計（Date.now）で測ると、確定と Enter の
+// あいだに OS の時計が後ろへ動いたとき（NTP の段差、休止からの復帰）、差が負のまま
+// 猶予を超えるまで Enter の行送りが効かなくなる。時計を1時間戻せば1時間効かない。
+// page.clock.setSystemTime は壁時計だけを動かし、経過時間の時計は動かさない。
+test("確定のあとで OS の時計が戻っても、少し置いた Enter で次の行へ進む", async ({ page, server }) => {
+  await openPaused(page, server);
+  await openEditor(page, SAMPLE_LINES.hello);
+  await compose(page, "compositionstart");
+  await compose(page, "input", "あさ");
+  await compose(page, "compositionend", "朝");
+
+  // 壁時計だけを1時間戻す。
+  await page.clock.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  expect(await page.evaluate(() => Date.now())).toBe(new Date("2026-01-01T00:00:00Z").getTime());
 
   await page.clock.runFor(100);
   await editor(page).press("Enter");

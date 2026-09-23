@@ -352,6 +352,31 @@ test("よそが別の行だけを書き換えた 409 のあとも、打ってい
     .toBe(expected);
 });
 
+// 打っていた行そのものをよそが書き換えていたら、その行は競合になり、選ぶまで開かない
+// （openEditor）。入力欄は開き直せないので、以前は焦点が body へ落ち、続けて打った字は
+// 黙ってどこにも入らなかった（上の試験と同じ事故の形）。焦点を引き止めの最初のボタンへ
+// 移し、次にすることを画面にも読み上げにも出す（app.js の onConflict）。
+test("打っていた行そのものが競合したら、焦点を引き止めの最初のボタンへ移す", async ({ page, server }) => {
+  await openPaused(page, server);
+  await typeTranslation(page, L.goodbye, "さような");
+  const external = copy(hello(), goodbye("またね。"), wonderful());
+  await server.writeRoot(workingRel, external);
+  const saving = nextSave(page);
+  // 入力が止まったので自動保存が走る。入力欄は開いたまま。
+  await page.clock.runFor(pastAutosave);
+  expect((await saving).status()).toBe(409);
+
+  await expect(conflictBox(page)).toBeVisible();
+  await expect(conflictValues(page, L.goodbye)).toHaveText(["またね。", "さような"]);
+  // 競合した行は開き直さない。焦点は body ではなく、引き止めの最初のボタンにある。
+  await expect(editor(page)).toHaveCount(0);
+  await expect(keepButton(page)).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
+  // 何も選んでいないので、送ったのは 409 になった1回だけ。ファイルはよそが書いたまま。
+  expect(await rowPosts(page)).toBe(1);
+  await expectFile(server, external);
+});
+
 // 読み直すまでのあいだに、よそが行を足すと同じ行番号が別の台詞を指す。行番号で
 // 載せ直すと、訳が別の行へ入り、その行にもとからあった訳が消える（app.js の remap に
 // 「実際に起きた」とある）。載せ直しはキーで行う。
@@ -419,6 +444,44 @@ test("台詞の行がファイルから消えた訳は捨てず、キーと訳�
   await expectFile(server, copy(hello(), wonderful("最高！")));
   await expect(page.locator("#orphans-list li")).toHaveText([`${keyFor(s.goodbye.source)}: さようなら。`]);
   await expect(saveState(page)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
+});
+
+// ---- 空白を含む訳 ----
+
+// drawn は要素の描かれた字（innerText）を並べる。textContent は空白を詰めずに持つので、
+// 詰まって描かれていても一致してしまう。描かれた字で比べる。
+function drawn(locator) {
+  return locator.evaluateAll((nodes) => nodes.map((node) => node.innerText));
+}
+
+// 競合で並べる2つの訳は、どちらを残すか選ぶ材料である。空白だけが違う2つの訳が同じに
+// 描かれると、選ぶ材料にならない。訳の欄と同じく空白を詰めずに出す（app.css の
+// .note-value）。行き先の無い訳は、翻訳者が控える最後の写しなので、同じく詰めない。
+test("競合で並べる2つの訳は、先頭の空白と続いた空白を詰めずに出す", async ({ page, server }) => {
+  await openPaused(page, server);
+  const theirs = "  またね。";
+  const mine = "さよう  なら。";
+  await raiseConflict(page, server, L.goodbye, mine, copy(hello(), goodbye(theirs), wonderful()));
+  await expect(conflictBox(page)).toBeVisible();
+
+  const values = conflictValues(page, L.goodbye);
+  // 値は届いている（ここまでは通る）。
+  expect(await values.evaluateAll((nodes) => nodes.map((node) => node.textContent))).toEqual([theirs, mine]);
+  // 描かれた字も同じでなければならない。
+  expect(await drawn(values)).toEqual([theirs, mine]);
+});
+
+test("行き先の無い訳は、先頭の空白と続いた空白を詰めずに出す", async ({ page, server }) => {
+  await openPaused(page, server);
+  const mine = "  さよう  なら。";
+  await raiseConflict(page, server, L.goodbye, mine, copy(hello(), wonderful()));
+  await expect(orphansBox(page)).toBeVisible();
+
+  const value = page.locator("#orphans-list li .note-value");
+  // 値は届いている（ここまでは通る）。
+  expect(await value.evaluateAll((nodes) => nodes.map((node) => node.textContent))).toEqual([mine]);
+  // 描かれた字も同じでなければならない。
+  expect(await drawn(value)).toEqual([mine]);
 });
 
 // 行き先の無い訳はファイルに1つも入っていない。頁を閉じればその訳は消えるので、
@@ -640,10 +703,20 @@ async function expectButtonsReachable(page, before) {
   await expect.poll(() => reachable(page, "#conflict-take")).toBe(true);
 }
 
+// 狭くて低い画面（320x480、375x667 など）も見る。幅が狭いと説明の文が長く折り返し、
+// ボタンが2段になる。以前は 50vh の帯の見える範囲の下へ「ファイルの訳を採る」が出て、
+// elementFromPoint が当たらなかった（320x500 で帯 0〜250px、ボタン 248〜279px）。
+// 帯の中を送れば届いたが、送れることは画面のどこにも出ない。ボタンは帯の下端に
+// 貼り付けてある（app.css の .conflict-actions）。
 for (const size of [
   { width: 800, height: 600 },
   { width: 600, height: 500 },
   { width: 320, height: 600 },
+  { width: 320, height: 500 },
+  { width: 320, height: 480 },
+  { width: 360, height: 480 },
+  { width: 375, height: 667 },
+  { width: 414, height: 480 },
 ]) {
   test(`${size.width}x${size.height} でも、競合の引き止めのボタンは押せる`, async ({ page, server }) => {
     await page.setViewportSize(size);

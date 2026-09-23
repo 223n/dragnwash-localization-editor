@@ -498,13 +498,18 @@ test.describe("要求そのものが落ちたとき", () => {
     }
   });
 
-  test("ロケールを切り替えたあとに返ってきた失敗は、新しいロケールの画面に出さない", async ({
+  test("送れなかった訳を捨てて切り替えたら、新しいロケールの画面に失敗を出さず、送り直しもしない", async ({
     page,
     server,
   }) => {
     // 送りかけの保存の失敗を新しいロケールの画面に出すと、誰も触っていない he の
     // 画面で「保存できませんでした」と出て、しかも送るものが無いのに送り直しを始める
     // （app.js の flush の世代の注記）。
+    //
+    // 切り替えは、送っている保存が返るのを待ってから決める（app.js の askDiscard）。
+    // 以前は返る前に尋ねて移ったので、失敗は he の画面で返った。いまは失敗が ja の画面で
+    // 返り、それでも残った訳を「消えます」と尋ね、受けてから移る。移ったあとの he の
+    // 画面に失敗を出さず、捨てると答えた訳を送り直さないことを見る。
     await openPaused(page, server);
     const before = await server.readRoot(workingRel);
     const posts = [];
@@ -517,22 +522,31 @@ test.describe("要求そのものが落ちたとき", () => {
       await held;
       await route.abort("connectionrefused");
     });
-    page.on("dialog", (dialog) => dialog.accept());
+    const dialogs = [];
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.message());
+      return dialog.accept();
+    });
 
     await typeTranslation(page, SAMPLE_LINES.goodbye, "さようなら。");
     await closeEditor(page);
     await expect.poll(() => posts.length).toBe(1);
 
-    // 未保存を捨てて he へ移る（確認は受け入れる）。
+    // 送っている最中に he を選ぶ。返るまでは尋ねず、移りもしない。
     await page.locator("#locale").selectOption("he");
-    await expect(page.locator("#file-path")).toHaveText(`${msg("ja", "ui.file")}: Translations/he/strings.csv`);
+    expect(dialogs).toHaveLength(0);
+    await expect(page.locator("#file-path")).toHaveText(`${msg("ja", "ui.file")}: ${workingRel}`);
     release();
 
+    // 届かなかったので訳は残る。尋ねて（受けて）から he へ移る。
+    await expect(page.locator("#file-path")).toHaveText(`${msg("ja", "ui.file")}: Translations/he/strings.csv`);
+    expect(dialogs).toEqual([msg("ja", "ui.switch_confirm")]);
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
     await expect(page.locator("#message")).toHaveText("");
-    // 送り直しも始めない。
+    // 尋ねる前に、もう1度だけ送った（それも届かなかった）。移ったあとは送り直しも始めない。
+    expect(posts).toHaveLength(2);
     await page.clock.runFor(60_000);
-    await expectNoNewPost(page, posts, 1);
+    await expectNoNewPost(page, posts, 2);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
 
@@ -731,7 +745,7 @@ test.describe("行ごとに断られたとき", () => {
 
   test("保存できなかった訳は、読み直しを取り消せば残る", async ({ app }) => {
     // 読み直すと保存できなかった訳は消える。だから消す前に必ず尋ね、取り消せば
-    // 何も変わらない（app.js の confirmDiscard）。
+    // 何も変わらない（app.js の askDiscard）。
     await app.route("**/api/rows", (route) => misplace(route, SAMPLE_LINES.goodbye));
     const n = SAMPLE_LINES.goodbye;
     await typeTranslation(app, n, "さようなら。");
