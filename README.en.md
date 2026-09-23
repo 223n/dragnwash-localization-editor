@@ -1141,7 +1141,8 @@ The profile is left in `coverage/go/cover.out`.
 It neither reads nor writes the contents of your checkout.  
 Coverage of `app.js` is counted on lines, leaving out comments and blank lines.  
 The report is written to `coverage/e2e/index.html`.  
-To use a `dwloc` you have already built, put its path in `DWLOC_BIN`.
+To use a `dwloc` you have already built, put its path in `DWLOC_BIN`.  
+A relative path is taken from the root of the repository.
 
 Both fail when coverage falls below `coverageThresholds` in `package.json`.  
 The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  

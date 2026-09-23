@@ -16,6 +16,8 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 
+import { givenBinary } from "./paths.mjs";
+
 // DEFAULT_OPTIONS は起動の既定値。test.use({ dwloc: { ... } }) で渡したものが上に重なる。
 //
 //   uiLang       --ui-lang（ja / en）。空なら付けない（Accept-Language で決まる）
@@ -55,10 +57,11 @@ process.on("exit", () => {
   }
 });
 
-// binaryPath は使う dwloc を返す。DWLOC_BIN が最優先で、無ければ globalSetup が
-// ビルドしたもの（DWLOC_E2E_BIN）。
+// binaryPath は使う dwloc を絶対パスで返す。DWLOC_BIN が最優先で、無ければ globalSetup が
+// ビルドしたもの（DWLOC_E2E_BIN）。dwloc は見本の一時ディレクトリをカレントにして
+// 起動するので、相対パスのままでは返さない（support/paths.mjs の givenBinary）。
 export function binaryPath() {
-  const bin = process.env.DWLOC_BIN || process.env.DWLOC_E2E_BIN;
+  const bin = givenBinary() || process.env.DWLOC_E2E_BIN;
   if (!bin) {
     throw new Error("dwloc のバイナリがありません。playwright test -c e2e で走らせてください（globalSetup がビルドします）");
   }
@@ -108,9 +111,30 @@ function buildArgs(root, game, opt) {
   return args;
 }
 
-// waitForUrl は標準出力に URL が出るまで待つ。出る前に終わったら理由ごと投げる。
-function waitForUrl(child, out) {
+// spawnFailure は起動できなかった理由を、渡したファイルが分かる形にする。Node の理由には
+// ファイルが出ないことがある（Windows で実行できないファイルを渡したときの「spawn EFTYPE」）。
+function spawnFailure(bin, err) {
+  return new Error(`dwloc を起動できませんでした（${bin}）: ${err.message}`, { cause: err });
+}
+
+// waitForUrl は標準出力に URL が出るまで待つ。出る前に終わったか、起動できなかったら
+// 理由ごと投げる。どちらも exited（launchDwloc）で分かる。
+function waitForUrl(child, out, exited, bin) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (err, m) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      child.stdout.off("data", onData);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(m);
+      }
+    };
     const timer = setTimeout(() => {
       finish(new Error(`dwloc edit が ${startTimeout}ms 以内に URL を出しませんでした\n${out.text()}`));
     }, startTimeout);
@@ -120,23 +144,22 @@ function waitForUrl(child, out) {
         finish(null, m);
       }
     };
-    const onExit = (code, signal) => {
-      finish(new Error(`dwloc edit が URL を出す前に終わりました（code=${code} signal=${signal}）\n${out.text()}`));
-    };
-    const finish = (err, m) => {
-      clearTimeout(timer);
-      child.stdout.off("data", onData);
-      child.off("exit", onExit);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(m);
-      }
-    };
     child.stdout.on("data", onData);
-    child.on("exit", onExit);
+    exited.then(({ code, signal, error }) => {
+      if (error) {
+        finish(spawnFailure(bin, error));
+      } else {
+        finish(new Error(`dwloc edit が URL を出す前に終わりました（code=${code} signal=${signal}）\n${out.text()}`));
+      }
+    });
     onData();
   });
+}
+
+// removeDir は見本の一時ディレクトリを消す。Windows はプロセスが終わった直後だと
+// ファイルの手放しが遅れることがあるので、何度か試す。
+async function removeDir(dir) {
+  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 // launchDwloc は見本を作って dwloc edit を起動し、URL が出たところで返す。
@@ -145,28 +168,43 @@ function waitForUrl(child, out) {
 // 返したハンドルの stop() で止めて一時ディレクトリを消す。stop は何度呼んでもよい。
 export async function launchDwloc(repo, options = {}) {
   const opt = { ...DEFAULT_OPTIONS, ...options };
+  // 一時ディレクトリを作る前に確かめる。作ってから投げると、それが残る。
+  const bin = binaryPath();
   // 実パスにしておく。dwloc は --game の値のシンボリックリンクを解く（internal/gamedir の
   // canonical）ので、macOS の /var（実体は /private/var）のままだと、画面に出るパスと
   // ハンドルのパスが食い違う。
   const dir = await realpath(await mkdtemp(join(tmpdir(), "dwloc-e2e-")));
   const root = join(dir, "repo");
-  await mkdir(join(root, "Translations"), { recursive: true });
-  await writeTree(root, repo?.root);
-
   let game = null;
-  if (repo?.game) {
-    game = join(dir, "game", "BepInEx", "plugins", "DragNWashLocalization");
-    // 目印（Translations/_discovered）が無いと --game が断られる。
-    await mkdir(join(game, "Translations", "_discovered"), { recursive: true });
-    await writeTree(game, repo.game);
-  }
+  let args;
+  let child;
+  try {
+    await mkdir(join(root, "Translations"), { recursive: true });
+    await writeTree(root, repo?.root);
 
-  const args = buildArgs(root, game, opt);
-  const child = spawn(binaryPath(), args, {
-    cwd: dir,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
+    if (repo?.game) {
+      game = join(dir, "game", "BepInEx", "plugins", "DragNWashLocalization");
+      // 目印（Translations/_discovered）が無いと --game が断られる。
+      await mkdir(join(game, "Translations", "_discovered"), { recursive: true });
+      await writeTree(game, repo.game);
+    }
+
+    args = buildArgs(root, game, opt);
+    try {
+      child = spawn(bin, args, {
+        cwd: dir,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (err) {
+      throw spawnFailure(bin, err);
+    }
+  } catch (err) {
+    // 見本を書きかけたところや、spawn がその場で断ったところ（Windows で実行できない
+    // ファイルを渡したときの EFTYPE など）で投げても、一時ディレクトリを残さない。
+    await removeDir(dir);
+    throw err;
+  }
   running.add(child);
 
   // 出力は読み続ける。読まずにおくと、管の容量が埋まったところで dwloc が書けずに止まる。
@@ -185,8 +223,24 @@ export async function launchDwloc(repo, options = {}) {
   child.stderr.on("data", (chunk) => {
     out.stderr += chunk;
   });
+  // exited は終わったときに { code, signal } で解ける。起動できなかったときは
+  // { code: null, signal: null, error } で解ける。
+  //
+  // 起動の失敗（見つからない、実行できない）は 'exit' ではなく 'error' で届く。受け手が
+  // 無いと捕まらない例外でワーカーごと落ち、URL を待つ側は startTimeout まで待ち続ける。
+  // 受けるのは起動する前（'spawn' より前）だけにする。起動したあとの 'error' は止められ
+  // なかったとき（kill の失敗）で、これまでどおり stop から投げさせる。
+  let ended = false;
   const exited = new Promise((resolve) => {
+    const onSpawnError = (error) => {
+      ended = true;
+      running.delete(child);
+      resolve({ code: null, signal: null, error });
+    };
+    child.once("error", onSpawnError);
+    child.once("spawn", () => child.off("error", onSpawnError));
     child.on("exit", (code, signal) => {
+      ended = true;
       running.delete(child);
       resolve({ code, signal });
     });
@@ -198,27 +252,30 @@ export async function launchDwloc(repo, options = {}) {
       return;
     }
     stopped = true;
-    if (child.exitCode === null && child.signalCode === null) {
+    if (!ended) {
       // Windows では TerminateProcess、Linux と macOS では SIGTERM になる。
       // dwloc は SIGTERM を受けないが、Go の既定の動きで終わる。
       child.kill();
+      // 待ちの時計は止めておく。残すと、止め終えたあとも node が stopTimeout まで終わらない。
+      let timer;
       const done = await Promise.race([
         exited,
-        new Promise((resolve) => setTimeout(() => resolve(null), stopTimeout)),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), stopTimeout);
+        }),
       ]);
+      clearTimeout(timer);
       if (done === null) {
         child.kill("SIGKILL");
         await exited;
       }
     }
-    // Windows はプロセスが終わった直後だとファイルの手放しが遅れることがあるので、
-    // 何度か試す。
-    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await removeDir(dir);
   };
 
   let match;
   try {
-    match = await waitForUrl(child, out);
+    match = await waitForUrl(child, out, exited, bin);
   } catch (err) {
     await stop();
     throw err;

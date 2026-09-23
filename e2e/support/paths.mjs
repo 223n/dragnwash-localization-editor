@@ -3,7 +3,7 @@
 //
 // 環境変数:
 //   DWLOC_BIN          使う dwloc の実行ファイル。あればビルドを省く（Linux のコンテナで
-//                      ホストが作ったバイナリを使うため）
+//                      ホストが作ったバイナリを使うため）。相対パスはリポジトリのルートから引く
 //   DWLOC_E2E_RAW      カバレッジの生データの置き場（既定: coverage/e2e-raw）
 //   DWLOC_E2E_REPORT   集計した報告（html と lcov）の置き場（既定: coverage/e2e）
 //   DWLOC_E2E_OUTPUT   Playwright の outputDir（既定: test-results/e2e/<実行ごとの ID>）
@@ -21,6 +21,18 @@ export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 
 // appJs は画面のスクリプトそのもの。カバレッジはこのファイルへ対応づける。
 export const appJs = join(root, "internal", "web", "ui", "app.js");
+
+// givenBinary は DWLOC_BIN が指す dwloc を絶対パスで返す。指定が無ければ null。
+//
+// dwloc は見本の一時ディレクトリをカレントにして起動する（support/dwloc.mjs）。相対パスの
+// まま渡すとそこから引かれ、ファイルはあるのに ENOENT で全部の試験が落ちる。
+// 引く起点をランナーのカレントディレクトリではなくリポジトリのルートにするのは、
+// npx playwright をどこから走らせても同じファイルを指すようにするためである
+// （npm run はいつもルートで走るので、npm run test:e2e ではどちらでも同じになる）。
+export function givenBinary() {
+  const given = process.env.DWLOC_BIN;
+  return given ? resolve(root, given) : null;
+}
 
 // reportDir は集計した報告（html と lcov）の置き場。
 //

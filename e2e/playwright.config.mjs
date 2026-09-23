@@ -28,5 +28,9 @@ export default defineConfig({
     locale: "ja-JP",
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium" }],
+  projects: [
+    { name: "chromium" },
+    // 試験の仕組み（support/ と coverage.mjs）そのものの試験。画面は開かず、生データも書かない。
+    { name: "harness", testDir: "harness" },
+  ],
 });

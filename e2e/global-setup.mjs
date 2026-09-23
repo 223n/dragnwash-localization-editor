@@ -5,7 +5,8 @@
 // 実行ファイルを上書きできないので、片方のビルドが落ちる。
 //
 // 環境変数 DWLOC_BIN があれば、ビルドせずにそれを使う。Linux のコンテナで、
-// ホストがビルドしたバイナリを渡すための道である。
+// ホストがビルドしたバイナリを渡すための道である。相対パスはリポジトリのルートから
+// 引く（support/paths.mjs の givenBinary）。
 //
 // ビルドしたパスは DWLOC_E2E_BIN でワーカーへ渡す。ワーカーは globalSetup の
 // あとに起動し、ランナーの環境を受け継ぐ。返した関数が後始末になり、一時
@@ -16,13 +17,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { root } from "./support/paths.mjs";
+import { givenBinary, root } from "./support/paths.mjs";
 
 export default async function globalSetup() {
-  const given = process.env.DWLOC_BIN;
+  const given = givenBinary();
   if (given) {
     if (!existsSync(given)) {
-      throw new Error(`DWLOC_BIN が指す dwloc がありません: ${given}`);
+      throw new Error(`DWLOC_BIN が指す dwloc がありません: ${given}（相対パスはリポジトリのルートから引きます）`);
     }
     return undefined;
   }
