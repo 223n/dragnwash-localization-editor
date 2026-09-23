@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
@@ -241,6 +244,226 @@ func TestRunDiffArgumentErrors(t *testing.T) {
 			}
 			checkContains(t, "stderr", stderr, tt.wantStderr)
 		})
+	}
+}
+
+// TestRunDiffWarnsWhenOrderIsUnreadable は、再生順を読めないときに必ず標準エラーで
+// 断ることを見る。
+//
+// 再生順が読めないと「再生順に無い」を根拠にするカテゴリがどれも成り立たない。
+// internal/diff はその判定を止めるが、止めたこと自体は csv の本体に出ない。
+// 断らないと、csv を読む人には「台本から消えた行は 0 件」に見える。
+//
+// 終了コードは 0 のまま。判定を止めたぶんを要確認に数えると、公開ファイルの
+// 全行が「台本から消えた行」になって CI が赤くなる。
+func TestRunDiffWarnsWhenOrderIsUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+	}{
+		{
+			name:  "再生順のファイルが無い",
+			files: map[string]string{"Translations/ja/strings.csv": diffCleanJA},
+		},
+		{
+			// 行はあるのに key 列を引けない。行数だけ見ていると読めたように見える。
+			name: "再生順に key 列が無い",
+			files: map[string]string{
+				"data/script_order.csv": "section,phase,node,order,line_id,speaker\n" +
+					"L01 Ryan,intro,Ryan_1_intro,1,line:a8779ebf,Ryan\n",
+				"Translations/ja/strings.csv": diffCleanJA,
+			},
+		},
+	} {
+		for _, format := range []string{diffFormatText, diffFormatCSV} {
+			t.Run(tc.name+"/"+format, func(t *testing.T) {
+				root := makeTree(t, tc.files)
+
+				code, stdout, stderr := runCLI("diff", "--root", root, "--format", format)
+				if code != exitOK {
+					t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
+				}
+				// パスはルートからの相対で出す。絶対パスには利用者名が入りうる。
+				checkContains(t, "stderr", stderr,
+					[]string{"警告: data/script_order.csv から再生順を読めません", "判定しません"})
+				if strings.Contains(stderr, filepath.ToSlash(root)) || strings.Contains(stderr, root) {
+					t.Errorf("絶対パスが出ている:\n%s", stderr)
+				}
+				if format == diffFormatCSV && strings.Contains(stdout, "警告") {
+					t.Errorf("csv 本体に人向けの文面が混ざっている:\n%s", stdout)
+				}
+			})
+		}
+	}
+}
+
+// TestRunDiffNamesEmptyLocales は、公開ファイルも作業コピーも無いロケールを
+// 名前で伝えることを見る。
+//
+// publish はそのロケールを対象にしない（書き出す元が無い）。この道具まで黙ると、
+// 「訳が1件も無い」という最大の要作業が見えなくなる。csv の本体には書く場所が
+// 無いので、標準エラーへ出す。
+func TestRunDiffNamesEmptyLocales(t *testing.T) {
+	root := diffTree(t, map[string]string{
+		"Translations/ja/strings.csv": diffCleanJA,
+		"Translations/de/.keep":       "",
+	})
+
+	for _, format := range []string{diffFormatText, diffFormatCSV} {
+		code, stdout, stderr := runCLI("diff", "--root", root, "--format", format)
+		if code == exitError {
+			t.Fatalf("%s: 終了コード = %d\nstdout:\n%s\nstderr:\n%s", format, code, stdout, stderr)
+		}
+		checkContains(t, format+" の stderr", stderr, []string{"訳が1件もないロケールがあります: de"})
+	}
+
+	// そのロケールを --locale に書いても「ありません」とは言わない。
+	// ディレクトリは実在するので、そう言うと嘘になる。
+	code, stdout, stderr := runCLI("diff", "--root", root, "--locale", "de")
+	if code == exitError {
+		t.Fatalf("--locale de の終了コード = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if strings.Contains(stderr, "--locale に指定したロケールがありません") {
+		t.Errorf("実在するロケールを無いと言っている:\n%s", stderr)
+	}
+	checkContains(t, "--locale de の stdout", stdout, []string{"訳が1件もないロケール: de"})
+}
+
+// TestRunDiffOnlyEmptyLocales は、ロケールのディレクトリはあるのに比べる中身が
+// 1つも無いときに、終了コード2で止まることを見る。
+//
+// 「0 件」と書いて成功で終わると、何も比べていないことに気づけない。
+// 止める前に、どのロケールが空なのかも伝える。
+func TestRunDiffOnlyEmptyLocales(t *testing.T) {
+	root := diffTree(t, map[string]string{"Translations/de/.keep": ""})
+
+	code, stdout, stderr := runCLI("diff", "--root", root)
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{
+		"訳が1件もないロケールがあります: de",
+		"対象になるロケールがありません: Translations",
+	})
+	if stdout != "" {
+		t.Errorf("失敗したのに標準出力へ書いている:\n%s", stdout)
+	}
+}
+
+// TestRunDiffFileErrorIsRelative は、読めない公開ファイルをルートからの相対パスで
+// 伝えることを見る。
+//
+// internal/diff は表示の基準を知らないので、パスを持ったままエラーを返す。
+// そのまま出すと、手元の絶対パス（利用者名が入りうる）が CI のログや不具合報告へ
+// 漏れる。
+func TestRunDiffFileErrorIsRelative(t *testing.T) {
+	root := diffTree(t, map[string]string{
+		// 列名が重複したヘッダー。読み始めて初めて分かる壊れ方。
+		"Translations/ja/strings.csv": "key,key,node,order,speaker,translation\n" +
+			diffHelloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,こんにちは\n",
+	})
+
+	code, stdout, stderr := runCLI("diff", "--root", root)
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{"dwloc: Translations/ja/strings.csv: "})
+	if strings.Contains(stderr, filepath.ToSlash(root)) || strings.Contains(stderr, root) {
+		t.Errorf("絶対パスが出ている:\n%s", stderr)
+	}
+}
+
+// failWriter は書き込みを必ず断る io.Writer。閉じたパイプへ書いたときの代わり。
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) {
+	return 0, errors.New("パイプが閉じています")
+}
+
+// TestRunDiffReportsWriteFailure は、結果を書き出せなかったときに終了コード2を
+// 返すことを見る。
+//
+// ここで報告の終了コード（0 か 1）を返すと、CI は結果を1行も受け取っていないのに
+// 「要確認なし」と読む。
+func TestRunDiffReportsWriteFailure(t *testing.T) {
+	root := diffTree(t, map[string]string{"Translations/ja/strings.csv": diffCleanJA})
+
+	for _, format := range []string{diffFormatText, diffFormatCSV} {
+		var errOut bytes.Buffer
+		code := run([]string{"diff", "--root", root, "--format", format}, failWriter{}, &errOut)
+		if code != exitError {
+			t.Errorf("%s: 終了コード = %d, 期待 %d\n%s", format, code, exitError, errOut.String())
+		}
+		checkContains(t, format+" の stderr", errOut.String(),
+			[]string{"結果を書き出せません", "パイプが閉じています"})
+	}
+}
+
+// TestRunDiffCSVWarnsWhenOldOrderLooksStale は、読めた1つ前の再生順が「いまの版と
+// 同じ」に見えるとき、csv では標準エラーで保留を伝えることを見る。
+//
+// csv は Finding を並べるだけなので、「候補が0件」と「判定していない」が同じ姿
+// （carryover の行が無い）になる。黙っていると「移すべき訳は無い」と読まれ、
+// 消えた行の訳を捨てる判断に直結する。text 形式は本文に書くので重ねない。
+func TestRunDiffCSVWarnsWhenOldOrderLooksStale(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git が無いので飛ばす")
+	}
+	// 台本から消えた行（diffGoneKey）がある公開ファイル。旧版と新版の台詞IDとキーの
+	// 対応が同じなのに消えた行がある、という辻褄の合わない形を作る。
+	root := diffTree(t, map[string]string{"Translations/ja/strings.csv": diffPublishedJA})
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+		}
+	}
+	gitRun("init")
+	gitRun("add", ".")
+	gitRun(append(gitTestOpts(), "commit", "-m", "first")...)
+	// 話者の列だけを変えてコミットする。再生順は変わったが、台詞IDとキーの対応は
+	// 同じまま。1つ前の版として読まれるのは first の再生順になる。
+	speakerChanged := strings.ReplaceAll(diffOrderCSV, ",Ryan,\n", ",Kobold,\n")
+	if err := os.WriteFile(filepath.Join(root, "data", "script_order.csv"),
+		[]byte(speakerChanged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun("add", ".")
+	gitRun(append(gitTestOpts(), "commit", "-m", "speaker only")...)
+
+	code, stdout, stderr := runCLI("diff", "--root", root, "--format", "csv")
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr,
+		[]string{"いまの版と同じ内容に見えます。引き継ぎ候補は判定しません: ja"})
+	if strings.Contains(stdout, ",carryover,") {
+		t.Errorf("判定していないのに carryover の行がある:\n%s", stdout)
+	}
+
+	// text 形式は本文に理由を書くので、標準エラーへ重ねない。
+	code, stdout, stderr = runCLI("diff", "--root", root)
+	if code != exitProblems {
+		t.Fatalf("text の終了コード = %d, 期待 %d\nstderr:\n%s", code, exitProblems, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("text 形式で標準エラーへ何か出ている:\n%s", stderr)
+	}
+	checkContains(t, "stdout", stdout, []string{"判定していません（読めた1つ前の再生順が、いまの版と同じ内容に見えます"})
+}
+
+// TestOldOrderReasonTextFallback は、理由が空でも「（）」と書かないことを見る。
+//
+// internal/diff は理由を必ず埋める約束だが、空のまま出すと理由を取り違えたように
+// 見える。最後の受け皿の文面が出ること。
+func TestOldOrderReasonTextFallback(t *testing.T) {
+	if got := oldOrderReasonText(&diff.Repo{OldOrderReason: "git を実行できません"}); got != "git を実行できません" {
+		t.Errorf("理由がそのまま出ていない: %q", got)
+	}
+	if got := oldOrderReasonText(&diff.Repo{}); got != "1つ前の再生順を読めません" {
+		t.Errorf("受け皿の文面 = %q", got)
 	}
 }
 

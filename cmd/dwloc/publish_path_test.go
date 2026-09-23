@@ -96,3 +96,59 @@ func TestPathListSet(t *testing.T) {
 		t.Error("空白だけの指定がエラーにならなかった")
 	}
 }
+
+// TestPathListString は flag.Value としての表示を確かめる。
+//
+// 区切りはカンマではなく OS のリスト区切り（PATH と同じ）にしてある。
+// パス名にはカンマを入れられるので、カンマで並べると1件と2件が見分けられない。
+// ゼロ値のポインターでも落ちないことも見る（[TestLocaleListString] と同じ理由）。
+func TestPathListString(t *testing.T) {
+	var none *pathList
+	if got := none.String(); got != "" {
+		t.Errorf("nil の表示 = %q, 期待 \"\"", got)
+	}
+	list := pathList{"a,b.csv", "c.csv"}
+	want := "a,b.csv" + string(filepath.ListSeparator) + "c.csv"
+	if got := list.String(); got != want {
+		t.Errorf("表示 = %q, 期待 %q", got, want)
+	}
+}
+
+// TestRunPublishPathStopsWhenTranslationsWouldBeLost は、--path でも訳が失われる
+// なら書かずに止まることを見る。
+//
+// --path は入力と出力が同じファイルなので、止めずに書けば、消える訳を持っていた
+// 原本そのものが上書きされる。取り戻す先が無い。
+//
+// 報告の頭にはロケール名を付けない。--path ではロケールが決まらないので、
+// 付けるとすれば当て推量になる。
+func TestRunPublishPathStopsWhenTranslationsWouldBeLost(t *testing.T) {
+	// 1行目はキーの列に英文が入っていて原文の列が空。キーを決められないので
+	// publish はこの行を捨てる（diff の「publish で捨てられる行」と同じ形）。
+	const lossy = "key,source_en,translation\n" +
+		"English text,,訳した文\n" +
+		",Hello,こんにちは\n"
+	root := makeTree(t, map[string]string{
+		"data/script_order.csv": scriptOrderCSV,
+		"手元/my.csv":             lossy,
+	})
+	target := filepath.Join(root, "手元", "my.csv")
+
+	code, stdout, stderr := runCLI("publish", "--root", root, "--path", target)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{
+		"訳が失われるので、1バイトも書きませんでした",
+		// ロケール名の無い見出し。パスはルートからの相対。
+		"dwloc:   手元/my.csv（1 件）",
+		"2行目 English text 「訳した文」",
+		"失われる訳が 1 件あります",
+	})
+	if got := readFile(t, root, "手元/my.csv"); got != lossy {
+		t.Errorf("止めたのにファイルが変わっている:\n%s", got)
+	}
+	if strings.Contains(stdout, "書き出しました") {
+		t.Errorf("書き出したと出ている:\n%s", stdout)
+	}
+}
