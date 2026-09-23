@@ -1144,6 +1144,10 @@ The report is written to `coverage/e2e/index.html`.
 To use a `dwloc` you have already built, put its path in `DWLOC_BIN`.  
 A relative path is taken from the root of the repository.
 
+When you run a narrowed set of specs with `npx playwright test -c e2e <spec>`, first remove the raw data of earlier runs with `node e2e/coverage.mjs clean`.  
+Aggregate the results afterwards with `npm run test:e2e:report`.  
+If raw data from an earlier run is left behind, the aggregation stops without counting.
+
 Both fail when coverage falls below `coverageThresholds` in `package.json`.  
 The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
 Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  

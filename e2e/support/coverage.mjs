@@ -12,7 +12,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { rawDir } from "./paths.mjs";
+import { rawDir, runId } from "./paths.mjs";
 
 // servedPath は取り出す資産のパス。
 const servedPath = "/app.js";
@@ -73,6 +73,9 @@ export async function saveCoverage(page, testInfo, label = "page") {
   const dir = rawDir();
   await mkdir(dir, { recursive: true });
   const body = {
+    // run はどの実行の生データかを示す。集計は、別々の実行の生データが混ざっていたら
+    // 数えずに止める（e2e/coverage.mjs の checkSingleRun）。
+    run: runId(),
     test: testInfo.titlePath.join(" > "),
     file: testInfo.file,
     entries: kept,

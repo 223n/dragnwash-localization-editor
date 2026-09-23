@@ -8,7 +8,12 @@
 // 書き出したものである。ここでそれを v8-to-istanbul で internal/web/ui/app.js に
 // 対応づけ、istanbul の CoverageMap に合算する。
 //
-// 合算の前に、配られた app.js が手元の internal/web/ui/app.js と同じものかを確かめる。
+// 合算の前に、生データが1回分の実行のものだけかを確かめる。生データは clean でしか
+// 消えないので、スペックを絞って走らせ直すと前の実行のぶんが残る。混ぜて数えると、
+// 数字が水増しされて閾値を通ったり、古い生データのせいで次の確かめに引っかかったりする。
+// 混ざっていれば数えずに止め、clean を案内する。
+//
+// 次に、配られた app.js が手元の internal/web/ui/app.js と同じものかを確かめる。
 // dwloc は画面を実行ファイルに埋め込んで配るので、ビルドが古い（DWLOC_BIN に前の
 // バイナリを渡した、など）と、別の版のスクリプトの位置を今のファイルへ当てはめる
 // ことになり、数字がでたらめになる。
@@ -70,6 +75,42 @@ function readRaw(dir) {
     .map((name) => ({ name, body: JSON.parse(readFileSync(join(dir, name), "utf8")) }));
 }
 
+// cleanHint は、前の実行の生データを消す方法の案内。
+const cleanHint =
+  "node e2e/coverage.mjs clean で生データを消してから、試験を走らせ直してください" +
+  "（npm run test:e2e は最初に消します）";
+
+// checkSingleRun は、生データが1回分の実行のものだけかを確かめる。
+//
+// 実行の ID（run）の無い生データは、この確かめを入れる前の形である。どの実行のものかが
+// 分からないので、これも数えずに止める。
+function checkSingleRun(raw, dir) {
+  const missing = raw.filter(({ body }) => typeof body.run !== "string" || body.run === "");
+  if (missing.length > 0) {
+    const names = missing.slice(0, 3).map(({ name }) => name);
+    const more = missing.length > names.length ? ` ほか ${missing.length - names.length} ファイル` : "";
+    throw new Error(
+      `実行の ID が無い生データがあります（${names.join("、")}${more}）。` +
+        `前の形の生データが ${relative(root, dir) || dir} に残っています。${cleanHint}`,
+    );
+  }
+  const runs = new Map();
+  for (const { body } of raw) {
+    runs.set(body.run, (runs.get(body.run) ?? 0) + 1);
+  }
+  if (runs.size > 1) {
+    const lines = [...runs].sort(([a], [b]) => a.localeCompare(b)).map(([id, n]) => `  ${id}: ${n} ファイル`);
+    throw new Error(
+      [
+        `生データに ${runs.size} 回分の実行が混ざっています（${relative(root, dir) || dir}）:`,
+        ...lines,
+        "前の実行の生データが残っていると、数字が水増しされたり、古い app.js との食い違いで止まったりします。",
+        cleanHint,
+      ].join("\n"),
+    );
+  }
+}
+
 async function buildMap(raw, source) {
   const want = createHash("sha256").update(source, "utf8").digest("hex");
   const map = libCoverage.createCoverageMap({});
@@ -77,9 +118,12 @@ async function buildMap(raw, source) {
   for (const { name, body } of raw) {
     for (const entry of body.entries ?? []) {
       if (entry.sourceHash !== want) {
+        // 食い違いの原因は、古いバイナリだけではない。試験のあとで app.js を直したときも
+        // 起き、そのときはビルドし直しても直らない。
         throw new Error(
           `配られた app.js が ${relative(root, appJs)} と違います（${name}、${body.test}）。` +
-            "dwloc をビルドし直してください（DWLOC_BIN に古いバイナリを渡していないかも見てください）",
+            "dwloc のビルドが古い（DWLOC_BIN に古いバイナリを渡した）か、試験を走らせたあとで app.js を変えています。" +
+            `DWLOC_BIN を使うときはビルドし直し、${cleanHint}`,
         );
       }
       // 変換器は1エントリごとに作り直す。applyCoverage は数を足さずに上書きするので、
@@ -170,6 +214,7 @@ async function report() {
     process.exit(1);
   }
 
+  checkSingleRun(raw, dir);
   const source = readFileSync(appJs, "utf8");
   const { map, entries } = await buildMap(raw, source);
   const lines = keepCodeLines(map, source);
