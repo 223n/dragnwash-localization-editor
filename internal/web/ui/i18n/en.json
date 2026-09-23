@@ -77,7 +77,7 @@
     "note.via_publish": "What you see is a working copy. Saving writes to this file only. Your translations reach {path}, the file you commit, when you run dwloc publish.",
     "note.no_source": "There is no working copy, so the source column stays empty.",
     "ui.file_readonly": "This file is read-only: {reason}",
-    "ui.export_title": "Save a copy elsewhere",
+    "ui.export_title": "Save a copy",
     "ui.export_help": "Save the CSV for the locale you have open to any place you like. The browser asks where it goes. Saving here does not change where this editor normally saves. If you have unsaved translations, wait until they are sent, then press.",
     "ui.export_published": "Save in the published form",
     "ui.export_published_note": "The same form dwloc publish makes. Keys become hashes and rows follow the script order. You can drop it straight into the repository.",

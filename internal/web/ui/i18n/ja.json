@@ -77,7 +77,7 @@
     "note.via_publish": "いま並べているのは作業コピーです。保存はこのファイルにだけ書きます。訳がコミットする側の {path} へ入るのは、dwloc publish を回したときです。",
     "note.no_source": "作業コピーが無いので、原文の欄は空のままです。",
     "ui.file_readonly": "このファイルは読み取り専用です: {reason}",
-    "ui.export_title": "別の場所へ保存",
+    "ui.export_title": "別に保存",
     "ui.export_help": "いま開いているロケールのCSVを、好きな場所へ保存できます。保存先はブラウザーが尋ねます。ここで保存しても、いつもの保存先は変わりません。未保存の訳があるときは、送り終わってから押してください。",
     "ui.export_published": "公開ファイルの形で保存",
     "ui.export_published_note": "dwloc publish が作るのと同じ形です。キーがハッシュになり、行の並びが台本の順になります。そのままリポジトリへ置けます。",

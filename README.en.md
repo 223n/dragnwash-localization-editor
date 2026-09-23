@@ -734,7 +734,8 @@ The controls on the screen are as follows.
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
 
-"Save to another location" in the left column saves the CSV of the locale you have open to wherever you like.  
+"Save a copy" in the bar at the top saves the CSV of the locale you have open to wherever you like.  
+Pressing it opens a menu where you choose the form.  
 The browser asks you where to save it.  
 This tool does not take a destination path, so there is no field on the screen to type one into.
 
