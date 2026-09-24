@@ -58,8 +58,8 @@ npx playwright install chromium   # first time only
 npm run screenshots
 ```
 
-It writes 8 images to `docs/images/`.  
-It takes 4 scenes for each screen language (`ja` and `en`).  
+It takes 8 images for `docs/images/`.  
+That is 4 scenes, one image each per screen language (`ja` and `en`).  
 It opens a copy of the sample in a temporary directory, so `samples/harbor` does not change.
 
 Retaking the same sample does not give pixel-identical images.  

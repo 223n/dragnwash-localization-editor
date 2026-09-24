@@ -58,8 +58,8 @@ npx playwright install chromium   # 初回だけ
 npm run screenshots
 ```
 
-`docs/images/`に8枚を書きます。  
-4つの場面を、画面の言語（`ja`と`en`）ごとに撮ります。  
+`docs/images/`へ8枚を撮ります。  
+場面は4つで、画面の言語（`ja`と`en`）ごとに1枚ずつです。  
 見本は一時ディレクトリへ写してから開くので、`samples/harbor`は変わりません。
 
 同じ見本を撮り直しても、画像は画素まで揃いません。  
