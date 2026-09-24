@@ -1208,7 +1208,7 @@ A Windows program called from Git Bash writes to `C:\dev\null` in the same way w
 The name of the bit bucket Go knows about on Windows is `NUL`.  
 Running it with `-o NUL` exits with code 0 and leaves no file behind.
 
-CI's [ci.yml](.github/workflows/ci.yml) runs on `ubuntu-latest`, so there `/dev/null` does throw the result away correctly.  
+CI's [ci.yml](.github/workflows/ci.yml) runs this build on `ubuntu-latest`, so there `/dev/null` does throw the result away correctly.  
 This is the only place where the same line means something different locally and in CI.  
 CI builds all six targets, so writing anything that uses `CGO` will pass locally and fail in CI.
 
@@ -1248,6 +1248,12 @@ Both `npm run test:go` and `npm run test:e2e` fail when coverage falls below `co
 The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
 Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
 When you add tests and the figures go up, raise the thresholds too.
+
+CI also runs the Go tests on a Windows runner, in addition to Linux (the `go-windows` job).  
+That is to check the paths that only Windows takes (drive letters, a file system that ignores case, the default Steam location).  
+Only the Linux job checks the coverage thresholds.  
+On the Windows runner the temporary directory has a short (8.3) name, `C:\Users\RUNNER~1\...`, and it is on a different drive from the workspace (`D:\a\...`).  
+Write tests that compare temporary paths so that they pass in that form too.
 
 When the E2E tests fail in CI, Playwright's output (`test-results/`) is kept as an artifact for 7 days.  
 It is named `e2e-test-results-<attempt number>`.  
@@ -1411,7 +1417,7 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
 | `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually (the `runner` input picks the runner for that run only) | Scans the workflows, the Go code and the JavaScript (the screen's `app.js` and the `.mjs` files for tests and tools) with CodeQL. The results are not a required check |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |

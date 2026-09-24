@@ -1,9 +1,10 @@
 name: CI
 
-# 5つの検査をする。
+# 6つの検査をする。
 #   lint-ja         文書の書式（markdownlint）と日本語の書き方（textlint）。
 #                   規則は公開されている共有設定 @223n/lint-config-ja にあり、ここには「何を検査するか」だけを書く
 #   go              Goの書式（gofmt）、静的解析（go vet）、テストとカバレッジの閾値、全対象向けのビルド
+#   go-windows      Windows での静的解析（go vet）とテスト。主な利用先で、Windows でだけ通る道を試す
 #   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値。
 #                   落ちたときは Playwright の出力（test-results/）を成果物として7日間残す
 #   lint-workflows  ワークフローの構文と型（actionlint）
@@ -21,6 +22,7 @@ on:
         # ubuntu-latest が次の版へ移る前に、その版の本物のランナーで1回だけ試すときに使う。
         # 変数 RUNS_ON はリリースを含むすべてのワークフローが見るので、試すだけならこちらを使う。
         # 例: gh workflow run ci.yml --ref develop -f runner=ubuntu-26.04
+        # Windows のジョブ（go-windows）は、この入力に関わらず windows-latest で動く
         description: 'この実行だけで使うランナーのラベル（例: ubuntu-26.04）。空なら変数 RUNS_ON、それも無ければ ubuntu-latest'
         required: false
         type: string
@@ -125,6 +127,43 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null ./cmd/dwloc
             echo "ok ${target}"
           done
+
+  go-windows:
+    name: Go（Windows）
+    # 翻訳者の多くは Windows で使う。Windows でだけ通る道（ドライブ文字、大文字と小文字を区別しない
+    # ファイルシステム、Steam の既定の場所）は、Linux のジョブでは飛ぶか別の期待値になるため、ここで試す。
+    # 変数 RUNS_ON と入力 runner は見ない。どちらも Linux のランナーを選ぶためのものである。
+    # macOS は足していない。利用先として少なく、ゲームの Mod も macOS では動かないため
+    runs-on: windows-latest
+    # Windows のランナーは Linux より遅い。手元の Windows でも、diff・cmd・web のパッケージが30〜60秒かかる
+    timeout-minutes: 20
+    defaults:
+      run:
+        # 既定の pwsh ではなく bash で書く。ほかのジョブと同じ書き方で読めるようにする
+        shell: bash
+    steps:
+      - name: リポジトリを取得
+        # .gitattributes が改行を LF に固定するので、ランナーの core.autocrlf に関わらず Linux と同じ中身になる
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Goを用意
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 静的解析する
+        run: go vet ./cmd/... ./internal/...
+
+      - name: テストする
+        # カバレッジの閾値は Linux の go ジョブだけで見る。Windows でだけ走る試験の分、数字が揺れるため。
+        #
+        # 一時ディレクトリ（TMP）はランナーの既定のまま使う。GitHub の Windows のランナーでは
+        # C:\Users\RUNNER~1\... の短い名前（8.3 形式）になり、作業場所（D:\a\...）とドライブも違う。
+        # 翻訳者の手元でも起こりうる形なので、揃え直さずにそのまま試す
+        run: go test ./cmd/... ./internal/... -count=1
 
   e2e:
     name: 画面のE2E
