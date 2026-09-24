@@ -349,7 +349,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 | CR だけの改行のファイル | 全行を捨て、ヘッダーとコメントだけを書く | 読む | cr-only-published、cr-only-working |
 | 引用符で囲まない値の中の単独の CR | その行を失う | 行の区切りとして値を切る（上の「残る隙間」） | lone-cr-unquoted-value |
 | ',' だけの行 | 空の値のレコードにし、malformed dropped に数える | 空行相当として黙って落とす。違うのは集計の数だけ | comma-only-row |
-| '#' で始まるヘッダー（引用符で囲んだもの、空白のあとのもの） | ConvertFrom-Csv がそのレコードを飛ばし、次のレコード（データ）をヘッダーにする。何も書かない | 飛ばさずヘッダーとして読む。いまは source_en 列から訳を書く。PR2 から形の確かめ (a) で止める | hash-header-quoted、hash-header-leading-space |
+| '#' で始まるヘッダー（引用符で囲んだもの、空白のあとのもの） | ConvertFrom-Csv がそのレコードを飛ばし、次のレコード（データ）をヘッダーにする。何も書かない | 飛ばさずヘッダーとして読む。publish はいま source_en 列から訳を書く。いまの形の確かめ (a) は key 列も source_en 列も無いか、translation 列が無いときだけ止めるので、source_en 列と translation 列のあるこのヘッダーには当たらない。PR2 で (a) に「最初の列名が '#' で始まるヘッダー」の判定を足して止める。(a) を「key 列が無い」に広げると、正当な source_en,translation の2列の作業コピーまで止まるので、'#' を見る判定が別に要る | hash-header-quoted、hash-header-leading-space |
 | 裸の引用符の後ろのコメント行と見出し | '"' の偶奇で引用の中と見なし、レコードにする。列が多ければ公開ファイルに書く | 引用の外として落とす | bare-quote-then-comment、bare-quote-then-heading、quote-after-closing-quote |
 | 行頭の '#' の判定 | StartsWith('#') はカルチャに依存する照合で、U+00AD のように照合上無視される文字を飛ばす | 序数で比べる。U+00AD で始まる行はデータとして読み、malformed dropped に数える | soft-hyphen-comment |
 | 閉じない引用符（上流の報告 #11） | ファイルの終わりまでを値に飲み込み、英語の原文ごと書く | 形の確かめ (e) で止める（PR2 からは読み手の型付きの誤りを終了コード1にする） | unclosed-to-eof、unclosed-last-line、unclosed-header、unclosed-published-middle |
@@ -364,7 +364,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 
 行単位の読み手（csvfile.ReadPowerShellTable）の違い（行をまたぐ値が最初の行で切れる、閉じない引用符が行の終わりで閉じる、全角空白や NO-BREAK SPACE だけの行がレコードになる、データ行の無いファイルで列名の重複を確かめない）は、「行単位の読み方」として同じ表に載せてある。
 
-publish の試験（cmd/dwloc）では、いまの publish の振る舞いのうち PR2 で変わる箇所を「PR2 で変わる」として表に載せてある。行をまたぐ訳の入った入力と、行をまたぐレコードのあるいまの公開ファイルで止まること、訳の空の行をまたぐレコードを2件の malformed dropped に数えること、飲み込みと単独の CR を (b)(c) で止めていること、'#' で始まるヘッダーから書くこと、データ行の無いファイルで列名の重複を見ないこと、全角空白だけの行を malformed dropped に数えること、などである。見込みは表の理由に書いた。たとえば source_en,translation の2列の作業コピーで原文が行をまたぐと、続きの行の区切りの数がヘッダーの列数と同じになるので、PR2 の飲み込みの確かめ (f) で止まる見込みである（確かめたうえで通す指定で書く）。
+publish の試験（cmd/dwloc）では、いまの publish の振る舞いのうち PR2 で変わる箇所を「PR2 で変わる」として表に載せてある。行をまたぐ訳の入った入力と、行をまたぐレコードのあるいまの公開ファイルで止まること、訳の空の行をまたぐレコードを2件の malformed dropped に数えること、飲み込みと単独の CR を (b)(c) で止めていること、'#' で始まるヘッダーから書くこと、データ行の無いファイルで列名の重複を見ないこと、全角空白だけの行を malformed dropped に数えること、などである。見込みは表の理由に書いた。たとえば source_en,translation の2列の作業コピーで原文が行をまたぐと、続きの行の区切りの数がヘッダーの列数と同じになるので、PR2 の飲み込みの確かめ (f) で止まる見込みである（確かめたうえで通す指定で書く）。'#' で始まるヘッダーは、上の表のとおり (a) に専用の判定を足さないと PR2 のあとも書き続ける。表はいまの「書く」を固定しているだけなので、判定を入れ忘れても試験は落ちない。PR2 では、この2件が「止まる」に変わったことを確かめてから表を直す。
 
 集計の1行は項目ごとに比べる（converted、already hashed、per-line、malformed dropped、in play order、other）。kept from the published file は dwloc の集計の1行に無いので比べない（上の表の #10 の行）。上流 main の集計の1行は、R28 に書いた 003ed1e の8項目に、この項目を足した9項目である。
 
