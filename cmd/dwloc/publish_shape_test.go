@@ -537,6 +537,28 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline に指定したファイルが --path にありません"})
 	})
 
+	t.Run("カンマでは分けない", func(t *testing.T) {
+		// --path ではファイル名を受けるので、カンマを区切りにできない。使い方の
+		// 説明も「1つずつ複数回指定する」と書く（前は「カンマ区切りで並べられます」と
+		// 書いていたが、実際には当たらない指定として止まっていた）。
+		root := makeTree(t, files)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "de,ja")
+		if code != exitError {
+			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline に指定したロケールがありません: de,ja"})
+
+		code, _, stderr = runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "de", "--accept-multiline", "ja")
+		if code != exitOK {
+			t.Fatalf("複数回の指定: 終了コード = %d\n%s", code, stderr)
+		}
+		_, usage, _ := runCLI("publish", "--help")
+		checkContains(t, "使い方", usage, []string{"1つずつ複数回\n        指定します（ファイル名にカンマを入れられるので、カンマでは分けません）。"})
+		if strings.Contains(usage, "複数回指定するか、カンマ区切りで並べられます。\n        --path で走らせたときは") {
+			t.Error("使い方の説明が、--accept-multiline をカンマで並べられると書いている")
+		}
+	})
+
 	t.Run("空の指定は誤りにする", func(t *testing.T) {
 		root := makeTree(t, files)
 		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", " ")
