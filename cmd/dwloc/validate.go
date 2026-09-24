@@ -51,7 +51,7 @@ dwloc validate だけが問題を報告することがあります。上流は�
 // 問題は標準エラーではなく標準出力へ出します。元実装がそうしており、
 // CI のログの拾い方が変わるためです（移植仕様「形式検証 R22 / R23」）。
 func runValidate(args []string, defaultRoot string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc validate", stderr)
+	fs := newFlagSet("dwloc validate")
 	// 既定値には共通オプションで受けた値を入れる。サブコマンド側でも指定されたら
 	// そちらが後から上書きするので、後ろに書いた方が勝つ。
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
@@ -66,7 +66,7 @@ func runValidate(args []string, defaultRoot string, stdout, stderr io.Writer) in
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), validateUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 
 	// Tracked に nil を渡すと validate.GitTracked が使われ、git を呼ぶ。

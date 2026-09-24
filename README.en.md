@@ -286,6 +286,11 @@ If you want to build it yourself, see "Development" below.
 | `edit` | Starts a server only you can reach and lets you edit translations in the browser |
 | `version` | Prints the version |
 
+The description of each subcommand is shown by `dwloc <subcommand> --help` or `dwloc help <subcommand>`.  
+`dwloc --version` also prints the version.  
+When an argument is wrong, it prints one line with the reason and one line such as `使い方は dwloc diff --help で表示します。` ("see dwloc diff --help for usage"), then stops (exit code `2`).  
+For options that need a unit, such as `--idle-timeout`, it also says how to write the value.
+
 On a PC that has the game installed, the last two can stop the moment you run them.  
 You do not even get the `--dry-run` report; it ends with "the translation in the game is older, so not a single byte was written" (exit code `1`).  
 That is what actually happens on this development machine.  

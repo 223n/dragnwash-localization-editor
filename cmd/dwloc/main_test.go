@@ -166,7 +166,7 @@ func TestRunArguments(t *testing.T) {
 			name:       "知らないフラグはエラーにする",
 			args:       []string{"--nope"},
 			wantCode:   exitError,
-			wantStderr: []string{"使い方:"},
+			wantStderr: []string{"知らないオプションです: --nope", "使い方は dwloc --help で表示します。"},
 		},
 		{
 			name:       "version は版を1行で出す",
@@ -197,7 +197,7 @@ func TestRunArguments(t *testing.T) {
 			name:       "version の知らないフラグはエラーにする",
 			args:       []string{"version", "--nope"},
 			wantCode:   exitError,
-			wantStderr: []string{"-nope", "使い方: dwloc version"},
+			wantStderr: []string{"--nope", "使い方は dwloc version --help で表示します。"},
 		},
 		{
 			name:       "publish の余分な引数はエラーにする",

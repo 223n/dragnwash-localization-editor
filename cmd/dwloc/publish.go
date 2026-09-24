@@ -164,7 +164,7 @@ func (l *pathList) Set(value string) error {
 
 // runPublish は公開用CSVを生成します。
 func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc publish", stderr)
+	fs := newFlagSet("dwloc publish")
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	var locales localeList
@@ -177,7 +177,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), publishUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 	if len(paths) > 0 && len(locales) > 0 {
 		// 元実装の -Path は走査そのものを置き換えるので、絞り込みと重ねる意味が

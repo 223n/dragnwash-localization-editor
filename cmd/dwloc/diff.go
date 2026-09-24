@@ -118,7 +118,7 @@ const (
 
 // runDiff は公開ファイルと再生順を突き合わせて報告します。
 func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc diff", stderr)
+	fs := newFlagSet("dwloc diff")
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	var locales localeList
@@ -134,7 +134,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), diffUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 	if *format != diffFormatText && *format != diffFormatCSV {
 		fmt.Fprintf(stderr, "dwloc: --format は %s か %s です: %s\n", diffFormatText, diffFormatCSV, *format)

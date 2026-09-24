@@ -108,7 +108,7 @@ const editPortMax = 65535
 
 // runEdit は待ち受けを始めます。
 func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc edit", stderr)
+	fs := newFlagSet("dwloc edit")
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	// 打ち消しは3つとも受けます。publish と diff も --game を省いた
@@ -127,7 +127,7 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), editUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 	if *port < 0 || *port > editPortMax {
 		fmt.Fprintf(stderr, "dwloc: --port は 0 から %d です: %d\n", editPortMax, *port)

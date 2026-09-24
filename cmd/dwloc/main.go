@@ -64,6 +64,8 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
 使い方:
   dwloc <サブコマンド> [オプション]
   dwloc                      サブコマンドを省くと edit を始めます
+  dwloc help <サブコマンド>  そのサブコマンドの説明を表示します
+  dwloc --version            版を表示します（dwloc version と同じ）
 
 サブコマンド:
   validate   公開ファイル（Translations/<ロケール>/strings.csv）を検証する
@@ -105,7 +107,8 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
   画面に出た diff の出力は原文と訳を含むので、公開の場へ貼らないでください。
   0.10.0 までの版の記録には、原文と訳が入っていることがあります。
 
-サブコマンドごとの説明は dwloc <サブコマンド> --help で表示します。
+サブコマンドごとの説明は dwloc <サブコマンド> --help か
+dwloc help <サブコマンド> で表示します。
 `
 
 func main() {
@@ -176,16 +179,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// 共通オプションは、サブコマンドの前にも置けるようにここで受ける。
 	// flag パッケージは最初の非フラグ引数で解釈を止めるので、
 	// "dwloc --root X validate --locale ja" のような並びが素直に通る。
-	global := newFlagSet("dwloc", stderr)
+	global := newFlagSet("dwloc")
 	root := global.String("root", ".", "翻訳リポジトリのルート")
 	game := global.String("game", "", gameFlagUsage)
 	noGame := global.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
+	// --version は version の別名です。版を確かめようとして、多くの道具が受ける
+	// この形を打つ人がいます（Issue の雛形は「最新の版でも起きるか」を尋ねます）。
+	showVersion := global.Bool("version", false, "版を表示する（version と同じ）")
 
 	if code, ok := parseFlags(global, args, usageText, stdout, stderr); !ok {
 		return code
 	}
 
 	rest := global.Args()
+	if *showVersion {
+		return runVersion(rest, stdout, stderr)
+	}
 	if len(rest) == 0 {
 		return runDefault(args, *root, *game, *noGame, stdout, stderr)
 	}
@@ -211,13 +220,51 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		return runVersion(rest[1:], stdout, stderr)
 	case "help":
+		return runHelp(rest[1:], stdout, stderr)
+	default:
+		return unknownSubcommand(name, stderr)
+	}
+}
+
+// subcommandUsage は、サブコマンドの名前からその使い方を引く表です。
+// help <サブコマンド> が使います。
+var subcommandUsage = map[string]string{
+	"validate": validateUsage,
+	"publish":  publishUsage,
+	"diff":     diffUsage,
+	"edit":     editUsage,
+	"version":  versionUsage,
+	"help":     usageText,
+}
+
+// runHelp は使い方を出します。後ろにサブコマンドの名前があれば、そのサブコマンドの
+// 使い方を出します（dwloc <サブコマンド> --help と同じ）。
+//
+// 後ろの名前を黙って捨てて全体の使い方を出すと、打ち間違いに気づけません。
+// 知らない名前と余分な引数は、ほかの入口と同じく断ります。
+func runHelp(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
 		fmt.Fprint(stdout, usageText)
 		return exitOK
-	default:
-		fmt.Fprintf(stderr, "dwloc: 知らないサブコマンドです: %s\n\n", name)
-		fmt.Fprint(stderr, usageText)
+	}
+	usage, ok := subcommandUsage[args[0]]
+	if !ok {
+		return unknownSubcommand(args[0], stderr)
+	}
+	if len(args) > 1 {
+		fmt.Fprintf(stderr, "dwloc: 余分な引数です: %s\n", args[1])
+		fmt.Fprintln(stderr, "使い方は dwloc help で表示します。")
 		return exitError
 	}
+	fmt.Fprint(stdout, usage)
+	return exitOK
+}
+
+// unknownSubcommand は、知らないサブコマンドを受け取ったときの報告です。
+func unknownSubcommand(name string, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "dwloc: 知らないサブコマンドです: %s\n", name)
+	fmt.Fprintln(stderr, "使い方は dwloc help で表示します。")
+	return exitError
 }
 
 // stdin は Enter を待つときの読み取り先。テストが差し替えられるように変数にしてある。
@@ -635,7 +682,7 @@ dwloc の版を1行で表示します。ビルド時に版を埋め込んでい�
 
 // runVersion は版を表示します。
 func runVersion(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc version", stderr)
+	fs := newFlagSet("dwloc version")
 	// --root と --game と --no-game は使わないが、共通オプションのつもりで打たれても
 	// 止まらないように受ける。版の表示に根拠となるフォルダーは要らないので、値は読まない。
 	fs.String("root", "", "（version では使いません）")
@@ -645,50 +692,60 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), versionUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 
 	fmt.Fprintf(stdout, "dwloc %s\n", version)
 	return exitOK
 }
 
-// newFlagSet は FlagSet を作ります。エラー文の行き先は標準エラーです。
+// newFlagSet は FlagSet を作ります。name は使い方の案内に出すコマンドの名前です
+// （"dwloc diff" など）。
 //
-// Usage を空の関数にしているのは、説明を出す先を自分で決めるためです。
-// flag は -h でも解釈の失敗でも Usage を呼びますが、前者は求められて出す説明
-// （標準出力）、後者は失敗の報告（標準エラー）で、行き先が違います。
-// flag に任せると両方が標準エラーへ出て、-h のときに二重に出ます。
-func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
+// flag 自身には何も書かせません（出力先は io.Discard、Usage は空の関数）。
+// flag は解釈に失敗すると英語の理由の1行を書き、-h でも失敗でも Usage を呼びます。
+// 理由は parseFlags が日本語に言い換えて標準エラーへ書き、使い方は -h のときだけ
+// 標準出力へ出します。求められて出す説明（標準出力）と失敗の報告（標準エラー）は
+// 行き先が違うので、flag に任せられません。
+func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	return fs
 }
 
 // parseFlags は共通の後始末つきで Parse を呼びます。
 // 第2戻り値が false のとき、第1戻り値をそのまま終了コードにします。
+//
+// 解釈に失敗したときは、理由を日本語の1行（[flagErrorText]）で書き、使い方の
+// 全文ではなく「使い方は … --help で表示します」の1行を添えます。全文（diff は
+// 80行を超える）を続けると、端末が小さいときに理由が上へ流れて見えなくなります。
 func parseFlags(fs *flag.FlagSet, args []string, usage string, stdout, stderr io.Writer) (int, bool) {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
 			return exitOK, false
 		}
-		// 解釈に失敗したときは flag 自身が理由の1行を標準エラーへ書いている。
-		// その後ろに1行あけて使い方を足す。
-		fmt.Fprintln(stderr)
-		fmt.Fprint(stderr, usage)
+		fmt.Fprintf(stderr, "dwloc: %s\n", flagErrorText(fs, err))
+		fmt.Fprintln(stderr, usageHint(fs))
 		return exitError, false
 	}
 	return exitOK, true
 }
 
-// unexpectedArg は余分な引数を受け取ったときの報告です。
+// usageHint は、引数を誤ったときに添える1行です。
+func usageHint(fs *flag.FlagSet) string {
+	return "使い方は " + fs.Name() + " --help で表示します。"
+}
+
+// unexpectedArg は余分な引数を受け取ったときの報告です。報告するのは、解釈の
+// 残りの最初の1つ（fs.Arg(0)）です。
 //
 // 黙って無視しないのは、"dwloc publish ja" のような打ち間違いを
 // 「全ロケールを書き出す」に化けさせないためです。
-func unexpectedArg(arg, usage string, stderr io.Writer) int {
-	fmt.Fprintf(stderr, "dwloc: 余分な引数です: %s\n\n", arg)
-	fmt.Fprint(stderr, usage)
+func unexpectedArg(fs *flag.FlagSet, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "dwloc: 余分な引数です: %s\n", fs.Arg(0))
+	fmt.Fprintln(stderr, usageHint(fs))
 	return exitError
 }
 
