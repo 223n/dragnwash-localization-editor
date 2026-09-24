@@ -324,6 +324,18 @@ func TestExportRefusesUnsafeShapes(t *testing.T) {
 			}, "\n"),
 		},
 		{
+			// 作業コピー（組み立ての入力）の閉じない引用符。形の確かめを組み立てより前に
+			// 置くので、組み立ての読み方の誤り（書き出しの失敗、500）ではなく、形の崩れ
+			// として断る（publish の終了コード1と直し方に当たる）。
+			name: "作業コピーの引用符が閉じない",
+			working: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"ながい",
+				"",
+			}, "\n"),
+		},
+		{
 			name: "いまの公開ファイルの訳に単独の CR がある",
 			published: strings.Join([]string{
 				"key,section,node,order,speaker,translation",
