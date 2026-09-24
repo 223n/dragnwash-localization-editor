@@ -1061,36 +1061,55 @@ test.describe("行ごとに断られたとき", () => {
 test.describe("待ち受けが操作の無いまま時間切れで終わったあと", () => {
   test.use({ dwloc: { idleTimeout: "2s" } });
 
-  test("届かないことを案内し、まだファイルに入っていない訳を一覧に並べて写せるようにする", async ({ app, server }) => {
+  // 送り直しの時計は止めて、試験の手で進める（ファイル冒頭の注記）。実時間のままだと、
+  // 届かない保存の送り直しが 500ms・1s・2s…で勝手に走り、見たい順番と競る（Linux では
+  // 接続を拒まれるのが速いので、送り直しも速く回る）。
+  test("届かないことを案内し、まだファイルに入っていない訳を一覧に並べて写せるようにする", async ({ page, server }) => {
+    await openPaused(page, server);
     // 待ち受けが自分で終わるのを待つ。時間切れは失敗ではないので、終了コードは 0。
     expect((await server.exited).code).toBe(0);
 
     const typed = "さようなら。";
     const n = SAMPLE_LINES.goodbye;
     const key = keyFor(SAMPLE.goodbye.source);
-    await typeTranslation(app, n, typed);
-    await closeEditor(app);
-    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
-    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_retrying"));
-    await expect(rowByLine(app, n)).toHaveClass(UNSAVED);
-    await expectUnsent(app, n, key, typed);
+    await typeTranslation(page, n, typed);
+    await closeEditor(page);
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
+    await expect(rowByLine(page, n)).toHaveClass(UNSAVED);
+    await expectUnsent(page, n, key, typed);
 
     // 写せる。一覧の訳は字として出ているので、選べばそのまま写せる。
-    await app.locator("#unsent-list > li .note-value").selectText();
-    expect(await app.evaluate(() => window.getSelection().toString())).toBe(typed);
+    const value = page.locator("#unsent-list > li .note-value");
+    await value.selectText();
+    const selection = () => page.evaluate(() => window.getSelection().toString());
+    expect(await selection()).toBe(typed);
+
+    // 送り直しが走っても、選んだ範囲は消えない。以前は送り直しのたびに一覧を作り直し、
+    // 写している途中の選択が外れた（選んだ要素ごと DOM から外れた）。並べる訳が同じなら
+    // 描き直さない（app.js の renderUnsent）。
+    const selected = await value.elementHandle();
+    const retried = page.waitForEvent("requestfailed", (req) => new URL(req.url()).pathname === "/api/rows");
+    await page.clock.runFor(retryDelays[0]);
+    await retried;
+    await expect(saveState(page)).not.toHaveClass(SAVING);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
+    expect(await selected.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await selection()).toBe(typed);
+    await expectUnsent(page, n, key, typed);
 
     // 読み直しも届かない。受けても、読み直しを勧める「読み込めませんでした。読み直して
     // ください。」ではなく、届かないことを言う。抱えている訳も一覧もそのまま残る。
     const dialogs = [];
-    app.on("dialog", (dialog) => {
+    page.on("dialog", (dialog) => {
       dialogs.push(dialog.message());
       return dialog.accept();
     });
-    await app.locator("#reload").click();
+    await page.locator("#reload").click();
     await expect.poll(() => dialogs).toEqual([msg("ja", "ui.discard_confirm")]);
-    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "false");
-    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
-    await expect(translationCell(app, n)).toHaveText(typed);
-    await expectUnsent(app, n, key, typed);
+    await expect(page.locator("#list")).toHaveAttribute("aria-busy", "false");
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
+    await expect(translationCell(page, n)).toHaveText(typed);
+    await expectUnsent(page, n, key, typed);
   });
 });

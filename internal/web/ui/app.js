@@ -253,6 +253,12 @@
       描いていなければ null。同じなら描き直さないために持つ（updateStatus を見よ）。
     */
     status: null,
+    /*
+      まだファイルに入っていない訳の一覧（#unsent）にいま並べている中身の控え（ロケールと、
+      行番号・キー・訳の並びを1つの文字列にしたもの）。まだ描いていなければ null。同じなら
+      描き直さないために持つ（renderUnsent を見よ）。
+    */
+    unsentShown: null,
     timer: null,
     retry: 0,
     /*
@@ -2379,6 +2385,13 @@
     移ってここに並ぶ。行き先の無い訳は、すぐ上の #orphans に出ている。
 
     文言は目録から。訳は textContent で入れる（行の中身を innerHTML に渡さない）。
+
+    並べる中身（ロケールと、行番号・キー・訳）が前に描いたものと同じなら、描き直さない
+    （state.unsentShown）。この関数は updateStatus から、保存の状態が変わるたびに呼ばれる。
+    届かないあいだは送り直しの時計が 500ms・1s・2s…と切れ、そのたびに送る・応答を受ける
+    の2回ここを通る。毎回作り直していたころは、翻訳者が一覧の訳を選んで写している途中でも、
+    選んだ要素ごと DOM から外れて選択が消えた（Linux では接続を拒まれるのが速く、送り直しも
+    速く回るので、E2E の選んで写す試験が揺れた）。
   */
   function renderUnsent() {
     var items = [];
@@ -2393,14 +2406,19 @@
         return a.line - b.line;
       });
     }
+    /* 並べるのは描いてある行の訳だけなので、その行は必ずある。 */
+    items.forEach(function (item) {
+      item.key = state.rows.get(item.line).key;
+    });
+    var shown = JSON.stringify([state.locale, items]);
+    if (state.unsentShown === shown) {
+      return;
+    }
+    state.unsentShown = shown;
     clear(el.unsentList);
     items.forEach(function (item) {
-      /*
-        並べるのは描いてある行の訳だけなので、その行は必ずある。キーの欄が空の行
-        （作業コピーにはありうる）では、行番号だけにする。
-      */
-      var entry = state.rows.get(item.line);
-      var label = [t("ui.unsent_line", { line: item.line }), entry.key].join(" ").trim();
+      /* キーの欄が空の行（作業コピーにはありうる）では、行番号だけにする。 */
+      var label = [t("ui.unsent_line", { line: item.line }), item.key].join(" ").trim();
       var row = li(null, "");
       row.appendChild(span("note-label", label + ": "));
       var text = span("note-value", item.text);
