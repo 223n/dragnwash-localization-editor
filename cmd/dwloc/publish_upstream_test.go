@@ -536,6 +536,99 @@ func TestPublishAgainstUpstream(t *testing.T) {
 	t.Logf("上流と違う入力: %v（全 %d 件）", counts, len(cases.Cases))
 }
 
+// portSpecPath は移植仕様。表の分類を、仕様の表と突き合わせるのに使う。
+var portSpecPath = filepath.Join("..", "..", "docs", "port-spec.md")
+
+// 移植仕様で、上流との違いを並べた表の見出し。
+const (
+	specIntendedHeading  = "### 上流と意図して違える点"
+	specUndecidedHeading = "### 上流と違うが未決の点"
+)
+
+// specHeading は Markdown の見出しの行。節の終わりを決めるのに使う。
+var specHeading = regexp.MustCompile(`(?m)^#{1,6} `)
+
+// fixtureInputName は入力の名前の形（cases.json の name）。表の最後の列から、
+// 見出しの「試験の入力」や「（すべての入力）」のような文を除くのに使う。
+var fixtureInputName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// specInputs は、移植仕様の見出し heading の節にある表から、最後の列（試験の入力）に
+// 書いた入力の名前を集める。
+func specInputs(t *testing.T, spec, heading string) map[string]bool {
+	t.Helper()
+	_, section, ok := strings.Cut(spec, "\n"+heading+"\n")
+	if !ok {
+		t.Fatalf("移植仕様に見出し %q が無い", heading)
+	}
+	if loc := specHeading.FindStringIndex(section); loc != nil {
+		section = section[:loc[0]]
+	}
+	names := map[string]bool{}
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		for _, name := range strings.Split(cells[len(cells)-1], "、") {
+			if name = strings.TrimSpace(name); fixtureInputName.MatchString(name) {
+				names[name] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		t.Fatalf("移植仕様の %q の節に、試験の入力を並べた表が無い", heading)
+	}
+	return names
+}
+
+// TestPublishDiffKindsMatchPortSpec は、[publishDiffs] の分類が移植仕様の表と
+// 食い違っていないかを見る。
+//
+// 「意図して違える」と「未決」は、どちらも違い方を固定するだけで試験の結果は
+// 変わらない。そのため分類を取り違えても [TestPublishAgainstUpstream] は落ちず、
+// まだ決めていない違いが、仕様の上で決まったように読まれる。仕様の2つの表と
+// 分類がそろっていることを、ここで確かめる。PR2 で変わる行は、止まることを
+// 意図した違い（飲み込みなど）として仕様の表に載ることがあるので見ない。
+func TestPublishDiffKindsMatchPortSpec(t *testing.T) {
+	raw, err := os.ReadFile(portSpecPath)
+	if err != nil {
+		t.Fatalf("移植仕様が読めない: %v", err)
+	}
+	spec := string(raw)
+	intended := specInputs(t, spec, specIntendedHeading)
+	undecided := specInputs(t, spec, specUndecidedHeading)
+
+	cases, _ := loadPublishFixture(t)
+	for _, table := range []map[string]bool{intended, undecided} {
+		for name := range table {
+			if !slices.ContainsFunc(cases.Cases, func(c publishFixtureCase) bool { return c.Name == name }) {
+				t.Errorf("移植仕様の表の %s は入力の表に無い", name)
+			}
+		}
+	}
+
+	for name, pin := range publishDiffs {
+		switch pin.kind {
+		case pubIntended:
+			if !intended[name] || undecided[name] {
+				t.Errorf("%s: %s として固定しているが、移植仕様の「%s」の表に無いか、「%s」の表にある",
+					name, pin.kind, strings.TrimPrefix(specIntendedHeading, "### "), strings.TrimPrefix(specUndecidedHeading, "### "))
+			}
+		case pubUndecided:
+			if !undecided[name] || intended[name] {
+				t.Errorf("%s: %s として固定しているが、移植仕様の「%s」の表に無いか、「%s」の表にある",
+					name, pin.kind, strings.TrimPrefix(specUndecidedHeading, "### "), strings.TrimPrefix(specIntendedHeading, "### "))
+			}
+		}
+	}
+	for name := range undecided {
+		if pin, ok := publishDiffs[name]; !ok || pin.kind != pubUndecided {
+			t.Errorf("%s: 移植仕様では未決だが、試験は %s として固定していない", name, pubUndecided)
+		}
+	}
+}
+
 func quotePublishLines(lines []string) string {
 	var b strings.Builder
 	for _, l := range lines {
