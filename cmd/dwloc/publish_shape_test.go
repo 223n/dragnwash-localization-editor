@@ -109,18 +109,32 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 			},
 		},
 		{
-			// 原文の単独の CR は直させない。キーは原文から作るので、直すとキーと合わず、
-			// その行は止まりも知らせもせずに公開されなくなる（malformed dropped に
-			// 数えられるだけ）。上流の道具もこの行を公開しない。
+			// key 列のキーがいまの原文から作ったものなら、原文は直させない。直すとキーと
+			// 合わず、その行は止まりも知らせもせずに公開されなくなる（malformed dropped に
+			// 数えられるだけ）。上流の道具もこの行を公開しない。キーの決まり方ごとの
+			// 直し方と、案内どおりに直した結果は TestPublishLoneCRSourceFix が見る。
 			name: "作業コピーの原文の中の単独の CR",
 			working: "key,source_en,translation\n" +
 				key.For("Hello\rthere") + ",\"Hello\rthere\",もしもし？\n",
 			want: []string{
 				"2〜3行目: source_en 列の値に単独の CR（後ろに LF の続かない CR）がある。",
-				"直し方: 原文（source_en 列）は直さないでください。キーは原文から作るので、直すとキーと合わなくなり、",
+				"直し方: 原文（source_en 列）は直さないでください。key 列のキーはいまの原文から作ったものなので、直すとキーと合わなくなり、",
 				"この行の訳を空に戻すと、ほかの行は書けます。",
 			},
 			notWant: []string{"LF に直すか取り除いて"},
+		},
+		{
+			// 台詞ID の行はキーを原文から作らないので、原文を直してよい。訳を空に戻す
+			// 案内をすると、公開できる訳を翻訳者が自分で捨てることになる（検証の指摘）。
+			name: "作業コピーの台詞ID の行の原文の中の単独の CR",
+			working: "key,section,node,order,speaker,source_en,translation\n" +
+				"line:aaaaaaaa,L01 Ryan,Ryan_1_intro,1,Ryan,\"Hello\rthere\",もしもし？\n",
+			want: []string{
+				"2〜3行目: source_en 列の値に単独の CR（後ろに LF の続かない CR）がある。",
+				"直し方: 原文（source_en 列）の単独の CR を LF に直すか取り除いてから、もう一度実行してください。",
+				"この行は台詞ID の行で、キーを原文から作らないので、原文を直しても訳は公開されます。",
+			},
+			notWant: []string{"直さないでください", "訳を空に戻す"},
 		},
 		{
 			// key 列の単独の CR は取り除かせる。LF に直すと、キーの途中の改行でキーの形で
@@ -774,31 +788,207 @@ func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
 	}
 }
 
-// TestLoneCRFix は、単独の CR の直し方を列で分けることを見る。列名は publish が列を
-// 引くときと同じく、ASCII の大文字小文字を区別しない。
+// TestLoneCRFix は、単独の CR の直し方を列と、原文ならキーの決まり方（理由の置換
+// key_kind）で分けることを見る。列名は publish が列を引くときと同じく、ASCII の
+// 大文字小文字を区別しない。
 func TestLoneCRFix(t *testing.T) {
 	general := publishShapeFix[reason.PublishLoneCR]
-	for _, tc := range []struct {
-		column, want string
-	}{
-		{"source_en", publishLoneCRSourceFix},
-		{"Source_EN", publishLoneCRSourceFix},
-		{"key", publishLoneCRKeyFix},
-		{"KEY", publishLoneCRKeyFix},
-		{"translation", general},
-		{"speaker", general},
-		// ASCII 以外の文字で畳むと source_en になる列名は、publish が source_en 列として
-		// 引かない（csvfile.FoldASCII）ので、原文の直し方にしない。
-		{"ſource_en", general},
-	} {
-		if got := loneCRFix(tc.column); got != tc.want {
-			t.Errorf("loneCRFix(%q) = %q, want %q", tc.column, got, tc.want)
-		}
-		fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(reason.PublishLoneCR, "", "column", tc.column)})
-		if fix != tc.want {
-			t.Errorf("shapeFix（列 %q）= %q, want %q", tc.column, fix, tc.want)
+	kinds := []string{
+		publish.LoneCRKeyLineID, publish.LoneCRKeyMatches, publish.LoneCRKeyFromSource,
+		publish.LoneCRKeyMatchesLF, publish.LoneCRKeyMismatch,
+	}
+	// キーの決まり方ごとに直し方がある。足し忘れると、原文を直させない案内に落ちる。
+	for _, kind := range kinds {
+		if publishLoneCRSourceFix[kind] == "" {
+			t.Errorf("キーの決まり方 %q の直し方が無い", kind)
 		}
 	}
+	if len(publishLoneCRSourceFix) != len(kinds) {
+		t.Errorf("原文の直し方が %d 件、%d 件を期待", len(publishLoneCRSourceFix), len(kinds))
+	}
+
+	matches := publishLoneCRSourceFix[publish.LoneCRKeyMatches]
+	tests := []struct {
+		column, keyKind, want string
+	}{
+		{"Source_EN", publish.LoneCRKeyLineID, publishLoneCRSourceFix[publish.LoneCRKeyLineID]},
+		// キーの決まり方が分からなければ、原文を直させない。直すとキーと合わなくなる
+		// 行で「直してよい」と案内すると、訳が黙って公開されなくなる。
+		{"source_en", "", matches},
+		{"source_en", "unknown", matches},
+		{"key", "", publishLoneCRKeyFix},
+		{"KEY", publish.LoneCRKeyMatches, publishLoneCRKeyFix},
+		{"translation", "", general},
+		// キーの決まり方は原文の直し方にだけ効く。
+		{"translation", publish.LoneCRKeyMatches, general},
+		{"speaker", "", general},
+		// ASCII 以外の文字で畳むと source_en になる列名は、publish が source_en 列として
+		// 引かない（csvfile.FoldASCII）ので、原文の直し方にしない。
+		{"ſource_en", publish.LoneCRKeyMatches, general},
+	}
+	for _, kind := range kinds {
+		tests = append(tests, struct{ column, keyKind, want string }{"source_en", kind, publishLoneCRSourceFix[kind]})
+	}
+	for _, tc := range tests {
+		if got := loneCRFix(tc.column, tc.keyKind); got != tc.want {
+			t.Errorf("loneCRFix(%q, %q) = %q, want %q", tc.column, tc.keyKind, got, tc.want)
+		}
+		args := []string{"column", tc.column}
+		if tc.keyKind != "" {
+			args = append(args, "key_kind", tc.keyKind)
+		}
+		fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(reason.PublishLoneCR, "", args...)})
+		if fix != tc.want {
+			t.Errorf("shapeFix（列 %q、キー %q）= %q, want %q", tc.column, tc.keyKind, fix, tc.want)
+		}
+		// 単独の CR は通す指定では通さないので、案内もしない。
+		if strings.Contains(fix, "--accept-multiline") {
+			t.Errorf("shapeFix（列 %q、キー %q）が通す指定を案内している: %s", tc.column, tc.keyKind, fix)
+		}
+	}
+}
+
+// TestPublishLoneCRSourceFix は、原文（source_en 列）の単独の CR で止めたときの
+// 直し方が、キーの決まり方ごとに、案内どおりに直したときの publish の結果と合うことを
+// 見る。
+//
+// 直し方は「原文を直す」「原文は直さず訳を空に戻す」のどちらかで、どちらが正しいかは
+// キーを原文から作るかどうかで決まる。列名だけで「直さない」と案内すると、台詞ID の
+// 行（キーを原文から作らない）でも、公開できる訳を翻訳者が自分で捨てることになる
+// （検証の指摘）。ここでは、原文を LF にそろえたときと CR を取り除いたときに、
+// その行の訳がどのキーで公開されるか（されないか）を、案内の文面と並べて固定する。
+// 上流の tools/hash-strings.ps1（pwsh 7.6.6）も、同じ入力で同じキーに書く（書かない）
+// ことを確かめてある。
+func TestPublishLoneCRSourceFix(t *testing.T) {
+	const cr, lf, removed = "Alpha\rBeta", "Alpha\nBeta", "AlphaBeta"
+	// 1行目は公開ファイルにある訳。作業コピーに残さないと、失われる訳の確かめが止める。
+	head := "key,section,node,order,speaker,source_en,translation\n" +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\n"
+	for _, tc := range []struct {
+		name string
+		// key は確かめる行の key 列。
+		key string
+		// want と notWant は、止めたときの直し方に出る／出ない文字列。
+		want, notWant []string
+		// wantLF と wantRemoved は、原文を LF にそろえたとき・CR を取り除いたときに、
+		// その行の訳が公開ファイルに書かれるキー。空なら書かれない。
+		wantLF, wantRemoved string
+	}{
+		{
+			name: "台詞ID の行",
+			key:  "line:cccccccc",
+			want: []string{
+				"直し方: 原文（source_en 列）の単独の CR を LF に直すか取り除いてから、もう一度実行してください。",
+				"原文を直しても訳は公開されます。",
+			},
+			notWant:     []string{"直さないでください", "訳を空に戻す"},
+			wantLF:      "line:cccccccc",
+			wantRemoved: "line:cccccccc",
+		},
+		{
+			name: "key 列のキーがいまの原文から作ったもの",
+			key:  key.For(cr),
+			want: []string{
+				"直し方: 原文（source_en 列）は直さないでください。key 列のキーはいまの原文から作ったものなので、",
+				"直すとキーと合わなくなり、その行は黙って公開されなくなります",
+				"この行の訳を空に戻すと、ほかの行は書けます。",
+			},
+			notWant: []string{"LF に直す", "LF にそろえてから"},
+		},
+		{
+			// ゲームはいまの原文（CR のまま）から作ったキーで引くので、直した原文の
+			// キーでは引かない。
+			name: "key 列が空",
+			key:  "",
+			want: []string{
+				"直し方: 原文（source_en 列）は直さないでください。key 列が無いか空なので、キーはいまの原文から作ります。",
+				"直すとキーが変わり、ゲームが引かないキーで公開されます。",
+				"この行の訳を空に戻すと、ほかの行は書けます。",
+			},
+			notWant:     []string{"黙って公開されなくなります", "LF に直す"},
+			wantLF:      key.For(lf),
+			wantRemoved: key.For(removed),
+		},
+		{
+			// キーは Mod が LF の原文から計算したもので、改行が CR に変わっている。
+			name: "改行を LF にそろえると key と一致する",
+			key:  key.For(lf),
+			want: []string{
+				"直し方: 原文（source_en 列）の改行を、単独の CR も含めて LF にそろえてから、もう一度実行してください。",
+				"（CR を取り除くと一致しません）",
+			},
+			notWant: []string{"直さないでください", "取り除いてから", "訳を空に戻す"},
+			wantLF:  key.For(lf),
+		},
+		{
+			name:    "どちらでも key と合わない",
+			key:     shapeKeyUnrelated,
+			want:    []string{"直しても公開されません。", "この行の訳を空に戻すと、ほかの行は書けます。"},
+			notWant: []string{"LF にそろえてから", "取り除いてから"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := func(src, tr string) string {
+				return tc.key + ",UI,,,UI,\"" + src + "\"," + tr + "\n"
+			}
+			publishWorking := func(working string) (int, string, string) {
+				t.Helper()
+				root := lossRepo(t)
+				game := makeGame(t, map[string]string{"Translations/_discovered/ja.working.csv": working})
+				code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+				return code, stderr, readFile(t, root, jaPublishedPath)
+			}
+
+			code, stderr, _ := publishWorking(head + row(cr, "訳"))
+			if code != exitProblems {
+				t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+			}
+			checkContains(t, "標準エラー", stderr, append([]string{"3〜4行目: source_en 列の値に単独の CR"}, tc.want...))
+			for _, s := range tc.notWant {
+				if strings.Contains(stderr, s) {
+					t.Errorf("標準エラーに %q が出ている:\n%s", s, stderr)
+				}
+			}
+
+			for _, fixed := range []struct{ how, src, want string }{
+				{"LF にそろえた", lf, tc.wantLF},
+				{"CR を取り除いた", removed, tc.wantRemoved},
+			} {
+				code, stderr, out := publishWorking(head + row(fixed.src, "訳"))
+				if code != exitOK {
+					t.Fatalf("%s: 終了コード = %d\n%s", fixed.how, code, stderr)
+				}
+				published := publishedKeyOf(out, "訳")
+				if published != fixed.want {
+					t.Errorf("%s: 訳を書いたキー = %q、%q を期待\n%s", fixed.how, published, fixed.want, out)
+				}
+			}
+
+			// 訳を空に戻せば、止まらずにほかの行を書く。
+			code, stderr, out := publishWorking(head + row(cr, "") + keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,やあ！\n")
+			if code != exitOK {
+				t.Fatalf("訳を空に戻した: 終了コード = %d\n%s", code, stderr)
+			}
+			if publishedKeyOf(out, "やあ！") != keyHiThere {
+				t.Errorf("訳を空に戻した: ほかの行を書いていない\n%s", out)
+			}
+		})
+	}
+}
+
+// shapeKeyUnrelated は、どの見本の原文から作ったキーとも合わない16桁のキー。
+const shapeKeyUnrelated = "0123456789abcdef"
+
+// publishedKeyOf は、公開ファイル out のうち、訳が tr の行のキー（最初の列）を返す。
+// 無ければ空。
+func publishedKeyOf(out, tr string) string {
+	for line := range strings.Lines(out) {
+		line = strings.TrimSuffix(line, "\n")
+		if k, _, ok := strings.Cut(line, ","); ok && strings.HasSuffix(line, ","+tr) {
+			return k
+		}
+	}
+	return ""
 }
 
 // TestLineRange は、報告に出す行の範囲の書き方を固定する。

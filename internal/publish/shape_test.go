@@ -528,25 +528,32 @@ func TestCheckShapeLoneCR(t *testing.T) {
 		name  string
 		input string
 		want  []wantHazard
-		// column は理由の置換 column に入っているはずの列名。
-		column string
+		// args は理由の置換に入っているはずの並び。
+		args []string
 	}{
 		{
-			name:   "訳の中の単独の CR",
-			input:  "key,translation\n" + shapeK1 + ",\"い\rち\"\n",
-			want:   []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
-			column: "translation",
+			name:  "訳の中の単独の CR",
+			input: "key,translation\n" + shapeK1 + ",\"い\rち\"\n",
+			want:  []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
+			args:  []string{"column", "translation"},
 		},
 		{
 			// 訳の入った行なら、ほかの列の単独の CR でも止める。上流の道具は行ごと落とす。
-			name:   "訳の入った行の speaker の単独の CR",
-			input:  "key,speaker,translation\n" + shapeK1 + ",\"U\rI\",訳\n",
-			want:   []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
-			column: "speaker",
+			name:  "訳の入った行の speaker の単独の CR",
+			input: "key,speaker,translation\n" + shapeK1 + ",\"U\rI\",訳\n",
+			want:  []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
+			args:  []string{"column", "speaker"},
 		},
 		{
-			// 訳の空の行はどちらの道具でも公開されないので止めない。原文は翻訳者には
-			// 直せない（直すとキーが変わる）。
+			// 原文なら、直し方を分けるためにキーの決まり方を添える（LoneCRKeyKind）。
+			// 列名は、publish が列を引くときと同じく大文字小文字を問わない。
+			name:  "訳の入った行の原文の単独の CR",
+			input: "key,Source_EN,translation\n" + key.For("a\rb") + ",\"a\rb\",訳\n",
+			want:  []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
+			args:  []string{"column", "Source_EN", "key_kind", LoneCRKeyMatches},
+		},
+		{
+			// 訳の空の行はどちらの道具でも公開されないので止めない。失うものが無い。
 			name:  "訳の空の行の原文の単独の CR",
 			input: "key,source_en,translation\n" + key.For("a\rb") + ",\"a\rb\",\n",
 		},
@@ -563,9 +570,63 @@ func TestCheckShapeLoneCR(t *testing.T) {
 				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
 			}
 			for _, h := range found {
-				if !slices.Equal(h.Why.Args, []string{"column", tt.column}) {
-					t.Errorf("置換が違う: %+v", h.Why.Args)
+				if !slices.Equal(h.Why.Args, tt.args) {
+					t.Errorf("置換 = %q、want %q", h.Why.Args, tt.args)
 				}
+			}
+		})
+	}
+}
+
+// TestLoneCRKeyKind は、原文に単独の CR がある行のキーの決まり方を見る。
+//
+// 直し方（cmd/dwloc）はこれで分かれる。台詞ID の行はキーを原文から作らないので
+// 原文を直してよく、キーがいまの原文から作ったものなら直させない。列名だけで
+// 分けると、台詞ID の行でも「訳を空に戻す」と案内し、公開できる訳を捨てさせる
+// （検証の指摘）。キーの決め方は publish が書くときと同じ（rowKey）でなければならない。
+func TestLoneCRKeyKind(t *testing.T) {
+	const cr = "Alpha\rBeta"
+	lfKey := key.For("Alpha\nBeta")
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"台詞ID の行", "key,source_en,translation\nline:0a0b0c01,\"" + cr + "\",訳\n", LoneCRKeyLineID},
+		// 台詞ID は key 列の前後の空白を除いて見る（R11・R12）。
+		{"前後に空白のある台詞ID", "key,source_en,translation\n\" line:0a0b0c01 \",\"" + cr + "\",訳\n", LoneCRKeyLineID},
+		{"キーがいまの原文から作ったもの", "key,source_en,translation\n" + key.For(cr) + ",\"" + cr + "\",訳\n", LoneCRKeyMatches},
+		// キーは小文字にしてから比べる（R13）。
+		{"キーが大文字の16進", "key,source_en,translation\n" + strings.ToUpper(key.For(cr)) + ",\"" + cr + "\",訳\n", LoneCRKeyMatches},
+		{"key 列が空", "key,source_en,translation\n,\"" + cr + "\",訳\n", LoneCRKeyFromSource},
+		{"key 列が空白だけ", "key,source_en,translation\n\"  \",\"" + cr + "\",訳\n", LoneCRKeyFromSource},
+		{"key 列の無い2列の作業コピー", "source_en,translation\n\"" + cr + "\",訳\n", LoneCRKeyFromSource},
+		{"改行を LF にそろえると一致する", "key,source_en,translation\n" + lfKey + ",\"" + cr + "\",訳\n", LoneCRKeyMatchesLF},
+		// CRLF も LF にそろえてから比べる。単独の CR だけを直すと一致しない。
+		{"CRLF と単独の CR が混ざる", "key,source_en,translation\n" + key.For("a\nb\nc") + ",\"a\r\nb\rc\",訳\n", LoneCRKeyMatchesLF},
+		// CR を取り除くと一致する形は、LF にそろえる直し方では直らないので合わない扱い。
+		{"CR を取り除くと一致する", "key,source_en,translation\n" + key.For("AlphaBeta") + ",\"" + cr + "\",訳\n", LoneCRKeyMismatch},
+		{"どちらでも合わない", "key,source_en,translation\n" + shapeK1 + ",\"" + cr + "\",訳\n", LoneCRKeyMismatch},
+		{"キーの形でない key", "key,source_en,translation\nnot-a-key,\"" + cr + "\",訳\n", LoneCRKeyMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := csvfile.ReadPowerShell([]byte(tc.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(f.Records) != 1 {
+				t.Fatalf("レコードが %d 件", len(f.Records))
+			}
+			if got := LoneCRKeyKind(f.Records[0].Row); got != tc.want {
+				t.Errorf("LoneCRKeyKind = %q、want %q", got, tc.want)
+			}
+			// 形の確かめも同じ値を置換に入れる。2列の作業コピーでは、続きの行が
+			// ヘッダーと同じ列の数に見えるので、飲み込みの確かめも当たる。
+			found := CheckShape([]byte(tc.input))
+			i := slices.IndexFunc(found, func(h Hazard) bool { return h.Why.ID == reason.PublishLoneCR })
+			if i < 0 {
+				t.Fatalf("単独の CR で止めていない: %+v", found)
+			}
+			if got := found[i].Why.Args; !slices.Equal(got[2:], []string{"key_kind", tc.want}) {
+				t.Errorf("形の確かめの置換 = %q、key_kind %q を期待", got, tc.want)
 			}
 		})
 	}

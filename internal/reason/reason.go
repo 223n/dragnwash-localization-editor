@@ -314,7 +314,10 @@ const (
 	// 引用符のすぐ後ろに文字が続くこと。置換は line。
 	PublishSwallowTextAfterQuote = "publish_swallow_text_after_quote"
 	// PublishLoneCR は、値の中に単独の CR（後ろに LF の続かない CR）があること。
-	// 置換は column（列名）。
+	// 置換は column（列名）。原文（source_en 列）の値なら key_kind（その行のキーの
+	// 決まり方。internal/publish の LoneCRKey*）も入る。原文を直してよいかは
+	// キーの決まり方で変わり、CLI の直し方がこれで分かれる。目録の文面は key_kind を
+	// 使わない。
 	PublishLoneCR = "publish_lone_cr"
 	// PublishCRCut は、引用符で囲まない値が引用の外の単独の CR で切れたと見られる
 	// こと。置換は line（切れた後半が読まれる物理行）。

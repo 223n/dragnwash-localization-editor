@@ -630,10 +630,7 @@ The lines it lets through are printed on standard error.
 When you run it with `--path`, give the file you passed to `--path` instead of a locale.  
 A closing quote followed right away by text, a quote that is never closed, a lone `CR`, and the shapes of the play order data are never let through, even with this option.  
 None of them appear in files written by the tools, and fixing them gets you through.  
-Do not fix a lone `CR` in the source text (the `source_en` column), though.  
-The key is made from the source text, so fixing it makes the key no longer match, and the row is silently left out of the published file.  
-The upstream tool does not publish this row either.  
-Emptying the translation of that row lets the other rows be written.  
+For a lone `CR` in the source text (the `source_en` column), though, whether you may fix it depends on the key of the row (see the table below).  
 A record with a line where text follows a closing quote right away is never let through, even when its continuation lines look like records.  
 It cannot be a valid value, and letting it through would publish the English source text or keys as translations.  
 Exporting from the screen has no such option.  
@@ -646,6 +643,19 @@ So every run that writes that locale needs `--accept-multiline`.
 That option also lets through a forgotten closing quote that later gets into the working copy, as long as its continuation lines look like records.  
 Each time you run it, check that the list of lines it lets through contains no line you do not know.  
 Exporting from the screen keeps stopping for that locale.
+
+When it stops on a lone `CR` in the source text (the `source_en` column), how to fix it depends on the key of the row.  
+The fix printed for each row when it stops follows this table too.
+
+| Key of the row | How to fix | Why |
+| ---- | ---- | ---- |
+| A line ID (starting with `line:`) | Change the `CR` in the source text to `LF`, or remove it | The key is not made from the source text, so the translation is published after the fix |
+| The key in the `key` column matches the one made from the current source text | Leave the source text as it is, and empty the translation of that row | Fixing it makes the key no longer match, and the row is silently left out of the published file (the upstream tool does not publish this row either) |
+| The `key` column is missing or empty | Leave the source text as it is, and empty the translation of that row | The key is made from the current source text, so fixing it changes the key, and the row is published under a key the game does not look up |
+| The key in the `key` column matches once the line breaks in the source text are made `LF` | Make the line breaks in the source text `LF` (do not remove them) | The key was made from the source text with `LF`; for now it does not match, and the row is not published |
+| The key in the `key` column matches neither way | Empty the translation of that row | Fixing it does not get the row published |
+
+A row whose translation is emptied is not published, but the other rows can be written.
 
 A translation that spans lines does not stop it by itself.  
 The earlier `dwloc` read one line at a time, so it cut a translation that spans lines short at its first line.  

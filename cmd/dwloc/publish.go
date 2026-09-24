@@ -519,15 +519,36 @@ var publishShapeFix = map[string]string{
 }
 
 // publishLoneCRSourceFix は、原文（source_en 列）の中の単独の CR の直し方です。
+// マップのキーは、publish.LoneCRKeyKind が返す、その行のキーの決まり方です。
 //
-// 値の中の単独の CR は LF に直すよう案内しますが、原文だけは直させません。キーは
-// 原文から作る（移植仕様 R14・R15）ので、原文を直すとキーと合わなくなり、その行は
-// malformed dropped に数えられるだけで、止まりも知らせもせずに公開されなくなります。
-// 上流の tools/hash-strings.ps1 もこの行を公開しません（pwsh 7.6.6 で確かめた）。
-// 翻訳者にできるのは、その行の訳を空に戻して、ほかの行を書くことです。
-const publishLoneCRSourceFix = "原文（source_en 列）は直さないでください。キーは原文から作るので、直すとキーと合わなくなり、" +
-	"その行は黙って公開されなくなります（上流の tools/hash-strings.ps1 もこの行を公開しません）。" +
-	"この行の訳を空に戻すと、ほかの行は書けます。"
+// 値の中の単独の CR は LF に直すよう案内しますが、原文を直してよいかは、その行の
+// キーの決まり方で変わります（移植仕様 R12〜R17）。どれも架空の作業コピーを上流の
+// tools/hash-strings.ps1（pwsh 7.6.6）と dwloc に通して確かめました。
+//
+//   - 台詞ID の行: キーを原文から作らないので、LF に直しても取り除いても公開されます。
+//   - key 列のキーがいまの原文から作ったものと一致する行: 直すとキーと合わなくなり、
+//     malformed dropped に数えられるだけで、止まりも知らせもせずに公開されなくなります。
+//     上流の道具も、この行を公開しません。翻訳者にできるのは、訳を空に戻して、
+//     ほかの行を書くことです。
+//   - key 列が無いか空の行: キーはいまの原文から作るので、直すとキーが変わり、ゲームが
+//     引かないキーで公開されます。これも訳を空に戻すよう案内します。
+//   - 改行を LF にそろえると key 列のキーと一致する行: いまは公開されません。LF に
+//     直すと公開されます。取り除くとキーと合わないので、LF に直す案内だけにします。
+//   - どちらでもキーと合わない行: 直しても公開されません。
+var publishLoneCRSourceFix = map[string]string{
+	publish.LoneCRKeyLineID: "原文（source_en 列）の単独の CR を LF に直すか取り除いてから、もう一度実行してください。" +
+		"この行は台詞ID の行で、キーを原文から作らないので、原文を直しても訳は公開されます。",
+	publish.LoneCRKeyMatches: "原文（source_en 列）は直さないでください。key 列のキーはいまの原文から作ったものなので、" +
+		"直すとキーと合わなくなり、その行は黙って公開されなくなります（上流の tools/hash-strings.ps1 もこの行を公開しません）。" +
+		"この行の訳を空に戻すと、ほかの行は書けます。",
+	publish.LoneCRKeyFromSource: "原文（source_en 列）は直さないでください。key 列が無いか空なので、キーはいまの原文から作ります。" +
+		"直すとキーが変わり、ゲームが引かないキーで公開されます。" +
+		"この行の訳を空に戻すと、ほかの行は書けます。",
+	publish.LoneCRKeyMatchesLF: "原文（source_en 列）の改行を、単独の CR も含めて LF にそろえてから、もう一度実行してください。" +
+		"いまの原文は key 列のキーと合わないので、この行は公開されません。LF にそろえると一致します（CR を取り除くと一致しません）。",
+	publish.LoneCRKeyMismatch: "この行は、原文（source_en 列）の改行を LF にそろえても key 列のキーと合わないので、直しても公開されません。" +
+		"この行の訳を空に戻すと、ほかの行は書けます。",
+}
 
 // publishLoneCRKeyFix は、key 列の中の単独の CR の直し方です。
 //
@@ -535,12 +556,20 @@ const publishLoneCRSourceFix = "原文（source_en 列）は直さないでく�
 // ことがあります。取り除く直し方だけを案内します。
 const publishLoneCRKeyFix = "key 列の値から単独の CR を取り除いてから、もう一度実行してください。"
 
-// loneCRFix は、単独の CR の直し方を列で分けます。列名の照合は、publish が列を
-// 引くときと同じく ASCII の大文字小文字を区別しません（csvfile.FoldASCII）。
-func loneCRFix(column string) string {
+// loneCRFix は、単独の CR の直し方を列と、原文ならキーの決まり方（理由の置換
+// key_kind）で分けます。列名の照合は、publish が列を引くときと同じく ASCII の
+// 大文字小文字を区別しません（csvfile.FoldASCII）。
+//
+// 原文でキーの決まり方が分からないとき（publish が置換を入れなかったとき）は、
+// 原文を直させない案内にします。直すとキーと合わなくなる行で「直してよい」と
+// 案内すると、訳が止まりも知らせもせずに公開されなくなるからです。
+func loneCRFix(column, keyKind string) string {
 	switch csvfile.FoldASCII(column) {
 	case csvfile.FoldASCII("source_en"):
-		return publishLoneCRSourceFix
+		if fix, ok := publishLoneCRSourceFix[keyKind]; ok {
+			return fix
+		}
+		return publishLoneCRSourceFix[publish.LoneCRKeyMatches]
 	case csvfile.FoldASCII("key"):
 		return publishLoneCRKeyFix
 	}
@@ -566,18 +595,20 @@ func shapeFix(h publish.Hazard) string {
 	if accept == "" {
 		accept = h.Path
 	}
-	line, column := "", ""
+	line, column, keyKind := "", "", ""
 	for i := 0; i+1 < len(h.Why.Args); i += 2 {
 		switch h.Why.Args[i] {
 		case "line":
 			line = h.Why.Args[i+1]
 		case "column":
 			column = h.Why.Args[i+1]
+		case "key_kind":
+			keyKind = h.Why.Args[i+1]
 		}
 	}
 	fix := publishShapeFix[h.Why.ID]
 	if h.Why.ID == reason.PublishLoneCR {
-		fix = loneCRFix(column)
+		fix = loneCRFix(column, keyKind)
 	}
 	fix = strings.NewReplacer("{line}", line, "{accept}", accept, "{column}", column).Replace(fix)
 	if h.GameBase {

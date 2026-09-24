@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -320,27 +321,90 @@ func swallowHazards(f csvfile.PowerShellFile) []Hazard {
 // （決まったことのそのほか 1）。
 //
 // 止めるのは訳の入ったレコードだけである。訳の空のレコードはどちらの道具でも
-// 公開されないので、原文に単独の CR があっても失うものが無い（原文は翻訳者には
-// 直せない。直すとキーが変わる）。訳の入ったレコードの原文で止めたときも、原文を
-// 直させず、訳を空に戻すよう案内する（直し方は cmd/dwloc が列で分ける）。閉じない
-// 引用符のレコードは (e) に任せる。
+// 公開されないので、原文に単独の CR があっても失うものが無い。閉じない引用符の
+// レコードは (e) に任せる。
+//
+// 原文（source_en 列）の値なら、理由の置換 key_kind にその行のキーの決まり方
+// （[LoneCRKeyKind]）を入れる。原文を直してよいかはキーの決まり方で変わり、
+// 直し方は cmd/dwloc がこれで分ける。列名だけで「原文は直さない」と案内すると、
+// キーを原文から作らない台詞ID の行でも、公開できる訳を捨てさせてしまう。
 func loneCRHazards(f csvfile.PowerShellFile) []Hazard {
-	translated := make(map[int]bool, len(f.Records))
+	records := make(map[int]csvfile.PowerShellRecord, len(f.Records))
 	for _, r := range f.Records {
-		translated[r.ID] = !r.Unclosed && r.Get(colTranslation) != ""
+		records[r.ID] = r
 	}
+	source := csvfile.FoldASCII(colSourceEn)
 	var out []Hazard
 	for _, v := range csvfile.LoneCRValues(f) {
-		if !translated[v.ID] {
+		r, ok := records[v.ID]
+		if !ok || r.Unclosed || r.Get(colTranslation) == "" {
 			continue
+		}
+		args := []string{"column", v.Column}
+		if csvfile.FoldASCII(v.Column) == source {
+			args = append(args, "key_kind", LoneCRKeyKind(r.Row))
 		}
 		out = append(out, Hazard{Line: v.Line, EndLine: v.EndLine,
 			Why: reason.New(reason.PublishLoneCR,
 				v.Column+" 列の値に単独の CR（後ろに LF の続かない CR）がある。上流の tools/hash-strings.ps1 は、この行を落とす",
-				"column", v.Column)})
+				args...)})
 	}
 	return out
 }
+
+// 原文（source_en 列）に単独の CR がある行の、キーの決まり方。[LoneCRKeyKind] が返し、
+// 理由（reason.PublishLoneCR）の置換 key_kind に入る。
+//
+// 原文を直してよいかは、これで決まる。
+//
+//	LoneCRKeyLineID     直してよい（キーを原文から作らない）
+//	LoneCRKeyMatches    直さない（直すとキーと合わず、R15 で捨てられる）
+//	LoneCRKeyFromSource 直さない（直すとキーが変わり、ゲームが引かないキーで公開される）
+//	LoneCRKeyMatchesLF  CR を LF に直す（取り除くとキーと合わない）
+//	LoneCRKeyMismatch   直しても公開されない（キーが原文と合わない）
+const (
+	// LoneCRKeyLineID は台詞ID の行。キーは key 列の台詞ID そのもので、原文から
+	// 作らない（R12）。
+	LoneCRKeyLineID = "line_id"
+	// LoneCRKeyMatches は、key 列のキーが、いまの原文（単独の CR を含む）から作った
+	// キーと一致する行（R15）。
+	LoneCRKeyMatches = "matches"
+	// LoneCRKeyFromSource は、key 列が無いか空で、キーをいまの原文から作る行（R14）。
+	LoneCRKeyFromSource = "from_source"
+	// LoneCRKeyMatchesLF は、いまは key 列のキーと合わないが、原文の改行（CRLF と
+	// 単独の CR）を LF にそろえると一致する行。キーは Mod が LF の原文から計算した
+	// もので、表計算ソフトやエディターが改行を CR に変えると起きる。
+	LoneCRKeyMatchesLF = "matches_lf"
+	// LoneCRKeyMismatch は、改行を LF にそろえても key 列のキーと合わない行。
+	// どちらにしても R15 で捨てられる。
+	LoneCRKeyMismatch = "mismatch"
+)
+
+// LoneCRKeyKind は、原文（source_en 列）に単独の CR がある行 r のキーの決まり方を
+// 返す。キーの決め方は publish が書くときと同じ（rowKey）で、食い違うと、直し方の
+// 案内と実際に書く結果がずれる。
+func LoneCRKeyKind(r csvfile.Row) string {
+	switch _, how := rowKey(r); how {
+	case keyLineID:
+		return LoneCRKeyLineID
+	case keyConverted:
+		if strings.TrimSpace(r.Get(colKey)) == "" {
+			return LoneCRKeyFromSource
+		}
+		return LoneCRKeyMatches
+	}
+	// 残りは捨てられる行（keyDropped）。原文が空でない（単独の CR がある）ので、
+	// key 列の16桁をそのまま採る行（keyKept）にはならない。
+	k := strings.ToLower(strings.TrimSpace(r.Get(colKey)))
+	if k != "" && key.For(toLF.Replace(r.Get(colSourceEn))) == k {
+		return LoneCRKeyMatchesLF
+	}
+	return LoneCRKeyMismatch
+}
+
+// toLF は、値の中の改行（CRLF と単独の CR）を LF にそろえる。CRLF を先に置くので、
+// CRLF は LF 1つになる（strings.Replacer は引数の順に照合する）。
+var toLF = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 
 // crCutHazards は (g) のうち、引用の外の単独の CR で切れた値を確かめる
 // （決まったことの 11 と 14。見分けは [csvfile.FindCRCuts]）。
