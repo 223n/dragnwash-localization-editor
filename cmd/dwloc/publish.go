@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
@@ -15,7 +16,7 @@ import (
 )
 
 // publishUsage は publish の説明。
-const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--dry-run]
+const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>] [--dry-run]
 
 <ルート>/Translations 配下の各ロケールについて、公開用の strings.csv を作り直します。
 tools/hash-strings.ps1 と同じ出力です。
@@ -40,15 +41,24 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
 同じ場所へ写し、ゲームを起動し直して F1 → Translation → Export working copy を
 押してください。既訳を1行でも直して publish を通すたびに、ゲーム側は1つ古くなります。
 
-この2つの確認より前に、入力といまの公開ファイルの形も確かめます。publish は
-1物理行を1レコードとして読むので、次の形のファイルでは訳を黙って失います。
-見つけたら同じように止まり、どのファイルの何行目か、どう直せばよいかを表示します
+この2つの確認より前に、入力・いまの公開ファイル・ゲーム側の公開ファイルの形も
+確かめます。publish は tools/hash-strings.ps1 と同じくファイル全体を解釈して読み、
+引用符で囲んだ値は行をまたいでも1つの値になります。次の形のファイルは、そのまま
+書くと英語の原文が訳として公開されたり、訳が黙って落ちたりします。見つけたら
+同じように止まり、どのファイルの何行目か、どう直せばよいかを表示します
 （終了コード 1）。
-  - ヘッダーに key 列も source_en 列も無い、または translation 列が無い
-  - 引用符で囲んだ値が行をまたいでいる。いまの公開ファイルなら必ず止まり、
-    入力なら、その行に訳が入っているか、1行ずつ読むと訳が変わるときに止まる
+  - ヘッダーに key 列も source_en 列も無い、translation 列が無い、または最初の
+    列名が '#' で始まる
   - 閉じない引用符がファイルの終わりまで続く
+  - 引用符が別の行で閉じ、後ろの行を値に飲み込んでいると見られる（行をまたぐ
+    値の続きの行が、それだけでレコードに見える）
+  - 値の中に単独の CR（後ろに LF の続かない CR）がある
+  - 引用符で囲まない値が、行の終わりの単独の CR で切れている
   - 空でない行があるのに、行の区切りを読み違えて1行も読めない
+
+行をまたぐ値の続きの行がレコードに見える形は、正しい複数行の値でも当たることが
+あります。値を確かめて正しければ、--accept-multiline でそのロケールを指定すると
+書けます。
 
 オプション:
   --root <ディレクトリ>
@@ -68,6 +78,13 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
         Translations の走査をやめて、指定したファイルだけを変換します。
         入力と出力が同じファイルになります。複数回指定できます。
         --locale と同時には使えません。
+  --accept-multiline <ロケール>
+        行をまたぐ値の続きの行がそれだけでレコードに見える形を、確かめたうえで
+        正しい複数行の値として通します。止まったときに表示された行を見て、
+        引用符の閉じ位置が正しいと確かめてから指定してください。通した行は
+        標準エラーに出します。複数回指定するか、カンマ区切りで並べられます。
+        --path で走らせたときは、ロケールの代わりにそのファイルを指定します。
+        閉じない引用符、閉じ引用符の後ろに文字が続く形、単独の CR は通しません。
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
 
@@ -80,7 +97,7 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
 
 終了コード:
   0   成功
-  1   書くと訳が失われる、1行ずつ読むと訳を失う形のファイルがある、または
+  1   書くと訳が失われる、読み違える形のファイルがある、または
       ゲームに入っている翻訳が古いので止めた（どれも1バイトも書いていません）
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、など）
 `
@@ -162,6 +179,91 @@ func (l *pathList) Set(value string) error {
 	return nil
 }
 
+// acceptList は --accept-multiline の値を集める flag.Value です。
+//
+// カンマでは分けません。--path で走らせたときはファイル名を受けるので、
+// pathList と同じ理由でカンマを区切りにできません。1つ指定するたびに1件ずつ
+// 足してください。
+type acceptList []string
+
+// String は flag.Value の求めに応じた表示です。
+func (l *acceptList) String() string {
+	if l == nil {
+		return ""
+	}
+	return strings.Join(*l, " ")
+}
+
+// Set は1回ぶんの指定を取り込みます。
+func (l *acceptList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		// 空の指定を黙って受けると、通したつもりの行が止まったままになり、
+		// 何が効いていないのか分からなくなります。
+		return fmt.Errorf("ロケール名かファイル名が空です")
+	}
+	*l = append(*l, value)
+	return nil
+}
+
+// acceptSet は、--accept-multiline で通してよいと指定された対象です。
+//
+// ロケールで走らせたときはロケール名で、--path で走らせたときはファイルで引きます。
+// --path ではロケール名が決まらないためです。
+type acceptSet struct {
+	locales map[string]bool
+	paths   map[string]bool
+}
+
+// covers は h を指定で通してよいかを返します。通せる形（[publish.Hazard.Acceptable]）で、
+// そのロケールかファイルが指定されているときだけです。
+func (a acceptSet) covers(h publish.Hazard) bool {
+	if !h.Acceptable() {
+		return false
+	}
+	if h.Locale != "" {
+		return a.locales[h.Locale]
+	}
+	return a.paths[filepath.Clean(h.Path)]
+}
+
+// resolveAccepts は --accept-multiline の指定を、対象の中から引き当てます。
+//
+// 当たらない指定は誤りにします。打ち間違えた名前を黙って無視すると、通したつもりの
+// ロケールが止まったままになり、何度走らせても同じところで止まります。ロケール名の
+// 照合は --locale と同じです（[matchLocales]）。--path で走らせたときは、--path に
+// 渡したファイルのどれかと同じファイルを指定します。
+func resolveAccepts(targets []publish.Target, values []string, byPath bool) (acceptSet, error) {
+	set := acceptSet{locales: map[string]bool{}, paths: map[string]bool{}}
+	if len(values) == 0 {
+		return set, nil
+	}
+	if !byPath {
+		found, err := matchLocales(targets, values, "--accept-multiline")
+		if err != nil {
+			return acceptSet{}, err
+		}
+		for _, t := range found {
+			set.locales[t.Locale] = true
+		}
+		return set, nil
+	}
+	var missing []string
+	for _, v := range values {
+		want := filepath.Clean(v)
+		if !slices.ContainsFunc(targets, func(t publish.Target) bool { return filepath.Clean(t.Input) == want }) {
+			missing = append(missing, v)
+			continue
+		}
+		set.paths[want] = true
+	}
+	if len(missing) > 0 {
+		return acceptSet{}, fmt.Errorf("--accept-multiline に指定したファイルが --path にありません: %s",
+			strings.Join(missing, ", "))
+	}
+	return set, nil
+}
+
 // runPublish は公開用CSVを生成します。
 func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("dwloc publish", stderr)
@@ -171,6 +273,8 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	fs.Var(&locales, "locale", "対象のロケール")
 	var paths pathList
 	fs.Var(&paths, "path", "変換するファイル（入出力兼用）")
+	var accepts acceptList
+	fs.Var(&accepts, "accept-multiline", "確かめたうえで複数行の値として通すロケール（--path ではファイル）")
 	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	dryRun := fs.Bool("dry-run", false, "書き込まずに内容だけ表示する")
 	if code, ok := parseFlags(fs, args, publishUsage, stdout, stderr); !ok {
@@ -246,15 +350,21 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		}
 		targets = found
 	}
+	accepted, err := resolveAccepts(targets, accepts, len(paths) > 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "dwloc: %v\n", err)
+		return exitError
+	}
 
-	// 入力といまの公開ファイルが、1行ずつ読むと訳を失う形になっていないかを
-	// 最初に見ます。この形のファイルは、下の組み立てと2つの確認も同じ読み方で
-	// 読むので、読み違えたまま「そろっている」「失われない」と判断してしまいます。
+	// 入力・いまの公開ファイル・ゲーム側の公開ファイルが、読むと訳や原文を取り違える
+	// 形になっていないかを最初に見ます。この形のファイルは、下の組み立てと2つの確認も
+	// 同じ読み方で読むので、取り違えたまま「そろっている」「失われない」と判断して
+	// しまいます。
 	//
-	// 組み立てより前に見るのは、組み立てが読み方の誤りで止まる前に、どのファイルの
-	// 何行目をどう直すかを出すためです。組み立ての誤りは「変換できません」
-	// （終了コード 2）としか言えません。
-	if code := reportShape(*root, targets, stderr); code != exitOK {
+	// 組み立てより前に見るのは、組み立てが読み方の誤り（閉じない引用符など）で
+	// 止まる前に、どのファイルの何行目をどう直すかを出すためです。組み立ての誤りは
+	// 「変換できません」（終了コード 2）としか言えません。
+	if code := reportShape(*root, targets, accepted, stderr); code != exitOK {
 		return code
 	}
 
@@ -322,91 +432,102 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	return exitOK
 }
 
-// publishShapeText は、1行ずつ読むと訳を失う形のファイルを見つけたときの見出しです。
+// publishShapeText は、読み違える形のファイルを見つけたときの見出しです。
 //
 // 「訳が失われる」（publishLossText）と文面を分けてあるのは、直す先が違うからです。
 // あちらは入力が途中までか壊れていることを疑いますが、こちらはファイルの形その
 // ものを直します。どの行をどう直すかは、1件ずつ下に添えます。
-const publishShapeText = `dwloc: 1行ずつ読むと訳を失う形のファイルがあるので、1バイトも書きませんでした。
-dwloc:       publish は1物理行を1レコードとして読みます。下の行はこの読み方では読み違え、
-dwloc:       書き出すと訳が切り詰められたり、黙って落ちたりします。
+const publishShapeText = `dwloc: 読み違える形のファイルがあるので、1バイトも書きませんでした。
+dwloc:       publish はファイル全体を解釈して読みます。下の行はそのまま書くと、
+dwloc:       英語の原文やほかの行が訳として公開されたり、訳が黙って落ちたりします。
 `
 
 // publishShapeFix は、形ごとの直し方です。キーは reason の識別子です。
 //
-// 行をまたぐ値は、壊れた形とは限りません。上流の tools/hash-strings.ps1 は
-// ファイル全体を解釈するので、複数行の訳を正しい訳として読み書きします。
-// いまの公開ファイルにある複数行の訳は、ほかの翻訳者がコミットした正しい訳で
-// ありえます。改行を取り除くよう案内すると、その訳を壊させることになります。
-// 原文（source_en）がまたいでいるものは、そもそも翻訳者には直せません。原文を
-// 変えるとキー（原文のハッシュ）が変わるからです。
+// 文面の {line} は、理由の置換の line（飲み込まれたと疑う物理行など）で、
+// {accept} は --accept-multiline に渡す値です。どちらも [shapeFix] が埋めます。
 //
-// そこで行をまたぐ値では、止めることは保ったまま、訳を壊さない抜け方を先に
-// 書きます。ほかのロケールは --locale で書けること、止まったロケールは上流の
-// 道具で書けること、の2つです。改行を取り除く、訳を空に戻す、は条件付きの
-// 案内に留めます。
-//
-// 文面の {this} と {others} は、[shapeFix] が報告するときに埋めます。ロケールを
-// 決めて走らせたときと --path で走らせたときで、外し方が違うためです。
-// publishToolNote は、上流の道具で書くときの前提。どちらの道具も、dwloc が入力に
-// したゲーム側の作業コピーを、そのままリポジトリの公開ファイルへ届けるわけでは
-// ない。案内どおりに走らせて終了コード0で終わっても、訳が入っていないことがある。
-const publishToolNote = "tools/hash-strings.ps1 はリポジトリの Translations/_discovered にある作業コピーを読みます。" +
-	"ゲーム側の作業コピーを使っているなら、先にそこへ写してください。" +
-	"Hash for commit はゲーム側の公開ファイルを書くので、書いたあとでリポジトリの Translations/<ロケール>/strings.csv へ写してください。"
-
+// 飲み込み（引用符が別の行で閉じる形）の直し方は、引用符の閉じ位置を確かめることと、
+// 値の中の " を "" と書くことです。閉じ忘れた " を足すか、値の中の " を重ねれば、
+// 後ろの行は値から外れます。続きの行がレコードに見えるだけの形は、正しい複数行の
+// 値でも当たる（原文の2行目がカンマを多く含むなど）ので、確かめたうえで通す指定を
+// 案内します。閉じ引用符の後ろに文字が続く形は、どの書き手も作らないので、指定を
+// 案内しません。
 var publishShapeFix = map[string]string{
 	reason.PublishNoKeyColumn: "ヘッダーの行を key,section,node,order,speaker,translation などの形に直してください。" +
 		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
 	reason.PublishNoTranslationColumn: "ヘッダーの行に translation 列を入れてください。" +
 		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
-	reason.PublishMultilineCurrent: "{this}は、いまの dwloc publish では書けません。dwloc publish は行をまたぐ値を読めないためです。" +
-		"{others}" +
-		"{this}は、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。" +
-		publishToolNote +
-		"誤って入った改行なら、取り除いてからもう一度実行してください。",
-	reason.PublishMultilineTranslated: "この行に訳があるうちは、{this}をいまの dwloc publish では書けません。dwloc publish は行をまたぐ値を読めないためです。" +
-		"{others}" +
-		"{this}は、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。" +
-		publishToolNote +
-		"訳に誤って入った改行なら、取り除いてからもう一度実行してください。" +
-		"この訳をまだ公開しなくてよいなら、訳を空に戻すと、{this}のほかの行は dwloc publish で書けます。",
-	reason.PublishMultilineDiverges: "訳の入っていない行なら、作業コピーからその範囲の行を消しても公開される中身は変わりません。" +
-		"消せないときは、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。" +
-		publishToolNote +
-		"{others}",
+	reason.PublishHashHeader: "ヘッダーの最初の列名から '#' を取り除き、key,section,node,order,speaker,translation などの形に直してください。" +
+		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
 	reason.PublishRowsUnread: "改行を LF か CRLF にして保存し直してから、もう一度実行してください。",
 	reason.PublishUnclosedQuote: "引用符を閉じるか取り除いてから、もう一度実行してください。" +
 		"値の中の \" は \"\" と2つ重ねて書きます。",
+	reason.PublishSwallowKeyShaped: "引用符の閉じ位置を確かめてください。値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。" +
+		"{line}行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline {accept} を付けると書けます。",
+	reason.PublishSwallowSameColumns: "引用符の閉じ位置を確かめてください。値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。" +
+		"{line}行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline {accept} を付けると書けます。",
+	reason.PublishSwallowTextAfterQuote: "引用符の閉じ位置を確かめてください。{line}行目の \" が、前の行で開いた値を閉じています。" +
+		"値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。",
+	reason.PublishLoneCR: "値の中の単独の CR を LF に直すか取り除いてから、もう一度実行してください。",
+	reason.PublishCRCut: "{line}行目の手前（前の行の終わり）にある CR を取り除くか、値全体を引用符で囲んでから、もう一度実行してください。" +
+		"値に改行を入れたいなら、値を引用符で囲み、改行を LF にします。",
 }
+
+// publishGameBaseFix は、ゲーム側の公開ファイルで見つけた形の直し方の頭に添える文です。
+//
+// ゲーム側の公開ファイルは、Mod が読み込んでいる訳の土台で、publish はコミット済みと
+// 突き合わせるためだけに読みます（「ゲームに入っている翻訳が古い」の確かめ）。
+// 手で直すより、コミット済みの公開ファイルを写し直すほうが確かです。
+const publishGameBaseFix = "ゲーム側の公開ファイルは、リポジトリの Translations/<ロケール>/strings.csv を同じ場所へ写し直すと直ります。" +
+	"手で直すときは次のとおりです。"
 
 // shapeFix は、h の直し方を報告に出す形にします。
 //
-// 1つのロケールで止まると、どのロケールも書きません。そのロケールだけを外して
-// ほかを書く道は、ロケールを決めて走らせたなら --locale、--path で走らせたなら
-// --path です（2つは同時に使えません）。--path ではロケール名が決まらないので、
-// 「このロケール」ではなく「このファイル」と呼びます。
+// --accept-multiline に渡す値は、ロケールを決めて走らせたならロケール名、--path で
+// 走らせたなら --path に渡したとおりのファイルです。--path ではロケール名が
+// 決まらないためです。ファイルを相対にして出さないのは、--accept-multiline は
+// --path に渡した綴りと引き当てるので、書き換えると当たらなくなるからです。
 func shapeFix(h publish.Hazard) string {
-	this, others := "このロケール", "ほかのロケールは、このロケール以外を --locale に並べれば publish できます。"
-	if h.Locale == "" {
-		this, others = "このファイル", "ほかのファイルは、このファイルを --path から外せば publish できます。"
+	accept := h.Locale
+	if accept == "" {
+		accept = h.Path
 	}
-	return strings.NewReplacer("{this}", this, "{others}", others).Replace(publishShapeFix[h.Why.ID])
+	line := ""
+	for i := 0; i+1 < len(h.Why.Args); i += 2 {
+		if h.Why.Args[i] == "line" {
+			line = h.Why.Args[i+1]
+		}
+	}
+	fix := strings.NewReplacer("{line}", line, "{accept}", accept).Replace(publishShapeFix[h.Why.ID])
+	if h.GameBase {
+		fix = publishGameBaseFix + fix
+	}
+	return fix
 }
 
 // publishShapeListMax は、形の崩れを何件まで並べるかです。publishLossListMax と
 // 同じ理由で切ります。
 const publishShapeListMax = 20
 
-// reportShape は、1行ずつ読むと訳を失う形のファイルを報告します。
-// 1件も無ければ exitOK を返します。
+// publishAcceptText は、--accept-multiline で通した形の見出しです。
 //
-// 1件でもあれば exitProblems（1）で、どのロケールも書きません。reportLosses と
-// 同じく、読んだうえで「書けば訳を失う」と分かったので 1 です。読めなくて
+// 通した行も必ず出します。止めずに書く以上、何を正しいと見なしたかが後から
+// 分からないと、飲み込みを誤って通したときに気づく手がかりが残りません。
+const publishAcceptText = "dwloc: --accept-multiline の指定で、次の行を正しい複数行の値として通します。\n"
+
+// reportShape は、読み違える形のファイルを報告します。1件も無ければ（あるいは
+// すべて --accept-multiline で通せば）exitOK を返します。
+//
+// 1件でも残れば exitProblems（1）で、どのロケールも書きません。reportLosses と
+// 同じく、読んだうえで「書けば訳を取り違える」と分かったので 1 です。読めなくて
 // 確かめられなかったときだけが 2 で、そのときの文面は reportLosses と同じにします。
 // どちらの確認でも、読めないファイルに対してすることは同じだからです。
-func reportShape(root string, targets []publish.Target, stderr io.Writer) int {
-	var found []publish.Hazard
+//
+// 通した行は、止めるときも書くときも標準エラーに出します。止めるときに出すのは、
+// 止まった原因を直したあとで、同じ指定で何が通るかを先に見せるためです。
+func reportShape(root string, targets []publish.Target, accept acceptSet, stderr io.Writer) int {
+	var found, passed []publish.Hazard
 	for _, t := range targets {
 		hazards, err := publish.CheckTargetShape(t)
 		if err != nil {
@@ -420,18 +541,36 @@ func reportShape(root string, targets []publish.Target, stderr io.Writer) int {
 				displayPath(root, path), err)
 			return exitError
 		}
-		found = append(found, hazards...)
+		for _, h := range hazards {
+			if accept.covers(h) {
+				passed = append(passed, h)
+			} else {
+				found = append(found, h)
+			}
+		}
+	}
+	if len(passed) > 0 {
+		fmt.Fprint(stderr, publishAcceptText)
+		writeHazards(root, passed, stderr, false)
 	}
 	if len(found) == 0 {
 		return exitOK
 	}
 
 	fmt.Fprint(stderr, publishShapeText)
+	writeHazards(root, found, stderr, true)
+	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(found))
+	return exitProblems
+}
+
+// writeHazards は形の崩れを1件ずつ出します。ファイルの見出しはファイルが変わる
+// ときだけ出し、先頭の [publishShapeListMax] 件で切ります。withFix なら直し方も添えます。
+func writeHazards(root string, hazards []publish.Hazard, stderr io.Writer, withFix bool) {
 	lastFile := ""
-	for i, h := range found {
+	for i, h := range hazards {
 		if i >= publishShapeListMax {
-			fmt.Fprintf(stderr, "dwloc:       ほかに %d か所あります。\n", len(found)-i)
-			break
+			fmt.Fprintf(stderr, "dwloc:       ほかに %d か所あります。\n", len(hazards)-i)
+			return
 		}
 		file := fileLabel(root, h)
 		if file != lastFile {
@@ -439,17 +578,21 @@ func reportShape(root string, targets []publish.Target, stderr io.Writer) int {
 			lastFile = file
 		}
 		fmt.Fprintf(stderr, "dwloc:       %s: %s\n", lineRange(h.Line, h.EndLine), h.Why)
-		fmt.Fprintf(stderr, "dwloc:         直し方: %s\n", shapeFix(h))
+		if withFix {
+			fmt.Fprintf(stderr, "dwloc:         直し方: %s\n", shapeFix(h))
+		}
 	}
-	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(found))
-	return exitProblems
 }
 
-// fileLabel は、報告に出すファイルの見出しです。ロケールと、入力か書き出し先かを添えます。
+// fileLabel は、報告に出すファイルの見出しです。ロケールと、入力・書き出し先・
+// ゲーム側の公開ファイルのどれかを添えます。
 func fileLabel(root string, h publish.Hazard) string {
 	role := "入力"
-	if h.Current {
+	switch {
+	case h.Current:
 		role = "いまの公開ファイル"
+	case h.GameBase:
+		role = "ゲーム側の公開ファイル"
 	}
 	return fmt.Sprintf("%s%s（%s）", localePrefix(h.Locale), displayPath(root, h.Path), role)
 }
@@ -609,7 +752,13 @@ func selectLocales(targets []publish.Target, want []string) ([]publish.Target, e
 	if len(want) == 0 {
 		return targets, nil
 	}
+	return matchLocales(targets, want, "--locale")
+}
 
+// matchLocales は want に並べたロケール名に当たる対象を返します。照合の仕方は
+// [selectLocales] に書いたとおりで、当たらない名前があれば、flag（指定の名前）を
+// 添えた誤りを返します。--locale と --accept-multiline が同じ照合を使うためです。
+func matchLocales(targets []publish.Target, want []string, flag string) ([]publish.Target, error) {
 	keep := make([]bool, len(targets))
 	var missing []string
 	for _, name := range want {
@@ -637,8 +786,8 @@ func selectLocales(targets []publish.Target, want []string) ([]publish.Target, e
 		if len(targets) > 0 {
 			available = "対象にできるのは " + strings.Join(localeNames(targets), ", ")
 		}
-		return nil, fmt.Errorf("--locale に指定したロケールがありません: %s（%s）",
-			strings.Join(missing, ", "), available)
+		return nil, fmt.Errorf("%s に指定したロケールがありません: %s（%s）",
+			flag, strings.Join(missing, ", "), available)
 	}
 
 	out := make([]publish.Target, 0, len(targets))

@@ -16,12 +16,16 @@ import (
 // （値の中に LF が2つ、間に空行）をまねた架空の文である。
 const multiSource = "para1\n\npara2"
 
-// TestPublishStopsOnUnsafeShapes は、1行ずつ読むと訳を失う形のファイルで
+// shapeStopText は、読み違える形で止まったときの見出しの1行目。
+const shapeStopText = "読み違える形のファイルがあるので、1バイトも書きませんでした。"
+
+// TestPublishStopsOnUnsafeShapes は、読むと訳や原文を取り違える形のファイルで
 // 止まることを見る。
 //
-// どれも守りを入れる前は終了コード 0 で書き出し、訳を切り詰めたり落としたり
-// していた（最後の1つだけは、失われる訳の確認が別の文面で止めていた）。
-// いまの公開ファイルも同じ読み方で読むので、失われる訳の確認では捕まらない。
+// 全体を解釈して読むと、引用符の閉じ誤りは後ろの行（英語の原文やほかの行の
+// キー）を値に飲み込む。上流の hash-strings.ps1 はそのまま公開ファイルへ書く
+// （上流の報告 #11）。いまの公開ファイルの訳は消えないので、失われる訳の確認では
+// 捕まらない。
 func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -37,35 +41,32 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 		notWant []string
 	}{
 		{
-			name: "いまの公開ファイルの訳が行をまたぐ",
+			// 入力と書き出し先が同じ経路（作業コピーの無いロケール）でも止まる。
+			// 同じファイルの中で訳を比べても、飲み込みは見えない（批評の high）。
+			name: "いまの公開ファイルで引用符が別の行で閉じる",
 			published: "key,section,node,order,speaker,translation\n" +
-				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\nもしもし？\"\n",
-			// 直し方は、訳を壊さない抜け方を先に出す。複数行の訳は上流では正しい訳で、
-			// 改行を取り除かせるとほかの翻訳者の訳を壊す。
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\"\n",
 			want: []string{
 				"ja: " + jaPublishedPath + "（いまの公開ファイル）",
-				"2〜3行目: 引用符で囲んだ値が行をまたいでいる",
-				"直し方: このロケールは、いまの dwloc publish では書けません。",
-				"ほかのロケールは、このロケール以外を --locale に並べれば publish できます。",
-				"このロケールは、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。",
-				"誤って入った改行なら、取り除いて",
+				"2〜3行目: 3行目が、単独で読むとキーの形で始まるレコードに見える。",
+				`直し方: 引用符の閉じ位置を確かめてください。値を閉じる " が抜けていれば足し、値の中の " は "" と2つ重ねて書きます。`,
+				"3行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline ja を付けると書けます。",
 			},
 		},
 		{
-			name: "作業コピーの原文が行をまたぎ、訳が入っている",
-			working: "key,section,node,order,speaker,source_en,translation\r\n" +
-				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\r\n" +
-				key.For(multiSource) + ",UI,,,UI,\"" + multiSource + "\",訳\r\n",
-			// 訳は翻訳者が入れた正しい訳でありうるので、空に戻すのは条件付きの案内に
-			// 留め、訳を保ったまま抜ける道を先に出す。
+			// 飲み込まれた行が自分の値を引用符で開く形。どの書き手も作らないので、
+			// 通す指定は案内しない。
+			name: "作業コピーで閉じ引用符の後ろに文字が続く",
+			working: "source_en,translation\n" +
+				"Hello?,\"もしもし\n" +
+				"\"Alpha line\nBeta line\",に\n",
 			want: []string{
 				"ja.working.csv（入力）",
-				"3〜5行目: 引用符で囲んだ値が行をまたぎ、この行には訳が入っている",
-				"直し方: この行に訳があるうちは、このロケールをいまの dwloc publish では書けません。",
-				"このロケール以外を --locale に並べれば",
-				"tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。",
-				"この訳をまだ公開しなくてよいなら、訳を空に戻すと、このロケールのほかの行は",
+				"2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+				`3行目の " が、前の行で開いた値を閉じています。`,
 			},
+			notWant: []string{"--accept-multiline"},
 		},
 		{
 			name: "作業コピーの引用符が閉じない",
@@ -78,30 +79,75 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 			},
 		},
 		{
-			// 以前は失われる訳の確認が「訳が失われる」で止めていた。いまは原因の
-			// ヘッダーを指す。
+			// ヘッダーの中で開いた引用符が閉じない。列名にファイルの終わりまでが入るので、
+			// 「translation 列が無い」とは言わず、閉じない引用符だけを出す。
 			name:    "作業コピーのヘッダーの引用符が閉じない",
 			working: workingBadHeader,
 			want: []string{
-				"1行目: ヘッダーに translation 列が無い",
 				"1〜2行目: 開いた引用符がファイルの終わりまで閉じない",
-				"読み違える形が 2 か所あります。",
+				"読み違える形が 1 か所あります。",
+			},
+			notWant: []string{"translation 列が無い"},
+		},
+		{
+			// 上流はこのヘッダーを飛ばし、次の行をヘッダーにして、訳を1行も公開しない。
+			name: "作業コピーの最初の列名が '#' で始まる",
+			working: "\"#key\",source_en,translation\n" +
+				keyHello + ",Hello?,もしもし？\n",
+			want: []string{
+				"1行目: ヘッダーの最初の列名が '#' で始まる。",
+				"直し方: ヘッダーの最初の列名から '#' を取り除き",
 			},
 		},
 		{
+			name: "作業コピーの訳の中の単独の CR",
+			working: "key,source_en,translation\n" +
+				keyHello + ",Hello?,\"もし\rもし？\"\n",
+			want: []string{
+				"2〜3行目: translation 列の値に単独の CR（後ろに LF の続かない CR）がある。",
+				"直し方: 値の中の単独の CR を LF に直すか取り除いてから",
+			},
+		},
+		{
+			// 引用符で囲まない値が単独の CR で切れる。ゲームは「もしもし？」と読むが、
+			// そのまま書くと「もし」だけが公開される。
+			name: "作業コピーの値が単独の CR で切れる",
+			working: "key,source_en,translation\n" +
+				keyHello + ",Hello?,もし\rもし？\n",
+			want: []string{
+				"2行目: 引用符で囲まない値が行の終わりの単独の CR で切れ、3行目にある続きが別の行として読まれる。",
+				"直し方: 3行目の手前（前の行の終わり）にある CR を取り除くか、値全体を引用符で囲んで",
+			},
+		},
+		{
+			// ゲーム側の公開ファイルも同じ確かめを通す（決まったことの 3）。土台の確かめが
+			// 読み違えると、巻き戻りを見逃す。直し方は、コミット済みを写し直すことを先に出す。
+			name: "ゲーム側の公開ファイルの引用符が閉じない",
+			working: "key,section,node,order,speaker,source_en,translation\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\n",
+			game: "key,section,node,order,speaker,translation\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし？\n",
+			want: []string{
+				"（ゲーム側の公開ファイル）",
+				"2行目: 開いた引用符がファイルの終わりまで閉じない",
+				"直し方: ゲーム側の公開ファイルは、リポジトリの Translations/<ロケール>/strings.csv を同じ場所へ写し直すと直ります。",
+			},
+			notWant: []string{"ゲームに入っている翻訳が古いので"},
+		},
+		{
 			// 形の崩れとゲーム側の古さが同時にあるときは、形で止め、土台の報告は
-			// 出さない。確かめる順（形 → ゲーム側の土台 → 失われる訳）を固定する。
+			// 出さない。確かめる順（形 → 組み立て → ゲーム側の土台 → 失われる訳）を固定する。
 			// 形の崩れたファイルは土台の確かめも読み違えるので、先に見る必要がある。
 			name: "作業コピーの形が崩れ、ゲーム側も古い",
 			working: "key,section,node,order,speaker,source_en,translation\n" +
 				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし\n" +
-				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,\"やあ\nやあ！\"\n",
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,\"やあ\rやあ！\"\n",
 			// コミット済みの「もしもし？」に対して、ゲーム側は古い「もしもし」を持つ。
 			game: "key,section,node,order,speaker,translation\n" +
 				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし\n",
 			want: []string{
 				"ja.working.csv（入力）",
-				"3〜4行目: 引用符で囲んだ値が行をまたぎ、この行には訳が入っている",
+				"3〜4行目: translation 列の値に単独の CR",
 				"読み違える形が 1 か所あります。",
 			},
 			notWant: []string{"ゲームに入っている翻訳が古いので"},
@@ -136,7 +182,7 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 				t.Errorf("報告が --dry-run で変わっている\n--- dry-run ---\n%s\n--- 本番 ---\n%s", stderr, wet)
 			}
 			checkContains(t, "標準エラー", stderr, append([]string{
-				"1行ずつ読むと訳を失う形のファイルがあるので、1バイトも書きませんでした。",
+				shapeStopText,
 				"直すまでは書きません。",
 			}, tc.want...))
 			for _, s := range tc.notWant {
@@ -154,12 +200,49 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 	}
 }
 
+// TestPublishWritesMultilineValues は、引用符で囲んだ正しい複数行の値を、上流 main と
+// 同じく1つの値として読み、読んだとおりに書くことを見る。
+//
+// 行単位で読んでいたときは、行をまたぐ訳は1行目で切り詰められるので、形の確かめで
+// 止めていた（いまの公開ファイルなら必ず、入力なら訳が入っていれば）。値の中の改行は
+// LF も CRLF も直さずに書く（上流とバイト一致させるため）。
+func TestPublishWritesMultilineValues(t *testing.T) {
+	root := lossRepo(t)
+	publishOnce(t, root)
+	game := makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": "key,section,node,order,speaker,source_en,translation\r\n" +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,\"もし\r\nもし？\"\r\n" +
+			keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,\"や\n\n# あ！\"\r\n" +
+			key.For(multiSource) + ",UI,,,UI,\"" + multiSource + "\",段落\r\n",
+	})
+	code, stdout, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	got := readFile(t, root, jaPublishedPath)
+	checkContains(t, "公開ファイル", got, []string{
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\r\nもし？\"\n",
+		keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"や\n\n# あ！\"\n",
+		key.For(multiSource) + ",UI,,,UI,段落\n",
+	})
+	checkContains(t, "標準出力", stdout, []string{"3 converted", "0 malformed dropped"})
+
+	// 書いた公開ファイルを入力にしてもう一度通すと、同じバイト列が返る（冪等）。
+	code, _, stderr = runCLI("publish", "--root", root, "--no-game")
+	if code != exitOK {
+		t.Fatalf("2回目の終了コード = %d\n%s", code, stderr)
+	}
+	if again := readFile(t, root, jaPublishedPath); again != got {
+		t.Errorf("2回目で公開ファイルが変わった\n--- 1回目 ---\n%q\n--- 2回目 ---\n%q", got, again)
+	}
+}
+
 // TestPublishPassesTheRealWorkingCopyShape は、ゲーム側の作業コピーの実物と同じ
 // 形では止まらず、書き出す中身も変わらないことを見る。
 //
 // 実物には、原文が行をまたぎ（区切りは CRLF、値の中は LF、空行を挟む）、訳が
-// 空のレコードが1件ある。どちらの読み方でも公開されない行なので、止める理由が
-// 無い。ここで止めると、翻訳者には直せない理由で ja の publish が常に塞がる。
+// 空のレコードが1件ある。公開されない行なので、止める理由が無い。ここで止めると、
+// 翻訳者には直せない理由で ja の publish が常に塞がる。
 func TestPublishPassesTheRealWorkingCopyShape(t *testing.T) {
 	head := "key,section,node,order,speaker,source_en,translation\r\n" +
 		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\r\n"
@@ -198,7 +281,7 @@ func TestPublishShapeReportIsCapped(t *testing.T) {
 	b.WriteString("key,section,node,order,speaker,translation\n")
 	total := publishShapeListMax + 3
 	for i := range total {
-		fmt.Fprintf(&b, "%s,UI,,,UI,\"訳%02d\nつづき\"\n", key.For(fmt.Sprintf("Line %02d", i)), i)
+		fmt.Fprintf(&b, "%s,UI,,,UI,\"訳%02d\rつづき\"\n", key.For(fmt.Sprintf("Line %02d", i)), i)
 	}
 	jaPublished := b.String()
 	dePublished := "key,section,node,order,speaker,translation\n" + helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hallo\n"
@@ -232,11 +315,12 @@ func TestPublishShapeReportIsCapped(t *testing.T) {
 }
 
 // TestPublishShapeWithPathHasNoLocale は、--path で走らせたときの報告を見る。
-// ロケールが決まらないので頭に付けず、ファイルの名前だけを出す。
+// ロケールが決まらないので頭に付けず、ファイルの名前だけを出す。通す指定には、
+// --path に渡したとおりのファイルを案内する。
 func TestPublishShapeWithPathHasNoLocale(t *testing.T) {
 	root := lossRepo(t)
 	path := filepath.Join(root, filepath.FromSlash(jaPublishedPath))
-	if err := os.WriteFile(path, []byte("key,translation\n"+keyHello+",\"a\nb\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("key,translation\n"+keyHello+",\"a\n"+keyHiThere+",b\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, _, stderr := runCLI("publish", "--root", root, "--path", path)
@@ -245,62 +329,141 @@ func TestPublishShapeWithPathHasNoLocale(t *testing.T) {
 	}
 	checkContains(t, "標準エラー", stderr, []string{
 		"dwloc:   " + jaPublishedPath + "（いまの公開ファイル）",
-		// --path と --locale は同時に使えないので、外し方は --path で案内する。
-		"直し方: このファイルは、いまの dwloc publish では書けません。",
-		"ほかのファイルは、このファイルを --path から外せば publish できます。",
+		"--accept-multiline " + path + " を付けると書けます。",
 	})
 	if strings.Contains(stderr, "ja: ") {
 		t.Errorf("--path なのにロケールを付けている:\n%s", stderr)
 	}
 	if strings.Contains(stderr, "--locale") || strings.Contains(stderr, "このロケール") {
-		t.Errorf("--path なのにロケールで外すよう案内している:\n%s", stderr)
+		t.Errorf("--path なのにロケールで案内している:\n%s", stderr)
 	}
+
+	// 案内どおりにそのファイルを指定すると書ける。
+	code, _, stderr = runCLI("publish", "--root", root, "--path", path, "--accept-multiline", path)
+	if code != exitOK {
+		t.Fatalf("--accept-multiline を付けた終了コード = %d\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--accept-multiline の指定で、次の行を正しい複数行の値として通します。"})
 }
 
-// TestPublishShapeEscapeWithLocale は、行をまたぐ値で止まったときの直し方が
-// 案内する抜け方で、実際にほかのロケールを書けることを見る。
+// TestPublishAcceptMultiline は、確かめたうえで通す指定（--accept-multiline）を見る。
 //
-// 複数行の訳は上流では正しい訳なので、いまの公開ファイルにあると、そのロケールは
-// 全体を解釈する読み手が入るまで止まり続ける。--locale を付けずに走らせると
-// どのロケールも書かない。案内どおり --locale でほかのロケールだけを選べば書け、
-// 止まったロケールの公開ファイルには触れない。
-func TestPublishShapeEscapeWithLocale(t *testing.T) {
+// 通すのは、指定したロケールの、続きの行が単独で読むとレコードに見える形だけである。
+// 正しい複数行の値でも当たる（原文の2行目がカンマを多く含むなど）ので、止めたまま
+// にすると、そのロケールを publish できなくなる。通した行は標準エラーに出す。
+func TestPublishAcceptMultiline(t *testing.T) {
+	// de の訳の2行目は、単独で読むとヘッダーと同じ6列のレコードに見える。
 	dePublished := "key,section,node,order,speaker,translation\n" +
-		helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\nWelt\"\n"
+		helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\n,,,,,Welt\"\n"
 	jaPublished := "key,section,node,order,speaker,translation\n" +
 		helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし\n"
-	root := makeTree(t, map[string]string{
+	files := map[string]string{
 		"data/script_order.csv":       scriptOrderCSV,
 		"Translations/de/strings.csv": dePublished,
 		"Translations/ja/strings.csv": jaPublished,
-	})
-	// 案内どおりに抜けたときと比べるため、ja だけを書いたときの中身を先に作る。
-	want := makeTree(t, map[string]string{
-		"data/script_order.csv":       scriptOrderCSV,
-		"Translations/ja/strings.csv": jaPublished,
-	})
-	if code, _, stderr := runCLI("publish", "--root", want, "--no-game"); code != exitOK {
-		t.Fatalf("下ごしらえの publish の終了コード = %d\n%s", code, stderr)
 	}
 
-	code, _, stderr := runCLI("publish", "--root", root, "--no-game")
-	if code != exitProblems {
-		t.Fatalf("--locale なしの終了コード = %d、1 を期待\n%s", code, stderr)
-	}
-	checkContains(t, "標準エラー", stderr, []string{"de: Translations/de/strings.csv（いまの公開ファイル）"})
-	if got := readFile(t, root, "Translations/ja/strings.csv"); got != jaPublished {
-		t.Errorf("止めたのに ja を書いている:\n%s", got)
-	}
+	t.Run("指定が無ければ止める", func(t *testing.T) {
+		root := makeTree(t, files)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game")
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"de: Translations/de/strings.csv（いまの公開ファイル）",
+			"2〜3行目: 3行目が、単独で読むとヘッダーと同じ列の数のレコードに見える。",
+			"--accept-multiline de を付けると書けます。",
+		})
+		if got := readFile(t, root, "Translations/ja/strings.csv"); got != jaPublished {
+			t.Errorf("止めたのに ja を書いている:\n%s", got)
+		}
+	})
 
-	code, _, stderr = runCLI("publish", "--root", root, "--no-game", "--locale", "ja")
-	if code != exitOK {
-		t.Fatalf("--locale ja の終了コード = %d、0 を期待\n%s", code, stderr)
+	t.Run("指定したロケールの行を通して書く", func(t *testing.T) {
+		root := makeTree(t, files)
+		// 大文字小文字は --locale と同じく問わない。
+		code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "DE")
+		if code != exitOK {
+			t.Fatalf("終了コード = %d\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"--accept-multiline の指定で、次の行を正しい複数行の値として通します。",
+			"de: Translations/de/strings.csv（いまの公開ファイル）",
+			"2〜3行目: 3行目が、単独で読むとヘッダーと同じ列の数のレコードに見える。",
+		})
+		if strings.Contains(stderr, "直し方") || strings.Contains(stderr, shapeStopText) {
+			t.Errorf("通したのに止めるときの文面が出ている:\n%s", stderr)
+		}
+		checkContains(t, "標準出力", stdout, []string{"2 件を書き出しました。"})
+		checkContains(t, "de の公開ファイル", readFile(t, root, "Translations/de/strings.csv"),
+			[]string{"\"Hallo\n,,,,,Welt\"\n"})
+	})
+
+	t.Run("ほかのロケールの指定では通さない", func(t *testing.T) {
+		root := makeTree(t, files)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		if strings.Contains(stderr, "として通します") {
+			t.Errorf("指定していない de を通している:\n%s", stderr)
+		}
+	})
+
+	t.Run("閉じ引用符の後ろに文字が続く形は通さない", func(t *testing.T) {
+		root := makeTree(t, map[string]string{
+			"data/script_order.csv": scriptOrderCSV,
+			"Translations/ja/strings.csv": "key,section,node,order,speaker,translation\n" +
+				helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n\"Alpha\nBeta\",UI,,,UI,訳\n",
+		})
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"行をまたいだ引用が閉じたすぐ後ろに文字が続く"})
+	})
+
+	t.Run("当たらない指定は誤りにする", func(t *testing.T) {
+		root := makeTree(t, files)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "xx")
+		if code != exitError {
+			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"--accept-multiline に指定したロケールがありません: xx（対象にできるのは de, ja）",
+		})
+	})
+
+	t.Run("--path に無いファイルの指定は誤りにする", func(t *testing.T) {
+		root := makeTree(t, files)
+		path := filepath.Join(root, "Translations", "ja", "strings.csv")
+		code, _, stderr := runCLI("publish", "--root", root, "--path", path,
+			"--accept-multiline", filepath.Join(root, "Translations", "de", "strings.csv"))
+		if code != exitError {
+			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline に指定したファイルが --path にありません"})
+	})
+
+	t.Run("空の指定は誤りにする", func(t *testing.T) {
+		root := makeTree(t, files)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", " ")
+		if code != exitError {
+			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"ロケール名かファイル名が空です"})
+	})
+}
+
+// TestAcceptListString は flag.Value としての表示を確かめる。
+func TestAcceptListString(t *testing.T) {
+	var nilList *acceptList
+	if got := nilList.String(); got != "" {
+		t.Errorf("nil の表示 = %q", got)
 	}
-	if got, w := readFile(t, root, "Translations/ja/strings.csv"), readFile(t, want, "Translations/ja/strings.csv"); got != w {
-		t.Errorf("ja の中身が違う\n got %q\nwant %q", got, w)
-	}
-	if got := readFile(t, root, "Translations/de/strings.csv"); got != dePublished {
-		t.Errorf("外した de を書き換えている:\n%s", got)
+	l := acceptList{"de", "ja"}
+	if got := l.String(); got != "de ja" {
+		t.Errorf("表示 = %q", got)
 	}
 }
 
@@ -322,9 +485,9 @@ func TestPublishShapeFixCoversEveryReason(t *testing.T) {
 			if !has || publishShapeFix[id] == "" {
 				t.Errorf("%s の直し方が無い", id)
 			}
-			// 埋め残しがあると、報告に {this} がそのまま出る。
+			// 埋め残しがあると、報告に {line} がそのまま出る。
 			for _, locale := range []string{"ja", ""} {
-				fix := shapeFix(publish.Hazard{Locale: locale, Why: reason.New(id, "")})
+				fix := shapeFix(publish.Hazard{Locale: locale, Path: "x.csv", Why: reason.New(id, "", "line", "3")})
 				if strings.ContainsAny(fix, "{}") {
 					t.Errorf("%s（ロケール %q）の直し方に埋め残しがある: %s", id, locale, fix)
 				}
@@ -333,35 +496,32 @@ func TestPublishShapeFixCoversEveryReason(t *testing.T) {
 	}
 }
 
-// TestShapeFixNamesTheWayOut は、行をまたぐ値の直し方が、ロケールを決めて
-// 走らせたか --path で走らせたかに合わせて抜け方を変えることを固定する。
-func TestShapeFixNamesTheWayOut(t *testing.T) {
-	for _, id := range []string{
-		reason.PublishMultilineCurrent, reason.PublishMultilineTranslated, reason.PublishMultilineDiverges,
-	} {
-		byLocale := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(id, "")})
-		byPath := shapeFix(publish.Hazard{Why: reason.New(id, "")})
-		if !strings.Contains(byLocale, "--locale") || strings.Contains(byLocale, "--path") {
-			t.Errorf("%s: ロケールで走らせたのに --locale で案内していない: %s", id, byLocale)
+// TestShapeFixNamesTheAcceptTarget は、直し方が、確かめたうえで通す指定を案内する形を
+// 固定する。通せる形だけに案内し、渡す値はロケールを決めて走らせたならロケール名、
+// --path で走らせたならそのファイルにする。ゲーム側の公開ファイルでは、写し直す直し方を
+// 先に出す。
+func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
+	for _, id := range []string{reason.PublishSwallowKeyShaped, reason.PublishSwallowSameColumns} {
+		why := reason.New(id, "", "line", "7")
+		byLocale := shapeFix(publish.Hazard{Locale: "ja", Path: "Translations/ja/strings.csv", Why: why})
+		byPath := shapeFix(publish.Hazard{Path: "some/file.csv", Why: why})
+		if !strings.Contains(byLocale, "7行目が値の一部として正しい") || !strings.Contains(byLocale, "--accept-multiline ja を") {
+			t.Errorf("%s: ロケールで走らせたときの案内が違う: %s", id, byLocale)
 		}
-		if !strings.Contains(byPath, "--path") || strings.Contains(byPath, "--locale") {
-			t.Errorf("%s: --path で走らせたのに --path で案内していない: %s", id, byPath)
-		}
-		for _, fix := range []string{byLocale, byPath} {
-			if !strings.Contains(fix, "tools/hash-strings.ps1") {
-				t.Errorf("%s: 上流の道具を案内していない: %s", id, fix)
-			}
-			// 上流の道具は、どちらもゲーム側の作業コピーをそのまま公開ファイルへ
-			// 届けない。前提を添えないと、案内どおりに走らせて終了コード0で
-			// 終わっても訳が入っていない。
-			if !strings.Contains(fix, publishToolNote) {
-				t.Errorf("%s: 上流の道具で書くときの前提（写す先）を添えていない: %s", id, fix)
-			}
+		if !strings.Contains(byPath, "--accept-multiline some/file.csv を") {
+			t.Errorf("%s: --path で走らせたときの案内が違う: %s", id, byPath)
 		}
 	}
-	// 形が壊れているだけのものは、ほかのロケールの話をしない。
-	if fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(reason.PublishUnclosedQuote, "")}); strings.Contains(fix, "--locale") {
-		t.Errorf("閉じない引用符の直し方に --locale が出ている: %s", fix)
+	for _, id := range []string{
+		reason.PublishSwallowTextAfterQuote, reason.PublishUnclosedQuote, reason.PublishLoneCR, reason.PublishCRCut,
+	} {
+		if fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(id, "", "line", "7")}); strings.Contains(fix, "--accept-multiline") {
+			t.Errorf("%s: 通せない形に通す指定を案内している: %s", id, fix)
+		}
+	}
+	game := shapeFix(publish.Hazard{Locale: "ja", GameBase: true, Why: reason.New(reason.PublishUnclosedQuote, "")})
+	if !strings.HasPrefix(game, publishGameBaseFix) {
+		t.Errorf("ゲーム側の公開ファイルで写し直す案内を先に出していない: %s", game)
 	}
 }
 
@@ -415,7 +575,7 @@ func TestPublishShapeReportsWholeFile(t *testing.T) {
 		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
 	}
 	checkContains(t, "標準エラー", stderr, []string{
-		"ファイル全体: 空でない行があるのに、1行ずつ読むと1行も読めない",
+		"ファイル全体: 空でない行があるのに、1行も読めない",
 		"直し方: 改行を LF か CRLF にして保存し直して",
 	})
 }

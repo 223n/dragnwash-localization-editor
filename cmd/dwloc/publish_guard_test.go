@@ -55,9 +55,11 @@ const workingPartial = "key,section,node,order,speaker,source_en,translation\n" 
 
 // workingBadHeader は、ヘッダーの引用符が閉じていない作業コピー。
 //
-// source_en と translation が1つの列名に融合して translation 列を引けなくなり、
-// 全行が「訳が空」と見なされて落ちる。壊れ方としては最も静かで、この守りが
-// 無いと公開ファイルがヘッダー1行だけになる。
+// 行単位で読んでいたときは、source_en と translation が1つの列名に融合して
+// translation 列を引けなくなり、全行が「訳が空」と見なされて落ちていた。壊れ方と
+// しては最も静かで、守りが無いと公開ファイルがヘッダー1行だけになっていた。
+// 全体を解釈すると、ヘッダーがファイルの終わりまでを飲み込み、形の確かめが
+// 閉じない引用符として止める。
 const workingBadHeader = "key,section,node,order,speaker,\"source_en,translation\n" +
 	keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\n"
 
@@ -114,7 +116,7 @@ func TestPublishStopsWhenTranslationsWouldBeLost(t *testing.T) {
 	// 守りが効くこと。どの壊れ方でも、公開ファイルは1バイトも変わらない。
 	//
 	// ヘッダーの引用符が閉じていない作業コピー（workingBadHeader）は、この確認より
-	// 前の「1行ずつ読むと訳を失う形」の確認で止まる（TestPublishStopsOnUnsafeShapes）。
+	// 前の「読み違える形」の確認で止まる（TestPublishStopsOnUnsafeShapes）。
 	for _, tc := range []struct {
 		name    string
 		working string

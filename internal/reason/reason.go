@@ -253,12 +253,12 @@ const (
 	PublishBaseDrift = "publish_base_drift"
 )
 
-// 1行ずつ読むと訳を黙って失う形（internal/publish の shape.go）。
+// 読むと訳や原文を取り違える形（internal/publish の shape.go）。
 //
-// publish は1物理行を1レコードとして読む。この読み方で読み違えるファイルは、
-// 読み違えた結果どうしを突き合わせても気づけない（いまの公開ファイルも同じ
-// 読み方で読むため）。そうした形を、書く前にファイルの形そのものから見つける。
-// どれも置換を持たない。どのファイルの何行目かは、理由の外に持つ。
+// publish は上流 main と同じくファイル全体を解釈して読む。読み手は規則どおりに
+// 読むだけで、引用符の閉じ誤りと正当な複数行の値を見分けない。そのまま書くと、
+// 英語の原文が訳として公開されたり、訳が黙って落ちたりする形を、書く前にファイルの
+// 形そのものから見つける。どのファイルの何行目かは、理由の外に持つ。
 const (
 	// PublishNoKeyColumn は、ヘッダーに key 列も source_en 列も無いこと。
 	// どの行もキーを決められず、すべて捨てられる。
@@ -266,18 +266,29 @@ const (
 	// PublishNoTranslationColumn は、ヘッダーに translation 列が無いこと。
 	// すべての行が訳の無い行として読まれる。
 	PublishNoTranslationColumn = "publish_no_translation_column"
-	// PublishMultilineCurrent は、いまの公開ファイルに行をまたぐ値があること。
-	// 1行ずつ読むと、その訳は切り詰められる。
-	PublishMultilineCurrent = "publish_multiline_current"
-	// PublishMultilineTranslated は、入力の行をまたぐレコードに訳が入っていること。
-	PublishMultilineTranslated = "publish_multiline_translated"
-	// PublishMultilineDiverges は、入力の行をまたぐレコードのせいで、1行ずつ
-	// 読んだ訳と全体を読んだ訳が食い違うこと。
-	PublishMultilineDiverges = "publish_multiline_diverges"
-	// PublishRowsUnread は、空でない行があるのに1行ずつ読むと1行も読めないこと。
+	// PublishHashHeader は、ヘッダーの最初の列名が '#' で始まること。上流はその
+	// ヘッダーを飛ばし、次の行をヘッダーにするので、訳を1行も公開しない。
+	PublishHashHeader = "publish_hash_header"
+	// PublishRowsUnread は、空でない行があるのに1行も読めないこと（行の区切りが
+	// LF・CRLF・CR 以外）。
 	PublishRowsUnread = "publish_rows_unread"
 	// PublishUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
 	PublishUnclosedQuote = "publish_unclosed_quote"
+	// PublishSwallowKeyShaped は、行をまたぐレコードの続きの物理行が、単独で読むと
+	// キーの形で始まるレコードに見えること。置換は line（その物理行）。
+	PublishSwallowKeyShaped = "publish_swallow_key_shaped"
+	// PublishSwallowSameColumns は、続きの物理行が、単独で読むとヘッダーと同じ
+	// 列の数のレコードに見えること。置換は line。
+	PublishSwallowSameColumns = "publish_swallow_same_columns"
+	// PublishSwallowTextAfterQuote は、行をまたいだ引用がその物理行で閉じ、閉じ
+	// 引用符のすぐ後ろに文字が続くこと。置換は line。
+	PublishSwallowTextAfterQuote = "publish_swallow_text_after_quote"
+	// PublishLoneCR は、値の中に単独の CR（後ろに LF の続かない CR）があること。
+	// 置換は column（列名）。
+	PublishLoneCR = "publish_lone_cr"
+	// PublishCRCut は、引用符で囲まない値が引用の外の単独の CR で切れたと見られる
+	// こと。置換は line（切れた後半が読まれる物理行）。
+	PublishCRCut = "publish_cr_cut"
 )
 
 // all は [All] が返す並び。定義した順のまま持つ。
@@ -311,9 +322,9 @@ var all = []string{
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 
-	PublishNoKeyColumn, PublishNoTranslationColumn, PublishMultilineCurrent,
-	PublishMultilineTranslated, PublishMultilineDiverges, PublishRowsUnread,
-	PublishUnclosedQuote,
+	PublishNoKeyColumn, PublishNoTranslationColumn, PublishHashHeader, PublishRowsUnread,
+	PublishUnclosedQuote, PublishSwallowKeyShaped, PublishSwallowSameColumns,
+	PublishSwallowTextAfterQuote, PublishLoneCR, PublishCRCut,
 }
 
 // All はこのパッケージが名前を付けた識別子を全部返す。

@@ -501,10 +501,10 @@ func publishLossReasons(t *testing.T) []reason.Reason {
 	return out
 }
 
-// publishShapeReasons は「1行ずつ読むと訳を失う形」の理由の見本を集める。
+// publishShapeReasons は「読み違える形」の理由の見本を集める。
 //
-// どれも形の確かめを実際に走らせて出させる。入力（作業コピー）の確かめと、
-// いまの公開ファイルの確かめで出る理由が違うので、両方を通す。
+// どれも形の確かめを実際に走らせて出させる。入力・いまの公開ファイル・ゲーム側の
+// 公開ファイルは同じ確かめ（publish.CheckShape）を通る。
 func publishShapeReasons(t *testing.T) []reason.Reason {
 	t.Helper()
 
@@ -512,10 +512,18 @@ func publishShapeReasons(t *testing.T) []reason.Reason {
 	inputs := []string{
 		// ヘッダーに key 列も source_en 列も translation 列も無い。
 		"foo,bar\nx,y\n",
-		// 行をまたぐ値に訳が入っている。
-		"key,translation\naaaaaaaaaaaaaaaa,\"a\nb\"\n",
-		// 原文が行をまたぎ、続きの行が1行ずつ読むと別のキーの訳になる。
-		"key,source_en,translation\n" + key.For("x") + ",\"x\n" + hashKey + ",,y\",\n",
+		// ヘッダーの最初の列名が '#' で始まる。
+		"\"#key\",source_en,translation\n" + key.For("x") + ",x,y\n",
+		// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
+		"key,source_en,translation\n" + key.For("x") + ",x,\"y\n" + hashKey + ",,z\"\n",
+		// 閉じ忘れた引用符が、ヘッダーと同じ列の数の次の行を飲み込む。
+		"source_en,translation\nx,\"y\nw,z\"\n",
+		// 飲み込まれた行が自分の値を引用符で開く。
+		"source_en,translation\nx,\"y\n\"w\nv\",z\n",
+		// 値の中の単独の CR。
+		"key,translation\naaaaaaaaaaaaaaaa,\"a\rb\"\n",
+		// 引用符で囲まない値が単独の CR で切れる。
+		"key,translation\naaaaaaaaaaaaaaaa,a\rb\n",
 		// 行の区切りが LF・CRLF・CR のどれでもない。
 		"key,translation aaaaaaaaaaaaaaaa,t ",
 		// 引用符が閉じない。
@@ -523,23 +531,13 @@ func publishShapeReasons(t *testing.T) []reason.Reason {
 	}
 	var out []reason.Reason
 	for _, input := range inputs {
-		found, err := publish.CheckInputShape([]byte(input))
-		if err != nil {
-			t.Fatalf("CheckInputShape(%q): %v", input, err)
-		}
+		found := publish.CheckShape([]byte(input))
 		if len(found) == 0 {
-			t.Fatalf("CheckInputShape(%q) が何も見つけない", input)
+			t.Fatalf("CheckShape(%q) が何も見つけない", input)
 		}
 		for _, h := range found {
 			out = append(out, h.Why)
 		}
-	}
-	found, err := publish.CheckCurrentShape([]byte("key,translation\naaaaaaaaaaaaaaaa,\"a\nb\"\n"))
-	if err != nil {
-		t.Fatalf("CheckCurrentShape: %v", err)
-	}
-	for _, h := range found {
-		out = append(out, h.Why)
 	}
 	return out
 }

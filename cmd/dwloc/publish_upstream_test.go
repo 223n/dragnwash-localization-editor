@@ -26,12 +26,15 @@ tools/・data/・Translations/ の並びを一時ディレクトリに作り、d
 走らせる。書けば出力のバイトと集計の1行を、止まればどこで止まったかを上流と比べる。
 
 上流と違ってよいのは [publishDiffs] に載せた入力だけで、どう違うかまで固定する。
-pubPR2 の行は、publish・diff・order が全体を解釈する読み手へ移る PR2 で振る舞いが
-変わる箇所である。PR2 でそこが変わると、この試験が落ちて教えてくれる。そのときは
-表を直す（上流と同じになったなら行を消し、意図して違えるなら pubIntended へ移す）。
 pubUndecided の行は、上流と違えてよいかをまだ決めていない点で、いまの振る舞いを
 固定するだけである。意図して違える点と混ぜないのは、仕様の上で決まったように
 読まれないためである。
+
+PR0 と PR1 では、publish が全体を解釈する読み手へ移る PR2 で振る舞いが変わる箇所を
+「PR2 で変わる」として分けていた。PR2 で publish が全体を解釈して読むようになり、
+その行は、上流と同じバイトを書くようになったもの（表から外した）と、止めることを
+意図したもの（飲み込み、単独の CR、'#' で始まるヘッダー。pubIntended へ移した）の
+どちらかになった。分類そのものも無くした。
 
 集計の1行のうち「kept from the published file」は比べない。dwloc の集計の1行には
 この項目が無い（上流の #10。いまの公開ファイルにだけある行を引き継ぐ処理は、この
@@ -169,7 +172,9 @@ func upstreamPublish(t *testing.T, name string, exp publishExpected, i int) publ
 
 // runFixturePublish は、上流の通しの実行と同じ並びのリポジトリを作り、
 // dwloc publish --no-game を走らせる。
-func runFixturePublish(t *testing.T, cases publishFixture, i int) publishView {
+//
+// extra は dwloc publish に足す指定（--accept-multiline など）。
+func runFixturePublish(t *testing.T, cases publishFixture, i int, extra ...string) publishView {
 	t.Helper()
 	c := cases.Cases[i]
 	published := "Translations/" + publishFixtureLocale + "/strings.csv"
@@ -191,7 +196,7 @@ func runFixturePublish(t *testing.T, cases publishFixture, i int) publishView {
 	}
 	root := makeTree(t, files)
 
-	code, stdout, stderr := runCLI("publish", "--root", root, "--no-game")
+	code, stdout, stderr := runCLI(append([]string{"publish", "--root", root, "--no-game"}, extra...)...)
 	switch code {
 	case exitOK:
 		m := dwlocSummary.FindStringSubmatch(strings.TrimSpace(strings.SplitN(stdout, "\n", 2)[0]))
@@ -283,11 +288,8 @@ type publishDiffKind string
 
 const (
 	// pubIntended は、上流と意図して違える点（docs/port-spec.md「上流と意図して
-	// 違える点」）。PR2 のあとも違う。
+	// 違える点」）。
 	pubIntended publishDiffKind = "意図して違える"
-	// pubPR2 は、PR2（publish・diff・order を全体を解釈する読み手へ移す）で
-	// 振る舞いが変わる箇所。
-	pubPR2 publishDiffKind = "PR2 で変わる"
 	// pubUndecided は、上流と違うが、違えてよいかをまだ決めていない点
 	// （docs/port-spec.md「上流と違うが未決の点」）。いまの振る舞いを固定する
 	// だけで、正しいとはしない。決まったら pubIntended へ移すか、直して表から外す。
@@ -297,48 +299,38 @@ const (
 // knownPublishDiff は、上流と違ってよい入力1つ。
 type knownPublishDiff struct {
 	kind publishDiffKind
-	// why はなぜ違うか。pubPR2 では、PR2 でどう変わる見込みかも書く。
+	// why はなぜ違うか。
 	why string
 	// diff は [describePublishDiff] の出力をそのまま固定したもの。
 	diff []string
 }
 
-// 上流と違う理由。pubPR2 では、PR2 でどう変わる見込みかも書く（見込みは
-// 決まったことからの推測で、PR2 の実装で確かめる）。
+// 上流と違う理由。
 const (
-	whyPubMultilineInput = "入力に、訳の入った行をまたぐレコードがあるので、形の確かめ (c) で止める。" +
-		"PR2 で全体を解釈して読むと止まらず、上流と同じバイトを書く見込み"
-	whyPubTwoColumnSource = "入力（source_en,translation の2列）に、訳の入った行をまたぐレコードがあるので (c) で止める。" +
-		"PR2 では正しい訳として読めるが、続きの行の区切りの数がヘッダーの列数（2）と同じなので、" +
-		"飲み込みの確かめ (f) で止まる見込み（確かめたうえで通す指定で書く）"
-	whyPubRowLikeContinuation = "原文の続きの行が、1行だけで読むとヘッダーと同じ7列のレコードに見える。いまは (c) で止める。" +
-		"PR2 でも飲み込みの確かめ (f) で止まる見込み（確かめたうえで通す指定で書く）"
-	whyPubMultilineCurrent = "いまの公開ファイルに行をまたぐレコードがあるので、形の確かめ (b) で止める。" +
-		"PR2 で (b) をやめると、上流と同じバイトを書く見込み"
+	whyPubAcceptable = "正しい複数行の値だが、続きの行が単独で読むとレコードに見える（2列の作業コピーでは" +
+		"区切りの数がヘッダーの列数 2 と同じ、7列では原文の2行目がカンマを多く含み7列）。飲み込みの確かめ (f) で止め、" +
+		"確かめたうえで通す指定（--accept-multiline）で上流と同じバイトを書く（[TestPublishAcceptMultilineMatchesUpstream]）"
 	whyPubHeaderColumns = "ヘッダーに key 列も source_en 列も無いか、translation 列が無いので、形の確かめ (a) で止める。" +
 		"上流はすべての行を捨て、ヘッダーとコメントだけを書く"
-	whyPubCRLFSource = "表計算ソフトで保存し直した形（原文の LF が CRLF）。いまは (c) で止める。" +
-		"PR2 では上流と同じくその行を落として書き、原文の CRLF を LF にするとキーが合うことを知らせる見込み"
 	whyPubUnclosed = "閉じない引用符 (e)。上流は後ろの行（英語の原文を含む）を訳に飲み込んで書く（上流の報告 #11）。" +
-		"dwloc は止める。PR2 でも止める（読み手の型付きの誤りを、終了コード1と直し方の案内にする）"
+		"dwloc は読み手の型付きの誤りを、形の確かめで終了コード1と直し方の案内にして止める。ヘッダーで開いたときは、" +
+		"列名にファイルの終わりまでが入るので、(a) の列が無いとは言わない"
 	whyPubSwallow = "引用符が別の行で閉じ、後ろの行を飲み込む形。上流は英語の原文やキーを訳に入れて書く。" +
-		"いまは (b)(c) で止める。PR2 でも止めるが、理由が飲み込みの確かめ (f) に変わる見込み"
-	whyPubLoneCRQuoted = "引用した訳の中の単独の CR。上流はその行を失う。いまは (c) で止める。" +
-		"PR2 でも止めるが、理由が単独の CR（LF に直す案内）に変わる見込み"
+		"dwloc は飲み込みの確かめ (f) で止める（csvfile.FindSwallows）。続きの行がレコードに見える形は" +
+		"確かめたうえで通す指定で通せるが、閉じ引用符の後ろに文字が続く形は通せない"
+	whyPubLoneCRQuoted = "引用した訳の中の単独の CR。上流はその行を失う（Remove-NonRecords が単独の CR を行末と見なさない）。" +
+		"dwloc は単独の CR として止め、LF に直すよう案内する（決まったことのそのほか 1）"
 	whyPubLoneCR         = "単独の CR も行の区切りにして読む。上流は単独の CR の手前を捨て、その行の訳を失う（上流の不具合。写さない）"
-	whyPubLoneCRUnquoted = "引用符で囲まない値の中の単独の CR（docs/port-spec.md の「残る隙間」。どちらの道具の書き手も" +
-		"作らない、手で書いた形）。dwloc は行の区切りとして値を切り、いまは切れた訳「い」を止めずに公開する。続きの「ち」は" +
-		"malformed dropped に数えるだけで、ほかに知らせない。ゲームは引用の外の CR を捨てて「いち」と読み、上流はその行を" +
-		"失う。PR2 で止める（PR0 のあとで決めた。単独の CR で終わるレコードの次のセグメントがレコードに見えなければ止め、" +
-		"CR を取り除くか値を引用符で囲むよう案内する。見つけるのは csvfile.FindCRCuts）"
+	whyPubLoneCRUnquoted = "引用符で囲まない値の中の単独の CR（どちらの道具の書き手も作らない、手で書いた形）。" +
+		"ゲームは引用の外の CR を捨てて「いち」と読み、上流はその行を失う。dwloc は行の区切りの規則のまま読むと" +
+		"切れた訳「い」を公開してしまうので、形の確かめ (g) で止め、CR を取り除くか値を引用符で囲むよう案内する" +
+		"（決まったことの 11 と 14。見つけるのは csvfile.FindCRCuts）"
 	whyPubCROnly     = "CR だけで改行したファイルも読む。上流は全行を失い、ヘッダーだけを書く（上流の不具合。写さない）"
 	whyPubCommaRow   = "',' だけの行を黙って落とす。上流は空のレコードとして malformed dropped に数える。違うのは集計の数だけ"
-	whyPubHashHeader = "'#' で始まるヘッダーをそのまま読み、source_en 列から訳を書く。上流はそのヘッダーを飛ばして" +
-		"データの行をヘッダーにし、何も書かない。いまの形の確かめ (a) は key 列も source_en 列も無いか、" +
-		"translation 列が無いときだけ止めるので、source_en 列と translation 列のあるこのヘッダーには当たらない。" +
-		"PR2 で (a) に「最初の列名が '#' で始まるヘッダー」の判定を足して止める。(a) を「key 列が無い」に広げると、" +
-		"正当な source_en,translation の2列の作業コピーまで止まるので、'#' を見る判定が別に要る。" +
-		"PR2 のあとでこの2件がまだ書くなら、その判定を入れ忘れている"
+	whyPubHashHeader = "'#' で始まるヘッダー（読んだ最初の列名が '#' で始まるもの）。上流はそのヘッダーを飛ばして" +
+		"データの行をヘッダーにし、訳を1行も公開しない。dwloc は写さず、形の確かめ (a) で止める（決まったことの 12 と 15）。" +
+		"(a) を「key 列が無い」に広げると、正当な source_en,translation の2列の作業コピーまで止まるので、" +
+		"'#' を見る判定を別に置く"
 	whyPubBareQuote = "裸の引用符の後ろのコメント行や見出しを、引用の外として落とす。上流はレコードとして読み、" +
 		"列が多ければ公開ファイルに書く（上流の不具合。写さない）"
 	whyPubCultureHash = "U+00AD のあとに '#' が続く行をデータとして読み、malformed dropped に数える。" +
@@ -351,47 +343,19 @@ const (
 
 // publishDiffs は、いまの dwloc publish が上流と違う入力。
 var publishDiffs = map[string]knownPublishDiff{
-	"ml-translation-lf": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	// 行をまたぐ訳・原文・台詞ID行の訳（ml-translation-*、ml-source-translated、
+	// ml-published-*、ml-hash-line-in-*、ml-line-id-translation）と、表計算ソフトで
+	// 保存し直した形（ml-source-crlf-key-mismatch。上流と同じくその行を落として書き、
+	// 原文の CRLF を LF にするとキーが合うことを知らせる）は、上流と同じバイトを書く
+	// ので、ここに無い。
+	"ml-source-translated-2col": {pubIntended, whyPubAcceptable, []string{
+		`上流 書く / dwloc 止まる（形: 入力 3〜5行目 publish_swallow_same_columns）`,
 	}},
-	"ml-translation-crlf": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
-	}},
-	"ml-translation-blank-lines": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜5行目 publish_multiline_translated）`,
-	}},
-	"ml-source-translated": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 3〜5行目 publish_multiline_translated）`,
-	}},
-	"ml-source-translated-2col": {pubPR2, whyPubTwoColumnSource, []string{
-		`上流 書く / dwloc 止まる（形: 入力 3〜5行目 publish_multiline_translated）`,
-	}},
-	"ml-translation-only-newline": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
-	}},
-	"ml-published-crlf": {pubPR2, whyPubMultilineCurrent, []string{
-		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
-	}},
-	"ml-hash-line-in-translation": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
-	}},
-	"ml-hash-line-in-published": {pubPR2, whyPubMultilineCurrent, []string{
-		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
-	}},
-	"ml-published-translation": {pubPR2, whyPubMultilineCurrent, []string{
-		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
-	}},
-	"ml-continuation-looks-like-row": {pubPR2, whyPubRowLikeContinuation, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
-	}},
-	"ml-line-id-translation": {pubPR2, whyPubMultilineInput, []string{
-		`上流 書く / dwloc 止まる（形: 入力 3〜4行目 publish_multiline_translated）`,
+	"ml-continuation-looks-like-row": {pubIntended, whyPubAcceptable, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_same_columns）`,
 	}},
 	"ml-header": {pubIntended, whyPubHeaderColumns, []string{
-		`上流 書く / dwloc 止まる（形: 入力 1行目 publish_no_translation_column）`,
-	}},
-	"ml-source-crlf-key-mismatch": {pubPR2, whyPubCRLFSource, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜4行目 publish_multiline_translated）`,
+		`上流 書く / dwloc 止まる（形: 入力 1〜2行目 publish_no_translation_column）`,
 	}},
 	"unclosed-to-eof": {pubIntended, whyPubUnclosed, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_unclosed_quote）`,
@@ -400,47 +364,45 @@ var publishDiffs = map[string]knownPublishDiff{
 		`上流 書く / dwloc 止まる（形: 公開ファイル 3行目 publish_unclosed_quote）`,
 	}},
 	"unclosed-header": {pubIntended, whyPubUnclosed, []string{
-		`上流 書く / dwloc 止まる（形: 入力 1行目 publish_no_translation_column、入力 1〜2行目 publish_unclosed_quote）`,
+		`上流 書く / dwloc 止まる（形: 入力 1〜2行目 publish_unclosed_quote）`,
 	}},
 	"unclosed-published-middle": {pubIntended, whyPubUnclosed, []string{
 		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜5行目 publish_unclosed_quote）`,
 	}},
-	"swallow-3col": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	"swallow-3col": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_same_columns）`,
 	}},
-	"swallow-7col-hash-close": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜4行目 publish_multiline_translated）`,
+	"swallow-7col-hash-close": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜4行目 publish_swallow_key_shaped）`,
 	}},
-	"swallow-2col-hash-close": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜4行目 publish_multiline_translated）`,
+	"swallow-2col-hash-close": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜4行目 publish_swallow_same_columns）`,
 	}},
-	"swallow-7col-empty-key-english": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	"swallow-7col-empty-key-english": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_same_columns）`,
 	}},
-	"swallow-6col-published": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
+	"swallow-6col-published": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_swallow_same_columns）`,
 	}},
-	"swallow-2col-own-quote": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	"swallow-2col-own-quote": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_text_after_quote）`,
 	}},
-	"swallow-7col-empty-key-own-quote": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	"swallow-7col-empty-key-own-quote": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_text_after_quote）`,
 	}},
-	"swallow-6col-published-own-quote": {pubPR2, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
+	"swallow-6col-published-own-quote": {pubIntended, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_swallow_text_after_quote）`,
 	}},
-	"lone-cr-in-quoted-translation": {pubPR2, whyPubLoneCRQuoted, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	"lone-cr-in-quoted-translation": {pubIntended, whyPubLoneCRQuoted, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_lone_cr）`,
 	}},
 	"lone-cr-line-end": {pubIntended, whyPubLoneCR, []string{
 		`already hashed: 上流 2 / dwloc 3`,
 		`other: 上流 2 / dwloc 3`,
 		`出力の 4 行目: 上流 "fedcba9876543210,UI,,,UI,b" / dwloc "0123456789abcdef,UI,,,UI,a"`,
 	}},
-	"lone-cr-unquoted-value": {pubPR2, whyPubLoneCRUnquoted, []string{
-		`malformed dropped: 上流 0 / dwloc 1`,
-		`in play order: 上流 1 / dwloc 2`,
-		`出力の 7 行目: 上流 "3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に" / dwloc "7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,い"`,
+	"lone-cr-unquoted-value": {pubIntended, whyPubLoneCRUnquoted, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2行目 publish_cr_cut）`,
 	}},
 	"cr-only-published": {pubIntended, whyPubCROnly, []string{
 		`already hashed: 上流 0 / dwloc 2`,
@@ -459,22 +421,16 @@ var publishDiffs = map[string]knownPublishDiff{
 	"hash-header-unquoted": {pubIntended, whyPubHeaderColumns, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2行目 publish_no_key_column、入力 2行目 publish_no_translation_column）`,
 	}},
-	"hash-header-quoted": {pubPR2, whyPubHashHeader, []string{
-		`converted: 上流 0 / dwloc 2`,
-		`malformed dropped: 上流 1 / dwloc 0`,
-		`in play order: 上流 0 / dwloc 2`,
-		`出力の 5 行目: 上流 "（無い）" / dwloc "# ===== Level 1: Ember (Rainy) ====="`,
+	"hash-header-quoted": {pubIntended, whyPubHashHeader, []string{
+		`上流 書く / dwloc 止まる（形: 入力 1行目 publish_hash_header）`,
 	}},
-	"hash-header-leading-space": {pubPR2, whyPubHashHeader, []string{
-		`converted: 上流 0 / dwloc 2`,
-		`malformed dropped: 上流 1 / dwloc 0`,
-		`in play order: 上流 0 / dwloc 2`,
-		`出力の 5 行目: 上流 "（無い）" / dwloc "# ===== Level 1: Ember (Rainy) ====="`,
+	"hash-header-leading-space": {pubIntended, whyPubHashHeader, []string{
+		`上流 書く / dwloc 止まる（形: 入力 1行目 publish_hash_header）`,
 	}},
 	// hash-header-quoted-space と hash-header-nbsp は、上流と同じバイトを書くので
 	// ここに無い。上流はそのヘッダーを飛ばさない（読んだ最初の値が '#' で始まらない）。
-	// PR2 で (a) に足す csvfile.PowerShellHeader.CommentLike も読んだ最初の値そのもので
-	// 見るので、PR2 のあとも止まらずに上流と同じに書く。
+	// (a) の csvfile.PowerShellHeader.CommentLike も読んだ最初の値そのもので見るので、
+	// 止まらずに上流と同じに書く（決まったことの 15）。
 	"bare-quote-then-comment": {pubIntended, whyPubBareQuote, []string{
 		`converted: 上流 1 / dwloc 0`,
 		`other: 上流 3 / dwloc 2`,
@@ -524,6 +480,31 @@ func TestPublishAgainstUpstream(t *testing.T) {
 		}
 	}
 	t.Logf("上流と違う入力: %v（全 %d 件）", counts, len(cases.Cases))
+}
+
+// acceptableFixtures は、正しい複数行の値なのに飲み込みの確かめ (f) が当たる入力。
+// 表では「意図して違える」（止まる）として固定し、確かめたうえで通す指定で書けることを
+// [TestPublishAcceptMultilineMatchesUpstream] で固定する。
+var acceptableFixtures = []string{"ml-continuation-looks-like-row", "ml-source-translated-2col"}
+
+// TestPublishAcceptMultilineMatchesUpstream は、正しい複数行の値なのに飲み込みの確かめで
+// 止まる入力が、確かめたうえで通す指定（--accept-multiline）を付けると、上流と同じ
+// バイトと集計で書けることを見る（決まったことの 4）。
+func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
+	cases, exp := loadPublishFixture(t)
+	for _, name := range acceptableFixtures {
+		i := slices.IndexFunc(cases.Cases, func(c publishFixtureCase) bool { return c.Name == name })
+		if i < 0 {
+			t.Fatalf("入力の表に %s が無い", name)
+		}
+		if pin, ok := publishDiffs[name]; !ok || pin.kind != pubIntended || pin.why != whyPubAcceptable {
+			t.Errorf("%s: 表で、確かめたうえで通す形として止めることを固定していない: %+v", name, pin)
+		}
+		got := runFixturePublish(t, cases, i, "--accept-multiline", publishFixtureLocale)
+		if d := describePublishDiff(upstreamPublish(t, name, exp, i), got); len(d) > 0 {
+			t.Errorf("%s: 通す指定を付けても上流と違う\n%s", name, quotePublishLines(d))
+		}
+	}
 }
 
 // portSpecPath は移植仕様。表の分類を、仕様の表と突き合わせるのに使う。
@@ -578,8 +559,7 @@ func specInputs(t *testing.T, spec, heading string) map[string]bool {
 // 「意図して違える」と「未決」は、どちらも違い方を固定するだけで試験の結果は
 // 変わらない。そのため分類を取り違えても [TestPublishAgainstUpstream] は落ちず、
 // まだ決めていない違いが、仕様の上で決まったように読まれる。仕様の2つの表と
-// 分類がそろっていることを、ここで確かめる。PR2 で変わる行は、止まることを
-// 意図した違い（飲み込みなど）として仕様の表に載ることがあるので見ない。
+// 分類がそろっていることを、ここで確かめる。
 func TestPublishDiffKindsMatchPortSpec(t *testing.T) {
 	raw, err := os.ReadFile(portSpecPath)
 	if err != nil {

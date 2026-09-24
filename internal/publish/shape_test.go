@@ -46,9 +46,13 @@ func hazardsOf(found []Hazard) []wantHazard {
 //
 // 名前の p- で始まるものは、報告と検証が上流の hash-strings.ps1 と dwloc の
 // 両方に通した入力そのもの（英文は架空）。止めないものについては、組み立てた
-// 中身が守りを入れる前の dwloc と1バイトも変わらないことも見る（wantOut。
-// 守りを入れる前の dwloc で書き出したものを写してある）。wantOut が空のものは、
-// 形は通るが、訳が失われる確かめ（[CheckLoss]）で止まる入力で、書き出されない。
+// 中身も見る（wantOut）。wantOut が空のものは、形は通るが、訳が失われる確かめ
+// （[CheckLoss]）で止まる入力で、書き出されない。
+//
+// 行をまたぐ値は、全体を解釈する読み手へ移ってから、上流 main と同じく正しい値と
+// して読み書きする（p-multiline-published、p-multiline-source、p-hash-in-quotes）。
+// 行単位で読んでいたときは、訳が1行目で切り詰められるので形の確かめ (b)(c) で
+// 止めていた。
 func TestCheckTargetShapeUpstreamCases(t *testing.T) {
 	keyOne, keyTwo := key.For("one"), key.For("two")
 	tests := []struct {
@@ -64,20 +68,19 @@ func TestCheckTargetShapeUpstreamCases(t *testing.T) {
 			published: shapeH6 + shapeK1 + ",UI,,,UI,a\nHello there,UI,,,UI,こんにちは\n",
 		},
 		{
-			// 1行ずつ読むと訳が line1 に切り詰められ、いまの公開ファイルも同じく
-			// 読むので、守りを入れる前は終了コード0で書いていた。
+			// 行をまたぐ訳は、全体を解釈して1つの訳として読み、そのまま書く。
 			name:      "p-multiline-published",
 			published: shapeH6 + shapeK1 + ",UI,,,UI,\"line1\nline2\"\n" + shapeK2 + ",UI,,,UI,b\n",
-			want:      []wantHazard{{reason.PublishMultilineCurrent, 2, 3, true}},
+			wantOut:   shapeH6 + shapeK1 + ",,,,UI,\"line1\nline2\"\n" + shapeK2 + ",,,,UI,b\n",
 		},
 		{
-			// 原文が行をまたぎ、訳が入っている。1行ずつ読むと行ごと捨てられ、
-			// 新しい訳が公開ファイルに届かないまま終了コード0だった。
+			// 原文が行をまたぎ、訳が入っている。行単位で読んでいたときは行ごと
+			// 捨てられ、新しい訳が公開ファイルに届かないまま終了コード0だった。
 			name:      "p-multiline-source",
 			published: shapeH6 + keyOne + ",UI,,,UI,a\n",
 			working: shapeWorkingCRLF + keyOne + ",UI,,,UI,one,a\r\n" +
 				key.For(shapeMultiSource) + ",UI,,,UI,\"" + shapeMultiSource + "\",訳\r\n",
-			want: []wantHazard{{reason.PublishMultilineTranslated, 3, 5, false}},
+			wantOut: shapeH6 + keyOne + ",,,,UI,a\n" + key.For(shapeMultiSource) + ",,,,UI,訳\n",
 		},
 		{
 			// ゲーム側の作業コピーの実物と同じ形（区切りは CRLF、値の中は LF、
@@ -111,13 +114,13 @@ func TestCheckTargetShapeUpstreamCases(t *testing.T) {
 			wantOut:   shapeH6 + shapeK1 + ",,,,UI,a\n",
 		},
 		{
+			// 引用の中の '#' で始まる行は値の一部で、コメントではない。
 			name:      "p-hash-in-quotes",
 			published: shapeH6 + shapeK1 + ",UI,,,UI,\"first\n#second\"\n" + shapeK2 + ",UI,,,UI,b\n",
-			want:      []wantHazard{{reason.PublishMultilineCurrent, 2, 3, true}},
+			wantOut:   shapeH6 + shapeK1 + ",,,,UI,\"first\n#second\"\n" + shapeK2 + ",,,,UI,b\n",
 		},
 		{
-			// 引用符なしのフィールドの途中の '"' は引用を開かない。偶奇だけを
-			// 数えると止めてしまうが、どちらの読み方でも値は同じ。
+			// 引用符なしのフィールドの途中の '"' は引用を開かない。
 			name:      "p-bare-quote",
 			published: shapeH6 + shapeK1 + ",UI,,,UI,5\" screen\n\n# ===== UI and other text =====\n" + shapeK2 + ",UI,,,UI,b\n",
 			wantOut:   shapeH6 + shapeK1 + ",,,,UI,\"5\"\" screen\"\n" + shapeK2 + ",,,,UI,b\n",
@@ -148,16 +151,17 @@ func TestCheckTargetShapeUpstreamCases(t *testing.T) {
 			wantOut:   shapeH6 + shapeK1 + ",,,,UI,a2\n" + key.For("hello") + ",,,,UI,x\n",
 		},
 		{
-			// 引用の中の単独の CR も、行単位の読み手は行の区切りにする。
+			// 引用の中の単独の CR は値に残る。上流の道具はその行を落とすので止める。
 			name:      "lone-cr-in-value",
 			published: shapeH6 + shapeK1 + ",UI,,,UI,\"a\rb\"\n" + shapeK2 + ",UI,,,UI,b\n",
-			want:      []wantHazard{{reason.PublishMultilineCurrent, 2, 3, true}},
+			want:      []wantHazard{{reason.PublishLoneCR, 2, 3, true}},
 		},
 		{
+			// 原文の単独の CR も、訳の入った行なら止める。上流の道具は行ごと落とす。
 			name:      "lone-cr-wc-source",
 			published: shapeH6 + shapeK1 + ",UI,,,UI,a\n",
 			working:   "key,source_en,translation\n" + shapeK1 + ",,a2\n" + key.For("he\rllo") + ",\"he\rllo\",x\n",
-			want:      []wantHazard{{reason.PublishMultilineTranslated, 3, 4, false}},
+			want:      []wantHazard{{reason.PublishLoneCR, 3, 4, false}},
 		},
 		{
 			name:      "published-hash-quoted-translation",
@@ -199,7 +203,7 @@ func TestCheckTargetShapeUpstreamCases(t *testing.T) {
 				if h.Current {
 					wantPath = target.Output
 				}
-				if h.Locale != "xx" || h.Path != wantPath {
+				if h.Locale != "xx" || h.Path != wantPath || h.GameBase {
 					t.Errorf("どのファイルかが違う: %+v", h)
 				}
 			}
@@ -236,16 +240,15 @@ func shapeTarget(t *testing.T, published, working string) Target {
 	return targets[0]
 }
 
-// TestCheckInputShapeKeepsTheRealWorkingCopyShape は、ゲーム側の作業コピーの
+// TestCheckShapeKeepsTheRealWorkingCopyShape は、ゲーム側の作業コピーの
 // 実物と同じ形の入力で止まらず、組み立てた中身も変わらないことを固定する。
 //
 // 実物（ゲーム側の ja.working.csv）には、原文（source_en）が行をまたいで空行を
-// 挟み、訳が空のレコードが1件ある。区切りは CRLF、値の中は LF である。その
-// レコードは、1行ずつ読むと行ごと捨てられ（malformed dropped が2件増える）、
-// 全体を読めば訳の空の行になる。どちらでも公開されないので、出力は同じになる。
-// ここで止めると、翻訳者には直せない（原文を変えるとキーが変わる）理由で、
-// そのロケールの publish が常に塞がる（検証の指摘 high）。
-func TestCheckInputShapeKeepsTheRealWorkingCopyShape(t *testing.T) {
+// 挟み、訳が空のレコードが1件ある。区切りは CRLF、値の中は LF である。全体を
+// 解釈して読むと訳の空の行になり、公開されないので、出力は同じになる。ここで
+// 止めると、翻訳者には直せない（原文を変えるとキーが変わる）理由で、そのロケールの
+// publish が常に塞がる（検証の指摘 high）。
+func TestCheckShapeKeepsTheRealWorkingCopyShape(t *testing.T) {
 	multi := key.For(shapeMultiSource) + ",UI,,,UI,\"" + shapeMultiSource + "\",\r\n"
 	before := shapeWorkingCRLF +
 		key.For("one") + ",UI,,,UI,one,いち\r\n" +
@@ -255,11 +258,7 @@ func TestCheckInputShapeKeepsTheRealWorkingCopyShape(t *testing.T) {
 	withMulti := before + multi + after
 	without := before + after
 
-	found, err := CheckInputShape([]byte(withMulti))
-	if err != nil {
-		t.Fatalf("CheckInputShape: %v", err)
-	}
-	if len(found) != 0 {
+	if found := CheckShape([]byte(withMulti)); len(found) != 0 {
 		t.Fatalf("実物と同じ形で止めている: %+v", found)
 	}
 
@@ -312,6 +311,48 @@ func TestCheckShapeHeaders(t *testing.T) {
 			},
 		},
 		{
+			// 最後の列名が行をまたぐ。列名に改行が入り、translation 列を引けない。
+			name:  "ヘッダーが行をまたぐ",
+			input: "key,source_en,\"trans\nlation\"\none,いち\n",
+			want:  []wantHazard{{reason.PublishNoTranslationColumn, 1, 2, false}},
+		},
+		{
+			// 上流はこのヘッダーを飛ばし、次の行をヘッダーにするので、訳を1行も公開
+			// しない（hash-header-quoted。決まったことの 12 と 15）。
+			name:  "引用符で囲んだ '#' で始まる列名",
+			input: "\"#key\",source_en,translation\n" + key.For("one") + ",one,いち\n",
+			want:  []wantHazard{{reason.PublishHashHeader, 1, 1, false}},
+		},
+		{
+			// 先頭の半角空白は読み手が落とすので、読んだ列名は '#' で始まる
+			// （hash-header-leading-space）。
+			name:  "空白のあとの '#' で始まる列名",
+			input: " #key,source_en,translation\n" + key.For("one") + ",one,いち\n",
+			want:  []wantHazard{{reason.PublishHashHeader, 1, 1, false}},
+		},
+		{
+			// 引用の中の空白のあとの '#' は、上流も飛ばさずその名前の列にし、source_en
+			// から訳を書く（hash-header-quoted-space）。訳を失う形ではないので止めない。
+			name:  "引用の中の空白のあとの '#'",
+			input: "\" #key\",source_en,translation\n" + key.For("one") + ",one,いち\n",
+		},
+		{
+			// 行頭の '#' はコメントとして落ち、次の行がヘッダーになる（hash-header-unquoted）。
+			name:  "行頭の '#' のヘッダー",
+			input: "#key,source_en,translation\n" + key.For("one") + ",one,いち\n",
+			want: []wantHazard{
+				{reason.PublishNoKeyColumn, 2, 2, false},
+				{reason.PublishNoTranslationColumn, 2, 2, false},
+			},
+		},
+		{
+			// ヘッダーの中で開いた引用符が閉じない。列名にファイルの終わりまでが
+			// 入っているので、列が無いとは言わず、閉じない引用符だけを出す。
+			name:  "ヘッダーの引用符が閉じない",
+			input: "key,\"source_en,translation\n" + key.For("one") + ",one,いち\n",
+			want:  []wantHazard{{reason.PublishUnclosedQuote, 1, 2, false}},
+		},
+		{
 			name:  "列名の大文字小文字は問わない",
 			input: "Key,Source_EN,Translation\n" + shapeK1 + ",,a\n",
 		},
@@ -327,172 +368,264 @@ func TestCheckShapeHeaders(t *testing.T) {
 			name:  "中身が無ければ見ない",
 			input: "# comment\n\n",
 		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			for _, current := range []bool{false, true} {
-				check := CheckInputShape
-				if current {
-					check = CheckCurrentShape
-				}
-				found, err := check([]byte(tt.input))
-				if err != nil {
-					t.Fatalf("current=%v: %v", current, err)
-				}
-				// CheckCurrentShape の Current を埋めるのは呼び出し側なので、ここは false のまま。
-				if got := hazardsOf(found); !slices.Equal(got, tt.want) {
-					t.Errorf("current=%v\n got %+v\nwant %+v", current, got, tt.want)
-				}
-			}
-		})
-	}
-}
-
-// TestCheckInputShapeMultiline は (c) の細部を見る。
-func TestCheckInputShapeMultiline(t *testing.T) {
-	// 続きの行が、1行ずつ読むと別のキー（shapeK2）の訳 y" として読まれる原文。
-	tricky := "x\n" + shapeK2 + ",,y"
-	tests := []struct {
-		name  string
-		input string
-		want  []wantHazard
-	}{
 		{
-			// 行をまたぐレコードの訳は空だが、1行ずつ読むと続きの行が訳のある行になる。
-			name:  "続きの行が別の訳として読まれる",
-			input: "key,source_en,translation\n" + key.For(tricky) + ",\"" + tricky + "\",\n",
-			want:  []wantHazard{{reason.PublishMultilineDiverges, 2, 3, false}},
-		},
-		{
-			// 訳そのものが行をまたぐ。1行ずつ読むと1行目で切り詰められる。
-			name:  "訳そのものが行をまたぐ",
-			input: "key,translation\n" + shapeK1 + ",\"a\r\nb\"\r\n",
-			want:  []wantHazard{{reason.PublishMultilineTranslated, 2, 3, false}},
-		},
-		{
-			// 台詞ID行の訳が行をまたぐ場合も同じ。
-			name:  "台詞ID行の訳が行をまたぐ",
-			input: "key,translation\nline:aaaaaaaa,\"a\nb\"\n",
-			want:  []wantHazard{{reason.PublishMultilineTranslated, 2, 3, false}},
-		},
-		{
-			// ヘッダーが行をまたぐと、1行ずつ読んだヘッダーからは translation 列を
-			// 引けない。全体を読むと訳が出てくるので、食い違いとしても止まる。
-			name:  "ヘッダーが行をまたぐ",
-			input: "key,\"source\n_en\",translation\n" + shapeK1 + ",,a\n",
-			want: []wantHazard{
-				{reason.PublishNoTranslationColumn, 1, 1, false},
-				{reason.PublishMultilineDiverges, 1, 2, false},
-			},
-		},
-		{
-			// 1つは訳が入っていて、もう1つは続きの行が別の訳になる。両方を出す。
-			name: "2つのレコードがそれぞれ別の理由で当たる",
-			input: "key,source_en,translation\n" +
-				shapeK1 + ",,\"a\nb\"\n" +
-				key.For(tricky) + ",\"" + tricky + "\",\n",
-			want: []wantHazard{
-				{reason.PublishMultilineTranslated, 2, 3, false},
-				{reason.PublishMultilineDiverges, 4, 5, false},
-			},
-		},
-		{
-			// 閉じない引用符があると、全体の読み方は後ろを飲み込むので突き合わせない。
-			// 訳の入った行をまたぐレコードは、それとは別に出す。
-			name: "閉じない引用符の前に訳の入った行をまたぐレコード",
-			input: "key,translation\n" +
-				shapeK1 + ",\"a\nb\"\n" +
-				shapeK2 + ",\"c\n",
-			want: []wantHazard{
-				{reason.PublishMultilineTranslated, 2, 3, false},
-				{reason.PublishUnclosedQuote, 4, 4, false},
-			},
-		},
-		{
-			// 訳の空の行をまたぐレコードの後ろに、閉じない引用符がある。全体の読み方は
-			// 閉じない引用符から後ろを飲み込むので、突き合わせると訳が食い違って見え、
-			// 行をまたぐレコードのほうを「別の訳として読まれる」と誤って指してしまう。
-			// 閉じない引用符は (e) だけで出す。
-			name: "閉じない引用符があれば訳を突き合わせない",
-			input: "key,source_en,translation\n" +
-				key.For("x\ny") + ",\"x\ny\",\n" +
-				key.For("two") + ",two,\"c\n",
-			want: []wantHazard{{reason.PublishUnclosedQuote, 4, 4, false}},
-		},
-		{
-			// 行をまたいでから閉じないレコードに訳がある。そのレコードは (e) で出し、
-			// (c) の「訳が入っている」では重ねて出さない。範囲が同じ2件が並ぶと、
-			// 同じ行を2回直すよう読めてしまう。
-			name: "行をまたいでから閉じないレコードに訳がある",
-			input: "key,source_en,translation\n" +
-				key.For("x\ny") + ",\"x\ny\",\n" +
-				key.For("two") + ",two,\"c\nd\n",
-			want: []wantHazard{{reason.PublishUnclosedQuote, 4, 5, false}},
+			// 列名の重複は、ここでは見ない（組み立てと失われる訳の確かめが誤りにする）。
+			name:  "列名の重複",
+			input: "key,Key,translation\n" + shapeK1 + "," + shapeK1 + ",a\n",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			found, err := CheckInputShape([]byte(tt.input))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := hazardsOf(found); !slices.Equal(got, tt.want) {
+			if got := hazardsOf(CheckShape([]byte(tt.input))); !slices.Equal(got, tt.want) {
 				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestSameTranslationsFallsBackToTheFirstSpan は、どのレコードのせいかを決め
-// られない食い違いでも止めることを見る。
+// TestCheckShapeMultilineValues は、行をまたぐ値のうち、正しい値として通すものと、
+// 飲み込み (f) として止めるものを見る。
 //
-// 食い違いは行をまたぐレコードからしか生まれないので、ふつうは範囲の中に
-// 訳として読まれる行が見つかる。見つからないときでも、食い違いがあることは
-// 確かなので、最初のレコードを指して止める。
-func TestSameTranslationsFallsBackToTheFirstSpan(t *testing.T) {
-	// 全体を読むと、訳の空のレコードが2〜3行目にまたがる（またいでいるのは note 列）。
-	whole := csvfile.ReadPowerShellWhole([]byte("key,translation,note\n" + shapeK1 + ",,\"x\ny\"\n"))
-	// 1行ずつ読んだ結果は手で作り、範囲の外に訳のある行を置く。
-	table := csvfile.PowerShellTable{Header: []string{"key", "translation"}, HeaderLine: 1}
-	table.Rows = []csvfile.NumberedRow{{Row: csvfile.NewRow(table.Header, []string{shapeK2, "b"}), Line: 9}}
-
-	got := hazardsOf(multilineInputHazards(table, whole))
-	want := []wantHazard{{reason.PublishMultilineDiverges, 2, 3, false}}
-	if !slices.Equal(got, want) {
-		t.Errorf("\n got %+v\nwant %+v", got, want)
-	}
-}
-
-// TestSameTranslations は、訳の突き合わせが見るものと見ないものを固定する。
-func TestSameTranslations(t *testing.T) {
-	header := []string{"key", "speaker", "translation"}
-	rows := func(recs ...[]string) *collected {
-		var out []csvfile.Row
-		for _, r := range recs {
-			out = append(out, csvfile.NewRow(header, r))
-		}
-		return collectRows(out)
-	}
-	base := rows([]string{shapeK1, "UI", "a"}, []string{"line:aaaaaaaa", "", "せりふ"})
-
+// 飲み込みの見分けは csvfile.FindSwallows で、ここでは publish がそれを理由つきの
+// Hazard にし、飲み込まれたと疑う物理行ごとに1件を返すことを固定する。範囲は
+// 飲み込んだレコードの物理行で、疑う物理行は理由の置換 line に入る。
+func TestCheckShapeMultilineValues(t *testing.T) {
+	keyOne, keyTwo, keyThree := key.For("one"), key.For("two"), key.For("three")
 	tests := []struct {
 		name  string
-		other *collected
-		same  bool
+		input string
+		want  []wantHazard
+		// lines は、飲み込みの理由の置換 line に入っているはずの物理行。
+		lines []string
 	}{
-		{"同じ", rows([]string{shapeK1, "UI", "a"}, []string{"line:aaaaaaaa", "", "せりふ"}), true},
-		// 並びと speaker は見ない。変わっても訳は失われない。
-		{"並びと speaker が違う", rows([]string{"line:AAAAAAAA", "", "せりふ"}, []string{shapeK1, "Ryan", "a"}), true},
-		{"訳が違う", rows([]string{shapeK1, "UI", "b"}, []string{"line:aaaaaaaa", "", "せりふ"}), false},
-		{"キーが違う", rows([]string{shapeK2, "UI", "a"}, []string{"line:aaaaaaaa", "", "せりふ"}), false},
-		{"台詞ID行の訳が違う", rows([]string{shapeK1, "UI", "a"}, []string{"line:aaaaaaaa", "", "ちがう"}), false},
-		{"台詞IDが違う", rows([]string{shapeK1, "UI", "a"}, []string{"line:bbbbbbbb", "", "せりふ"}), false},
-		{"行が少ない", rows([]string{shapeK1, "UI", "a"}), false},
+		{
+			name:  "訳が行をまたぐ",
+			input: "key,translation\n" + shapeK1 + ",\"a\r\nb\"\r\n",
+		},
+		{
+			name:  "台詞ID行の訳が行をまたぐ",
+			input: "key,translation\nline:aaaaaaaa,\"a\nb\"\n",
+		},
+		{
+			// 値の中の '#' で始まる行と空行は、単独で読んでもレコードにならない。
+			name:  "訳の中の '#' の行と空行",
+			input: "key,translation\n" + shapeK1 + ",\"a\n\n# b\"\n",
+		},
+		{
+			// 閉じ忘れた引用符が、次の行（キーの形で始まる）を飲み込み、'#' の行の
+			// 引用符で閉じる（swallow-7col-hash-close と同じ形）。
+			name: "キーの形の行を飲み込む",
+			input: shapeWorkingCRLF +
+				keyOne + ",UI,,,UI,one,\"いち\r\n" +
+				keyTwo + ",UI,,,UI,two,\r\n" +
+				"# note \"\r\n" +
+				keyThree + ",UI,,,UI,three,さん\r\n",
+			want:  []wantHazard{{reason.PublishSwallowKeyShaped, 2, 4, false}},
+			lines: []string{"3"},
+		},
+		{
+			// 2列の作業コピーで次の行を飲み込む（swallow-2col-hash-close と同じ形）。
+			// キーの形でなくても、区切りの数がヘッダーと同じならレコードに見える。
+			name:  "ヘッダーと同じ列の数の行を飲み込む",
+			input: "source_en,translation\none,\"いち\ntwo,\n# note \"\nthree,さん\n",
+			want:  []wantHazard{{reason.PublishSwallowSameColumns, 2, 4, false}},
+			lines: []string{"3"},
+		},
+		{
+			// 飲み込まれた行が自分の値を引用符で開く（swallow-2col-own-quote と同じ形）。
+			name:  "閉じ引用符の後ろに文字が続く",
+			input: "source_en,translation\none,\"いち\n\"Alpha line\nBeta line\",に\ntwo,さん\n",
+			want:  []wantHazard{{reason.PublishSwallowTextAfterQuote, 2, 3, false}},
+			lines: []string{"3"},
+		},
+		{
+			// 1つのレコードが2つの行を飲み込めば、行ごとに1件ずつ出す。
+			name: "2つの行を飲み込む",
+			input: "key,source_en,translation\n" +
+				keyOne + ",one,\"いち\n" +
+				keyTwo + ",two,に\n" +
+				keyThree + ",three,さん\"\n",
+			want: []wantHazard{
+				{reason.PublishSwallowKeyShaped, 2, 4, false},
+				{reason.PublishSwallowKeyShaped, 2, 4, false},
+			},
+			lines: []string{"3", "4"},
+		},
+		{
+			// 閉じない引用符のレコードは飲み込みとして見ない。(e) だけで出す。
+			name:  "閉じない引用符",
+			input: "key,source_en,translation\n" + keyOne + ",one,\"いち\n" + keyTwo + ",two,に\n",
+			want:  []wantHazard{{reason.PublishUnclosedQuote, 2, 3, false}},
+		},
+		{
+			// 閉じない引用符の前にある飲み込みは出す。
+			name: "閉じない引用符の前の飲み込み",
+			input: "key,source_en,translation\n" +
+				keyOne + ",one,\"いち\n" + keyTwo + ",two,に\"\n" +
+				keyThree + ",three,\"さん\n",
+			want: []wantHazard{
+				{reason.PublishSwallowKeyShaped, 2, 3, false},
+				{reason.PublishUnclosedQuote, 4, 4, false},
+			},
+			lines: []string{"3"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := sameTranslations(base, tt.other); got != tt.same {
-				t.Errorf("sameTranslations = %v, want %v", got, tt.same)
+			found := CheckShape([]byte(tt.input))
+			if got := hazardsOf(found); !slices.Equal(got, tt.want) {
+				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
+			}
+			var lines []string
+			for _, h := range found {
+				if strings.HasPrefix(h.Why.ID, "publish_swallow_") {
+					if len(h.Why.Args) != 2 || h.Why.Args[0] != "line" {
+						t.Errorf("置換 line が無い: %+v", h.Why)
+						continue
+					}
+					lines = append(lines, h.Why.Args[1])
+					if !strings.HasPrefix(h.Why.Text, h.Why.Args[1]+"行目") {
+						t.Errorf("文面が疑う物理行から始まらない: %q", h.Why.Text)
+					}
+				}
+			}
+			if !slices.Equal(lines, tt.lines) {
+				t.Errorf("疑う物理行 = %v、want %v", lines, tt.lines)
+			}
+		})
+	}
+}
+
+// TestHazardAcceptable は、確かめたうえで通す指定で通せる形を固定する。
+//
+// 通せるのは、続きの行が単独で読むとレコードに見える形だけである。正当な複数行の
+// 値でも当たる（ml-continuation-looks-like-row、ml-source-translated-2col）。
+// 閉じ引用符の後ろに文字が続く形は、どの書き手も作らないので通させない。
+func TestHazardAcceptable(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{reason.PublishSwallowKeyShaped, true},
+		{reason.PublishSwallowSameColumns, true},
+		{reason.PublishSwallowTextAfterQuote, false},
+		{reason.PublishUnclosedQuote, false},
+		{reason.PublishLoneCR, false},
+		{reason.PublishCRCut, false},
+		{reason.PublishHashHeader, false},
+		{reason.PublishNoKeyColumn, false},
+		{reason.PublishRowsUnread, false},
+	} {
+		if got := (Hazard{Why: reason.New(tc.id, "")}).Acceptable(); got != tc.want {
+			t.Errorf("%s: Acceptable = %v、want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
+// TestCheckShapeLoneCR は (g) のうち、値の中の単独の CR を見る。
+func TestCheckShapeLoneCR(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []wantHazard
+		// column は理由の置換 column に入っているはずの列名。
+		column string
+	}{
+		{
+			name:   "訳の中の単独の CR",
+			input:  "key,translation\n" + shapeK1 + ",\"い\rち\"\n",
+			want:   []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
+			column: "translation",
+		},
+		{
+			// 訳の入った行なら、ほかの列の単独の CR でも止める。上流の道具は行ごと落とす。
+			name:   "訳の入った行の speaker の単独の CR",
+			input:  "key,speaker,translation\n" + shapeK1 + ",\"U\rI\",訳\n",
+			want:   []wantHazard{{reason.PublishLoneCR, 2, 3, false}},
+			column: "speaker",
+		},
+		{
+			// 訳の空の行はどちらの道具でも公開されないので止めない。原文は翻訳者には
+			// 直せない（直すとキーが変わる）。
+			name:  "訳の空の行の原文の単独の CR",
+			input: "key,source_en,translation\n" + key.For("a\rb") + ",\"a\rb\",\n",
+		},
+		{
+			// CRLF と LF は単独の CR ではない。
+			name:  "値の中の CRLF",
+			input: "key,translation\n" + shapeK1 + ",\"い\r\nち\"\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			found := CheckShape([]byte(tt.input))
+			if got := hazardsOf(found); !slices.Equal(got, tt.want) {
+				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
+			}
+			for _, h := range found {
+				if !slices.Equal(h.Why.Args, []string{"column", tt.column}) {
+					t.Errorf("置換が違う: %+v", h.Why.Args)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckShapeCRCut は (g) のうち、引用の外の単独の CR で切れた値を見る
+// （決まったことの 11 と 14）。見分けは csvfile.FindCRCuts で、ここでは publish が
+// それを止める理由にすることと、ファイルで分けることを固定する。
+func TestCheckShapeCRCut(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []wantHazard
+		// next は理由の置換 line に入っているはずの物理行。
+		next string
+	}{
+		{
+			// lone-cr-unquoted-value と同じ形。ゲームは「いち」と読み、publish は「い」を書く。
+			name: "値の途中の単独の CR",
+			input: shapeWorkingCRLF + key.For("one") + ",UI,,,UI,one,い\rち\r\n" +
+				key.For("two") + ",UI,,,UI,two,に\r\n",
+			want: []wantHazard{{reason.PublishCRCut, 2, 2, false}},
+			next: "3",
+		},
+		{
+			// 値が CR の直後の '#' で切れる。後半はコメントとして落ちる。
+			name: "CR の直後が '#'",
+			input: "key,translation\n" + shapeK1 + ",い\r# ち\n" +
+				shapeK2 + ",に\n",
+			want: []wantHazard{{reason.PublishCRCut, 2, 2, false}},
+			next: "3",
+		},
+		{
+			// 訳の空の行でも止める。切れた後半が訳を持つことがある。
+			name:  "切れた後半に訳がある",
+			input: "key,source_en,translation\n" + key.For("one") + ",o\rne,訳\n",
+			want:  []wantHazard{{reason.PublishCRCut, 2, 2, false}},
+			next:  "3",
+		},
+		{
+			// 行の区切りがすべて単独の CR のファイルは、CR だけの改行のファイルとして読む。
+			name:  "CR だけの改行のファイル",
+			input: "key,translation\r# ===== L =====\r" + shapeK1 + ",a\r\r" + shapeK2 + ",b\r",
+		},
+		{
+			// lone-cr-line-end と同じ形。次の行がレコードに見えるので、改行しただけと見る。
+			name:  "行末の単独の CR",
+			input: shapeH6 + shapeK1 + ",UI,,,UI,a\r" + shapeK2 + ",UI,,,UI,b\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			found := CheckShape([]byte(tt.input))
+			if got := hazardsOf(found); !slices.Equal(got, tt.want) {
+				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
+			}
+			for _, h := range found {
+				if !slices.Equal(h.Why.Args, []string{"line", tt.next}) {
+					t.Errorf("置換が違う: %+v", h.Why.Args)
+				}
 			}
 		})
 	}
@@ -545,41 +678,35 @@ func TestCheckShapeUnreadLines(t *testing.T) {
 			name:  "レコードにならない行だけ",
 			input: "key,translation\n,\n\"\"\n",
 		},
+		{
+			// 行をまたぐヘッダーだけでデータの無いファイル。広く分けると2行になるが、
+			// 読み手は正しく0件と読んでいる。行単位で数えていたときは誤って止めていた。
+			name:  "行をまたぐヘッダーだけ",
+			input: "key,\"trans\nlation\",translation\n",
+		},
+		{
+			// 値の中の U+2028 は行の区切りではなく、読み手はレコードを読めている。
+			name:  "値の中の LS",
+			input: "key,translation\n" + shapeK1 + ",い ち\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			found, err := CheckInputShape([]byte(tt.input))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := hazardsOf(found); !slices.Equal(got, tt.want) {
+			if got := hazardsOf(CheckShape([]byte(tt.input))); !slices.Equal(got, tt.want) {
 				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestCheckCurrentShape は、いまの公開ファイルの側の (b)(e) を見る。
-func TestCheckCurrentShape(t *testing.T) {
+// TestCheckShapeUnclosed は (e) を見る。範囲は引用符が開いた物理行から、
+// ファイルの最後の物理行まで。
+func TestCheckShapeUnclosed(t *testing.T) {
 	tests := []struct {
 		name    string
 		current string
 		want    []wantHazard
 	}{
-		{
-			// 入力の側と違い、訳の有無によらず止める。
-			name:    "訳の無い値が行をまたぐ",
-			current: shapeH6 + shapeK1 + ",UI,\"N\n1\",,UI,a\n",
-			want:    []wantHazard{{reason.PublishMultilineCurrent, 2, 3, false}},
-		},
-		{
-			name:    "ヘッダーが行をまたぐ",
-			current: "key,section,node,order,speaker,\"trans\nlation\"\n" + shapeK1 + ",UI,,,UI,a\n",
-			want: []wantHazard{
-				{reason.PublishNoTranslationColumn, 1, 1, false},
-				{reason.PublishMultilineCurrent, 1, 2, false},
-			},
-		},
 		{
 			// 最終行で開いた引用符は1行に収まるが、閉じていない。ゲームは改行まで
 			// 訳に含めて読む。
@@ -588,18 +715,20 @@ func TestCheckCurrentShape(t *testing.T) {
 			want:    []wantHazard{{reason.PublishUnclosedQuote, 3, 3, false}},
 		},
 		{
-			// 1行ずつ読むと、閉じない引用符の中身 translation がそのまま列名になる
-			// ので列はそろって見える。全体を読むと、ヘッダーがファイルの終わりまでを
-			// 飲み込む。
 			name:    "ヘッダーで開いた引用符",
 			current: "key,section,node,order,speaker,\"translation\n" + shapeK1 + ",UI,,,UI,a\n",
 			want:    []wantHazard{{reason.PublishUnclosedQuote, 1, 2, false}},
 		},
 		{
-			// データ行で開いた引用符が行をまたぎ、閉じない。(e) だけで出し、(b) の
-			// 「行をまたいでいる」では重ねて出さない。
 			name:    "行をまたいでから閉じない値",
 			current: shapeH6 + shapeK1 + ",UI,,,UI,\"b\nc\n",
+			want:    []wantHazard{{reason.PublishUnclosedQuote, 2, 3, false}},
+		},
+		{
+			// 閉じない引用符のレコードの中の単独の CR は見ない。値にファイルの
+			// 終わりまでが入っているので、どの値の話か決められない。
+			name:    "閉じない値の中の単独の CR",
+			current: shapeH6 + shapeK1 + ",UI,,,UI,\"b\rc\n",
 			want:    []wantHazard{{reason.PublishUnclosedQuote, 2, 3, false}},
 		},
 		{
@@ -609,34 +738,58 @@ func TestCheckCurrentShape(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			found, err := CheckCurrentShape([]byte(tt.current))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := hazardsOf(found); !slices.Equal(got, tt.want) {
+			if got := hazardsOf(CheckShape([]byte(tt.current))); !slices.Equal(got, tt.want) {
 				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestCheckTargetShapeReadsBothFiles は、入力と書き出し先の両方を見ることと、
-// 読めないときに誤りを返すことを見る。
-func TestCheckTargetShapeReadsBothFiles(t *testing.T) {
+// TestCheckTargetShapeReadsEveryFile は、入力・書き出し先・ゲーム側の公開ファイルの
+// すべてを見ることと、読めないときに誤りを返すことを見る。
+func TestCheckTargetShapeReadsEveryFile(t *testing.T) {
+	// 飲み込み（引用符が別の行で閉じる形）。
+	swallow := shapeH6 + shapeK1 + ",UI,,,UI,\"a\n" + shapeK2 + ",UI,,,UI,b\"\n"
+
 	t.Run("入力と書き出し先の両方で見つける", func(t *testing.T) {
-		target := shapeTarget(t,
-			shapeH6+shapeK1+",UI,,,UI,\"a\nb\"\n",
-			"key,translation\n"+shapeK2+",\"c\nd\"\n")
+		target := shapeTarget(t, swallow, "key,translation\n"+shapeK2+",\"c\rd\"\n")
 		found, err := CheckTargetShape(target)
 		if err != nil {
 			t.Fatal(err)
 		}
 		want := []wantHazard{
-			{reason.PublishMultilineTranslated, 2, 3, false},
-			{reason.PublishMultilineCurrent, 2, 3, true},
+			{reason.PublishLoneCR, 2, 3, false},
+			{reason.PublishSwallowKeyShaped, 2, 3, true},
 		}
 		if got := hazardsOf(found); !slices.Equal(got, want) {
 			t.Errorf("\n got %+v\nwant %+v", got, want)
+		}
+	})
+
+	t.Run("入力と書き出し先が同じファイルでも見つける", func(t *testing.T) {
+		// 作業コピーの無いロケールと --path の経路。飲み込みの守りは、ここでも効かないと
+		// いけない（批評の high）。同じファイルの中で訳を比べても食い違いは見えない。
+		found, err := CheckTargetShape(shapeTarget(t, swallow, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []wantHazard{{reason.PublishSwallowKeyShaped, 2, 3, true}}
+		if got := hazardsOf(found); !slices.Equal(got, want) {
+			t.Errorf("\n got %+v\nwant %+v", got, want)
+		}
+	})
+
+	t.Run("ゲーム側の公開ファイルでも見つける", func(t *testing.T) {
+		target := shapeTarget(t, shapeH6+shapeK1+",UI,,,UI,a\n", "key,translation\n"+shapeK1+",a2\n")
+		target.GameBase = filepath.Join(t.TempDir(), StringsFile)
+		writeFile(t, target.GameBase, shapeH6+shapeK1+",UI,,,UI,\"a\n")
+		found, err := CheckTargetShape(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(found) != 1 || found[0].Why.ID != reason.PublishUnclosedQuote ||
+			!found[0].GameBase || found[0].Current || found[0].Path != target.GameBase {
+			t.Errorf("ゲーム側の公開ファイルの閉じない引用符: %+v", found)
 		}
 	})
 
@@ -644,8 +797,19 @@ func TestCheckTargetShapeReadsBothFiles(t *testing.T) {
 		root := t.TempDir()
 		input := filepath.Join(root, "in.csv")
 		writeFile(t, input, "key,translation\n"+shapeK2+",\"c\"\n")
-		found, err := CheckTargetShape(Target{Locale: "xx", Input: input, Output: filepath.Join(root, "out.csv")})
+		// 書き出し先が無いときは、土台の確かめもゲーム側の公開ファイルを読まない。
+		game := filepath.Join(root, "game.csv")
+		writeFile(t, game, shapeH6+shapeK1+",UI,,,UI,\"a\n")
+		found, err := CheckTargetShape(Target{Locale: "xx", Input: input, Output: filepath.Join(root, "out.csv"), GameBase: game})
 		if err != nil || len(found) != 0 {
+			t.Errorf("%+v %v", found, err)
+		}
+	})
+
+	t.Run("ゲーム側の公開ファイルが無ければ見ない", func(t *testing.T) {
+		target := shapeTarget(t, shapeH6+shapeK1+",UI,,,UI,a\n", "key,translation\n"+shapeK1+",a2\n")
+		target.GameBase = filepath.Join(t.TempDir(), StringsFile)
+		if found, err := CheckTargetShape(target); err != nil || len(found) != 0 {
 			t.Errorf("%+v %v", found, err)
 		}
 	})
@@ -656,12 +820,13 @@ func TestCheckTargetShapeReadsBothFiles(t *testing.T) {
 		writeFile(t, good, shapeH6)
 
 		for _, tc := range []struct {
-			name, input, output, wantPath string
+			name, input, output, game, wantPath string
 		}{
-			{"入力がディレクトリ", root, good, root},
-			{"書き出し先がディレクトリ", good, root, root},
+			{"入力がディレクトリ", root, good, "", root},
+			{"書き出し先がディレクトリ", good, root, "", root},
+			{"ゲーム側の公開ファイルがディレクトリ", good, good, root, root},
 		} {
-			found, err := CheckTargetShape(Target{Locale: "xx", Input: tc.input, Output: tc.output})
+			found, err := CheckTargetShape(Target{Locale: "xx", Input: tc.input, Output: tc.output, GameBase: tc.game})
 			var shapeErr *ShapeError
 			if !errors.As(err, &shapeErr) {
 				t.Errorf("%s: 誤りが %v（%+v）", tc.name, err, found)
