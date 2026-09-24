@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 )
 
@@ -224,6 +226,55 @@ func BuildTarget(data *order.Data, t Target) ([]byte, Stats, error) {
 		return nil, Stats{}, err
 	}
 	return Build(data, inputCSV, existingCSV)
+}
+
+// SourceLineEndHint は、原文の CRLF を LF にするとキーが一致する入力の行1つ。
+type SourceLineEndHint struct {
+	// Line と EndLine は入力での物理行の範囲。
+	Line, EndLine int
+	// Key はその行の key 列の値（前後の空白を除いたもの）。
+	Key string
+}
+
+// SourceLineEndHints は、t の入力のうち、訳が入っているのに原文のハッシュが key と
+// 合わずに捨てられる行で、原文の CRLF を LF にすると key と一致するものを返す
+// （決まったことのそのほか 7）。
+//
+// 表計算ソフトなどで作業コピーを保存し直すと、原文（source_en）の中の改行が LF から
+// CRLF に変わることがある。キーは Mod が LF の原文から計算したものなので、合わなく
+// なり、publish はその行を捨てる（R15。上流と同じ）。止めはしないが、新しい訳が
+// 黙って公開されないので、呼び出し側が知らせる。値そのものは直さない。原文を
+// 書き換えて取り込むと、上流の道具と出力が食い違う。
+//
+// 読めないときは誤りを返す。形の確かめを通ったあとで呼ぶ前提なので、閉じない引用符の
+// 誤りはふつう起きない。
+func SourceLineEndHints(t Target) ([]SourceLineEndHint, error) {
+	data, err := os.ReadFile(t.Input)
+	if err != nil {
+		return nil, err
+	}
+	f, err := csvfile.ReadPowerShell(data)
+	if err != nil {
+		return nil, err
+	}
+	var out []SourceLineEndHint
+	for _, r := range f.Records {
+		if r.Get(colTranslation) == "" {
+			continue
+		}
+		if _, how := rowKey(r.Row); how != keyDropped {
+			continue
+		}
+		k := strings.ToLower(strings.TrimSpace(r.Get(colKey)))
+		src := r.Get(colSourceEn)
+		if k == "" || !strings.Contains(src, "\r\n") {
+			continue
+		}
+		if key.For(strings.ReplaceAll(src, "\r\n", "\n")) == k {
+			out = append(out, SourceLineEndHint{Line: r.Line, EndLine: r.EndLine, Key: strings.TrimSpace(r.Get(colKey))})
+		}
+	}
+	return out, nil
 }
 
 // WriteTarget は [BuildTarget] の結果を t.Output へ丸ごと上書き保存する。

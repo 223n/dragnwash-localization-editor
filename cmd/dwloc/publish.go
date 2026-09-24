@@ -60,6 +60,10 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
 あります。値を確かめて正しければ、--accept-multiline でそのロケールを指定すると
 書けます。
 
+表計算ソフトなどで作業コピーを保存し直すと、原文の中の改行が CRLF に変わり、
+キーと合わなくなった行は公開されません（tools/hash-strings.ps1 と同じです）。
+原文の CRLF を LF にするとキーが一致する行があれば、止めずに行とキーを表示します。
+
 オプション:
   --root <ディレクトリ>
         翻訳リポジトリのルート（既定: カレントディレクトリ）
@@ -394,6 +398,14 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return code
 	}
 
+	// 原文の改行が CRLF に変わってキーと合わず、黙って公開されない訳があれば知らせる。
+	// 止めはしません（上流も同じ行を落として書きます）。失われる訳の確認より前に
+	// 出すのは、その行の訳がいまの公開ファイルにあると、下の確認が「失われる」で
+	// 止めるためです。止まった理由がここに書いてあります。
+	if code := reportSourceLineEnds(*root, targets, stderr); code != exitOK {
+		return code
+	}
+
 	// 組み立てたものを書くと訳が消えるなら、ここで止める。1件でもあれば
 	// どのロケールも書きません。--dry-run でも同じ判定をします。書かないことは
 	// どちらでも変わらないので、判定だけ変えると「dry-run では通ったのに
@@ -675,6 +687,45 @@ func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) in
 		}
 	}
 	return exitProblems
+}
+
+// publishSourceLineEndText は、原文の CRLF を LF にするとキーが一致する行を
+// 見つけたときの見出しです。止めない知らせなので、「書きませんでした」とは言いません。
+const publishSourceLineEndText = `dwloc: 注意: 原文の改行が CRLF になっていて、キーと合わずに公開されない訳があります。
+dwloc:       表計算ソフトなどで作業コピーを保存し直すと、原文（source_en）の中の改行が LF から CRLF に変わります。
+dwloc:       ゲーム内で F1 → Translation → Export working copy を押して作業コピーを作り直すか、原文の中の CRLF を LF に直してください。
+`
+
+// reportSourceLineEnds は、原文の CRLF を LF にするとキーが一致する行を知らせます。
+// 止めないので、読めたときは見つけても exitOK です。読めなかったときだけが 2 です。
+//
+// 行とキーは出しますが、原文は出しません。原文はゲームの台本で、報告が貼られる先へ
+// 出していくものではないからです。
+func reportSourceLineEnds(root string, targets []publish.Target, stderr io.Writer) int {
+	printed := false
+	for _, t := range targets {
+		hints, err := publish.SourceLineEndHints(t)
+		if err != nil {
+			fmt.Fprintf(stderr, "dwloc: %s を読めません: %v\n", displayPath(root, t.Input), err)
+			return exitError
+		}
+		if len(hints) == 0 {
+			continue
+		}
+		if !printed {
+			fmt.Fprint(stderr, publishSourceLineEndText)
+			printed = true
+		}
+		fmt.Fprintf(stderr, "dwloc:   %s%s（入力、%d 件）\n", localePrefix(t.Locale), displayPath(root, t.Input), len(hints))
+		for i, h := range hints {
+			if i >= publishLossListMax {
+				fmt.Fprintf(stderr, "dwloc:       ほかに %d 件あります。\n", len(hints)-i)
+				break
+			}
+			fmt.Fprintf(stderr, "dwloc:       %s %s: 原文の CRLF を LF にするとキーが一致します\n", lineRange(h.Line, h.EndLine), h.Key)
+		}
+	}
+	return exitOK
 }
 
 // reportLosses は、書き出すと失われる訳を数えて報告します。

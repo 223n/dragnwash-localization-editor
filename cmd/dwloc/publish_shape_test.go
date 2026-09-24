@@ -237,6 +237,98 @@ func TestPublishWritesMultilineValues(t *testing.T) {
 	}
 }
 
+// TestPublishHintsCRLFSource は、表計算ソフトなどで保存し直して原文の LF が CRLF に
+// なった行を、止めずに知らせることを見る（決まったことのそのほか 7）。
+//
+// キーは LF の原文から計算したものなので合わず、publish はその行を捨てる（上流と
+// 同じ）。新しい訳が黙って公開されないので、行とキーを出す。原文は出さない。
+// その訳がいまの公開ファイルにあれば、失われる訳の確認が止め、知らせはその前に出る。
+func TestPublishHintsCRLFSource(t *testing.T) {
+	crlf := "para1\r\n\r\npara2"
+	keyMulti := key.For(multiSource)
+	working := "key,section,node,order,speaker,source_en,translation\r\n" +
+		keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\r\n" +
+		keyMulti + ",UI,,,UI,\"" + crlf + "\",段落の訳\r\n"
+	hint := "3〜5行目 " + keyMulti + ": 原文の CRLF を LF にするとキーが一致します"
+
+	t.Run("新しい訳なら知らせて書く", func(t *testing.T) {
+		root := lossRepo(t)
+		game := makeGame(t, map[string]string{"Translations/_discovered/ja.working.csv": working})
+		code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+		if code != exitOK {
+			t.Fatalf("終了コード = %d\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"注意: 原文の改行が CRLF になっていて、キーと合わずに公開されない訳があります。",
+			"ja: " + filepath.ToSlash(filepath.Join(game, "Translations", "_discovered", "ja.working.csv")) + "（入力、1 件）",
+			hint,
+		})
+		if strings.Contains(stderr, "para1") {
+			t.Errorf("原文を出している:\n%s", stderr)
+		}
+		if got := readFile(t, root, jaPublishedPath); strings.Contains(got, "段落の訳") {
+			t.Errorf("キーの合わない行を書いている:\n%s", got)
+		}
+	})
+
+	t.Run("公開済みの訳なら知らせてから失われる訳で止める", func(t *testing.T) {
+		root := lossRepo(t)
+		published := "key,section,node,order,speaker,translation\n" +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n" +
+			keyMulti + ",UI,,,UI,段落の訳\n"
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(jaPublishedPath)), []byte(published), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		game := makeGame(t, map[string]string{"Translations/_discovered/ja.working.csv": working})
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--dry-run")
+		if code != exitOK {
+			t.Fatalf("作業コピーを読まないときの終了コード = %d\n%s", code, stderr)
+		}
+		code, _, stderr = runCLI("publish", "--root", root, "--game", game)
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		at := strings.Index(stderr, hint)
+		lost := strings.Index(stderr, "訳が失われるので")
+		if at < 0 || lost < 0 || at > lost {
+			t.Errorf("知らせが失われる訳の報告より前に出ていない:\n%s", stderr)
+		}
+	})
+}
+
+// TestReportSourceLineEnds は、原文の CRLF の知らせの一覧を切ることと、読めない
+// 入力で終了コード2になることを見る。
+func TestReportSourceLineEnds(t *testing.T) {
+	root := t.TempDir()
+	var b strings.Builder
+	b.WriteString("key,source_en,translation\n")
+	total := publishLossListMax + 2
+	for i := range total {
+		src := fmt.Sprintf("Line %02d\nnext", i)
+		fmt.Fprintf(&b, "%s,\"%s\",訳\n", key.For(src), strings.ReplaceAll(src, "\n", "\r\n"))
+	}
+	input := filepath.Join(root, "in.csv")
+	if err := os.WriteFile(input, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	if code := reportSourceLineEnds(root, []publish.Target{{Input: input, Output: input}}, &stderr); code != exitOK {
+		t.Fatalf("終了コード = %d\n%s", code, stderr.String())
+	}
+	checkContains(t, "標準エラー", stderr.String(), []string{
+		fmt.Sprintf("in.csv（入力、%d 件）", total),
+		"ほかに 2 件あります。",
+	})
+	if got := strings.Count(stderr.String(), "原文の CRLF を LF にするとキーが一致します"); got != publishLossListMax {
+		t.Errorf("並べた件数が %d、%d を期待", got, publishLossListMax)
+	}
+
+	stderr.Reset()
+	if code := reportSourceLineEnds(root, []publish.Target{{Input: root, Output: input}}, &stderr); code != exitError {
+		t.Fatalf("読めない入力で終了コード = %d、2 を期待\n%s", code, stderr.String())
+	}
+}
+
 // TestPublishPassesTheRealWorkingCopyShape は、ゲーム側の作業コピーの実物と同じ
 // 形では止まらず、書き出す中身も変わらないことを見る。
 //
