@@ -639,6 +639,14 @@ It cannot be a valid value, and letting it through would publish the English sou
 Exporting from the screen has no such option.  
 When it stops on a valid multi-line value, write it with `dwloc publish`.
 
+The option works per locale (per file with `--path`).  
+It cannot pick rows or keys; it lets through every row of the passable shapes found in that locale.  
+Once a value of this shape is published, the check of the current published file hits it every time.  
+So every run that writes that locale needs `--accept-multiline`.  
+That option also lets through a forgotten closing quote that later gets into the working copy, as long as its continuation lines look like records.  
+Each time you run it, check that the list of lines it lets through contains no line you do not know.  
+Exporting from the screen keeps stopping for that locale.
+
 A translation that spans lines does not stop it by itself.  
 The earlier `dwloc` read one line at a time, so it cut a translation that spans lines short at its first line.  
 It therefore stopped on a published file with a value that spans lines, and on a working copy with a translated row whose value spans lines.  
