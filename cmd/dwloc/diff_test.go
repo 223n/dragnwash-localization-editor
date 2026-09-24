@@ -469,6 +469,52 @@ func TestRunDiffUnclosedQuote(t *testing.T) {
 	}
 }
 
+// TestRunDiffWarnsUnclosedLevelFlow は、見出しの表（data/level_flow.csv）の閉じない
+// 引用符で、標準エラーに1行の警告を出し、終了コードと報告は変えないことを見る
+// （決まったことの 18）。
+//
+// diff は見出しの文言を使わないので、判定は変わらない。publish と画面の書き出しは
+// 形の確かめでこのファイルに止まるので、黙っていると、diff が通ったあとで初めて
+// 気づくことになる。
+func TestRunDiffWarnsUnclosedLevelFlow(t *testing.T) {
+	const flowHeader = "level,dragon,weather,set_flags,end_flags\n"
+	for _, format := range []string{diffFormatText, diffFormatCSV} {
+		t.Run(format, func(t *testing.T) {
+			run := func(flow string) (int, string, string) {
+				t.Helper()
+				root := diffTree(t, map[string]string{
+					"Translations/ja/strings.csv": diffCleanJA,
+					"data/level_flow.csv":         flow,
+				})
+				code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", format)
+				if strings.Contains(stderr, filepath.ToSlash(root)) || strings.Contains(stderr, root) {
+					t.Errorf("絶対パスが出ている:\n%s", stderr)
+				}
+				return code, stdout, stderr
+			}
+			wantCode, wantOut, wantErr := run(flowHeader + "0,Ryan,Sunny,,\n")
+			code, stdout, stderr := run(flowHeader + "0,\"Ryan,Sunny,,\n")
+
+			if code != wantCode {
+				t.Errorf("終了コード = %d、閉じているときと同じ %d を期待\n%s", code, wantCode, stderr)
+			}
+			if stdout != wantOut {
+				t.Errorf("報告が閉じているときと違う\n--- 閉じない ---\n%s\n--- 閉じている ---\n%s", stdout, wantOut)
+			}
+			warning := "dwloc: 警告: data/level_flow.csv の 2行目で開いた引用符がファイルの終わりまで閉じません。" +
+				"diff は見出しの文言を使わないので判定は変えませんが、publish と画面の書き出しはこのファイルで止まります。\n"
+			if strings.Count(stderr, warning) != 1 {
+				t.Errorf("警告が1行だけ出ていない:\n%s", stderr)
+			}
+			// 警告のほかは、閉じているときと同じ。判定を止めたファイルの警告
+			// （「読みませんでした」）にはしない。
+			if rest := strings.Replace(stderr, warning, "", 1); rest != wantErr {
+				t.Errorf("警告のほかの標準エラーが違う\n--- 閉じない ---\n%s\n--- 閉じている ---\n%s", rest, wantErr)
+			}
+		})
+	}
+}
+
 // failWriter は書き込みを必ず断る io.Writer。閉じたパイプへ書いたときの代わり。
 type failWriter struct{}
 

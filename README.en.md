@@ -1107,6 +1107,11 @@ For `data/script_order.csv`, no category is judged at all.
 Until it is fixed, the exit code is `1`.  
 The closing line of the `text` format does not say that nothing needs review either; it says that some categories are not judged.
 
+A quote never closed in `data/level_flow.csv` does not stop any judgement.  
+This is because `diff` does not use the heading texts, and the exit code does not change either.  
+`publish` and exporting from the screen do stop on that file, though.  
+So it prints the line where the quote opens on standard error, in a single line.
+
 `publish` assembles everything it targets before writing anything out.  
 If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  

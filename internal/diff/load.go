@@ -88,10 +88,19 @@ type Repo struct {
 	// そのときの Order は行が0件になる（[Locale.PublishedUnclosed] と同じ理由）。
 	// 再生順はどのカテゴリの判定にも位置の根拠にも使うので、報告全体を判定しない。
 	//
-	// 見出しの表（data/level_flow.csv）の閉じない引用符はここに入れない。この
-	// パッケージは見出しの文言を使わないので、判定は変わらない。publish と画面の
-	// 書き出しは、形の確かめで止める。
+	// 見出しの表（data/level_flow.csv）の閉じない引用符はここに入れない
+	// （[Repo.LevelFlowUnclosed]）。
 	OrderUnclosed int
+	// LevelFlowPath は見出しの表（data/level_flow.csv）の場所。ファイルが無くても
+	// 値は入る。
+	LevelFlowPath string
+	// LevelFlowUnclosed は、見出しの表で開いた引用符がファイルの終わりまで閉じなかった
+	// ときの、その引用符の物理行（1始まり）。閉じていれば 0。
+	//
+	// このパッケージは見出しの文言を使わないので、判定は変わらず、[Report.Unclosed] にも
+	// 入れない（終了コードを変えない）。publish と画面の書き出しは形の確かめで止めるので、
+	// dwloc diff はこれを見て標準エラーに1行の警告を出す（決まったことの 18）。
+	LevelFlowUnclosed int
 	// OldOrder は1つ前の版の再生順。取れなかったときは nil。
 	// 使うのは引き継ぎ候補だけで、ほかの8カテゴリはこれを見ない。
 	OldOrder *order.Data
@@ -179,16 +188,20 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 	}
 
 	repo := &Repo{
-		Root:      root,
-		Order:     data,
-		OrderPath: data.Source,
-		Locales:   make([]Locale, 0, len(targets)),
+		Root:          root,
+		Order:         data,
+		OrderPath:     data.Source,
+		LevelFlowPath: publish.LevelFlowPath(root),
+		Locales:       make([]Locale, 0, len(targets)),
 	}
 	for _, u := range unclosedOrder {
-		// 見出しの表（level_flow.csv）の閉じない引用符は数えない。このパッケージは
-		// 見出しの文言を使わない（[Repo.OrderUnclosed]）。
-		if u.Path == data.Source {
+		// 見出しの表（level_flow.csv）の閉じない引用符は、判定を止めるものとしては
+		// 数えない。このパッケージは見出しの文言を使わない（[Repo.LevelFlowUnclosed]）。
+		switch u.Path {
+		case data.Source:
 			repo.OrderUnclosed = u.Line
+		case repo.LevelFlowPath:
+			repo.LevelFlowUnclosed = u.Line
 		}
 	}
 	// 旧再生順が取れなくてもエラーにはしない。引き継ぎ候補1カテゴリだけが

@@ -277,13 +277,22 @@ func TestUnclosedQuoteLoadsTheRest(t *testing.T) {
 
 // TestUnclosedLevelFlowDoesNotBlock は、見出しの表（data/level_flow.csv）の閉じない
 // 引用符では、どの判定も止めないことを見る。このパッケージは見出しの文言を使わない。
-// publish と画面の書き出しは、形の確かめで止める。
+// publish と画面の書き出しは、形の確かめで止める。どの行で開いたかは
+// Repo.LevelFlowUnclosed に残し、dwloc diff が標準エラーに警告を出す（決まったことの 18）。
 func TestUnclosedLevelFlowDoesNotBlock(t *testing.T) {
+	closed := newRepo(t, unclosedBase(), true)
+	if closed.LevelFlowUnclosed != 0 || !strings.HasSuffix(filepath.ToSlash(closed.LevelFlowPath), "data/level_flow.csv") {
+		t.Errorf("閉じている見出しの表: LevelFlowUnclosed = %d、LevelFlowPath = %q", closed.LevelFlowUnclosed, closed.LevelFlowPath)
+	}
+
 	files := unclosedBase()
 	files["data/level_flow.csv"] = "level,dragon,weather,set_flags,end_flags\n0,\"Ryan,Sunny,,\n"
 	repo := newRepo(t, files, true)
 	if repo.OrderUnclosed != 0 || len(repo.Order.Entries) != 2 {
 		t.Errorf("再生順の状態 = unclosed %d entries %d", repo.OrderUnclosed, len(repo.Order.Entries))
+	}
+	if repo.LevelFlowUnclosed != 2 || repo.LevelFlowPath != publish.LevelFlowPath(repo.Root) {
+		t.Errorf("LevelFlowUnclosed = %d（2 を期待）、LevelFlowPath = %q", repo.LevelFlowUnclosed, repo.LevelFlowPath)
 	}
 	rep := Compare(repo, nil)
 	if len(rep.Unclosed) != 0 {

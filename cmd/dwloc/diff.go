@@ -96,6 +96,9 @@ git が無い、git リポジトリでない、再生順の履歴が1版しか�
 作業コピーなら作業コピーを要るカテゴリ、layout_risks.csv なら
 「はみ出しの恐れがある行」、data/script_order.csv ならすべてのカテゴリが
 判定されません。
+data/level_flow.csv の閉じない引用符は、diff が見出しの文言を使わないので
+判定を止めず、終了コードも変えません。publish と画面の書き出しはこのファイルで
+止まるので、どの行かを標準エラーへ1行だけ書きます。
 
 data/script_order.csv が更新されたあと、dwloc publish より先に走らせてください。
 publish は再生順に置けなかった行の section 列を 'UI' に書き直すため、
@@ -173,6 +176,15 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		// 続きに読めてしまいます。
 		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
 			strings.Join(repo.EmptyLocales, ", "))
+	}
+	if repo.LevelFlowUnclosed > 0 {
+		// 見出しの表の閉じない引用符は、diff の判定に使わないので終了コードを変えません
+		// （決まったことの 18）。それでも publish と画面の書き出しはこのファイルで止まる
+		// （形の確かめ）ので、diff が通ったあとで初めて気づくことにならないよう、1行だけ
+		// 伝えます。再生順の警告より先に出すのは、上の行と同じ理由です。
+		fmt.Fprintf(stderr,
+			"dwloc: 警告: %s の %d行目で開いた引用符がファイルの終わりまで閉じません。diff は見出しの文言を使わないので判定は変えませんが、publish と画面の書き出しはこのファイルで止まります。\n",
+			displayPath(*root, repo.LevelFlowPath), repo.LevelFlowUnclosed)
 	}
 	if repo.OrderUnclosed == 0 && (len(repo.Order.Entries) == 0 || !hasOrderKeys(repo)) {
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
