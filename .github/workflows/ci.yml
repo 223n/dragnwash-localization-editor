@@ -259,13 +259,51 @@ jobs:
 
       - name: actionlintを入れる
         id: actionlint
-        # 公式の導入スクリプトを使う。スクリプトはタグ v1.7.12 のコミットで固定し、版も渡す。
+        # 公式の Release の書庫を取り、版ごとに固定した sha256 と照合してから展開する。
+        # 以前使っていた公式の導入スクリプトは、書庫を取って展開するだけで、チェックサムを確かめない。
+        # actionlint の Release は不変（immutable）ではないので、同じ版の書庫でも差し替えられうる。
+        #
+        # 版を上げるときは、ACTIONLINT_VERSION と2つの sha256 を、その版の Release にある
+        # actionlint_<版>_checksums.txt の値へ書き換える。Dependabot はここを上げない。
+        # 書庫は Linux 向けだけを持つ。amd64 と arm64 のどちらのセルフホストのランナーでも動くよう、2つを持つ。
+        #
         # shellcheck が入っていればシェルの検査も行い、無ければその規則だけ飛ばす。
         # shellcheck はランナーに入っているものを使うので、ランナーの OS で版が変わる。
         # Ubuntu 24.04 のランナーは 0.9.0、26.04 のランナーは 0.11.0 で、後者は規則が多い。
         # rhysd/actionlint:1.7.12 のイメージ（shellcheck 0.11.0）で、指摘が無いことを確かめてある
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256_LINUX_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_SHA256_LINUX_ARM64: 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
         run: |
-          bash <(curl -sSfL 'https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash') 1.7.12
+          if [ "$(uname -s)" != 'Linux' ]; then
+            echo "::error::actionlint の書庫は Linux 向けだけを照合できる。Linux のランナーで動かす（$(uname -s)）"
+            exit 1
+          fi
+          case "$(uname -m)" in
+            x86_64 | amd64) arch='amd64'; sha="${ACTIONLINT_SHA256_LINUX_AMD64}" ;;
+            aarch64 | arm64) arch='arm64'; sha="${ACTIONLINT_SHA256_LINUX_ARM64}" ;;
+            *)
+              echo "::error::actionlint の書庫を照合できない CPU である: $(uname -m)"
+              exit 1
+              ;;
+          esac
+
+          name="actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz"
+          dir="${RUNNER_TEMP}/actionlint"
+          mkdir -p "${dir}"
+          curl -sSfL --retry 3 -o "${dir}/${name}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${name}"
+
+          # sha256sum -c が読む形（ハッシュ、空白2つ、ファイル名）で書き、照合する
+          printf '%s  %s\n' "${sha}" "${name}" > "${dir}/SHA256SUMS"
+          if ! (cd "${dir}" && sha256sum --check --strict SHA256SUMS); then
+            echo "::error::${name} の sha256 が固定した値と合わない。書庫が差し替えられたか、取得が壊れている"
+            exit 1
+          fi
+
+          tar -xzf "${dir}/${name}" -C "${dir}" actionlint
+          echo "executable=${dir}/actionlint" >> "$GITHUB_OUTPUT"
 
       - name: ワークフローを検査する
         env:
