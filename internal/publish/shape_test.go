@@ -406,6 +406,27 @@ func TestCheckInputShapeMultiline(t *testing.T) {
 				{reason.PublishUnclosedQuote, 4, 4, false},
 			},
 		},
+		{
+			// 訳の空の行をまたぐレコードの後ろに、閉じない引用符がある。全体の読み方は
+			// 閉じない引用符から後ろを飲み込むので、突き合わせると訳が食い違って見え、
+			// 行をまたぐレコードのほうを「別の訳として読まれる」と誤って指してしまう。
+			// 閉じない引用符は (e) だけで出す。
+			name: "閉じない引用符があれば訳を突き合わせない",
+			input: "key,source_en,translation\n" +
+				key.For("x\ny") + ",\"x\ny\",\n" +
+				key.For("two") + ",two,\"c\n",
+			want: []wantHazard{{reason.PublishUnclosedQuote, 4, 4, false}},
+		},
+		{
+			// 行をまたいでから閉じないレコードに訳がある。そのレコードは (e) で出し、
+			// (c) の「訳が入っている」では重ねて出さない。範囲が同じ2件が並ぶと、
+			// 同じ行を2回直すよう読めてしまう。
+			name: "行をまたいでから閉じないレコードに訳がある",
+			input: "key,source_en,translation\n" +
+				key.For("x\ny") + ",\"x\ny\",\n" +
+				key.For("two") + ",two,\"c\nd\n",
+			want: []wantHazard{{reason.PublishUnclosedQuote, 4, 5, false}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -501,6 +522,13 @@ func TestCheckShapeUnreadLines(t *testing.T) {
 			want:  []wantHazard{{reason.PublishRowsUnread, 0, 0, false}},
 		},
 		{
+			// 広く分けてレコードになる行が1行だけで、読み手にはヘッダーも無い。
+			// 行が1行でも、ヘッダーが無いのに読める行があれば読み違えている。
+			name:  "コメントに LS でつながった1行だけ",
+			input: "# c " + shapeK1 + ",x\n",
+			want:  []wantHazard{{reason.PublishRowsUnread, 0, 0, false}},
+		},
+		{
 			// CR だけの改行は読み手が分けるので止めない。
 			name:  "CR だけの改行",
 			input: "key,translation\r" + shapeK1 + ",a\r",
@@ -564,6 +592,13 @@ func TestCheckCurrentShape(t *testing.T) {
 			name:    "ヘッダーで開いた引用符",
 			current: "key,section,node,order,speaker,\"translation\n" + shapeK1 + ",UI,,,UI,a\n",
 			want:    []wantHazard{{reason.PublishUnclosedQuote, 1, 2, false}},
+		},
+		{
+			// データ行で開いた引用符が行をまたぎ、閉じない。(e) だけで出し、(b) の
+			// 「行をまたいでいる」では重ねて出さない。
+			name:    "行をまたいでから閉じない値",
+			current: shapeH6 + shapeK1 + ",UI,,,UI,\"b\nc\n",
+			want:    []wantHazard{{reason.PublishUnclosedQuote, 2, 3, false}},
 		},
 		{
 			name:    "ふつうの公開ファイル",

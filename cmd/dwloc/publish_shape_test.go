@@ -29,8 +29,12 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 		published string
 		// working はゲーム側の作業コピー。空なら置かず、--no-game で走らせる。
 		working string
+		// game はゲームに入っている公開ファイル。空なら置かない。
+		game string
 		// want は標準エラーに出ていてほしい文字列。
 		want []string
+		// notWant は標準エラーに出ていてはいけない文字列。
+		notWant []string
 	}{
 		{
 			name: "いまの公開ファイルの訳が行をまたぐ",
@@ -84,6 +88,24 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 				"読み違える形が 2 か所あります。",
 			},
 		},
+		{
+			// 形の崩れとゲーム側の古さが同時にあるときは、形で止め、土台の報告は
+			// 出さない。確かめる順（形 → ゲーム側の土台 → 失われる訳）を固定する。
+			// 形の崩れたファイルは土台の確かめも読み違えるので、先に見る必要がある。
+			name: "作業コピーの形が崩れ、ゲーム側も古い",
+			working: "key,section,node,order,speaker,source_en,translation\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,\"やあ\nやあ！\"\n",
+			// コミット済みの「もしもし？」に対して、ゲーム側は古い「もしもし」を持つ。
+			game: "key,section,node,order,speaker,translation\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし\n",
+			want: []string{
+				"ja.working.csv（入力）",
+				"3〜4行目: 引用符で囲んだ値が行をまたぎ、この行には訳が入っている",
+				"読み違える形が 1 か所あります。",
+			},
+			notWant: []string{"ゲームに入っている翻訳が古いので"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := lossRepo(t)
@@ -95,9 +117,11 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 			}
 			args := []string{"publish", "--root", root, "--no-game"}
 			if tc.working != "" {
-				game := makeGame(t, map[string]string{
-					"Translations/_discovered/ja.working.csv": tc.working,
-				})
+				files := map[string]string{"Translations/_discovered/ja.working.csv": tc.working}
+				if tc.game != "" {
+					files[jaPublishedPath] = tc.game
+				}
+				game := makeGame(t, files)
 				args = []string{"publish", "--root", root, "--game", game}
 			}
 			before := readFile(t, root, jaPublishedPath)
@@ -115,6 +139,11 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 				"1行ずつ読むと訳を失う形のファイルがあるので、1バイトも書きませんでした。",
 				"直すまでは書きません。",
 			}, tc.want...))
+			for _, s := range tc.notWant {
+				if strings.Contains(stderr, s) {
+					t.Errorf("標準エラーに %q が出ている:\n%s", s, stderr)
+				}
+			}
 			if stdout != "" {
 				t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
 			}
