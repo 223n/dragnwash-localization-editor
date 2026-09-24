@@ -1100,11 +1100,13 @@ With `--verbose`, the same thing is printed on screen as well.
 ```text
 10:30:45 === dwloc 0.6.0 edit (windows/amd64) ===
 10:30:45 Listening. Open this URL in your browser.
-10:30:52 dwloc edit: GET /api/lines 200 12ms locale=ja lines=1721
-10:31:03 dwloc edit: POST /api/rows 200 31ms locale=ja rows=1
+10:30:52 dwloc edit: GET "/api/lines" 200 12ms locale=ja lines=1721
+10:31:03 dwloc edit: POST "/api/rows" 200 31ms locale=ja rows=1
 ```
 
 It writes only the method, path, status code, duration, locale name and count.  
+The path is wrapped in `"`, with line breaks and the like written as `\n`. Anything past 200 bytes is cut off.  
+Requests that were turned away (`404`) are logged too, so this keeps their paths from adding fake lines or bloating the log.  
 **It does not write the source text or the translation.**  
 The token that appears in the URL the first time is replaced with `***` too.  
 You can paste a log file as it is without the game's script leaving with it.

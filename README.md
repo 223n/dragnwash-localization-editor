@@ -1099,11 +1099,13 @@ Pull Requestは1言語・まとまりのある範囲に絞ってください。
 ```text
 10:30:45 === dwloc 0.6.0 edit（windows/amd64）===
 10:30:45 手元だけで待ち受けています。
-10:30:52 dwloc edit: GET /api/lines 200 12ms locale=ja lines=1721
-10:31:03 dwloc edit: POST /api/rows 200 31ms locale=ja rows=1
+10:30:52 dwloc edit: GET "/api/lines" 200 12ms locale=ja lines=1721
+10:31:03 dwloc edit: POST "/api/rows" 200 31ms locale=ja rows=1
 ```
 
 書くのはメソッド・パス・状態コード・所要時間・ロケール名・件数だけです。  
+パスは`"`で囲み、改行などは`\n`の形で書きます。200バイトを超える分は切ります。  
+通らなかった要求（`404`）も残すので、そのパスで偽の行を足されたり、記録を太らされたりしないためです。  
 **原文と訳は書きません。**  
 最初の1回のURLに載るトークンも`***`に置き換えます。  
 ログファイルをそのまま貼っても、ゲームの台本は出ていきません。

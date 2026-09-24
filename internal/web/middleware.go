@@ -5,8 +5,10 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // contentSecurityPolicy は全ての応答に付ける方針。
@@ -84,7 +86,7 @@ func (s *server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				s.logf("panic %s", r.URL.Path)
+				s.logf("panic %s", recordPath(r.URL.Path))
 				http.Error(w, s.t("error.internal"), http.StatusInternalServerError)
 			}
 		}()
@@ -120,6 +122,11 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 // パスは r.URL.Path で、問い合わせ文字列は書かない。最初の1回の URL には
 // トークンが載っているので、そのまま書くと記録からトークンが読める。
 // 原文と訳は既定でも --verbose でもログファイルでも書かない。
+//
+// 認証より外側に置いてあるので、通らなかった要求（404）も記録に残る。起動し
+// 直したあとに古いタブが出す 404 を、あとから辿れるようにするためである。
+// その代わり、パスはトークンを持たない相手が決めた文字列になる。そのまま
+// 書かずに [recordPath] を通す。
 func (s *server) logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out := s.recordTo()
@@ -133,9 +140,36 @@ func (s *server) logger(next http.Handler) http.Handler {
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
-		fmt.Fprintf(out, "dwloc edit: %s %s %d %s%s\n", r.Method, r.URL.Path, sw.status,
+		fmt.Fprintf(out, "dwloc edit: %s %s %d %s%s\n", r.Method, recordPath(r.URL.Path), sw.status,
 			time.Since(start).Round(time.Millisecond), sw.note)
 	})
+}
+
+// recordPathMax は、記録に書くパスの上限（バイト）。
+//
+// 実際の経路はどれも20バイトに満たない。上限はそれより十分に長く、1行が端末の
+// 幅を大きく超えない長さにしてある。
+const recordPathMax = 200
+
+// recordPath は、記録に書くためにパスを %q で囲み、長ければ切る。
+//
+// 記録は認証の外側で取るので、パスはトークンを持たない相手でも決められる。
+// そのまま書くと、改行を入れて本物と見分けの付かない行を足されたり、1回の
+// 要求で記録を 1MB 近く太らされたりする（http.Server の既定のヘッダーの上限）。
+// %q なら改行や制御文字は \n の形になり、1要求は必ず1行に収まる。囲む引用符で、
+// パスの終わりもはっきりする。
+//
+// 切るときは文字の途中で切らない。途中で切ると %q が壊れた1バイトを \x の形で
+// 書き、元に無い文字が見える。切ったことと元の長さは、後ろに添える。
+func recordPath(path string) string {
+	if len(path) <= recordPathMax {
+		return strconv.Quote(path)
+	}
+	cut := recordPathMax
+	for cut > 0 && !utf8.RuneStart(path[cut]) {
+		cut--
+	}
+	return strconv.Quote(path[:cut]) + "…(" + strconv.Itoa(len(path)) + " bytes)"
 }
 
 // recordTo は要求の記録の行き先を返す。記録しないときは nil。

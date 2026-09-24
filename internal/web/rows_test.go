@@ -564,7 +564,7 @@ func TestSaveLogHasNoRowContent(t *testing.T) {
 			t.Errorf("記録に行の中身が出ている（%q）:\n%s", secret, out)
 		}
 	}
-	if !strings.Contains(out, "POST /api/rows") {
+	if !strings.Contains(out, `POST "/api/rows"`) {
 		t.Errorf("記録に要求が出ていない:\n%s", out)
 	}
 }
