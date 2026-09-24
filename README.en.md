@@ -1189,6 +1189,12 @@ go vet ./cmd/... ./internal/...
 go test ./cmd/... ./internal/... -count=1
 ```
 
+Some Go tests use repositories created with `git`.  
+When `git` is not on the PATH, those tests are skipped.  
+When `git` is there but fails, they fail instead of being skipped.  
+A skipped test prints nothing in `go test` without `-v`, so nobody would notice that it did not run.  
+The repositories the tests create set `core.longpaths`, so they pass on Windows even when the temporary directory is deep.
+
 To see whether it still builds for another target, build it and throw the result away.  
 The name of the bit bucket differs by OS, so the line you type differs too.
 
