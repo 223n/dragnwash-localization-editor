@@ -134,6 +134,37 @@ func (c *catalogs) lookup(lang string) *Catalog {
 	return nil
 }
 
+// CheckUILang は、--ui-lang に渡された tag が目録のどれかに当たるかを確かめる。
+// 空なら何もしない（画面が Accept-Language で選ぶ）。
+//
+// 当たらなければ、渡せる言語タグを並べた誤りを返す。当たらない値を黙って原典の
+// ja に落とすと（[catalogs.forServer]）、英語を選んだつもりで eng と打った人に
+// 読めない日本語の案内が出る。画面は Accept-Language で選ぶので、黒い窓と画面で
+// 言語が割れる。落とし先の向きは変えずに、入口で断る。
+//
+// 照合は画面と同じ（[catalogs.lookup]）で、大文字と小文字、地域の付いた形
+// （en-US）も当たりにする。
+func CheckUILang(tag string) error {
+	if tag == "" {
+		return nil
+	}
+	c, err := loadCatalogs()
+	if err != nil {
+		return err
+	}
+	if c.lookup(tag) != nil {
+		return nil
+	}
+	// 原典を先に並べる。案内の文は「ja か en」の順で読ませたい。
+	langs := []string{originLang}
+	for _, lang := range c.langs {
+		if lang != originLang {
+			langs = append(langs, lang)
+		}
+	}
+	return fmt.Errorf("--ui-lang は %s です: %s", strings.Join(langs, " か "), tag)
+}
+
 // fallback は受け皿の目録を返す。
 func (c *catalogs) fallback() *Catalog { return c.byLang[fallbackLang] }
 

@@ -793,6 +793,10 @@ There is no switch inside the screen, so restart it with `--ui-lang ja`.
 ./dwloc edit --root ../dragnwash-localization --locale ja --ui-lang ja
 ```
 
+`--ui-lang` accepts `ja` and `en` (it also accepts forms such as `EN` or `en-US`).  
+Any other value (`eng`, `fr` and so on) stops with `--ui-lang は ja か en です` ("--ui-lang is ja or en") and exit code `2`.  
+Falling back to Japanese without a word would show guidance someone cannot read when they meant to choose English.
+
 The colour scheme follows the OS setting (light or dark).
 Even in the dark scheme, the meaningful colours (needs work, needs checking, informational, save state) keep the same hues, and the name is always shown as well.
 The meaningful colours are separated in both hue and lightness so that they can be told apart with colour vision differences (protan, deutan and tritan).
