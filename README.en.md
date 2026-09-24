@@ -845,13 +845,13 @@ When the load fails, the conditions, the search box and the list are all left as
 When you reload or switch locale, the translation column does not open until the load has finished.  
 The two buttons of the conflict prompt cannot be pressed either.  
 While it loads, the bar says "Loading...".  
-Anything typed during the load, or kept with "put my translation on top", would be dropped unsaved the moment the load succeeded.  
+Anything typed during the load, or kept with `Put my translations on top`, would be dropped unsaved the moment the load succeeded.  
 When the load fails, the previous list stays and can be edited again.  
 If you moved the focus onto a translation cell during the load (with `Tab`, for example), its input box opens right away.
 
 A row in conflict (the file changed underneath you) cannot be edited until you choose which side to keep.  
 Pressing the translation column on that row does not open the input box; the row says that you can edit it once you have chosen which side to keep.  
-Typing into an undecided row could mean either "put my translation on top" or "take the translation from the file".  
+Typing into an undecided row could mean either `Put my translations on top` or `Take what is in the file`.  
 Rows that are not in conflict can still be edited as usual while the prompt is up.
 
 ![The conflict prompt. Two buttons appear at the top of the bar, and the row in conflict shows the translation in the file and yours side by side](docs/images/edit-conflict-en.png)
