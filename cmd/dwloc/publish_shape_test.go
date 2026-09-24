@@ -332,7 +332,8 @@ func TestPublishHintsCRLFSource(t *testing.T) {
 		}
 		checkContains(t, "標準エラー", stderr, []string{
 			"注意: 原文の改行が CRLF になっていて、キーと合わずに公開されない訳があります。",
-			"ja: " + filepath.ToSlash(filepath.Join(game, "Translations", "_discovered", "ja.working.csv")) + "（入力、1 件）",
+			// ゲームのフォルダーは、製品がリンクを解いた形で出す（8.3 形式の TMP など）。
+			"ja: " + filepath.ToSlash(filepath.Join(realPath(t, game), "Translations", "_discovered", "ja.working.csv")) + "（入力、1 件）",
 			hint,
 		})
 		if strings.Contains(stderr, "para1") {
