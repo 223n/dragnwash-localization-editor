@@ -830,7 +830,7 @@ Which rows are involved is printed by `dwloc publish`.
 
 | Reason for refusing | When it happens | How to fix it |
 | ---- | ---- | ---- |
-| A file whose shape loses translations when read one line at a time | A quoted value spans lines, a quote is never closed, or the header lacks a `key` or `translation` column | Run `dwloc publish` and fix the rows it reports, as it describes |
+| A file whose shape loses translations when read one line at a time | The header lacks a key or translation column (it has neither `key` nor `source_en`, or it has no `translation`), a quoted value spans lines, a quote is never closed, or the line breaks are misread so that not a single row can be read | Run `dwloc publish` and fix the rows it reports, as it describes |
 | The translation in the game is older | The published file on the game side has different translations from what is committed. The working copy carries those old translations too, so exporting would roll a new commit back | Put the latest translations back into the game |
 | A committed translation would not survive in the new output | A row that exists in the committed file is missing from the working copy | Open the screen containing the missing rows once inside the game, then rebuild the working copy with `F1 → Translation → Export working copy` |
 
