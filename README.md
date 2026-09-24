@@ -1160,6 +1160,11 @@ npm test                          # 両方
 走らせたあとの集計は、`npm run test:e2e:report`で行います。  
 前の実行の生データが残っていると、集計は数えずに止まります。
 
+CIでE2Eが落ちたときは、Playwrightの出力（`test-results/`）を成果物として7日間残します。  
+名前は`e2e-test-results-<試行の番号>`です。  
+落ちた試験ごとに`trace.zip`と`error-context.md`が入ります。  
+`npx playwright show-trace <trace.zip>`で開くと、そのときの操作と画面を追えます。
+
 どちらも、カバレッジが`package.json`の`coverageThresholds`を下回ると失敗します。  
 閾値は、CIと同じ条件（Linux、元リポジトリ無し）で測った値から少し余裕を引いたものです。  
 手元では元リポジトリを読むテストも走るので、Goの数字はCIより少し高く出ます。  

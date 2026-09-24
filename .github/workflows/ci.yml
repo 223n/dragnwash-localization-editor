@@ -4,7 +4,8 @@ name: CI
 #   lint-ja         文書の書式（markdownlint）と日本語の書き方（textlint）。
 #                   規則は公開されている共有設定 @223n/lint-config-ja にあり、ここには「何を検査するか」だけを書く
 #   go              Goの書式（gofmt）、静的解析（go vet）、テストとカバレッジの閾値、全対象向けのビルド
-#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値
+#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値。
+#                   落ちたときは Playwright の出力（test-results/）を成果物として7日間残す
 #   lint-workflows  ワークフローの構文と型（actionlint）
 #   zizmor          ワークフローの安全性（zizmor）。アクションの SHA 固定、権限、危険な書き方を見る
 on:
@@ -148,6 +149,26 @@ jobs:
         # 閾値は package.json の coverageThresholds.e2e にある。
         # 下回ると失敗し、app.js のカバレッジをジョブの要約に出す
         run: npm run test:e2e
+
+      - name: 落ちたときにPlaywrightの出力を残す
+        # CI でだけ落ちた試験を、手元で追えるようにする。ログだけでは、そのとき画面がどうだったかが分からない。
+        # test-results/ には、落ちた試験ごとに trace.zip（操作、画面の写し、通信）と error-context.md が入る。
+        # trace.zip は npx playwright show-trace で開ける。
+        #
+        # 公開リポジトリなので、成果物は GitHub にログインした人なら誰でも落とせる。
+        # 中身は、試験が一時ディレクトリに作った見本（e2e/support/repo.mjs）と、127.0.0.1 の待ち受けとの
+        # やり取りだけである。待ち受けのセッションの Cookie も写るが、その実行の間だけ有効で、ランナーと一緒に消える。
+        # このジョブは秘密を環境に持たず、checkout も persist-credentials: false にしてある。
+        # それでも残す期間は短くする
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # 落ちたジョブだけを再実行すると、同じ実行の中でもう一度上げる。名前がぶつからないよう試行の番号を付ける
+          name: e2e-test-results-${{ github.run_attempt }}
+          path: test-results/
+          retention-days: 7
+          # 依存を入れる段などで落ちたときは、試験の出力がまだ無い
+          if-no-files-found: ignore
 
   lint-workflows:
     name: ワークフローの構文検査
