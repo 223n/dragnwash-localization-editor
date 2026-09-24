@@ -342,6 +342,20 @@
           <svg class="icon" aria-hidden="true"><use href="#i-filter-circle-xmark"/></svg>
           <span id="filter-clear-label"></span>
         </button>
+        <!--
+          引き出しの中の見張り。目には見せず、読み上げにだけ出す（sr-only）。
+
+          狭い画面で引き出しを開いているあいだは、帯（.top）と一覧（main）が inert に
+          なり、帯の「表示中 N 行」（#shown）も一覧の「当たる行がありません」（#empty）も
+          支援技術の木から外れる。引き出しの主な用途は絞り込みと検索なので、その結果が
+          告知されなくなる。そのあいだだけ app.js の applyView が同じ文をここへ写す。
+          閉じているとき、広い画面のときは空のままにする（帯の #shown が告知するので、
+          2か所で同じ文を読ませない）。
+
+          #message と同じく hidden は出し入れしない。畳み（details）の中にも入れない。
+          どちらも、文字が変わる瞬間にこの要素が木に居なくなる。
+        -->
+        <p id="finder-status" class="sr-only" role="status"></p>
       </div>
     </section>
 

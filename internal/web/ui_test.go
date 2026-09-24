@@ -1003,6 +1003,14 @@ func TestAlertsAreAnnounced(t *testing.T) {
 		}
 	}
 
+	// 狭い画面で引き出しを開いているあいだは、帯と一覧が inert になり、#shown と #empty が
+	// 支援技術の木から外れる。そのあいだ同じ文を写す見張り（app.js の announceInDrawer）は、
+	// 引き出し（左の列）の中に置く。帯や一覧の中に置くと、一緒に inert になって告知されない。
+	sidebar := between(t, html, `<aside id="sidebar" class="sidebar">`, "</aside>")
+	if !strings.Contains(sidebar, `<p id="finder-status" class="sr-only" role="status"></p>`) {
+		t.Error("左の列に #finder-status が無い。引き出しを開いているあいだ、絞り込みと検索の結果が告知されない")
+	}
+
 	// 見張り（role="status"）は hidden で出し入れしない。hidden の要素は支援
 	// 技術の木から外れるので、文字が変わる瞬間にその要素が木に居らず、告知
 	// しない実装があり得る。出し入れは中身の入れ替えで行い、空のときは
@@ -1019,7 +1027,7 @@ func TestAlertsAreAnnounced(t *testing.T) {
 		}
 	}
 	js := uiSource(t, "ui/app.js")
-	for _, bad := range []string{"el.message.hidden", "el.empty.hidden"} {
+	for _, bad := range []string{"el.message.hidden", "el.empty.hidden", "el.finderStatus.hidden"} {
 		if strings.Contains(js, bad) {
 			t.Errorf("app.js が %s を触っている。中身の入れ替えで出し入れすること", bad)
 		}

@@ -229,6 +229,25 @@ function reachable(page, selector) {
   }, selector);
 }
 
+// axState は selector の要素が読み上げの木でどう見えているかを、Chromium の DevTools
+// Protocol（Accessibility.getPartialAXTree）で読む。ignored は木から外れているか、live は
+// 告知の仕方（aria-live や role="status" から決まる。無ければ null）。
+//
+// Playwright の getByRole や toBeVisible は inert を見ないので、inert の中の要素も引けて
+// しまう。読み上げに出るかどうかは、ブラウザーが作った木で直に見る。
+async function axState(page, selector) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+    const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+    const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+    const live = nodes[0].properties?.find((p) => p.name === "live");
+    return { ignored: nodes[0].ignored, live: live ? live.value.value : null };
+  } finally {
+    await cdp.detach();
+  }
+}
+
 // failLines は次の /api/lines を 500 にし、読み直しを押して失敗の理由を帯に出す。
 // 帯（.top）の中の #message が埋まるので、帯が伸びる。
 async function failReload(page) {
@@ -585,6 +604,37 @@ test.describe("狭い画面で引き出しを開いているあいだ", () => {
     await expect(main).not.toHaveAttribute("inert");
     await expect(menu(app)).toBeFocused();
   });
+
+  // 帯と一覧を inert にすると、帯の「表示中 N 行」（#shown）と一覧の「当たる行がありません」
+  // （#empty）も読み上げの木から外れる。引き出しの主な用途は絞り込みと検索なのに、その結果が
+  // 告知されなくなっていた（inert にする前は、引き出しの中で検索すると行数が告知された）。
+  // 開いているあいだは、同じ文を引き出しの中の見張り（#finder-status）へ写す（app.js の
+  // applyView）。閉じれば空に戻す。帯の #shown がまた告知するので、2か所で同じ文を読ませない。
+  test("開いているあいだは、表示中の行数と当たる行が無いことを引き出しの中で告知する", async ({ app }) => {
+    const status = app.locator("#finder-status");
+    await expect(status).toBeEmpty();
+    await menu(app).click();
+    await expectDrawerOpen(app);
+    // 開いただけでは写さない。開くたびに行数を読ませない。
+    await expect(status).toBeEmpty();
+
+    await search(app).fill("Hello");
+    await expect(status).toHaveText(msg("ja", "ui.shown", { count: 1 }));
+    await search(app).fill("zzzz");
+    await expect(status).toHaveText(`${msg("ja", "ui.shown", { count: 0 })} ${msg("ja", "ui.no_rows_search")}`);
+
+    // 帯と一覧の見張りは木から外れていて、写した先は木に居て告知する形である。
+    expect(await axState(app, "#shown")).toMatchObject({ ignored: true });
+    expect(await axState(app, "#empty")).toMatchObject({ ignored: true });
+    expect(await axState(app, "#finder-status")).toEqual({ ignored: false, live: "polite" });
+
+    await app.keyboard.press("Escape");
+    await expectDrawerClosed(app);
+    await expect(status).toBeEmpty();
+    await expect(app.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 0 }));
+    expect(await axState(app, "#shown")).toEqual({ ignored: false, live: "polite" });
+    expect(await axState(app, "#empty")).toEqual({ ignored: false, live: "polite" });
+  });
 });
 
 test.describe("広い画面の左の列", () => {
@@ -623,6 +673,16 @@ test.describe("広い画面の左の列", () => {
   // だった）。名前は開閉ボタン（#menu）と同じ目録の文で、画面は文言を持たない。
   test("左の列は、目録の名前を持つ読み上げの目印になる", async ({ app }) => {
     await expect(app.getByRole("complementary", { name: msg("ja", "ui.sidebar"), exact: true })).toBeVisible();
+  });
+
+  // 広い画面の列は何にも被さらず、帯も一覧も inert にならない。行数は帯の #shown が告知する
+  // ので、引き出しの見張り（#finder-status）へは写さない。写すと同じ行数を2か所で読ませる。
+  test("列で検索したときの行数は、帯の #shown だけが告知する", async ({ app }) => {
+    await search(app).fill("zzzz");
+    await expect(app.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 0 }));
+    await expect(app.locator("#empty")).toHaveText(msg("ja", "ui.no_rows_search"));
+    await expect(app.locator("#finder-status")).toBeEmpty();
+    expect(await axState(app, "#shown")).toEqual({ ignored: false, live: "polite" });
   });
 });
 

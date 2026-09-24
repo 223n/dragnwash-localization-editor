@@ -135,6 +135,11 @@
     finderFold: document.getElementById("finder-fold"),
     shown: document.getElementById("shown"),
     empty: document.getElementById("empty"),
+    /*
+      引き出しの中の見張り。狭い画面で引き出しを開いているあいだだけ、#shown と #empty の
+      文を写す（announceInDrawer を見よ）。
+    */
+    finderStatus: document.getElementById("finder-status"),
     keys: document.getElementById("keys"),
     keysTitle: document.getElementById("keys-title"),
     keysFold: document.getElementById("keys-fold"),
@@ -1311,6 +1316,30 @@
     } else {
       el.empty.textContent = t("ui.no_rows");
     }
+    announceInDrawer();
+  }
+
+  /*
+    狭い画面で引き出しを開いているあいだは、#shown と #empty の文を引き出しの中の見張り
+    （#finder-status）へ写す。それ以外のときは空にする。
+
+    開いているあいだは帯（.top）と一覧（main）が inert になり（syncInert）、#shown も
+    #empty も支援技術の木から外れる。inert にする前は、引き出しの中で検索すると行数が
+    告知された。引き出しの主な用途は絞り込みと検索なので、読み上げを使う人が結果を知る
+    手がかりを失う。inert をやめると焦点が引き出しの裏へ抜ける（syncInert の注記）ので、
+    告知する場所のほうを引き出しの中に足す。
+
+    写すかどうかは、帯そのものが inert かどうかで決める。#shown が木から外れているときに
+    限って写すことになり、写す条件と外れる条件がずれない。外れていないときに写すと、
+    同じ文を2か所で読ませる。
+
+    開いた瞬間には写さない（applyView が走ったときだけ写す）。開くたびに行数を読ませない
+    ためである。閉じたら syncInert が空にする。
+  */
+  function announceInDrawer() {
+    el.finderStatus.textContent = el.top.inert
+      ? [el.shown.textContent, el.empty.textContent].join(" ").trim()
+      : "";
   }
 
   /* いま関わっている見出しを出す。節と節点の両方を出さないと、上が欠ける。 */
@@ -3353,6 +3382,9 @@
 
     閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした要素から
     は焦点が外れ、body へ落ちる。帯の inert を先に外してから移す。#menu は帯の中にある。
+
+    開いていないときは、引き出しの中の見張り（#finder-status）を空に戻す。帯の #shown が
+    また木に入って告知するので、写した文を残すと2か所で読ませる（announceInDrawer）。
   */
   function syncInert() {
     var open = sidebarOpen();
@@ -3360,6 +3392,9 @@
     var modal = narrow.matches && open;
     el.top.inert = modal;
     el.content.inert = modal;
+    if (!modal) {
+      el.finderStatus.textContent = "";
+    }
     if (shut && el.sidebar.contains(document.activeElement)) {
       el.menu.focus();
     }

@@ -895,7 +895,9 @@ When it closes, the focus goes back to the three-line button in the top bar.
 
 How many rows are currently listed appears in the top bar as the "showing" count.  
 When no row matches the conditions or the search, the list area says so.  
-When there is text in the search box, it first tells you to clear the search box.
+When there is text in the search box, it first tells you to clear the search box.  
+Both are set up to be announced by screen readers.  
+While the drawer is open on a narrow screen, the top bar and the list are left out of what screen readers see, so the same text is announced from a region inside the drawer instead.
 
 The list of key controls, the notes on the filter, and the band showing the state at startup are folded away.  
 All three are closed by default.  
