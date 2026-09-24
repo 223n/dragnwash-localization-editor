@@ -2,6 +2,9 @@
 node_modules/**
 docs/port-spec.md
 
+# Claude Code の手元の置き場。コミットしない。中の git worktree（.claude/worktrees/）にリポジトリの写しが入る
+.claude/**
+
 # 英語版の文書。textlint の規則は日本語向けで、英語の一文一行は文字数の上限に掛かる
 *.en.md
 **/*.en.md
