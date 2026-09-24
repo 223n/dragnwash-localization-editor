@@ -80,6 +80,10 @@ func upstreamCases() []upstreamCase {
 	credits := func(body string) map[string]string {
 		return withStrings(map[string]string{"Translations/xx/credits.txt": body})
 	}
+	// 絵の大きさの上限（8MB）と、fakePNG が作る見本の長さ（画素のデータ無し）。
+	// 実装の定数は使わず、上流の値をここに書く。
+	const eightMB = 8 * 1024 * 1024
+	pngLen := len(fakePNG(1, 1, 0))
 	const (
 		tex        = "Translations/xx/textures/"
 		texCredits = tex + "credits.csv"
@@ -268,6 +272,22 @@ func upstreamCases() []upstreamCase {
 			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
 		},
 		{
+			// str.strip() は \x1c〜\x1f も空白として落とす。Go の strings.TrimSpace は
+			// 落とさないので、それを使うと割れる。ファイルを行で読むときは \x1c で
+			// 行を割らない（splitlines() と違う）。
+			name:  "credits.txtの前後の\\x1cは空白として落とす",
+			files: credits("\x1cfun\x1c\n"),
+		},
+		{
+			name:  "credits.txtの前後の全角空白も落とす",
+			files: credits("\u3000Proofread\u3000\n"),
+		},
+		{
+			name:  "credits.txtの空白と見なす文字だけの行は飛ばす",
+			files: credits("\x1c\n\u3000\nnope\n"),
+			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
+		},
+		{
 			name: "strings.csvが無くてもcredits.txtとtexturesを見る",
 			files: map[string]string{
 				"Translations/xx/credits.txt": "done\n",
@@ -390,6 +410,68 @@ func upstreamCases() []upstreamCase {
 				tex + "big.png: 8192 KB, more than 8 MB",
 				tex + "big.png: not a PNG file",
 			},
+		},
+		{
+			// 上限は「超えたら」。ちょうどの絵は通る。
+			name: "4096x4096と8388608バイトちょうどの絵は通る",
+			files: withStrings(map[string]string{
+				tex + "side.png": fakePNG(4096, 4096, 0),
+				tex + "size.png": fakePNG(1, 1, eightMB-pngLen),
+				texCredits:       "file,author,note\nside.png,me,x\nsize.png,me,x\n",
+			}),
+		},
+		{
+			name: "境目を1つ超えた絵",
+			files: withStrings(map[string]string{
+				tex + "side.png": fakePNG(4096, 4097, 0),
+				tex + "size.png": fakePNG(1, 1, eightMB-pngLen+1),
+				texCredits:       "file,author,note\nside.png,me,x\nsize.png,me,x\n",
+			}),
+			want: []string{
+				tex + "side.png: 4096x4097, larger than 4096x4096",
+				tex + "size.png: 8192 KB, more than 8 MB",
+			},
+		},
+		{
+			// 上流は「PNG でない」でその絵を終える。24バイト以上あって幅と高さの位置に
+			// 上限を超える数があっても、大きさの問題は出さない。
+			name: "PNGでない24バイト以上のファイルは幅と高さを見ない",
+			files: withStrings(map[string]string{
+				tex + "chunk.png": strings.Replace(fakePNG(5000, 5000, 0), "IHDR", "IDAT", 1),
+				tex + "gif.png":   "GIF89a" + fakePNG(5000, 5000, 0)[len("GIF89a"):],
+				texCredits:        "file,author,note\nchunk.png,me,x\ngif.png,me,x\n",
+			}),
+			want: []string{
+				tex + "chunk.png: not a PNG file",
+				tex + "gif.png: not a PNG file",
+			},
+		},
+		{
+			// 1回目の行で覚えるのは「行があった」ことで、絵があるかどうかではない。
+			name: "textures/に無い名前の2回目の行",
+			files: withStrings(map[string]string{
+				texCredits: "file,author,note\nnothere.png,me,x\nnothere.png,me,x\n",
+			}),
+			want: []string{
+				texCredits + ":2: nothere.png is not in textures/",
+				texCredits + ":3: nothere.png is listed twice",
+				texCredits + ":3: nothere.png is not in textures/",
+			},
+		},
+		{
+			// 上流は credits.csv を csv.reader でそのまま読み、コメントを扱わない。
+			name: "credits.csvの'#'始まりの行はデータ",
+			files: withStrings(map[string]string{
+				texCredits: "file,author,note\n#x,me,y\n",
+			}),
+			want: []string{texCredits + ":2: #x is not in textures/"},
+		},
+		{
+			name: "credits.csvの見出しの前の'#'行も見出しとして比べる",
+			files: withStrings(map[string]string{
+				texCredits: "# メモ\nfile,author,note\n",
+			}),
+			want: []string{texCredits + ":1: the header must be file,author,note"},
 		},
 		{
 			// fallback.txt は splitlines() で分けるので、\x1c や U+2028 でも行が割れる。
