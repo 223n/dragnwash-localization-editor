@@ -317,7 +317,7 @@ const (
 		"（出力は上流と同じ。実物の ja 作業コピーと同じ形）。PR2 で上流と同じ集計になる見込み"
 	whyPubMultilineCurrent = "いまの公開ファイルに行をまたぐレコードがあるので、形の確かめ (b) で止める。" +
 		"PR2 で (b) をやめると、上流と同じバイトを書く見込み"
-	whyPubHeaderColumns = "ヘッダーに key 列か translation 列が無いので、形の確かめ (a) で止める。" +
+	whyPubHeaderColumns = "ヘッダーに key 列も source_en 列も無いか、translation 列が無いので、形の確かめ (a) で止める。" +
 		"上流はすべての行を捨て、ヘッダーとコメントだけを書く"
 	whyPubCRLFSource = "表計算ソフトで保存し直した形（原文の LF が CRLF）。いまは (c) で止める。" +
 		"PR2 では上流と同じくその行を落として書き、原文の CRLF を LF にするとキーが合うことを知らせる見込み"
