@@ -113,6 +113,33 @@ else
   warn "Actions の許可を変えられなかった。組織の設定で禁止されているときは、先に組織の Settings > Actions > General で許可する"
 fi
 
+# ワークフローの uses はすべてコミットの SHA で固定してある。固定していないアクションが
+# 入ったときに、実行の時点で止まるようにする。zizmor の検査は必須のチェックではないため、
+# それだけではマージを止められない
+info "アクションを完全なコミットの SHA で固定したものだけを動かす（Require actions to be pinned to a full-length commit SHA）"
+# PUT は enabled を必ず求め、allowed_actions も同じ呼び出しで書き換わる。いまの値を読んで渡し直す。
+# Actions を止めているリポジトリを、この設定のついでに動かし始めないためである
+if ! actions_perm="$(gh api "repos/${repo}/actions/permissions" \
+  --jq '[.enabled, (.allowed_actions // "-"), (.sha_pinning_required // false)] | map(tostring) | join(" ")' 2>/dev/null)" \
+  || [ -z "$actions_perm" ]; then
+  warn "Actions の設定を読めず、SHA での固定を求められなかった"
+else
+  read -r actions_enabled allowed_actions sha_pinning <<<"$actions_perm"
+  if [ "$sha_pinning" = 'true' ]; then
+    ok "すでに求めている"
+  else
+    pin_args=(api --method PUT "repos/${repo}/actions/permissions" -F "enabled=${actions_enabled}" -F sha_pinning_required=true --silent)
+    if [ "$allowed_actions" != '-' ]; then
+      pin_args+=(-f "allowed_actions=${allowed_actions}")
+    fi
+    if run gh "${pin_args[@]}"; then
+      ok "求めるようにした"
+    else
+      warn "SHA での固定を求められなかった。組織の設定で決まっているときは、組織の Settings > Actions > General で設定する"
+    fi
+  fi
+fi
+
 # ---- 3. セキュリティ機能
 info "Private vulnerability reporting を有効にする（SECURITY.md と Issue の選択画面が使う）"
 if run gh api --method PUT "repos/${repo}/private-vulnerability-reporting" --silent; then

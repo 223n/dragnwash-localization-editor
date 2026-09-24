@@ -1289,6 +1289,9 @@ The English documents (`*.en.md`) are checked by `markdownlint` only.
 
 CI runs the same checks on every `push` to `main` and `develop`, and on every pull request.  
 In CI it also checks the workflow syntax with `actionlint` and the safety of the workflows with `zizmor`.  
+The actions used in the workflows are pinned to a full-length commit SHA.  
+The repository setting "Require actions to be pinned to a full-length commit SHA" is turned on, so an action that is not pinned does not run.  
+`scripts/setup.sh` (`scripts/setup.ps1` on Windows) makes that setting.  
 CI builds all six targets as well.  
 That is to see whether the premise of shipping a single binary still holds.
 

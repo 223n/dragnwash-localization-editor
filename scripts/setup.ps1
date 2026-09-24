@@ -172,6 +172,38 @@ if (Invoke-Step 'gh' $permArgs) {
     Write-Warn 'Actions の許可を変えられなかった。組織の設定で禁止されているときは、先に組織の Settings > Actions > General で許可する'
 }
 
+# ワークフローの uses はすべてコミットの SHA で固定してある。固定していないアクションが
+# 入ったときに、実行の時点で止まるようにする。zizmor の検査は必須のチェックではないため、
+# それだけではマージを止められない
+Write-Info 'アクションを完全なコミットの SHA で固定したものだけを動かす（Require actions to be pinned to a full-length commit SHA）'
+# PUT は enabled を必ず求め、allowed_actions も同じ呼び出しで書き換わる。いまの値を読んで渡し直す。
+# Actions を止めているリポジトリを、この設定のついでに動かし始めないためである
+$actionsPerm = Get-GhValue @(
+    'api', "repos/${Repo}/actions/permissions",
+    '--jq', '[.enabled, (.allowed_actions // "-"), (.sha_pinning_required // false)] | map(tostring) | join(" ")'
+)
+if (-not $actionsPerm) {
+    Write-Warn 'Actions の設定を読めず、SHA での固定を求められなかった'
+} else {
+    $actionsEnabled, $allowedActions, $shaPinning = $actionsPerm -split ' '
+    if ($shaPinning -eq 'true') {
+        Write-Ok 'すでに求めている'
+    } else {
+        $pinArgs = @(
+            'api', '--method', 'PUT', "repos/${Repo}/actions/permissions",
+            '-F', "enabled=${actionsEnabled}",
+            '-F', 'sha_pinning_required=true',
+            '--silent'
+        )
+        if ($allowedActions -ne '-') { $pinArgs += @('-f', "allowed_actions=${allowedActions}") }
+        if (Invoke-Step 'gh' $pinArgs) {
+            Write-Ok '求めるようにした'
+        } else {
+            Write-Warn 'SHA での固定を求められなかった。組織の設定で決まっているときは、組織の Settings > Actions > General で設定する'
+        }
+    }
+}
+
 # ---- 3. セキュリティ機能
 Write-Info 'Private vulnerability reporting を有効にする（SECURITY.md と Issue の選択画面が使う）'
 if (Invoke-Step 'gh' @('api', '--method', 'PUT', "repos/${Repo}/private-vulnerability-reporting", '--silent')) {
