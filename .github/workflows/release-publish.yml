@@ -57,7 +57,8 @@ jobs:
     steps:
       - name: 要る道具があることを確かめる
         # GitHub がホストするランナーには入っている。セルフホストのランナーでは自分で入れる。
-        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない
+        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない。
+        # unzip は、作った zip の中身の一覧を取るのに使う
         run: |
           if ! command -v gh >/dev/null 2>&1; then
             echo "::error::gh（GitHub CLI）が無い。ランナーに入れてから実行する: https://cli.github.com/"
@@ -65,6 +66,10 @@ jobs:
           fi
           if ! command -v zip >/dev/null 2>&1; then
             echo "::error::zip が無い。Windows 向けの書庫を作れない。ランナーに入れてから実行する（例: apt-get install zip）"
+            exit 1
+          fi
+          if ! command -v unzip >/dev/null 2>&1; then
+            echo "::error::unzip が無い。Windows 向けの書庫の中身を確かめられない。ランナーに入れてから実行する（例: apt-get install unzip）"
             exit 1
           fi
 
@@ -257,6 +262,64 @@ jobs:
           (cd dist && sha256sum dwloc_*.tar.gz dwloc_*.zip > "dwloc_${VERSION}_checksums.txt")
           cat "dist/dwloc_${VERSION}_checksums.txt"
 
+      - name: 6つの書庫の中身を確かめる
+        # 次の段で展開して動かせるのは、ランナーと同じ対象の書庫1つだけである。
+        # 残りの5つ（主な利用先の Windows 向けの zip を含む）は、ここで見ないと公開の前に一度も開かれない。
+        # 不変のリリースは公開したあとで直せないので、実行はせずに中身の一覧だけを取り、6つすべてで次を見る。
+        #   - 書庫と同じ名前のフォルダー1つの下に、本体・LICENSE・THIRD_PARTY_NOTICES.md・README.txt の4つだけがある
+        #   - Windows 以外の本体に実行権限（755）が付いている。tar.gz の一覧の権限の欄で見る。
+        #     zip は Windows 向けだけで、Windows は実行権限を使わないので見ない
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ''
+        run: |
+          # 対象は「バイナリと書庫を作る」と同じ6種
+          targets='linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64'
+          for target in ${targets}; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="dwloc_${VERSION}_${goos}_${goarch}"
+            if [ "${goos}" = 'windows' ]; then
+              bin='dwloc.exe'
+              archive="dist/${name}.zip"
+            else
+              bin='dwloc'
+              archive="dist/${name}.tar.gz"
+            fi
+            if [ ! -f "${archive}" ]; then
+              echo "::error::書庫が無い: ${archive}"
+              exit 1
+            fi
+
+            # フォルダーの項目（末尾が /）を除き、並べ替えて期待と比べる。足りないものも余計なものも見つける
+            if [ "${goos}" = 'windows' ]; then
+              listing="$(unzip -Z1 "${archive}")"
+            else
+              listing="$(tar -tzf "${archive}")"
+            fi
+            got="$(printf '%s\n' "${listing}" | { grep -v '/$' || true; } | LC_ALL=C sort)"
+            want="$(printf '%s\n' "${name}/${bin}" "${name}/LICENSE" "${name}/THIRD_PARTY_NOTICES.md" "${name}/README.txt" | LC_ALL=C sort)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::書庫 ${archive#dist/} の中身が期待と違う（- が期待、+ が実際）"
+              diff <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") || true
+              exit 1
+            fi
+
+            if [ "${goos}" != 'windows' ]; then
+              # tar -tv の1列目が権限（例: -rwxr-xr-x）。持ち主・グループ・ほかの実行権限を見る
+              mode="$(tar -tvzf "${archive}" "${name}/${bin}" | awk '{ print $1 }')"
+              case "${mode}" in
+                -??x??x??x) ;;
+                *)
+                  echo "::error::書庫 ${archive#dist/} の ${bin} に実行権限が無い（${mode}）。展開した翻訳者の手元で Permission denied になる"
+                  exit 1
+                  ;;
+              esac
+            fi
+            echo "中身を確かめた: ${archive#dist/}"
+          done
+          echo "- 6つの書庫の中身を確かめた（4つのファイルと、Windows 以外の本体の実行権限）" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 作った書庫を展開して動かす
         # タグを打つ前に、配る書庫そのものを展開して動かす。1つでも失敗したら、ここで止まって
         # タグも Release も作らない。前の段と同じく、壊れた配布を公開しないためである。
@@ -264,7 +327,8 @@ jobs:
         # 動かすまで分からない。不変のリリースは公開したあとで直せないので、その前に確かめる。
         #
         # 動かせるのはランナーと同じ対象の書庫だけで、GitHub がホストするランナーでは linux/amd64 になる。
-        # 6つとも同じ ldflags と同じ手順で作っているので、1つ動けば版の埋め込みと書庫の形は効いている。
+        # 書庫の中身と実行権限は、前の段で6つとも一覧で確かめてある。ここでは展開した結果でも同じことを見る。
+        # 6つとも同じ ldflags と同じ手順で作っているので、1つ動けば版の埋め込みは効いている。
         # -trimpath を付けると go version -m に ldflags が残らないため、
         # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）。
         #

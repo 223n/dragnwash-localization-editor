@@ -1366,7 +1366,9 @@ It checks three things.
 - On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
 
 It also checks that the checksum list matches the archives.  
-It also checks that the archive holds all four files and that the executable permission is set.  
+For all six archives, it also checks the list of contents.  
+It checks that the folder with the same name as the archive holds exactly the four files, and that the program has the executable permission on every OS other than Windows.  
+That way the five archives it cannot run (including the `zip` files for Windows) are also checked before publication.  
 If any of these fails, it stops without creating the tag or the GitHub Release.  
 Even when the build succeeds, a version left out of the binary or a mistake in how the archive was made only shows up when it is run.  
 The sample is copied first because its working copy is committed to this repository.  
