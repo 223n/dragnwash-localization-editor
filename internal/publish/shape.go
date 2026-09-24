@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,9 +75,14 @@ type Hazard struct {
 // 書き出し先として1回だけ確かめる。書き出し先の確かめのほうが厳しい
 // （行をまたぐレコードがあれば、訳の有無によらず止める）。
 //
-// 誤りを返すのは、ファイルを読めないときと、ヘッダーの列名が重複していて
-// 列を決められないときだけである。どちらも [ShapeError] に包み、どの
-// ファイルかを添える。
+// 誤りを返すのは、ファイルを読めないときだけである。[ShapeError] に包み、
+// どのファイルかを添える。
+//
+// ヘッダーの列名の重複は、ここでは誤りにも形の崩れにもしない。組み立て（[Build]）と
+// 失われる訳の確かめ（[CheckLoss]）が同じ読み方で読んで誤りを返し、呼び出し側は
+// そこで「変換できない」「確かめられない」と伝える。形の確かめは組み立てより前に
+// 走るので、ここで誤りにすると、入力の列名の重複が「変換できない」でなく「読めない」と
+// 伝わってしまう。
 func CheckTargetShape(t Target) ([]Hazard, error) {
 	var out []Hazard
 	same := filepath.Clean(t.Input) == filepath.Clean(t.Output)
@@ -121,10 +127,12 @@ func (e *ShapeError) Unwrap() error { return e.Err }
 
 // CheckInputShape は、入力（作業コピー）に (a)(c)(d)(e) の形が無いかを確かめる。
 // 返す Hazard の Locale と Path は空で、Current は false。
+//
+// ヘッダーの列名が重複していれば何も返さない（理由は [CheckTargetShape]）。
 func CheckInputShape(input []byte) ([]Hazard, error) {
 	table, err := csvfile.ReadPowerShellTable(input)
 	if err != nil {
-		return nil, err
+		return nil, ignoreDuplicate(err)
 	}
 	whole := csvfile.ReadPowerShellWhole(input)
 
@@ -140,10 +148,12 @@ func CheckInputShape(input []byte) ([]Hazard, error) {
 // CheckCurrentShape は、いまの公開ファイル（書き出し先）に (a)(b)(d)(e) の形が
 // 無いかを確かめる。返す Hazard の Locale と Path は空で、Current は false
 // （呼び出し側が埋める）。
+//
+// ヘッダーの列名が重複していれば何も返さない（理由は [CheckTargetShape]）。
 func CheckCurrentShape(current []byte) ([]Hazard, error) {
 	table, err := csvfile.ReadPowerShellTable(current)
 	if err != nil {
-		return nil, err
+		return nil, ignoreDuplicate(err)
 	}
 	whole := csvfile.ReadPowerShellWhole(current)
 
@@ -162,6 +172,16 @@ func CheckCurrentShape(current []byte) ([]Hazard, error) {
 	out = append(out, unclosedHazards(whole)...)
 	sortHazards(out)
 	return out, nil
+}
+
+// ignoreDuplicate は、読み手の誤りのうち列名の重複を無かったことにする
+// （理由は [CheckTargetShape]）。
+func ignoreDuplicate(err error) error {
+	var dup *csvfile.DuplicateColumnError
+	if errors.As(err, &dup) {
+		return nil
+	}
+	return err
 }
 
 // headerHazards は (a) を確かめる。ヘッダーが無いファイルは (d) に任せる。

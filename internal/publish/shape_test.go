@@ -652,17 +652,12 @@ func TestCheckTargetShapeReadsBothFiles(t *testing.T) {
 		root := t.TempDir()
 		good := filepath.Join(root, "good.csv")
 		writeFile(t, good, shapeH6)
-		dup := filepath.Join(root, "dup.csv")
-		writeFile(t, dup, "key,Key,translation\n"+shapeK1+","+shapeK1+",a\n")
 
 		for _, tc := range []struct {
 			name, input, output, wantPath string
 		}{
 			{"入力がディレクトリ", root, good, root},
 			{"書き出し先がディレクトリ", good, root, root},
-			{"入力の列名が重複", dup, good, dup},
-			{"書き出し先の列名が重複", good, dup, dup},
-			{"同じファイルで列名が重複", dup, dup, dup},
 		} {
 			found, err := CheckTargetShape(Target{Locale: "xx", Input: tc.input, Output: tc.output})
 			var shapeErr *ShapeError
@@ -676,6 +671,35 @@ func TestCheckTargetShapeReadsBothFiles(t *testing.T) {
 			if errors.Unwrap(err) == nil {
 				t.Errorf("%s: 元の誤りを取り出せない", tc.name)
 			}
+		}
+	})
+
+	// 列名の重複は形の確かめでは誤りにしない。形の確かめは組み立てより前に走るので、
+	// ここで誤りにすると、入力の列名の重複が「変換できない」でなく「読めない」と
+	// 伝わる。組み立て（Build）と失われる訳の確かめ（CheckLoss）が誤りにする。
+	t.Run("列名の重複は組み立てと失われる訳の確かめに任せる", func(t *testing.T) {
+		root := t.TempDir()
+		good := filepath.Join(root, "good.csv")
+		writeFile(t, good, shapeH6)
+		dup := filepath.Join(root, "dup.csv")
+		writeFile(t, dup, "key,Key,translation\n"+shapeK1+","+shapeK1+",a\n")
+
+		for _, tc := range []struct{ name, input, output string }{
+			{"入力の列名が重複", dup, good},
+			{"書き出し先の列名が重複", good, dup},
+			{"同じファイルで列名が重複", dup, dup},
+		} {
+			found, err := CheckTargetShape(Target{Locale: "xx", Input: tc.input, Output: tc.output})
+			if err != nil || len(found) != 0 {
+				t.Errorf("%s: %+v %v", tc.name, found, err)
+			}
+		}
+		var dupErr *csvfile.DuplicateColumnError
+		if _, _, err := BuildTarget(nil, Target{Input: dup, Output: good}); !errors.As(err, &dupErr) {
+			t.Errorf("組み立てが列名の重複を誤りにしない: %v", err)
+		}
+		if _, err := CheckTargetLoss(Target{Input: good, Output: dup}, []byte(shapeH6)); !errors.As(err, &dupErr) {
+			t.Errorf("失われる訳の確かめが列名の重複を誤りにしない: %v", err)
 		}
 	})
 }

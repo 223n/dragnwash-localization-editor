@@ -247,7 +247,18 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		targets = found
 	}
 
-	// まず全件を組み立てる。書き出しはその後。組み立ての途中で失敗したとき
+	// 入力といまの公開ファイルが、1行ずつ読むと訳を失う形になっていないかを
+	// 最初に見ます。この形のファイルは、下の組み立てと2つの確認も同じ読み方で
+	// 読むので、読み違えたまま「そろっている」「失われない」と判断してしまいます。
+	//
+	// 組み立てより前に見るのは、組み立てが読み方の誤りで止まる前に、どのファイルの
+	// 何行目をどう直すかを出すためです。組み立ての誤りは「変換できません」
+	// （終了コード 2）としか言えません。
+	if code := reportShape(*root, targets, stderr); code != exitOK {
+		return code
+	}
+
+	// 全件を組み立てる。書き出しはその後。組み立ての途中で失敗したとき
 	// 「先頭の数ロケールだけ新しい内容、残りは古い内容」という半端な状態を
 	// 作らないためです。入力ヘッダーの列名重複のように、読み始めて初めて分かる
 	// 失敗があるので、事前の検査では代われません。
@@ -264,13 +275,6 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 			return exitError
 		}
 		built[i], stats[i] = out, st
-	}
-
-	// 入力といまの公開ファイルが、1行ずつ読むと訳を失う形になっていないかを
-	// 最初に見ます。この形のファイルは、下の2つの確認も同じ読み方で読むので、
-	// 読み違えたまま「そろっている」「失われない」と判断してしまいます。
-	if code := reportShape(*root, targets, stderr); code != exitOK {
-		return code
 	}
 
 	// ゲーム側の作業コピーを入力にしたロケールでは、その作業コピーが建っている
