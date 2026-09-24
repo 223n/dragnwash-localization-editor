@@ -649,6 +649,90 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		unchanged(t, root, withWorking)
 	})
 
+	t.Run("ゲーム側の公開ファイルにも効き、ほかのロケールの指定では通さない", func(t *testing.T) {
+		// ゲーム側の作業コピーを入力にする主な流れでは、一度公開した正しい複数行の訳が、
+		// 入力・いまの公開ファイル・ゲーム側の公開ファイルの3つで当たる。指定はその
+		// 3つのどれにも効かないと、指定を付けても止まり続ける。逆にロケールを見ずに
+		// 通すと、ほかのロケールの指定がゲーム側の飲み込みを通してしまう（検証の指摘）。
+		//
+		// 訳の2行目は、単独で読むと公開ファイルのヘッダーと同じ6列に、3行目は作業コピーの
+		// ヘッダーと同じ7列に見える。同じ訳が、3つのファイルのどれでも1行ずつ当たる。
+		keyAlpha := key.For("Alpha")
+		value := "\"Eins\n,,,,,Zwei\n,,,,,,Drei\""
+		published := "key,section,node,order,speaker,translation\n" + keyAlpha + ",UI,,,UI," + value + "\n"
+		repo := map[string]string{
+			"data/script_order.csv":       scriptOrderCSV,
+			"Translations/ja/strings.csv": published,
+			"Translations/de/strings.csv": "key,section,node,order,speaker,translation\n" +
+				helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hallo\n",
+		}
+		gameFiles := map[string]string{
+			"Translations/_discovered/ja.working.csv": "key,section,node,order,speaker,source_en,translation\n" +
+				keyAlpha + ",UI,,,UI,Alpha," + value + "\n",
+			// コミット済みと同じなので、ゲーム側の土台の確かめは止めない。
+			"Translations/ja/strings.csv": published,
+		}
+		jaSpec := "ja:" + keyAlpha
+		gameLabel := "（ゲーム側の公開ファイル）"
+
+		// 指定が無ければ、3つのファイルで止め、どれにも同じ指定を案内する。
+		root, game := makeTree(t, repo), makeGame(t, gameFiles)
+		code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+		if code != exitProblems {
+			t.Fatalf("指定なし: 終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"ja.working.csv（入力）", "ja: Translations/ja/strings.csv（いまの公開ファイル）", gameLabel,
+			"読み違える形が 3 か所あります。",
+		})
+		if n := strings.Count(stderr, "--accept-multiline "+jaSpec+" を付けると書けます。"); n != 3 {
+			t.Errorf("3か所に同じ指定を案内していない（%d か所）:\n%s", n, stderr)
+		}
+
+		// ほかのロケール（de）の指定と、同じロケールのほかの key の指定は、ゲーム側の
+		// 公開ファイルの行も通さない。どちらも当たらない指定なので終了コード2。
+		for _, spec := range []string{"de:" + keyAlpha, "ja:" + shapeKeyUnrelated} {
+			root, game := makeTree(t, repo), makeGame(t, gameFiles)
+			code, stdout, stderr := runCLI("publish", "--root", root, "--game", game, "--accept-multiline", spec)
+			if code != exitError {
+				t.Fatalf("%s: 終了コード = %d、2 を期待\n%s", spec, code, stderr)
+			}
+			_, stopped, ok := strings.Cut(stderr, shapeStopText)
+			if !ok {
+				t.Fatalf("%s: 形の確かめで止めていない:\n%s", spec, stderr)
+			}
+			checkContains(t, "止めた行", stopped, []string{
+				gameLabel, "読み違える形が 3 か所あります。",
+				"--accept-multiline の指定が、通せる行に当たりません: " + spec + "（そのレコードに、指定で通せる行がありません）",
+			})
+			if strings.Contains(stderr, publishAcceptText) {
+				t.Errorf("%s: 名指していないレコードの行を通している:\n%s", spec, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("%s: 止めたのに標準出力へ書いている:\n%s", spec, stdout)
+			}
+			unchanged(t, root, repo)
+		}
+
+		// 同じロケールの指定は、3つのファイルの行をどれも通して書く。
+		root, game = makeTree(t, repo), makeGame(t, gameFiles)
+		code, stdout, stderr := runCLI("publish", "--root", root, "--game", game, "--accept-multiline", jaSpec)
+		if code != exitOK {
+			t.Fatalf("%s: 終了コード = %d\n%s", jaSpec, code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			publishAcceptText, "ja.working.csv（入力）", "ja: Translations/ja/strings.csv（いまの公開ファイル）", gameLabel,
+		})
+		if n := strings.Count(stderr, "指定: --accept-multiline "+jaSpec); n != 3 {
+			t.Errorf("3つのファイルの行を通していない（%d 行）:\n%s", n, stderr)
+		}
+		if strings.Contains(stderr, shapeStopText) {
+			t.Errorf("通したのに止めるときの文面が出ている:\n%s", stderr)
+		}
+		checkContains(t, "標準出力", stdout, []string{"2 件を書き出しました。"})
+		checkContains(t, "ja の公開ファイル", readFile(t, root, jaPublishedPath), []string{keyAlpha + ",UI,,,UI," + value + "\n"})
+	})
+
 	t.Run("複数のレコードは1つずつ複数回指定する", func(t *testing.T) {
 		both := maps.Clone(files)
 		both["Translations/ja/strings.csv"] = "key,section,node,order,speaker,translation\n" +
