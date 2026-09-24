@@ -192,6 +192,32 @@ test("入力欄は頁に1つだけで、綴り検査・自動修正・翻訳を�
   await expect(translationCell(app, SAMPLE_LINES.hello)).toHaveText(SAMPLE.hello.ja);
 });
 
+// 強制色モード（Windows のハイコントラスト）では、ブラウザーが box-shadow を消し、色を
+// 系統の色へ置き換える。入力欄の焦点の印は枠の色と box-shadow で付けていて、outline は
+// none にしていたので、この状態では印がほぼ消えた（どこに打っているか分からない）。
+// 透明の輪郭を敷いておくと、強制色モードでは見える色の輪郭として描かれる。ふだんの
+// 配色では透明なので見た目は変わらない。
+test("強制色モードでも、入力欄に焦点の輪郭が残る", async ({ app }) => {
+  const outline = () =>
+    editor(app).evaluate((node) => {
+      const s = getComputedStyle(node);
+      return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) };
+    });
+
+  await openEditor(app, SAMPLE_LINES.hello);
+  expect(await outline()).toMatchObject({ style: "solid" });
+  expect((await outline()).width).toBeGreaterThanOrEqual(2);
+  // ふだんの配色では透明で、印は枠と box-shadow のまま。
+  expect(await editor(app).evaluate((node) => getComputedStyle(node).outlineColor)).toBe("rgba(0, 0, 0, 0)");
+
+  await app.emulateMedia({ forcedColors: "active" });
+  await expect(editor(app)).toBeFocused();
+  expect(await outline()).toMatchObject({ style: "solid" });
+  expect((await outline()).width).toBeGreaterThanOrEqual(2);
+  // 強制色モードでは、透明の輪郭が見える色に置き換わる。
+  expect(await editor(app).evaluate((node) => getComputedStyle(node).outlineColor)).not.toBe("rgba(0, 0, 0, 0)");
+});
+
 // 長い訳を横へ送らずに全部見ながら直せる、と README が約束している。textarea は
 // rows で決まった高さのままなので、画面が伸ばさないと送りの棒が出て、打っている
 // 場所の前後しか見えない。窓の幅が変わったときも測り直さないと同じことになる。
@@ -471,6 +497,31 @@ test("打つたびに自動保存の時計を引き直し、止まってから 1
   expect(saves).toHaveLength(1);
   // 入力欄は開いたまま（自動保存は閉じない）。
   await expectEditorIn(page, SAMPLE_LINES.goodbye);
+});
+
+// 保存の状態（#save-state）は読み上げの見張り（aria-live="polite"）である。打鍵のたびに
+// 中身を作り直すと、文が同じ「未保存 1 件」でも、読み上げによっては変わったものとして
+// 読み直され、打つ手の横で同じ文が繰り返される。文と種類が同じあいだは触らない。
+test("打っているあいだ、保存の状態の文が変わらなければ、見張りの中身を作り直さない", async ({ page, server }) => {
+  await openPaused(page, server);
+  await openEditor(page, SAMPLE_LINES.goodbye);
+  await editor(page).pressSequentially("B");
+  await expect(saveState(page)).toHaveText(msg("ja", "ui.save_pending", { count: 1 }));
+
+  await saveState(page).evaluate((node) => {
+    window.__saveStateMutations = 0;
+    new MutationObserver((records) => {
+      window.__saveStateMutations += records.length;
+    }).observe(node, { childList: true, subtree: true, characterData: true, attributes: true });
+  });
+  await editor(page).pressSequentially("ye!");
+  await expect(editor(page)).toHaveValue("Bye!");
+  expect(await page.evaluate(() => window.__saveStateMutations)).toBe(0);
+
+  // 文が変わるときは書き換える（送り始めると「保存しています」になる）。
+  await page.clock.runFor(1_500);
+  await waitForSaved(page);
+  expect(await page.evaluate(() => window.__saveStateMutations)).toBeGreaterThan(0);
 });
 
 // 送った訳を未保存の控えから先に消すと、応答が来なかったときにその訳がどこにも
@@ -941,5 +992,17 @@ test.describe("キーの欄が空の行がある作業コピー", () => {
     await expect(rowByLine(app, 6)).not.toHaveClass(/(^|\s)save-failed(\s|$)/);
     await expect(translationCell(app, 6)).toHaveText(typed);
     expectOnlyLines(before, await server.readRoot(workingRel), { 6: line });
+  });
+
+  // 待ち受けに届かないときは、まだファイルに入っていない訳を行番号とキーを添えて並べる
+  // （app.js の renderUnsent）。キーの無い行では行番号だけにし、空のキーを並べない。
+  test("待ち受けに届かないとき、キーの無い行の訳は行番号だけを添えて並べる", async ({ app }) => {
+    await app.route("**/api/rows", (route) => route.abort("connectionrefused"));
+    await typeTranslation(app, 6, "さようなら。");
+    await editor(app).press("Escape");
+    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
+    await expect(app.locator("#unsent-list > li")).toHaveText([
+      `${msg("ja", "ui.unsent_line", { line: 6 })}: さようなら。`,
+    ]);
   });
 });

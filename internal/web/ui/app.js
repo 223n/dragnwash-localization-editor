@@ -7,7 +7,9 @@
 
   - 判断を1つも持たない。状態バッジも件数も、待ち受けが渡したものをそのまま描く。
     ここで数え始めると、internal/diff が避けている誤検出を作り直すことになる。
-  - 文言を1つも持たない。すべて /api/bootstrap の目録から来る。
+  - 文言を1つも持たない。すべて /api/bootstrap の目録から来る。例外は1つだけで、
+    その目録が取れなかったときの1文（bootFailedText）は日本語と英語の固定の文を
+    持つ。目録が無いと、鍵をそのまま出すことしかできないためである。
   - 行の中身を innerHTML に渡さない。訳には <i> のような字が実際に入っている
     （ゲームの書式）。textContent で入れれば、その字はその字として見える。
   - 取りにいく先は自分自身だけ。外向きの通信はこの頁からも出さない。
@@ -108,6 +110,11 @@
     conflictTakeLabel: document.getElementById("conflict-take-label"),
     /* 貼り付く帯そのもの。高さを測って余白へ渡すために持つ（watchTopHeight）。 */
     top: document.querySelector(".top"),
+    /*
+      一覧の一帯（main）。狭い画面で引き出しを開いているあいだ、帯と一緒に inert に
+      するために持つ（syncInert）。
+    */
+    content: document.querySelector("main.content"),
     /* 絞り込みの一帯そのもの。スラッシュの近道が画面へ送るために持つ。 */
     finder: document.querySelector(".finder"),
     filterLabel: document.getElementById("filter-label"),
@@ -128,12 +135,21 @@
     finderFold: document.getElementById("finder-fold"),
     shown: document.getElementById("shown"),
     empty: document.getElementById("empty"),
+    /*
+      引き出しの中の見張り。狭い画面で引き出しを開いているあいだだけ、#shown と #empty の
+      文を写す（announceInDrawer を見よ）。
+    */
+    finderStatus: document.getElementById("finder-status"),
     keys: document.getElementById("keys"),
     keysTitle: document.getElementById("keys-title"),
     keysFold: document.getElementById("keys-fold"),
     orphans: document.getElementById("orphans"),
     orphansTitle: document.getElementById("orphans-title"),
-    orphansList: document.getElementById("orphans-list")
+    orphansList: document.getElementById("orphans-list"),
+    /* まだファイルに入っていない訳の一覧（renderUnsent を見よ）。 */
+    unsent: document.getElementById("unsent"),
+    unsentTitle: document.getElementById("unsent-title"),
+    unsentList: document.getElementById("unsent-list")
   };
 
   /*
@@ -158,6 +174,11 @@
                     保存の応答が「もう画面のものではない」と分かるようにする。
     state.saveError 要求そのものが落ちているか（届かない、404、503）。行ごとの
                     理由（state.failed）とは別に持つ。
+    state.stall     保存がどう止まっているか。"unreachable" は待ち受けに届かない
+                    （dwloc が終わったあとなど。送り直しは続ける）、"refused" は
+                    待ち受けが受け付けない（400・404・415。待っても直らないので
+                    送り直さない）。どちらでもなければ null。立っているあいだは、
+                    まだファイルに入っていない訳を一覧に並べる（renderUnsent）。
     state.inflight  いま送っている訳（行番号 → 値）。送っていなければ null。
                     返るまでのあいだ、その行の「ファイルの値」は entry.saved では
                     なくこちらになる見込みなので、onInput が未保存かどうかを決める
@@ -208,8 +229,23 @@
     composedAt: -Infinity,
     searchComposing: false,
     searchTimer: null,
+    /*
+      ロケールの欄を選んでから読みにいくまでの時計と、そのあいだに最後に選ばれた
+      ロケール（localeDelay を見よ）。選ばれた値は change の時点で控える。待つあいだに
+      別の読み込みが返ると、欄は描いたロケールへそろえ直される（syncLocale）ので、
+      時計が切れたときに欄の値を読むと、選んでいないロケールを読みにいく。
+    */
+    localeTimer: null,
+    localeChosen: "",
+    /*
+      返事を待っている切り替えの札（{ locale: 行き先 }）。送り終えるのを待って尋ねる
+      あいだだけ立つ。無ければ null。欄で元のロケールへ戻したときに、待っている
+      切り替えを取りやめるために持つ（switchLocale を見よ）。
+    */
+    switching: null,
     saving: false,
     saveError: false,
+    stall: null,
     inflight: null,
     sending: null,
     asking: 0,
@@ -217,6 +253,17 @@
     loading: null,
     /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
     exporting: false,
+    /*
+      保存の状態の欄（#save-state）にいま出している文と種類（{ text, kind }）。まだ
+      描いていなければ null。同じなら描き直さないために持つ（updateStatus を見よ）。
+    */
+    status: null,
+    /*
+      まだファイルに入っていない訳の一覧（#unsent）にいま並べている中身の控え（ロケールと、
+      行番号・キー・訳の並びを1つの文字列にしたもの）。まだ描いていなければ null。同じなら
+      描き直さないために持つ（renderUnsent を見よ）。
+    */
+    unsentShown: null,
     timer: null,
     retry: 0,
     /*
@@ -239,8 +286,25 @@
     諦めると、原因（ゲームがファイルを開いている）が消えたあとも、その訳は
     二度と送られない。翻訳者が別の行を触るまで、訳はブラウザーの中だけに残る。
     送り先は自分自身なので、間隔さえ広げれば送り続けても重くない。
+
+    例外は、待っても直らないと分かっている失敗（refusedStatus）だけである。
   */
   var retryDelays = [500, 1000, 2000, 5000, 15000, 30000];
+
+  /*
+    待ち受けが保存を受け付けない、待っても直らない状態コード。送り直さない。
+
+      400  要求の形が違う（画面と待ち受けの版が食い違ったときなど）
+      404  Cookie か Origin が合わない（多くは、dwloc を起動し直してこの画面の
+           Cookie が古くなったとき。起動し直すとトークンが変わる）
+      415  本文が application/json でない
+
+    以前はこれも送り直し続け、画面は「少し置いてから自動でもう一度送ります」と
+    言い続けた。待っても送られないので、送り直しは止め、訳は抱えたまま、まだ
+    ファイルに入っていない訳を写せるように並べる（renderUnsent）。打ち直せば、
+    その訳をもう一度送る。
+  */
+  var refusedStatus = { 400: true, 404: true, 415: true };
 
   /*
     検索の字を打ってから、絞り込みを走らせるまでの待ち。
@@ -259,6 +323,22 @@
     変わらない時間ができる。
   */
   var searchDelay = 120;
+
+  /*
+    ロケールの欄を選んでから、そのロケールを読みにいくまでの待ち。
+
+    Windows と Linux のブラウザーでは、閉じた欄に焦点を置いて矢印キーを押すと、押す
+    たびに change が出る（macOS では矢印で一覧が開くので出ない）。そのたびに読みに
+    いくと、選び終える前の途中のロケールを1つずつ読み、未保存の訳があれば、その
+    たびに「切り替えると消えます」と尋ねる。入力しただけで画面の中身が入れ替わる
+    （WCAG 3.2.2）形でもある。
+
+    最後の change から少し待ってから、そのとき選ばれているロケールだけを読む。
+    矢印を続けて押す間隔より長く、選び終えてから待たされると感じるほどは長くない
+    値として 400ms にしてある。マウスで一覧から選んだときも同じだけ待つ。一覧を開いて
+    から選ぶ道（Alt+↓）は、キー操作の説明（ui.keys_help）に書いてある。
+  */
+  var localeDelay = 400;
 
   /*
     変換が確定してから、Enter を行送りに使わないでおく長さ。
@@ -442,12 +522,53 @@
     告知しない実装があり得る。中身の入れ替えなら、要素はずっと木に居る。
     空のときに見えなくなるのは app.css の .notice:empty が受け持つ
     （余白と下線を落とすと、中身の無いブロックは高さ0になる）。
+
+    kind は出し方で、"info" なら案内（読み込んでいます…、ロケールを選んでください。）、
+    それ以外は失敗として出す。setExportState と同じく、クラスだけを切り替える。
+    index.html で失敗の出し方を固定していたころは、ふつうに起動するたびに、目録と
+    行が届くまでのあいだ「読み込んでいます…」が失敗と同じ赤い帯で出た。
+    クラスを先に替えてから中身を入れる。逆にすると、一瞬だけ前の出し方のまま
+    新しい文が出る。
   */
-  function showMessage(text) {
+  function showMessage(text, kind) {
+    el.message.className = text ? "notice " + (kind === "info" ? "info" : "error") : "notice";
     el.message.textContent = text ? text : "";
   }
 
-  /* 取りにいく先は同じ生成元だけ。相対のパスしか書かない。 */
+  /*
+    目録（/api/bootstrap）が取れなかったときの1文。
+
+    この頁は文言を1つも持たない（冒頭の約束）が、この1文だけは例外として日本語と
+    英語の固定の文を持つ。目録が無いと t() は鍵をそのまま返すので、以前は帯に
+    「ui.load_failed」という鍵が出た。翻訳者には何のことか分からない。どちらの言語の
+    画面かを決めるのも目録なので、目録が無いときはどちらとも決められない。だから
+    両方を、それぞれの lang を付けて並べる（読み上げがそれぞれの言語の声で読む）。
+
+    ほかの文言をここへ足さないこと。例外を広げると、目録を直しても変わらない文が
+    画面に増える。
+  */
+  var bootFailedText = {
+    ja: "画面を読み込めませんでした。dwloc の黒い窓に出ている URL を開き直してください。窓が閉じていたら、dwloc を起動し直してください。",
+    en: "Could not load the screen. Open the URL shown in the black dwloc window again. If the window is closed, start dwloc again."
+  };
+
+  function bootFailed() {
+    var ja = span(null, bootFailedText.ja);
+    ja.lang = "ja";
+    var en = span(null, bootFailedText.en);
+    en.lang = "en";
+    el.message.className = "notice error";
+    el.message.replaceChildren(ja, " ", en);
+  }
+
+  /*
+    取りにいく先は同じ生成元だけ。相対のパスしか書かない。
+
+    待ち受けに届かなかった（fetch そのものが投げた。待ち受けが終わっていて接続を
+    拒まれた、など）ときは、unreachable の印を付けて投げる。応答が返った失敗
+    （404、500 など）と分けるためである。届かないときに「読み直してください」と
+    言っても、読み直しも届かない（load を見よ）。
+  */
   function getJSON(path) {
     return fetch(path, {
       credentials: "same-origin",
@@ -457,6 +578,10 @@
         throw new Error(String(res.status));
       }
       return res.json();
+    }, function () {
+      var err = new Error("unreachable");
+      err.unreachable = true;
+      throw err;
     });
   }
 
@@ -467,6 +592,9 @@
 
     状態コードで投げ分けない。409 も 422 も本文に理由が入っているので、
     呼び出し側が本文ごと受け取って扱う。
+
+    待ち受けに届かなかった（fetch そのものが投げた）ときも投げず、状態コード 0 で
+    返す。応答が返った失敗（503 など）と分けて扱うためである（onSaved を見よ）。
   */
   function postJSON(path, body) {
     return fetch(path, {
@@ -487,6 +615,8 @@
           return { status: res.status, body: null };
         }
       );
+    }, function () {
+      return { status: 0, body: null };
     });
   }
 
@@ -503,6 +633,12 @@
     */
     el.menu.setAttribute("aria-label", t("ui.sidebar"));
     el.sidebarClose.setAttribute("aria-label", t("ui.sidebar_close"));
+    /*
+      左の列（aside）は読み上げの目印（complementary）になる。名前が無いと、目印の
+      一覧に「補足」とだけ並び、何の列かが分からない。開閉ボタンと同じ文を使うのは、
+      ボタンが開け閉めする先がこの列だからである（aria-controls で結んである）。
+    */
+    el.sidebar.setAttribute("aria-label", t("ui.sidebar"));
     el.finderTitle.textContent = t("ui.finder_title");
     el.colLine.textContent = t("ui.col_line");
     el.colStatus.textContent = t("ui.col_status");
@@ -517,6 +653,7 @@
     el.conflictKeepLabel.textContent = t("ui.conflict_keep_mine");
     el.conflictTakeLabel.textContent = t("ui.conflict_take_file");
     el.orphansTitle.textContent = t("ui.orphans_title");
+    el.unsentTitle.textContent = t("ui.unsent_title");
     el.filterLabel.textContent = t("ui.filter");
     el.filterClearLabel.textContent = t("ui.filter_clear");
     el.searchLabel.textContent = t("ui.search");
@@ -1094,7 +1231,8 @@
 
     見出しは、その下に出ている行があるときだけ出す。深さ（section / node）は
     待ち受けが付けたものを使う。出ている行が1つも無い見出しだけを並べても、
-    読む手がかりにならない。
+    読む手がかりにならない。ただし条件も検索語も無いときは、全部出す（下の
+    everything）。
 
     ここで入力欄を閉じることはしない。閉じる必要が無い。開いている行は
     keepAlways が必ず出すので、入力欄を差し込んだまま行が隠れる道が無い。
@@ -1105,9 +1243,16 @@
     var q = el.search.value.toLowerCase();
     var heads = { section: null, node: null, other: null };
     var shown = 0;
+    /*
+      条件も検索語も無いときは、見出しを全部出す。そのときの一覧はファイルの写しで、
+      行も全部出ている。下の「下に出ている行のある見出しだけ」をそこでも当てはめると、
+      節点の末尾に翻訳者が書いたメモ（どちらの印も無いコメント行）が、次の節点で
+      捨てられて、何も絞っていないのに一覧から消えた。
+    */
+    var everything = state.filter.size === 0 && !q;
     state.items.forEach(function (item) {
       if (item.heading) {
-        setHidden(item.heading, true);
+        setHidden(item.heading, !everything);
         if (item.level === "section") {
           /* 節が変われば、その前の節に属していた見出しはもう関わらない。 */
           heads.node = null;
@@ -1171,6 +1316,30 @@
     } else {
       el.empty.textContent = t("ui.no_rows");
     }
+    announceInDrawer();
+  }
+
+  /*
+    狭い画面で引き出しを開いているあいだは、#shown と #empty の文を引き出しの中の見張り
+    （#finder-status）へ写す。それ以外のときは空にする。
+
+    開いているあいだは帯（.top）と一覧（main）が inert になり（syncInert）、#shown も
+    #empty も支援技術の木から外れる。inert にする前は、引き出しの中で検索すると行数が
+    告知された。引き出しの主な用途は絞り込みと検索なので、読み上げを使う人が結果を知る
+    手がかりを失う。inert をやめると焦点が引き出しの裏へ抜ける（syncInert の注記）ので、
+    告知する場所のほうを引き出しの中に足す。
+
+    写すかどうかは、帯そのものが inert かどうかで決める。#shown が木から外れているときに
+    限って写すことになり、写す条件と外れる条件がずれない。外れていないときに写すと、
+    同じ文を2か所で読ませる。
+
+    開いた瞬間には写さない（applyView が走ったときだけ写す）。開くたびに行数を読ませない
+    ためである。閉じたら syncInert が空にする。
+  */
+  function announceInDrawer() {
+    el.finderStatus.textContent = el.top.inert
+      ? [el.shown.textContent, el.empty.textContent].join(" ").trim()
+      : "";
   }
 
   /* いま関わっている見出しを出す。節と節点の両方を出さないと、上が欠ける。 */
@@ -1658,10 +1827,12 @@
           ので、「保存できません（もう一度試しています）」を下ろす。下ろさないと、
           閉じても何も失われないのに、翻訳者は存在しない失敗を直しにいく。
           scheduleRetry の早い戻りと同じ扱いで、1行ずつの理由（state.failed）は
-          そちらの表示に任せる。
+          そちらの表示に任せる。届かない・受け付けないの印も下ろし、まだファイルに
+          入っていない訳の一覧も閉じる（保存できない行は、行に理由と訳が出ている）。
         */
         state.saveError = false;
         state.retry = 0;
+        state.stall = null;
         showMessage("");
         updateStatus();
       }
@@ -1712,6 +1883,10 @@
       edits: edits
     })
       .then(function (res) {
+        /*
+          届かなかったときも、ここへ状態コード 0 で来る（postJSON）。扱いは onSaved が
+          状態コードで分ける。
+        */
         state.saving = false;
         if (gen !== state.gen) {
           updateStatus();
@@ -1722,14 +1897,12 @@
       })
       .catch(function () {
         /*
-          届かなかった。未保存の訳はそのまま抱えたままにする。失敗したことは
-          画面に出す（黙って成功したように見せない）。
+          応答を受け止めるところで投げた（応答の形が思っていたものと違う、など）。
+          未保存の訳はそのまま抱えたまま、送り直しへ回す。失敗したことは画面に出す
+          （黙って成功したように見せない）。ここで受け止めるので、送り終わり
+          （state.sending）が投げっぱなしになることは無い。
         */
         state.saving = false;
-        if (gen !== state.gen) {
-          updateStatus();
-          return;
-        }
         state.inflight = null;
         showMessage(t("ui.save_failed_detail"));
         scheduleRetry();
@@ -1989,12 +2162,15 @@
       if (body.current.locale !== state.locale) {
         return;
       }
+      /* 応答が返ったので、待ち受けには届いている。 */
+      state.stall = null;
       onConflict(body);
       return;
     }
     if (res.status === 200) {
       state.retry = 0;
       state.saveError = false;
+      state.stall = null;
       applyResults(body.results || [], sent);
       state.version = body.version;
       showMessage("");
@@ -2019,8 +2195,33 @@
       （編集できない行、書けない値）だけを取り出して、残りは未保存のまま抱える。
     */
     applyRowErrors(body.results || []);
-    showMessage(body.message ? body.message : t("ui.save_failed_detail"));
-    scheduleRetry();
+    if (res.status === 0) {
+      /*
+        待ち受けに届かなかった（postJSON が状態コード 0 で返す）。多くは、操作が無いまま
+        --idle-timeout がたって待ち受けが終わったあとである。以前は 503 と同じく「少し
+        置いてから自動でもう一度送ります」と言い続けたが、起動し直すと URL（ポートと
+        トークン）が変わるので、待ち受けが終わっていれば、この画面の訳は待っても送られ
+        ない。届かないことと起動し直し方を言い、まだファイルに入っていない訳を並べる
+        （renderUnsent）。一時的に届かなかっただけなら届きしだい入るよう、送り直しは
+        続ける。
+      */
+      state.stall = "unreachable";
+      showMessage(t("ui.unreachable"));
+      scheduleRetry();
+    } else if (refusedStatus[res.status]) {
+      /*
+        待ち受けが受け付けない。待っても直らないので送り直さない（refusedStatus）。
+        訳は未保存のまま抱える（閉じる前の引き止めも効く）。
+      */
+      state.stall = "refused";
+      state.saveError = state.pending.size > 0;
+      state.retry = 0;
+      showMessage(t("ui.save_refused", { status: res.status }));
+    } else {
+      state.stall = null;
+      showMessage(body.message ? body.message : t("ui.save_failed_detail"));
+      scheduleRetry();
+    }
     updateStatus();
   }
 
@@ -2196,6 +2397,67 @@
       el.orphansList.appendChild(row);
     });
     el.orphans.hidden = state.orphans.length === 0;
+  }
+
+  /*
+    まだファイルに入っていない訳を、帯の中の一覧（#unsent）に並べる。保存が止まって
+    いるとき（state.stall。待ち受けに届かない、受け付けない）だけ出す。
+
+    待ち受けが終わったあと（--idle-timeout）は、起動し直すと URL（ポートとトークン）が
+    変わり、このタブの訳は新しい待ち受けへは送れない。翻訳者が手で写すしかないので、
+    行き先の無い訳と同じ形で、字として並べる（選べばそのまま写せる）。行番号とキーを
+    添えるのは、新しい画面でその行を探すためである（検索の欄はキーにも当たる）。
+
+    並べるのは、送り直している訳（state.pending）と、行ごとに断られた訳（state.failed）。
+    どちらも画面の中にしか無い。競合で抱えている訳（state.mine）は並べない。その行に
+    「ファイルの訳 / あなたの訳」が並んでいて、「自分の訳を上に載せる」を選べば未保存へ
+    移ってここに並ぶ。行き先の無い訳は、すぐ上の #orphans に出ている。
+
+    文言は目録から。訳は textContent で入れる（行の中身を innerHTML に渡さない）。
+
+    並べる中身（ロケールと、行番号・キー・訳）が前に描いたものと同じなら、描き直さない
+    （state.unsentShown）。この関数は updateStatus から、保存の状態が変わるたびに呼ばれる。
+    届かないあいだは送り直しの時計が 500ms・1s・2s…と切れ、そのたびに送る・応答を受ける
+    の2回ここを通る。毎回作り直していたころは、翻訳者が一覧の訳を選んで写している途中でも、
+    選んだ要素ごと DOM から外れて選択が消えた（Linux では接続を拒まれるのが速く、送り直しも
+    速く回るので、E2E の選んで写す試験が揺れた）。
+  */
+  function renderUnsent() {
+    var items = [];
+    if (state.stall) {
+      state.failed.forEach(function (bad, line) {
+        items.push({ line: line, text: bad.value });
+      });
+      state.pending.forEach(function (value, line) {
+        items.push({ line: line, text: value });
+      });
+      items.sort(function (a, b) {
+        return a.line - b.line;
+      });
+    }
+    /* 並べるのは描いてある行の訳だけなので、その行は必ずある。 */
+    items.forEach(function (item) {
+      item.key = state.rows.get(item.line).key;
+    });
+    var shown = JSON.stringify([state.locale, items]);
+    if (state.unsentShown === shown) {
+      return;
+    }
+    state.unsentShown = shown;
+    clear(el.unsentList);
+    items.forEach(function (item) {
+      /* キーの欄が空の行（作業コピーにはありうる）では、行番号だけにする。 */
+      var label = [t("ui.unsent_line", { line: item.line }), item.key].join(" ").trim();
+      var row = li(null, "");
+      row.appendChild(span("note-label", label + ": "));
+      var text = span("note-value", item.text);
+      /* 訳なので向きは中身から決めさせる（renderOrphans と同じ）。 */
+      text.dir = "auto";
+      text.lang = state.locale;
+      row.appendChild(text);
+      el.unsentList.appendChild(row);
+    });
+    el.unsent.hidden = items.length === 0;
   }
 
   /*
@@ -2442,6 +2704,13 @@
   };
 
   function updateStatus() {
+    /*
+      まだファイルに入っていない訳の一覧も、ここで描き直す。保存の状態が変わる
+      ところ（打つ、送る、応答を受ける）はどれもここを通るので、一覧は打った訳と
+      いつも同じになる。下の早い戻りより前に置く。文が同じ「未保存 1 件」のままでも、
+      並べる訳は1字ごとに変わる。
+    */
+    renderUnsent();
     var text = t("ui.save_clean");
     var kind = "clean";
     if (state.mine) {
@@ -2455,8 +2724,10 @@
         要求そのものが落ちている（届かない、404、503を出し切った）。ここで
         「未保存 N 件」と出すと、打ったばかりでまだ送っていない状態と
         見分けが付かない。常に見えている場所で、保存できていないことを言う。
+        受け付けないと言われたとき（state.stall が refused）は送り直していないので、
+        「もう一度試しています」とは言わない。
       */
-      text = t("ui.save_retrying");
+      text = state.stall === "refused" ? t("ui.save_failed") : t("ui.save_retrying");
       kind = "failed";
     } else if (state.failed.size) {
       text = t("ui.save_failed");
@@ -2474,6 +2745,16 @@
       text = t("ui.save_orphans", { count: state.orphans.length });
       kind = "failed";
     }
+    /*
+      文と種類がいま出ているものと同じなら触らない。この欄は読み上げの見張り
+      （aria-live="polite"）で、onInput は打鍵のたびにここを呼ぶ。同じ「未保存 1 件」でも
+      中身を作り直すと、読み上げによっては変わったものとして読み直し、打つ手の横で
+      同じ文を繰り返す。
+    */
+    if (state.status && state.status.text === text && state.status.kind === kind) {
+      return;
+    }
+    state.status = { text: text, kind: kind };
     el.saveState.replaceChildren(icon(saveIcons[kind]), span(null, text));
     el.saveState.className = "save-state " + kind;
   }
@@ -2779,7 +3060,7 @@
       stopHolding(holding);
       clear(el.list);
       el.rows.textContent = "";
-      showMessage(t("ui.select_locale"));
+      showMessage(t("ui.select_locale"), "info");
       return;
     }
     /*
@@ -2801,7 +3082,7 @@
     if (state.editing !== null) {
       commitEditor();
     }
-    showMessage(t("ui.loading"));
+    showMessage(t("ui.loading"), "info");
     /* URL に載せるのはロケール名だけ。原文も訳も URL には載せない。 */
     getJSON("/api/lines?locale=" + encodeURIComponent(locale))
       .then(function (data) {
@@ -2869,6 +3150,8 @@
         state.failed = new Map();
         state.mine = null;
         state.orphans = [];
+        /* 読めたので待ち受けには届いている。抱えている訳も片付いた。 */
+        state.stall = null;
         /* 捨てると答えた訳は、ここで捨て終わった。送らない印も倒す。 */
         if (state.discarding === holding) {
           state.discarding = null;
@@ -2885,7 +3168,7 @@
         syncLocale();
         syncBusy();
       })
-      .catch(function () {
+      .catch(function (err) {
         /*
           読めなかったので何も捨てていない。捨てると答えた印を倒し、送り直しへ戻す。
           あとから別の読み込みが始まっていても同じにする（理由は上の .then の注記）。
@@ -2919,7 +3202,17 @@
         if (focused !== null) {
           openEditor(focused);
         }
-        showMessage(t("ui.load_failed"));
+        if (err.unreachable) {
+          /*
+            待ち受けに届かなかった（getJSON の印）。「読み直してください」と言っても、
+            読み直しも届かない。保存が届かなかったときと同じ案内を出し、まだファイルに
+            入っていない訳を並べる（renderUnsent。下の updateStatus が描く）。
+          */
+          state.stall = "unreachable";
+          showMessage(t("ui.unreachable"));
+        } else {
+          showMessage(t("ui.load_failed"));
+        }
         updateStatus();
       });
   }
@@ -3062,18 +3355,46 @@
   }
 
   /*
-    狭い画面で引き出しが閉じているあいだは、列の中身に焦点を入れさせない（inert）。
+    引き出しを閉じ、焦点を開くボタン（#menu）へ戻す。閉じるボタン・幕・Escape の
+    どれで閉じても同じにする。落とすと body へ飛び、キーボードだけで操作している人は
+    どこにいるか分からなくなる。幕を押して閉じていたころは焦点を戻していなかった。
+  */
+  function closeDrawer() {
+    setDrawer(false);
+    el.menu.focus();
+  }
 
-    閉じた引き出しは transform で画面の外へ出してあるだけで、中身はタブ順に残る。
-    入れさせていたころは、#reload から Tab で進むと、画面の外にある閉じるボタン・
-    検索の欄・条件のチップに焦点が入った。見えない検索の欄に字を打つと、一覧だけが
-    黙って絞られる。開けば入れる。広い画面では列は画面に出ているので、入れさせる。
+  /*
+    狭い画面では、引き出しの開き具合に合わせて、焦点を入れさせる場所を決める（inert）。
 
-    閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした
-    要素からは焦点が外れ、body へ落ちる。
+    閉じているあいだは、列の中身に焦点を入れさせない。閉じた引き出しは transform で
+    画面の外へ出してあるだけで、中身はタブ順に残る。入れさせていたころは、#reload から
+    Tab で進むと、画面の外にある閉じるボタン・検索の欄・条件のチップに焦点が入った。
+    見えない検索の欄に字を打つと、一覧だけが黙って絞られる。
+
+    開いているあいだは、逆に帯（.top）と一覧（main）に焦点を入れさせない。引き出しは
+    一覧の上に被さる模態として扱う。入れさせていたころは、開いたまま Tab で進むと、
+    焦点は引き出しの最後の欄を越えて一覧の1行目の訳の欄に入った。入力欄が開くが
+    引き出しに覆われて見えず、打った字はその行の訳の後ろに付いて自動で保存された
+    （375x700 で実際に起きた）。幕（#backdrop）は帯と一覧の外にあるので、押せば閉じる。
+
+    広い画面では列は画面に出ていて、何にも被さらないので、どこにも付けない。
+
+    閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした要素から
+    は焦点が外れ、body へ落ちる。帯の inert を先に外してから移す。#menu は帯の中にある。
+
+    開いていないときは、引き出しの中の見張り（#finder-status）を空に戻す。帯の #shown が
+    また木に入って告知するので、写した文を残すと2か所で読ませる（announceInDrawer）。
   */
   function syncInert() {
-    var shut = narrow.matches && !sidebarOpen();
+    var open = sidebarOpen();
+    var shut = narrow.matches && !open;
+    var modal = narrow.matches && open;
+    el.top.inert = modal;
+    el.content.inert = modal;
+    if (!modal) {
+      el.finderStatus.textContent = "";
+    }
     if (shut && el.sidebar.contains(document.activeElement)) {
       el.menu.focus();
     }
@@ -3082,7 +3403,18 @@
 
   function toggleSidebar() {
     if (narrow.matches) {
-      setDrawer(!sidebarOpen());
+      /*
+        狭い画面では開くだけである。開いているあいだは帯ごと #menu が inert になり
+        （syncInert）、引き出しにも覆われるので、ここへ来るのは閉じているときだけ。
+
+        開いたら焦点を引き出しの閉じるボタンへ移す。#menu に残すと、#menu は inert に
+        なった帯の中なので焦点は body へ落ち、Tab の行き先が分からなくなる。検索の欄では
+        なく閉じるボタンにするのは、狭い画面は電話のことが多く、入力欄へ移すと画面の
+        キーボードが開いて引き出しの半分を覆うためである。検索したいときは、スラッシュで
+        開けば検索の欄へ移る。
+      */
+      setDrawer(true);
+      el.sidebarClose.focus();
       return;
     }
     document.body.classList.toggle("sidebar-collapsed");
@@ -3090,14 +3422,8 @@
   }
 
   el.menu.addEventListener("click", toggleSidebar);
-  el.sidebarClose.addEventListener("click", function () {
-    setDrawer(false);
-    /* 閉じたら焦点を開いたボタンへ戻す。落とすと body へ飛ぶ。 */
-    el.menu.focus();
-  });
-  el.backdrop.addEventListener("click", function () {
-    setDrawer(false);
-  });
+  el.sidebarClose.addEventListener("click", closeDrawer);
+  el.backdrop.addEventListener("click", closeDrawer);
   narrow.addEventListener("change", function () {
     setDrawer(false);
   });
@@ -3125,8 +3451,7 @@
     */
     if (e.key === "Escape" && sidebarOpen()) {
       e.preventDefault();
-      setDrawer(false);
-      el.menu.focus();
+      closeDrawer();
       return;
     }
     if (isTyping(e.target)) {
@@ -3222,6 +3547,82 @@
     });
   }
 
+  /* 待っているロケールの切り替えをやめる。待っていなければ何もしない。 */
+  function cancelLocaleSwitch() {
+    if (state.localeTimer) {
+      clearTimeout(state.localeTimer);
+      state.localeTimer = null;
+    }
+  }
+
+  /*
+    ロケールの欄で選んだロケールへ切り替える。欄の change から localeDelay だけ待って
+    呼ばれる。chosen は change の時点で控えた値である。
+
+    尋ねるのは送り終えてからなので、そのあいだに先に始めた読み込みが返ると、欄は
+    描いたロケールへそろえ直される（load）。欄の値を読み直すと、選んでいないロケールを
+    読みにいく。読み込みのあいだは一覧を編集させない（load）ので、読み込みと保存が
+    重なるこの並びは、いまは画面の操作では起きない。控えるのは守りとして残す。
+  */
+  function switchLocale(chosen) {
+    /*
+      画面が向かっている先へ戻ってきただけなら、何もしない。向かっている先は、返事を
+      待っている切り替えがあればその行き先、読んでいる最中ならその行き先、どちらでも
+      なければ出ているロケールである。矢印で動かして元のロケールへ戻したときに読みに
+      いくと、同じロケールを読み直して条件と検索語を外し、未保存の訳があれば、
+      切り替えていないのに「切り替えると消えます」と尋ねる。
+
+      返事を待っている切り替えを先に見るのは、そちらを取りやめるためである。he への
+      切り替えが送り終えるのを待っているあいだに ja（出ているロケール）へ戻したとき、
+      出ているロケールと比べて何もしないと、待っていた he への切り替えがそのまま
+      走る。あとで選んだ ja を尋ね直し（askDiscard）、he のほうは stale で終わらせる。
+    */
+    var heading = state.switching
+      ? state.switching.locale
+      : state.loading
+        ? state.loading.locale
+        : state.locale;
+    if (chosen === heading) {
+      return;
+    }
+    var ticket = { locale: chosen };
+    state.switching = ticket;
+    askDiscard("ui.switch_confirm").then(function (answer) {
+      if (state.switching === ticket) {
+        state.switching = null;
+      }
+      if (answer === "stale") {
+        /*
+          あとから押されたほうに任せる。欄にも触らない。あとから選び直したなら
+          欄はもうそのロケールを指しており、読み直しなら押した時点で欄を
+          そろえてある。
+        */
+        return;
+      }
+      if (answer === "keep") {
+        /*
+          断ったので何も変えない。欄は選ぶ前に指していた先へ戻す。読んでいる
+          最中ならその行き先で、画面に出ている前のロケールではない。前のロケールへ
+          戻すと、読み込みが返ったときに欄と一覧が食い違う。
+        */
+        syncLocale();
+        return;
+      }
+      /*
+        前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
+        「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
+        言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
+        ものなので、ロケールが変われば外すのが素直である。
+        読み直し（el.reload）では外さない。同じロケールを見続けている。
+
+        外すのは load に任せる。読めたときだけ外させるためで、ここで先に
+        外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
+        チップと一覧は前のロケールのまま残る（load を見よ）。
+      */
+      load(chosen, true);
+    });
+  }
+
   function boot() {
     getJSON("/api/bootstrap")
       .then(function (data) {
@@ -3236,44 +3637,16 @@
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
           /*
-            選んだロケールはここで控える。尋ねるのは送り終えてからなので、そのあいだに
-            先に始めた読み込みが返ると、欄は描いたロケールへそろえ直される（load）。
-            欄の値を読み直すと、選んでいないロケールを読みにいく。
-            読み込みのあいだは一覧を編集させない（load）ので、読み込みと保存が重なる
-            この並びは、いまは画面の操作では起きない。控えるのは守りとして残す。
+            選んだロケールはここで控え、少し待ってから読みにいく（localeDelay）。矢印
+            キーで続けて動かしたときは、時計を引き直して最後に選んだものだけを読む。
+            控えた値を使う理由は state.localeChosen に書いてある。
           */
-          var chosen = el.locale.value;
-          askDiscard("ui.switch_confirm").then(function (answer) {
-            if (answer === "stale") {
-              /*
-                あとから押されたほうに任せる。欄にも触らない。あとから選び直したなら
-                欄はもうそのロケールを指しており、読み直しなら押した時点で欄を
-                そろえてある。
-              */
-              return;
-            }
-            if (answer === "keep") {
-              /*
-                断ったので何も変えない。欄は選ぶ前に指していた先へ戻す。読んでいる
-                最中ならその行き先で、画面に出ている前のロケールではない。前のロケールへ
-                戻すと、読み込みが返ったときに欄と一覧が食い違う。
-              */
-              syncLocale();
-              return;
-            }
-            /*
-              前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
-              「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
-              言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
-              ものなので、ロケールが変われば外すのが素直である。
-              読み直し（el.reload）では外さない。同じロケールを見続けている。
-
-              外すのは load に任せる。読めたときだけ外させるためで、ここで先に
-              外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
-              チップと一覧は前のロケールのまま残る（load を見よ）。
-            */
-            load(chosen, true);
-          });
+          state.localeChosen = el.locale.value;
+          cancelLocaleSwitch();
+          state.localeTimer = setTimeout(function () {
+            state.localeTimer = null;
+            switchLocale(state.localeChosen);
+          }, localeDelay);
         });
         el.reload.addEventListener("click", function () {
           /*
@@ -3298,6 +3671,13 @@
           if (!state.locale) {
             return;
           }
+          /*
+            ロケールの欄で選んで、読みにいくのを待っている（localeDelay）あいだに押された
+            ときは、その切り替えをやめる。あとから押した読み直しのほうを採る。やめずに
+            おくと、読み直しを押したのに、待っていた切り替えがあとから走って別のロケールへ
+            移る。欄は下の syncLocale が画面に出ているロケールへ戻す。
+          */
+          cancelLocaleSwitch();
           syncLocale();
           askDiscard("ui.discard_confirm").then(function (answer) {
             if (answer !== "go") {
@@ -3377,7 +3757,12 @@
         load(data.selected || "");
       })
       .catch(function () {
-        showMessage(t("ui.load_failed"));
+        /*
+          目録が取れていなければ t() は鍵を返すだけなので、固定の1文を出す
+          （bootFailed を見よ）。目録が取れたあとで組み立てに失敗したときも同じ文にする。
+          どちらも、翻訳者にできるのは開き直すことだけである。
+        */
+        bootFailed();
       });
   }
 

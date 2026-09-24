@@ -231,10 +231,13 @@ You do not need a command prompt.
 To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
-That is why the tab does nothing when you come back after stepping away.  
+That is why translations are not saved when you come back after stepping away.  
 The black window shows `No activity for 30m. Stopping.`.  
+If you type a translation in the old tab, the top bar says it cannot reach the server, and the translations that are not in the file yet are listed.  
+The list shows them as plain text, so you can select and copy them.  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
-Start it again and open the new `URL` shown in the black window.  
+After copying them, start it again and open the new `URL` shown in the black window.  
+On the new screen, typing the key into the search box brings up the row.  
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
 The default is there so that no translator is left with a server nobody can reach still listening on their PC.
 
@@ -889,6 +892,7 @@ The controls on the screen are as follows.
 | `Escape` | Closes the input box. What you typed is kept |
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
+| Locale box | Loads a moment (0.4 seconds) after you choose. Moving through it with the arrow keys only loads the locale you stop on. To open the list before choosing, press `Alt+Down` |
 
 "Save a copy" in the bar at the top saves the CSV of the locale you have open to wherever you like.  
 Pressing it opens a menu where you choose the form.  
@@ -967,9 +971,17 @@ On a wide screen the column sticks under the top bar, and on a narrow screen (90
 They are not put in the top bar.  
 Putting them there would push the buttons for deciding a conflict out of the bar, where they could no longer be clicked.
 
+While the drawer is open on a narrow screen, the top bar and the list cannot be touched.  
+`Tab` only moves inside the drawer.  
+If the focus slipped out to a row hidden behind the drawer, what you type would go into a translation cell you cannot see, and be saved.  
+To close it, press the close button, press the dark area outside the drawer, or press `Escape`.  
+When it closes, the focus goes back to the three-line button in the top bar.
+
 How many rows are currently listed appears in the top bar as the "showing" count.  
 When no row matches the conditions or the search, the list area says so.  
-When there is text in the search box, it first tells you to clear the search box.
+When there is text in the search box, it first tells you to clear the search box.  
+Both are set up to be announced by screen readers.  
+While the drawer is open on a narrow screen, the top bar and the list are left out of what screen readers see, so the same text is announced from a region inside the drawer instead.
 
 The list of key controls, the notes on the filter, and the band showing the state at startup are folded away.  
 All three are closed by default.  
@@ -1017,6 +1029,18 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
+
+Saving also stops when the screen cannot reach the server, and when the server does not accept saves from this screen.
+
+| What the screen says | What happened | Retrying |
+| ---- | ---- | ---- |
+| Cannot reach the server | `dwloc` has stopped (no activity for a while, or the black window was closed) | Keeps retrying. If it gets through, the translation goes in |
+| The server does not accept saves from this screen (404) | `dwloc` was restarted and this screen has an old `Cookie` (400 and 415 mean the screen and the server are different versions) | Stops. Typing the translation again sends it once |
+
+In both cases, the top bar lists the translations that are not in the file yet.  
+It shows the line number, the key and the translation, so copy them down before you restart.  
+After a restart the `URL` changes, and the old tab can no longer send them.  
+On the new screen, typing the key into the search box brings up the row.
 
 Rows with an unsaved translation, rows that could not be saved, and the row whose input box is currently open are not hidden even when they do not match the conditions.  
 Hiding them would make the row you need to fix, and the row you are touching, vanish from the screen.
