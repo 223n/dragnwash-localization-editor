@@ -193,9 +193,10 @@ func TestReadPowerShellMarked(t *testing.T) {
 
 // TestPowerShellHeaderCommentLike は、'#' で始まるヘッダーを見分けることを固定する。
 //
-// 上流の ConvertFrom-Csv はそのレコードを飛ばして次のレコードをヘッダーにするので、
-// そのファイルの訳は1行も公開されない。dwloc は飛ばさずにヘッダーとして返し、
-// publish の形の確かめ (a) がこれを見て止める（decisions のそのほか 2 の (iii)）。
+// dwloc は飛ばさずにヘッダーとして返し、publish の形の確かめ (a) がこれを見て止める
+// （decisions のそのほか 2 の (iii)）。判定は列名の前後の空白を除いて見るので、
+// 上流が飛ばさない `" #key"` や NO-BREAK SPACE の後ろの '#' も当たる
+// （[TestCommentLikeOnFixture]）。
 func TestPowerShellHeaderCommentLike(t *testing.T) {
 	tests := []struct {
 		text  string
@@ -205,6 +206,9 @@ func TestPowerShellHeaderCommentLike(t *testing.T) {
 		{"\"#key\",source_en,translation\nk,s,t\n", "#key", true},
 		{" #key,source_en,translation\nk,s,t\n", "#key", true},
 		{"\" #key\",translation\n", " #key", true},
+		{"\"\t#key\",translation\n", "\t#key", true},
+		{" #key,translation\n", " #key", true},
+		{"\"　#key\",translation\n", "　#key", true},
 		{"key,source_en,translation\nk,s,t\n", "key", false},
 		{"key#,translation\n", "key#", false},
 		// 行頭の '#' はコメントとして落ちるので、次の行がヘッダーになる（上流と同じ）。
@@ -226,6 +230,44 @@ func TestPowerShellHeaderCommentLike(t *testing.T) {
 				t.Errorf("最初の列名 %q、CommentLike %v, want %q と %v", first, f.Header.CommentLike(), tt.first, tt.want)
 			}
 		})
+	}
+}
+
+// TestCommentLikeOnFixture は、上流との突き合わせの入力の表で、'#' で始まると
+// 見なすヘッダーと、そのうち上流が飛ばすものを固定する。
+//
+// 上流が飛ばすのは、読んだ最初の値そのものが '#' で始まる2件だけである。
+// hash-header-quoted-space と hash-header-nbsp は、上流ではその名前の列（key 列の
+// 無いヘッダー）になり、source_en から訳を書く。dwloc は前後の空白を除いて見るので
+// この2件も '#' で始まると見なし、PR2 から (a) で止める（移植仕様「上流と意図して
+// 違える点」）。判定を上流と同じ「最初の値そのもの」に変えると、この試験が落ちる。
+func TestCommentLikeOnFixture(t *testing.T) {
+	commentLike := map[string]bool{
+		"hash-header-quoted": true, "hash-header-leading-space": true,
+		"hash-header-quoted-space": true, "hash-header-nbsp": true,
+	}
+	upstreamSkips := map[string]bool{"hash-header-quoted": true, "hash-header-leading-space": true}
+
+	cases, exp := loadUpstreamFixture(t)
+	for i, c := range cases.Cases {
+		header := ReadPowerShellMarked([]byte(c.Text)).Header
+		if got := header.CommentLike(); got != commentLike[c.Name] {
+			t.Errorf("%s: CommentLike() = %v, want %v", c.Name, got, commentLike[c.Name])
+		}
+		if !commentLike[c.Name] {
+			continue
+		}
+		// 上流が飛ばしたなら、上流の列名は dwloc のヘッダーではなく次のレコードになる。
+		skipped := !sameColumns(exp.Cases[i].Read.Columns, header.Fields)
+		if skipped != upstreamSkips[c.Name] {
+			t.Errorf("%s: 上流がヘッダーを飛ばしたか = %v, want %v（上流の列名 %q）",
+				c.Name, skipped, upstreamSkips[c.Name], exp.Cases[i].Read.Columns)
+		}
+	}
+	for name := range commentLike {
+		if !slices.ContainsFunc(cases.Cases, func(c fixtureCase) bool { return c.Name == name }) {
+			t.Errorf("表の %s は入力の表に無い", name)
+		}
 	}
 }
 

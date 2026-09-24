@@ -16,7 +16,7 @@
     "os": "linux",
     "culture": ""
   },
-  "cases_sha256": "6287da48694a2c2e681a5d36fddc71cc9f3d6e447abfdf5a571b41b78193834e",
+  "cases_sha256": "c820126de491363a5bf424dad9e23d4fd2c6cabf396856a505a4ed92fd122023",
   "cases": [
     {
       "name": "plain-working-crlf",
@@ -1384,6 +1384,70 @@
           "other": 0
         },
         "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "hash-header-quoted-space",
+      "read": {
+        "error": null,
+        "columns": [" #key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "hash-header-nbsp",
+      "read": {
+        "error": null,
+        "columns": ["\u00a0#key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
       }
     },
     {

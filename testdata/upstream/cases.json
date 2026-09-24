@@ -272,6 +272,18 @@
       "text": " #key,source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
     },
     {
+      "name": "hash-header-quoted-space",
+      "note": "ヘッダーの最初の列名が、引用の中の空白1つのあとの '#' で始まる。",
+      "as": "working",
+      "text": "\" #key\",source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "hash-header-nbsp",
+      "note": "ヘッダーが NO-BREAK SPACE のあとの '#' で始まる（引用符なし）。",
+      "as": "working",
+      "text": " #key,source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
       "name": "lines-above-header",
       "note": "ヘッダーの上に空行・コメント行・空白だけの行・全角空白だけの行がある。",
       "as": "working",

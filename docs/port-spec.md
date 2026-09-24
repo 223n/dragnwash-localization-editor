@@ -353,7 +353,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 - 閉じない引用符は型付きの誤り（csvfile.UnclosedQuoteError。引用符が開いた行を持つ）にし、値を返さない。上流はファイルの終わりまでを飲み込んで書く（上流の報告 #11）。値を返すと、確かめ忘れた呼び出し側から同じ漏れが起きる。
 - 列名の重複は、データが0件でも csvfile.DuplicateColumnError にする（上流 main に合わせる）。両方に当たれば閉じない引用符を返す。
 - 壊れたファイルを画面に並べるための入口（csvfile.ReadPowerShellMarked）は、誤りにせず印を付けて返す。閉じない引用符のあるファイルでは、引用符が開いたレコードより後ろを物理行のまま引ける。
-- 最初の列名が '#' で始まるヘッダー（`"#key"` など）は、上流と違って飛ばさずにヘッダーとして返す。呼び出し側は PowerShellHeader.CommentLike で見分け、publish は PR2 で (a) に足して止める。
+- 最初の列名が '#' で始まるヘッダー（`"#key"` など）は、上流と違って飛ばさずにヘッダーとして返す。呼び出し側は PowerShellHeader.CommentLike で見分け、publish は PR2 で (a) に足して止める。CommentLike は列名の前後の空白を除いて見る。上流の ConvertFrom-Csv がヘッダーを飛ばすのは、読んだ最初の値そのものが '#' で始まるとき（`"#key"`、先頭の半角空白を読み手が落とす ` #key`）だけなので、引用の中の空白（`" #key"`）や、読み手が落とさない NO-BREAK SPACE の後ろに '#' があるヘッダーは、上流ではその名前の列になる。dwloc はこれらも止める（下の表）。
 
 形の検出は、読み手が見分けない引用符の閉じ誤りなどを、形を見て見つける。止めるかどうかは呼び出し側が決め、publish と画面は同じ関数を呼ぶ（PR2・PR3）。物理行を単独で読むときは1物理行の読み方（csvfile.ParsePowerShellRecord と csvfile.FieldOffsets の中身）を使う。
 
@@ -369,7 +369,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 ### 上流と意図して違える点
 
-publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4）の土台として、上流 main（dc55c9e）の tools/hash-strings.ps1 と dwloc を、合成した入力の表で突き合わせる試験を置いた。入力は testdata/upstream/cases.json（63件、英文と訳はどれも架空の文）、上流の正解は testdata/upstream/expected.json で、scripts/upstream-fixtures.ps1 が上流の Read-Csv と Remove-NonRecords を AST で取り出して読ませた結果（レコードの値と物理行の範囲）と、上流のスクリプトを通しで走らせた結果（出力のバイトと集計の1行）を持つ。作り方は testdata/upstream/README.md にある。
+publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4）の土台として、上流 main（dc55c9e）の tools/hash-strings.ps1 と dwloc を、合成した入力の表で突き合わせる試験を置いた。入力は testdata/upstream/cases.json（65件、英文と訳はどれも架空の文）、上流の正解は testdata/upstream/expected.json で、scripts/upstream-fixtures.ps1 が上流の Read-Csv と Remove-NonRecords を AST で取り出して読ませた結果（レコードの値と物理行の範囲）と、上流のスクリプトを通しで走らせた結果（出力のバイトと集計の1行）を持つ。作り方は testdata/upstream/README.md にある。
 
 保存した正解は pwsh 7.4.6（上流の docker の hash 経路と同じ。mcr.microsoft.com/dotnet/sdk:8.0-noble に dotnet tool で入れたもの、Linux、カルチャは不変）で作った。手元の pwsh 7.6.6（Windows、ja-JP）で作り直した結果とは、pwsh の版の記録と例外の文面の言語のほかは同じだった（2026-09-24）。culture に依存する StartsWith('#') も、両方で U+00AD のあとの '#' をコメントと見なした。
 
@@ -382,6 +382,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 | CR だけの改行のファイル | 全行を捨て、ヘッダーとコメントだけを書く | 読む | cr-only-published、cr-only-working |
 | ',' だけの行 | 空の値のレコードにし、malformed dropped に数える | 空行相当として黙って落とす。違うのは集計の数だけ | comma-only-row |
 | '#' で始まるヘッダー（引用符で囲んだもの、空白のあとのもの） | ConvertFrom-Csv がそのレコードを飛ばし、次のレコード（データ）をヘッダーにする。何も書かない | 飛ばさずヘッダーとして読む。publish はいま source_en 列から訳を書く。いまの形の確かめ (a) は key 列も source_en 列も無いか、translation 列が無いときだけ止めるので、source_en 列と translation 列のあるこのヘッダーには当たらない。PR2 で (a) に「最初の列名が '#' で始まるヘッダー」の判定を足して止める。(a) を「key 列が無い」に広げると、正当な source_en,translation の2列の作業コピーまで止まるので、'#' を見る判定が別に要る | hash-header-quoted、hash-header-leading-space |
+| 引用の中の空白か NO-BREAK SPACE の後ろに '#' があるヘッダー | 読んだ最初の値が '#' で始まらないので飛ばさず、その名前（` #key` など）の列にする。key 列が無いので source_en から訳を書く | 読み方は上流と同じで、いまの publish も上流と同じバイトを書く。判定（PowerShellHeader.CommentLike）は、決めた判定の文面（最初の列名の前後の空白を除いて '#' で始まる）どおり空白を除いて見るので、'#' で始まると見なし、PR2 から (a) で止める。上流の飛ばし方（読んだ最初の値そのもの）にはそろえていない | hash-header-quoted-space、hash-header-nbsp |
 | 裸の引用符の後ろのコメント行と見出し | '"' の偶奇で引用の中と見なし、レコードにする。列が多ければ公開ファイルに書く | 引用の外として落とす | bare-quote-then-comment、bare-quote-then-heading、quote-after-closing-quote |
 | 行頭の '#' の判定 | StartsWith('#') はカルチャに依存する照合で、U+00AD のように照合上無視される文字を飛ばす | 序数で比べる。U+00AD で始まる行はデータとして読み、malformed dropped に数える | soft-hyphen-comment |
 | 閉じない引用符（上流の報告 #11） | ファイルの終わりまでを値に飲み込み、英語の原文ごと書く | 形の確かめ (e) で止める（PR2 からは読み手の型付きの誤りを終了コード1にする） | unclosed-to-eof、unclosed-last-line、unclosed-header、unclosed-published-middle |
@@ -397,7 +398,7 @@ PR0 では、次の違いを「PR1 で直す」として表に載せていた。
 
 行単位の読み手（csvfile.ReadPowerShellTable）の違い（行をまたぐ値が最初の行で切れる、閉じない引用符が行の終わりで閉じる、全角空白や NO-BREAK SPACE だけの行がレコードになる、データ行の無いファイルで列名の重複を確かめない）は、「行単位の読み方」として同じ表に載せてある。
 
-publish の試験（cmd/dwloc）では、いまの publish の振る舞いのうち PR2 で変わる箇所を「PR2 で変わる」として表に載せてある。行をまたぐ訳の入った入力と、行をまたぐレコードのあるいまの公開ファイルで止まること、訳の空の行をまたぐレコードを2件の malformed dropped に数えること、飲み込みと単独の CR を (b)(c) で止めていること、'#' で始まるヘッダーから書くこと、データ行の無いファイルで列名の重複を見ないこと、全角空白だけの行を malformed dropped に数えること、などである。見込みは表の理由に書いた。たとえば source_en,translation の2列の作業コピーで原文が行をまたぐと、続きの行の区切りの数がヘッダーの列数と同じになるので、PR2 の飲み込みの確かめ (f) で止まる見込みである（確かめたうえで通す指定で書く）。'#' で始まるヘッダーは、上の表のとおり (a) に専用の判定を足さないと PR2 のあとも書き続ける。表はいまの「書く」を固定しているだけなので、判定を入れ忘れても試験は落ちない。PR2 では、この2件が「止まる」に変わったことを確かめてから表を直す。引用符で囲まない値の中の単独の CR（lone-cr-unquoted-value）も、PR2 で止めると決まったので「PR2 で変わる」に置く。
+publish の試験（cmd/dwloc）では、いまの publish の振る舞いのうち PR2 で変わる箇所を「PR2 で変わる」として表に載せてある。行をまたぐ訳の入った入力と、行をまたぐレコードのあるいまの公開ファイルで止まること、訳の空の行をまたぐレコードを2件の malformed dropped に数えること、飲み込みと単独の CR を (b)(c) で止めていること、'#' で始まるヘッダーから書くこと、データ行の無いファイルで列名の重複を見ないこと、全角空白だけの行を malformed dropped に数えること、などである。見込みは表の理由に書いた。たとえば source_en,translation の2列の作業コピーで原文が行をまたぐと、続きの行の区切りの数がヘッダーの列数と同じになるので、PR2 の飲み込みの確かめ (f) で止まる見込みである（確かめたうえで通す指定で書く）。'#' で始まるヘッダーは、上の表のとおり (a) に専用の判定を足さないと PR2 のあとも書き続ける。表はいまの「書く」を固定しているだけなので、判定を入れ忘れても試験は落ちない。PR2 では、この2件が「止まる」に変わったことを確かめてから表を直す。引用の中の空白か NO-BREAK SPACE の後ろに '#' があるヘッダー（hash-header-quoted-space、hash-header-nbsp）は、いまは上流と同じバイトを書くので publish の試験の表に無い。PR2 で (a) に判定を足すとこの2件も止まり、表に無い違いとして試験が落ちるので、そのとき「意図して違える」として表に足す。引用符で囲まない値の中の単独の CR（lone-cr-unquoted-value）も、PR2 で止めると決まったので「PR2 で変わる」に置く。
 
 集計の1行は項目ごとに比べる（converted、already hashed、per-line、malformed dropped、in play order、other）。kept from the published file は dwloc の集計の1行に無いので比べない（上の表の集計の1行の行）。上流 main の集計の1行は、R28 に書いた 003ed1e の8項目に、この項目を足した9項目である。項目を比べないことは決めてあるが、この項目が数える処理（いまの公開ファイルにだけある行の引き継ぎ、上流の #10）に追従するかは、次の「上流と違うが未決の点」に置く。
 
