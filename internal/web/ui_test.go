@@ -1405,6 +1405,45 @@ func TestOpenEditorReviewsTheRowItLeft(t *testing.T) {
 	}
 }
 
+// TestNarrowAndWideLeaveNoGap は、狭い画面と広い画面の切り替わりが、app.css と
+// app.js で同じ1本の境目になっていることを見る。
+//
+// 広い側を @media (min-width: 901px) と書いていた。狭い側は (max-width: 900px) なので、
+// 900px と 901px のあいだ（ブラウザーの拡大率や高 DPI の画面で出る小数の幅）では、
+// どちらの指定も当たらない。そのあいだ app.js の matchMedia("(max-width: 900px)") は
+// 「広い」と答えるのに、見た目は狭い側の引き出しにも広い側の列の畳みにもならず、
+// 引き出しの閉じるボタンと幕が広い画面に出る。
+//
+// 広い側は狭い側のちょうど裏（not all and (max-width: …)）として書く。Media Queries
+// Level 4 の範囲の書き方（width > 900px）も同じ裏になるが、古いブラウザーでも通る形を採る。
+// 試験で小数の幅を作れない（Playwright の窓の幅は整数で、iframe も整数に丸められた）ので、
+// ここは字面で見る。
+func TestNarrowAndWideLeaveNoGap(t *testing.T) {
+	css := uiSource(t, "ui/app.css")
+	js := uiSource(t, "ui/app.js")
+
+	query := regexp.MustCompile(`matchMedia\("\(max-width: (\d+)px\)"\)`).FindAllStringSubmatch(js, -1)
+	if len(query) != 1 {
+		t.Fatalf("app.js の狭い画面の判定（matchMedia の max-width）が1つでない: %v", query)
+	}
+	width := query[0][1]
+
+	narrow := "@media (max-width: " + width + "px) {"
+	wide := "@media not all and (max-width: " + width + "px) {"
+	for _, want := range []string{narrow, wide} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css に %q が無い。app.js の matchMedia と同じ境目で切り替えること", want)
+		}
+	}
+	// 幅の指定を持つ @media は、この2つのほかに置かない。min-width で広い側を書くと、
+	// 境目の前後で小数の幅のすき間ができる。
+	for _, m := range regexp.MustCompile(`(?m)^\s*(@media [^{\n]*\{)`).FindAllStringSubmatch(css, -1) {
+		if strings.Contains(m[1], "width") && m[1] != narrow && m[1] != wide {
+			t.Errorf("app.css に境目と別の幅の指定がある: %q", m[1])
+		}
+	}
+}
+
 // TestScreenElementsExist は、app.js が探す id が index.html にあることを見る。
 //
 // getElementById は無い id に null を返すだけで、その場では落ちない。落ちるのは

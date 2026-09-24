@@ -1538,8 +1538,14 @@ button {
 /*
   広いとき。閉じるボタンと幕は引き出しのためのものなので出さない。
   #menu は列を畳んで一覧を広げる。畳んでいるあいだは列を描かない。
+
+  狭いときの指定のちょうど裏として書く。app.js の matchMedia("(max-width: 900px)")
+  とも裏表になる。(min-width: 901px) と書いていたころは、900px と 901px のあいだ
+  （拡大率や高 DPI の画面で出る小数の幅）でどちらの指定も当たらず、app.js は
+  「広い」と答えるのに、引き出しの閉じるボタンと幕が広い画面に出た。
+  (width > 900px) でも同じ裏になるが、古いブラウザーでも通るこちらを採る。
 */
-@media (min-width: 901px) {
+@media not all and (max-width: 900px) {
   .backdrop {
     display: none !important;
   }

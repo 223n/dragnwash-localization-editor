@@ -42,7 +42,7 @@ const s = SAMPLE;
 const L = SAMPLE_LINES;
 const typed = "さようなら。";
 
-// 画面の幅。900px 以下が引き出し、901px からが左の列（app.js の narrow と app.css の @media）。
+// 画面の幅。900px 以下が引き出し、900px を超えると左の列（app.js の narrow と app.css の @media）。
 const WIDE = { width: 1280, height: 720 };
 const NARROW = { width: 375, height: 812 };
 
