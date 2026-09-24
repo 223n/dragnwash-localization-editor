@@ -177,9 +177,18 @@ jobs:
           rm -rf dist
           mkdir -p dist
 
-          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする
+          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする。
+          # 日本語と英語を並べて書く。dwloc の出力は日本語だけなので、英語の読者には、そのことと
+          # 止まったときの主な文の英訳を、書庫を開いた時点で渡しておく（詳しくは README.en.md）
           cat > dist/README.txt <<TXT
           dwloc ${VERSION}
+
+          日本語の説明のあとに、英語の説明があります。
+          The English version follows the Japanese one.
+
+          ================================================================
+          日本語
+          ================================================================
 
           Drag'n Wash の翻訳リポジトリを扱うコマンドです。
           この書庫には、実行ファイルと LICENSE と THIRD_PARTY_NOTICES.md とこの説明が入っています。
@@ -209,6 +218,58 @@ jobs:
 
           詳しい手順とチェックサムの確かめ方は、次のページにあります。
           https://github.com/223n/dragnwash-localization-editor
+
+          ================================================================
+          English
+          ================================================================
+
+          dwloc is a command for working with the Drag'n Wash translation repository.
+          This archive contains the program, LICENSE, THIRD_PARTY_NOTICES.md and this file.
+
+          What dwloc prints is in Japanese:
+            Everything dwloc prints in the terminal is in Japanese only.
+            The screen of dwloc edit follows the language of your browser.
+            The messages dwloc edit prints in the window are in English
+            only when you start it with --ui-lang en.
+            When it stops, the first line tells you why. The most common ones:
+              ここは翻訳リポジトリではないようです。
+                This does not look like a translation repository.
+              ゲームのフォルダーを探しましたが、見つかりませんでした。
+                It looked for the game folder and did not find it.
+              訳が失われるので、1バイトも書きませんでした。
+                Translations would be lost, so not a single byte was written.
+              ゲームに入っている翻訳が古いので、1バイトも書きませんでした。
+                The translation in the game is older, so not a single byte was written.
+              操作がないまま 30m たちました。待ち受けを終えます。
+                No activity for 30m. Stopping.
+            More translations are in "What dwloc prints is in Japanese" of the English README:
+            https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md#what-dwloc-prints-is-in-japanese
+
+          The simplest way to start:
+            Put dwloc in the folder of the translation repository (the same place as Translations)
+            and double-click it. The screen for editing translations opens in your browser.
+            To stop it, press Ctrl+C or close the window that opened.
+            This is verified on Windows. On macOS and Linux, use the commands below.
+
+          From the command line:
+            dwloc edit     --root <path to the translation repository>   edit translations in the browser
+            dwloc diff     --root <path to the translation repository>   list what to do next
+            dwloc validate --root <path to the translation repository>   validate the published files
+            dwloc publish  --root <path to the translation repository>   rebuild the CSV for publication
+            dwloc version
+
+          This binary is not signed.
+          On macOS, Gatekeeper may stop it the first time. This line removes the quarantine mark:
+            xattr -d com.apple.quarantine ./dwloc
+          On Windows, a SmartScreen warning may appear.
+          Click "More info" and then "Run anyway".
+          If dwloc.exe is missing, suspect that Microsoft Defender quarantined it.
+          Check "Protection history" in Windows Security and allow it from there.
+          If macOS or Linux says Permission denied, add the execute permission:
+            chmod +x ./dwloc
+
+          The detailed steps and how to verify the checksums are on this page:
+          https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md
           TXT
 
           for target in ${targets}; do

@@ -79,7 +79,7 @@ dwloc_0.5.0_windows_amd64/
 | `dwloc` (`dwloc.exe` on Windows) | The program itself |
 | `LICENSE` | The license (Apache License 2.0) |
 | `THIRD_PARTY_NOTICES.md` | The attribution for the icons on the screen (Font Awesome Free, CC BY 4.0) |
-| `README.txt` | A short summary of how to run it |
+| `README.txt` | A short summary of how to run it (in Japanese and English) |
 
 There is a folder wrapped around everything so that extracting the archive does not scatter loose files across your machine.
 
@@ -234,7 +234,7 @@ To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
 That is why the tab does nothing when you come back after stepping away.  
-The black window shows `No activity for 30m. Stopping.`.  
+The black window shows `操作がないまま 30m たちました。待ち受けを終えます。` ("No activity for 30m. Stopping.").  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
 Start it again and open the new `URL` shown in the black window.  
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
@@ -281,7 +281,7 @@ If you want to build it yourself, see "Development" below.
 | `version` | Prints the version |
 
 On a PC that has the game installed, the last two can stop the moment you run them.  
-You do not even get the `--dry-run` report; it ends with "the translation in the game is older, so not a single byte was written" (exit code `1`).  
+You do not even get the `--dry-run` report; it ends with `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。` ("The translation in the game is older, so not a single byte was written.", exit code `1`).  
 That is what actually happens on this development machine.  
 Nothing is broken: `publish` is refusing to roll your work back.  
 How to get out of it is in "It stops when the translation in the game is older" below.
@@ -297,12 +297,45 @@ The options you will use most are these.
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
-| `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |
+| `--ui-lang ja` | `edit` | Chooses the language of the screen and of the messages `edit` prints in the black window |
 | `--idle-timeout` | `edit` | How long after the last activity it shuts down (`30m` by default, `0` never) |
 
 `--no-working` and `--no-game` have different jobs.  
 `--no-game` does not look for the game folder at all.  
 `--no-working` looks for it, and even when it finds one, does not read the working copy.
+
+### What dwloc prints is in Japanese
+
+Everything `dwloc` prints in the terminal is in Japanese: the usage, the error messages, and the reports of `validate`, `diff` and `publish`.  
+There is no option to switch it to English.  
+The screen of `edit` is different: it follows the language of your browser, so it comes out in English unless your browser asks for Japanese.  
+The messages `edit` prints in the black window are in Japanese, unless you start it with `--ui-lang en`.  
+When this README quotes what `dwloc` prints, the English in brackets is a translation, and the screen shows the Japanese.
+
+When it stops, the first line tells you why.  
+The table below gives English translations of the first lines you are most likely to see.  
+`<N>` and `…` stand for a number or a path that `dwloc` fills in.
+
+| First line it prints | In English | Details |
+| ---- | ---- | ---- |
+| `dwloc: ここは翻訳リポジトリではないようです。` | This does not look like a translation repository. It shows where it looked and where to put `dwloc`. | [The simplest way to start](#the-simplest-way-to-start) |
+| `dwloc: ゲームのフォルダーが見つかりません。` | The game folder was not found. | [When nothing is found](#when-nothing-is-found) |
+| `dwloc: ゲームのフォルダーを探しましたが、見つかりませんでした。` | It looked for the game folder and did not find it. It carries on without the game, so the source text column stays empty and "untranslated" is not judged. | [Using the game folder](#using-the-game-folder) |
+| `dwloc: ゲームのフォルダーが<N>個見つかりました。…` | `<N>` game folders were found. Choose one with `--game <folder>`. | [Using the game folder](#using-the-game-folder) |
+| `dwloc: --game と --no-game は一緒に指定できません。` | `--game` and `--no-game` cannot be given together. | [Use --no-game when you need the same answer every time](#use---no-game-when-you-need-the-same-answer-every-time) |
+| `dwloc: 訳が失われるので、1バイトも書きませんでした。` | Translations would be lost, so not a single byte was written. | [publish does not write if even one translation would be lost](#publish-does-not-write-if-even-one-translation-would-be-lost) |
+| `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。` | The translation in the game is older, so not a single byte was written. | [It stops when the translation in the game is older](#it-stops-when-the-translation-in-the-game-is-older) |
+| `dwloc: …ので、1バイトも書きませんでした。` | Because of …, not a single byte was written. `publish` stopped on purpose and changed no file. The lines below it say what to fix. | [publish does not write a file whose shape loses translations when read one line at a time](#publish-does-not-write-a-file-whose-shape-loses-translations-when-read-one-line-at-a-time) |
+| `dwloc: Translations を読めません: …` | It cannot read `Translations`. Check `--root`. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 対象になるロケールがありません: …` | There is no locale to work on. Check `--locale`. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 検証できません: …` | `validate` cannot check the files, because it cannot read them. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 記録を残せません（…）。このまま続けます。` | It cannot keep a log (…). It carries on without one. | [Logs](#logs) |
+| `操作がないまま 30m たちました。待ち受けを終えます。` | No activity for 30m. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
+
+The exit code tells you the same thing without reading the text.  
+`0` means it succeeded.  
+`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, or `publish` stopped without writing).  
+`2` means it could not run (a wrong argument, a file it cannot read, and so on).
 
 ### The two buttons inside the game
 
