@@ -435,6 +435,14 @@ func TestPythonSuffix(t *testing.T) {
 		"a.":        "",
 		"a":         "",
 		"archive.z": ".z",
+		// Python 3.14 は先頭に続く '.' を飛ばすので、次の3つに "" を返す。
+		// "..png" では判定が割れる（3.14 で走らせた上流だけが問題にする）。
+		// CI の 3.12 に合わせる。
+		"..png":  ".png",
+		"...png": ".png",
+		"..PNG":  ".PNG",
+		// 先頭の '.' のあとにもう1つ '.' があれば、3.12 と 3.14 で同じ。
+		".a.png": ".png",
 	}
 	for name, want := range tests {
 		if got := pythonSuffix(name); got != want {

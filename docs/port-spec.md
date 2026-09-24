@@ -833,7 +833,7 @@ credits.csv の報告の行番号は物理行ではなく「何番目のレコ�
 - 不正な UTF-8。上流は UnicodeDecodeError で異常終了し、dwloc は検査を続ける（従来どおり）
 - 読めないファイルと、CSV として読めない`textures/credits.csv`。上流は例外を捕まえずに異常終了（終了コード1、トレースバック）し、dwloc は「検証できません」で終了コード2になる。どちらも失敗として扱われる
 - Windows の Python の`sorted()`は大文字小文字を無視して並べる。dwloc はバイト順で、上流の CI（Linux）と同じ。大文字で始まる名前が混ざると、手元の Windows で走らせた上流とは出る順だけが変わる
-- Python 3.14 は`"a."`の`suffix`を`"."`とする（3.12 は空）。比べる相手は`.png`だけなので判定は変わらない。dwloc は CI の 3.12 に合わせた
+- `PurePath.suffix`の切り出し方が Python 3.14 で変わった。3.14 は先頭に続く '.' を飛ばしてから最後の '.' を探すので、`..png`と`...png`は空（3.12 は`.png`）、`..PNG`も空（3.12 は`.PNG`）になる。そのため`..png`のような名前では判定が割れる。`..png`という絵に credits.csv の行を付けた木は、上流の CI（3.12）と dwloc では問題なしになる。手元の 3.14 で上流を走らせると`..png: only .png files, credits.csv and fallback.txt belong in textures/`と`credits.csv:2: ..png is not in textures/`の2件になる。dwloc は CI の 3.12 に合わせた。`.a.png`はどちらも`.png`になる。`a.`は 3.14 だけ`"."`になるが、`.png`ではないので判定は変わらない
 
 ## CSVとキー生成
 
