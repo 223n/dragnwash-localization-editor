@@ -391,19 +391,29 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
             Write-Ok '書き換えるものは無い'
         } elseif (-not $NoPr) {
             $branch = 'feature/setup-repository'
-            Invoke-Step 'git' @('switch', '--create', $branch) | Out-Null
-            Invoke-Step 'git' (@('add') + $changed) | Out-Null
-            Invoke-Step 'git' @('commit', '--quiet', '--message', 'テンプレート由来の名前をこのリポジトリのものに書き換える') | Out-Null
-            Invoke-Step 'git' @('push', '--set-upstream', 'origin', $branch) | Out-Null
-            $prArgs = @(
-                'pr', 'create', '--repo', $Repo, '--base', $DevelopBranch, '--head', $branch,
-                '--title', 'テンプレート由来の名前を書き換える',
-                '--body', 'scripts/setup.ps1 が CODEOWNERS、Issue の選択画面の URL、package.json の名前を書き換えました。'
-            )
-            if (Invoke-Step 'gh' $prArgs) {
-                Write-Ok 'Pull Request を開いた。確かめてマージする'
+            # git の段が1つでも失敗したら、そこで書き換えの段を抜け、最後のまとめに出す。
+            # 先へ進むと、ブランチを作れないまま今のブランチへコミットしたり、押せていないブランチの
+            # Pull Request を開こうとしたりする。途中で止めても、書き換えたファイルは作業木に残る。
+            # $ErrorActionPreference = 'Stop' はネイティブコマンドの失敗では止まらないので、戻り値で見る
+            if (-not (Invoke-Step 'git' @('switch', '--create', $branch))) {
+                Write-Warn "ブランチ ${branch} を作れなかった。同じ名前のブランチが残っていないか確かめる。書き換えは作業木に残っている"
+            } elseif (-not (Invoke-Step 'git' (@('add') + $changed))) {
+                Write-Warn '書き換えたファイルを git add できなかった。書き換えは作業木に残っている'
+            } elseif (-not (Invoke-Step 'git' @('commit', '--quiet', '--message', 'テンプレート由来の名前をこのリポジトリのものに書き換える'))) {
+                Write-Warn "書き換えをコミットできなかった。書き換えはブランチ ${branch} の作業木に残っている"
+            } elseif (-not (Invoke-Step 'git' @('push', '--set-upstream', 'origin', $branch))) {
+                Write-Warn "ブランチ ${branch} を push できなかった。コミットは手元の ${branch} にある"
             } else {
-                Write-Warn "Pull Request を開けなかった。ブランチ ${branch} は push 済み"
+                $prArgs = @(
+                    'pr', 'create', '--repo', $Repo, '--base', $DevelopBranch, '--head', $branch,
+                    '--title', 'テンプレート由来の名前を書き換える',
+                    '--body', 'scripts/setup.ps1 が CODEOWNERS、Issue の選択画面の URL、package.json の名前を書き換えました。'
+                )
+                if (Invoke-Step 'gh' $prArgs) {
+                    Write-Ok 'Pull Request を開いた。確かめてマージする'
+                } else {
+                    Write-Warn "Pull Request を開けなかった。ブランチ ${branch} は push 済み"
+                }
             }
         } else {
             Write-Ok "書き換えた（コミットはしていない）: $($changed -join ' ')"
