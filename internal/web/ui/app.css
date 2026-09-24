@@ -430,6 +430,17 @@ button {
 }
 
 /*
+  失敗ではない案内（読み込んでいます…、ロケールを選んでください。）。失敗と同じ
+  赤い帯で出すと、ふつうに起動するたびに何かが壊れたように見える。参考のバッジと
+  同じ青の組（--info / --info-bg）にする。
+*/
+.notice.info {
+  color: var(--info);
+  background: var(--info-bg);
+  border-bottom: 1px solid var(--line);
+}
+
+/*
   中身が空の断り書きは、場所も取らない。
 
   #message と #empty は読み上げの見張り（role="status"）なので、hidden で

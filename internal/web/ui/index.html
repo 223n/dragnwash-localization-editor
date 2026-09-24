@@ -196,14 +196,18 @@
   </header>
 
   <!--
-    失敗の理由。読み上げにも出す（role="status"）。
+    失敗の理由と、読み込みの案内。読み上げにも出す（role="status"）。
 
     hidden を出し入れしない。hidden の要素は支援技術の木から外れるので、
     文字が変わる瞬間にこの要素が木に居らず、告知しない実装があり得る。
     出し入れは中身の入れ替えで行い、空のときは app.css の .notice:empty が
     余白と下線を落とす（中身の無いブロックの高さは0になる）。
+
+    出し方（失敗の .error か、案内の .info か）は app.js の showMessage が中身と
+    一緒に決める。ここで error を固定していたころは、「読み込んでいます…」と
+    「ロケールを選んでください。」まで失敗と同じ赤い帯で出た。
   -->
-  <p id="message" class="notice error" role="status"></p>
+  <p id="message" class="notice" role="status"></p>
 
   <!--
     書き出しの結果。帯のメニュー（#export-menu）の外に置く。メニューは選んだ

@@ -7,7 +7,9 @@
 
   - 判断を1つも持たない。状態バッジも件数も、待ち受けが渡したものをそのまま描く。
     ここで数え始めると、internal/diff が避けている誤検出を作り直すことになる。
-  - 文言を1つも持たない。すべて /api/bootstrap の目録から来る。
+  - 文言を1つも持たない。すべて /api/bootstrap の目録から来る。例外は1つだけで、
+    その目録が取れなかったときの1文（bootFailedText）は日本語と英語の固定の文を
+    持つ。目録が無いと、鍵をそのまま出すことしかできないためである。
   - 行の中身を innerHTML に渡さない。訳には <i> のような字が実際に入っている
     （ゲームの書式）。textContent で入れれば、その字はその字として見える。
   - 取りにいく先は自分自身だけ。外向きの通信はこの頁からも出さない。
@@ -447,9 +449,43 @@
     告知しない実装があり得る。中身の入れ替えなら、要素はずっと木に居る。
     空のときに見えなくなるのは app.css の .notice:empty が受け持つ
     （余白と下線を落とすと、中身の無いブロックは高さ0になる）。
+
+    kind は出し方で、"info" なら案内（読み込んでいます…、ロケールを選んでください。）、
+    それ以外は失敗として出す。setExportState と同じく、クラスだけを切り替える。
+    index.html で失敗の出し方を固定していたころは、ふつうに起動するたびに、目録と
+    行が届くまでのあいだ「読み込んでいます…」が失敗と同じ赤い帯で出た。
+    クラスを先に替えてから中身を入れる。逆にすると、一瞬だけ前の出し方のまま
+    新しい文が出る。
   */
-  function showMessage(text) {
+  function showMessage(text, kind) {
+    el.message.className = text ? "notice " + (kind === "info" ? "info" : "error") : "notice";
     el.message.textContent = text ? text : "";
+  }
+
+  /*
+    目録（/api/bootstrap）が取れなかったときの1文。
+
+    この頁は文言を1つも持たない（冒頭の約束）が、この1文だけは例外として日本語と
+    英語の固定の文を持つ。目録が無いと t() は鍵をそのまま返すので、以前は帯に
+    「ui.load_failed」という鍵が出た。翻訳者には何のことか分からない。どちらの言語の
+    画面かを決めるのも目録なので、目録が無いときはどちらとも決められない。だから
+    両方を、それぞれの lang を付けて並べる（読み上げがそれぞれの言語の声で読む）。
+
+    ほかの文言をここへ足さないこと。例外を広げると、目録を直しても変わらない文が
+    画面に増える。
+  */
+  var bootFailedText = {
+    ja: "画面を読み込めませんでした。dwloc の黒い窓に出ている URL を開き直してください。窓が閉じていたら、dwloc を起動し直してください。",
+    en: "Could not load the screen. Open the URL shown in the black dwloc window again. If the window is closed, start dwloc again."
+  };
+
+  function bootFailed() {
+    var ja = span(null, bootFailedText.ja);
+    ja.lang = "ja";
+    var en = span(null, bootFailedText.en);
+    en.lang = "en";
+    el.message.className = "notice error";
+    el.message.replaceChildren(ja, " ", en);
   }
 
   /* 取りにいく先は同じ生成元だけ。相対のパスしか書かない。 */
@@ -2800,7 +2836,7 @@
       stopHolding(holding);
       clear(el.list);
       el.rows.textContent = "";
-      showMessage(t("ui.select_locale"));
+      showMessage(t("ui.select_locale"), "info");
       return;
     }
     /*
@@ -2822,7 +2858,7 @@
     if (state.editing !== null) {
       commitEditor();
     }
-    showMessage(t("ui.loading"));
+    showMessage(t("ui.loading"), "info");
     /* URL に載せるのはロケール名だけ。原文も訳も URL には載せない。 */
     getJSON("/api/lines?locale=" + encodeURIComponent(locale))
       .then(function (data) {
@@ -3398,7 +3434,12 @@
         load(data.selected || "");
       })
       .catch(function () {
-        showMessage(t("ui.load_failed"));
+        /*
+          目録が取れていなければ t() は鍵を返すだけなので、固定の1文を出す
+          （bootFailed を見よ）。目録が取れたあとで組み立てに失敗したときも同じ文にする。
+          どちらも、翻訳者にできるのは開き直すことだけである。
+        */
+        bootFailed();
       });
   }
 

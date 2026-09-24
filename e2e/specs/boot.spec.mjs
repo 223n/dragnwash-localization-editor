@@ -401,6 +401,9 @@ test.describe("ロケールを省いて起動したとき", () => {
     const lines = watchRequests(page, "/api/lines");
     await openApp(page, server);
     await expect(page.locator("#message")).toHaveText(msg("ja", "ui.select_locale"));
+    // 選ぶ前の案内であって失敗ではない。失敗の出し方（.error）では出さない。
+    await expect(page.locator("#message")).toHaveClass(/(^|\s)info(\s|$)/);
+    await expect(page.locator("#message")).not.toHaveClass(/(^|\s)error(\s|$)/);
     await expect(page.locator("#locale option")).toHaveText([msg("ja", "ui.select_locale"), "he", "ja"]);
     await expect(page.locator("#locale")).toHaveValue("");
     await expect(dataRows(page)).toHaveCount(0);
@@ -552,6 +555,70 @@ test("目録を取れないときも黙らず、名前の無い畳みを出さ�
   await expect(page.locator("#locale option")).toHaveCount(0);
   await expect(dataRows(page)).toHaveCount(0);
   expect(lines).toHaveLength(0);
+});
+
+// 目録が無いと t() は鍵をそのまま返すので、以前は帯に「ui.load_failed」という鍵が出た。
+// 翻訳者には何のことか分からない。この1文だけは画面が日英の固定の文を持つ（app.js の
+// bootFailed。「文言を1つも持たない」約束の、ただ1つの例外）。どちらの言語の画面かは
+// 目録が決めるので、目録が無いときは分からない。だから両方を、それぞれの lang を付けて
+// 並べる。失敗なので、失敗の出し方（.error）で出す。
+test("目録を取れないときは、鍵ではなく日英の固定の文を失敗として出す", async ({ page, server }) => {
+  await page.route(isPath("/api/bootstrap"), (route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "boom" }),
+  );
+  await page.goto(server.url);
+  const message = page.locator("#message");
+  await expect(message).not.toBeEmpty();
+  await expect(message).not.toContainText("ui.");
+  await expect(message).toHaveClass(/(^|\s)error(\s|$)/);
+  for (const lang of ["ja", "en"]) {
+    await expect(message.locator(`[lang="${lang}"]`), lang).not.toBeEmpty();
+  }
+  // 日本語の側には日本語が、英語の側には日本語が1字も無い。
+  await expect(message.locator('[lang="ja"]')).toHaveText(/[぀-ヿ]/);
+  await expect(message.locator('[lang="en"]')).not.toHaveText(/[぀-ヿ一-鿿]/);
+});
+
+// 「読み込んでいます…」と「ロケールを選んでください。」は失敗ではない。以前は #message の
+// class が失敗の出し方（notice error）に固定されていて、ふつうに起動するたびに、目録と行が
+// 届くまでのあいだ赤い帯が出た。失敗を知らせる帯と同じ見た目だと、翻訳者は毎回何かが
+// 壊れたと読む。案内は案内の出し方（.info）、失敗だけを失敗の出し方で出す。
+test("読み込み中の案内は失敗の帯で出さず、読み込めなかったときだけ失敗の帯で出す", async ({ page, server }) => {
+  // 起動の最初から #message の移り変わりを控える。赤い帯が一瞬でも出たかを見る。
+  await page.addInitScript(() => {
+    window.__messages = [];
+    document.addEventListener("DOMContentLoaded", () => {
+      const node = document.getElementById("message");
+      const note = () => window.__messages.push({ text: node.textContent, cls: node.className });
+      new MutationObserver(note).observe(node, { attributes: true, childList: true, subtree: true, characterData: true });
+    });
+  });
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  await page.route(isPath("/api/lines"), async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.goto(server.url);
+  const message = page.locator("#message");
+  await expect(message).toHaveText(msg("ja", "ui.loading"));
+  await expect(message).toHaveClass(/(^|\s)info(\s|$)/);
+  await expect(message).not.toHaveClass(/(^|\s)error(\s|$)/);
+  release();
+  await expect(page.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 3 }));
+  await expect(message).toBeEmpty();
+  const seen = await page.evaluate(() => window.__messages);
+  expect(seen.filter((m) => m.text !== "" && /(^|\s)error(\s|$)/.test(m.cls))).toEqual([]);
+
+  // 読み込めなかったときは失敗の出し方になる。
+  await page.unroute(isPath("/api/lines"));
+  await page.route(isPath("/api/lines"), (route) => route.fulfill({ status: 500, body: "boom" }));
+  await page.locator("#reload").click();
+  await expect(message).toHaveText(msg("ja", "ui.load_failed"));
+  await expect(message).toHaveClass(/(^|\s)error(\s|$)/);
+  await expect(message).not.toHaveClass(/(^|\s)info(\s|$)/);
 });
 
 test.describe("ゲームのフォルダー", () => {

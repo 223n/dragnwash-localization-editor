@@ -985,7 +985,9 @@ func TestAlertsAreAnnounced(t *testing.T) {
 	for _, want := range []string{
 		`id="shown" class="shown" aria-live="polite"`,
 		`id="save-state" class="save-state" aria-live="polite"`,
-		`id="message" class="notice error" role="status"`,
+		// 出し方（失敗の .error か案内の .info か）は app.js の showMessage が決める。
+		// ここで error を固定すると、読み込みの案内まで失敗の赤い帯で出る。
+		`id="message" class="notice" role="status"`,
 		`id="empty" class="notice empty" role="status"`,
 		`id="filters" class="filters" role="group" aria-labelledby="filter-label"`,
 	} {
@@ -1002,7 +1004,7 @@ func TestAlertsAreAnnounced(t *testing.T) {
 	// 断っておくと、ここで確かめているのは属性と形までである。読み上げソフトで
 	// 実際に告知されたかどうかは、この環境では確かめられていない。
 	for _, bad := range []string{
-		`class="notice error" role="status" hidden`,
+		`id="message" class="notice" role="status" hidden`,
 		`class="notice empty" role="status" hidden`,
 	} {
 		if strings.Contains(html, bad) {
