@@ -304,10 +304,16 @@ func diffErrorText(root string, err error) string {
 // 1行です。
 //
 // 再生順のキーを読めていないロケールでは、「再生順を読めていません」で止めた
-// カテゴリを飛ばします。runDiff が先に「再生順を読めません。台本から消えた行などは
-// 判定しません」と書いていて、同じ理由を2度書くことになるためです。ロケールごとは
-// 飛ばしません。作業コピーやはみ出しの記録による保留はその警告に入らないので、
-// 飛ばすと未翻訳を判定していないことが消えます。
+// カテゴリの理由の行を書きません。runDiff が先に「再生順を読めません。台本から
+// 消えた行などは判定しません」と書いていて、同じ理由を2度書くことになるためです。
+// ロケールごとは飛ばしません。作業コピーやはみ出しの記録による保留はその警告に
+// 入らないので、飛ばすと未翻訳を判定していないことが消えます。
+//
+// 締めの1行（csv の category 列の値を並べる行）には、理由の行を省いたカテゴリも
+// 並べます。runDiff の警告が名指しするのは「台本から消えた行など」までで、
+// not_published や script_gap で絞った人には、その行が無いことが 0 件に見えます。
+// 理由の行が1つも無いときも締めは書きます。字下げした締めは、すぐ上の再生順の
+// 警告の続きとして読めます。
 func warnHeldCategories(report *diff.Report, stderr io.Writer) {
 	cats := diff.Categories()
 	type held struct {
@@ -318,6 +324,7 @@ func warnHeldCategories(report *diff.Report, stderr io.Writer) {
 	var groups []held
 	index := make(map[string]int)
 	// どこかのロケールで止めたカテゴリ。締めの1行で csv の category 列の値を並べる。
+	// 理由の行を再生順の警告に任せたカテゴリも入れる。
 	anyHeld := make(map[diff.Category]bool)
 	for _, sum := range report.Locales {
 		// このロケールで止めたカテゴリを、理由ごとに寄せる。
@@ -327,6 +334,7 @@ func warnHeldCategories(report *diff.Report, stderr io.Writer) {
 			if sum.CanJudge(c) {
 				continue
 			}
+			anyHeld[c] = true
 			block := sum.JudgeBlockReason(c)
 			if !sum.OrderKeys && block.ID == reason.JudgeOrderUnreadable {
 				continue
@@ -336,7 +344,6 @@ func warnHeldCategories(report *diff.Report, stderr io.Writer) {
 				whys = append(whys, why)
 			}
 			byWhy[why] = append(byWhy[why], c)
-			anyHeld[c] = true
 		}
 		for _, why := range whys {
 			key := why + "\x00" + joinCategoryIDs(byWhy[why])
@@ -349,7 +356,7 @@ func warnHeldCategories(report *diff.Report, stderr io.Writer) {
 			groups[i].locales = append(groups[i].locales, sum.Locale)
 		}
 	}
-	if len(groups) == 0 {
+	if len(anyHeld) == 0 {
 		return
 	}
 	for _, g := range groups {
