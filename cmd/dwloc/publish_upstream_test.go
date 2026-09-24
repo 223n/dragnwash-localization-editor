@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 /*
@@ -378,11 +379,13 @@ var publishDiffs = map[string]knownPublishDiff{
 	"swallow-2col-hash-close": {pubIntended, whyPubSwallow, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜4行目 publish_swallow_same_columns）`,
 	}},
+	// 次の2件の3行目は、単独で読むとヘッダーと同じ列の数に見えるが、閉じ引用符の後ろに
+	// 文字が続くので、通せない理由（text_after_quote）で止まる。
 	"swallow-7col-empty-key-english": {pubIntended, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_same_columns）`,
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_text_after_quote）`,
 	}},
 	"swallow-6col-published": {pubIntended, whyPubSwallow, []string{
-		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_swallow_same_columns）`,
+		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_swallow_text_after_quote）`,
 	}},
 	"swallow-2col-own-quote": {pubIntended, whyPubSwallow, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_text_after_quote）`,
@@ -505,6 +508,51 @@ func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
 			t.Errorf("%s: 通す指定を付けても上流と違う\n%s", name, quotePublishLines(d))
 		}
 	}
+}
+
+// stopsOnlyOnUnacceptableShapes は、表の違い方 diff が、形の確かめで止まり、確かめた
+// うえで通す指定では通せない理由だけを含むかを返す。通せる理由は
+// publish.Hazard.Acceptable と同じ（続きの行が単独で読むとレコードに見える形）。
+func stopsOnlyOnUnacceptableShapes(diff []string) bool {
+	if len(diff) == 0 {
+		return false
+	}
+	for _, line := range diff {
+		if !strings.Contains(line, "dwloc 止まる（形: ") ||
+			strings.Contains(line, reason.PublishSwallowKeyShaped) || strings.Contains(line, reason.PublishSwallowSameColumns) {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPublishAcceptMultilineKeepsOtherStops は、確かめたうえで通す指定
+// （--accept-multiline）を付けても、通せない形で止まる入力の止まり方が変わらない
+// ことを見る。対象は表の違い方のうち、形の確かめで止まり、通せる理由を含まないもの。
+//
+// 閉じ引用符の後ろに文字が続く飲み込みは、続きの行が単独で読むとレコードに見えても
+// 通さない（swallow-7col-empty-key-english、swallow-6col-published）。通すと、英語の
+// 原文やキーが訳として公開される。
+func TestPublishAcceptMultilineKeepsOtherStops(t *testing.T) {
+	cases, _ := loadPublishFixture(t)
+	var checked []string
+	for i, c := range cases.Cases {
+		pin, ok := publishDiffs[c.Name]
+		if !ok || !stopsOnlyOnUnacceptableShapes(pin.diff) {
+			continue
+		}
+		checked = append(checked, c.Name)
+		want := runFixturePublish(t, cases, i)
+		if got := runFixturePublish(t, cases, i, "--accept-multiline", publishFixtureLocale); got != want {
+			t.Errorf("%s: 通す指定で止まり方が変わった\n got %+v\nwant %+v", c.Name, got, want)
+		}
+	}
+	for _, name := range []string{"swallow-7col-empty-key-english", "swallow-6col-published"} {
+		if !slices.Contains(checked, name) {
+			t.Errorf("%s を確かめていない（表で通せない理由で止まることを固定していない）", name)
+		}
+	}
+	t.Logf("確かめた入力: %d 件", len(checked))
 }
 
 // portSpecPath は移植仕様。表の分類を、仕様の表と突き合わせるのに使う。

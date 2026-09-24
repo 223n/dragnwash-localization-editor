@@ -20,8 +20,9 @@ publish と画面は同じ関数を呼ぶ。別々に書くと、片方だけが
 // RecordSign は、続きの物理行がレコードを飲み込まれたものだと疑う理由。
 //
 // SignKeyShaped と SignSameColumns は、その物理行を単独で読むとレコードに見える
-// ことを表す。SignTextAfterQuote は、単独で読んでもレコードに見えないが、全体を
-// 解釈して読んだときの引用の閉じ方が、飲み込んだときにしか起きない形であることを表す。
+// ことを表す。正当な複数行の値でも当たる。SignTextAfterQuote は、全体を解釈して
+// 読んだときの引用の閉じ方が、飲み込んだときにしか起きない形であることを表す。
+// その行が単独で読むとレコードに見えるかは問わない。
 type RecordSign int
 
 const (
@@ -108,8 +109,9 @@ type Swallow struct {
 	ID, Line, EndLine int
 	// SwallowedLine は、飲み込まれたと疑う続きの物理行。
 	SwallowedLine int
-	// Sign は疑う理由。1つの物理行に理由が重なれば、単独で読むとレコードに見える
-	// 理由（キーの形、区切りの数の順）を採る。
+	// Sign は疑う理由。レコードに閉じ引用符の後ろに文字が続く行があれば、その
+	// レコードは [SignTextAfterQuote] の行だけを返す（[FindSwallows]）。そうでなければ、
+	// 単独で読むとレコードに見える理由（キーの形、区切りの数の順）を採る。
 	Sign RecordSign
 }
 
@@ -131,6 +133,16 @@ type Swallow struct {
 // [textAfterQuoteLines]）。こちらは行の中身ではなく全体を解釈したときの閉じ方で
 // 見るので、'#' で始まる行でも当たる。
 //
+// レコードにこの行が1つでもあれば、そのレコードはこの行だけを返し、ほかの続きの
+// 行がレコードに見えるかは見ない（同じ行がキーの形や区切りの数に当たっても、
+// 理由は [SignTextAfterQuote] にする）。閉じ引用符の後ろに文字を書く書き手は無いので、
+// そのレコードは正当な複数行の値ではありえない。単独で読むとレコードに見える理由は
+// 正当な値でも当たるので、呼び出し側は確かめたうえで通せる（publish の
+// --accept-multiline）。その理由で返すと、通してはならない飲み込みが通せる形になり、
+// 英語の原文やキーが訳として公開される。飲み込まれた行は、値を開いた行から閉じ引用符の
+// 行までのあいだにあり、どちらもレコードの範囲（Line〜EndLine）に入るので、どこを
+// 直すかは範囲と閉じ引用符の行で言える。
+//
 // 正当な複数行の値でも当たることがある（原文の2行目がカンマを多く含むなど）。
 // そのため、呼び出し側は、確かめたうえで通す指定を用意すること。閉じない引用符の
 // レコードは見ない。そちらは [UnclosedQuoteError] が先に止める。
@@ -148,11 +160,13 @@ func FindSwallows(segs Segments) []Swallow {
 		tails := textAfterQuoteLines(segs, seg)
 		for n := seg.Line + 1; n <= seg.EndLine; n++ {
 			sign, ok := RecordSign(0), false
-			if line, _ := segs.PhysicalLine(n); strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
-				sign, ok = looksLikeRecord(line, columns)
-			}
-			if !ok && tails[n] {
+			switch line, _ := segs.PhysicalLine(n); {
+			case tails[n]:
 				sign, ok = SignTextAfterQuote, true
+			case len(tails) > 0:
+				// 閉じ引用符の後ろに文字が続く行があるレコード。この行は返さない。
+			case strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#"):
+				sign, ok = looksLikeRecord(line, columns)
 			}
 			if ok {
 				out = append(out, Swallow{ID: seg.ID, Line: seg.Line, EndLine: seg.EndLine, SwallowedLine: n, Sign: sign})

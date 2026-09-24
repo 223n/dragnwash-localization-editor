@@ -11,11 +11,14 @@ import (
 //
 // 上流はどの入力も止めずに書く。飲み込みの8件（swallow-*）は、上流では英語の原文や
 // キーが訳に入って公開される形で、どれも当たらなければならない。訳の空の行を
-// 飲み込む形（swallow-7col-hash-close）はキーの形で、キー列の空いた英文の行
-// （swallow-7col-empty-key-english）と2列の作業コピー（swallow-2col-hash-close）は
-// 区切りの数で当たる（決まったことの 4）。飲み込まれた行が自分の値を引用符で開く
-// 3件（swallow-*-own-quote）は、続きの行を単独で読むと引用が開いたまま終わり、
-// キーの形にも区切りの数にも当たらない。閉じ引用符の後ろに文字が続くことで当たる。
+// 飲み込む形（swallow-7col-hash-close）はキーの形で、2列の作業コピー
+// （swallow-3col、swallow-2col-hash-close）は区切りの数で当たる（決まったことの 4）。
+// 飲み込まれた行が自分の値を引用符で開く3件（swallow-*-own-quote）は、続きの行を
+// 単独で読むと引用が開いたまま終わり、キーの形にも区切りの数にも当たらない。
+// 閉じ引用符の後ろに文字が続くことで当たる。キー列の空いた英文の行
+// （swallow-7col-empty-key-english）と key 列の英文の行（swallow-6col-published）は、
+// 区切りの数にも当たるが、閉じ引用符の後ろに文字が続くので、その理由で返す。
+// 区切りの数の理由は、確かめたうえで通す指定で通せるからである。
 //
 // 実物と同じ形の複数行の原文（ml-source-real-shape）や、複数行の訳（ml-translation-*）、
 // 値の中の '#' の行は当たってはいけない。当たると、正当なファイルの publish が
@@ -30,12 +33,12 @@ func TestFindSwallowsOnFixture(t *testing.T) {
 		"swallow-3col":                   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"swallow-7col-hash-close":        {{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 3, Sign: SignKeyShaped}},
 		"swallow-2col-hash-close":        {{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 3, Sign: SignSameColumns}},
-		"swallow-7col-empty-key-english": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
-		"swallow-6col-published":         {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-continuation-looks-like-row": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-source-translated-2col":      {{ID: 3, Line: 3, EndLine: 5, SwallowedLine: 5, Sign: SignSameColumns}},
-		// 次の3件は閉じ引用符の後ろの文字で当たる。上の swallow-7col-empty-key-english と
-		// swallow-6col-published も閉じ引用符の後ろに文字が続くが、区切りの数が先に当たる。
+		// 次の5件は閉じ引用符の後ろの文字で当たる。最初の2件は区切りの数にも当たるが、
+		// 閉じ引用符の後ろの文字を先に採る。
+		"swallow-7col-empty-key-english":   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		"swallow-6col-published":           {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 		"swallow-2col-own-quote":           {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 		"swallow-7col-empty-key-own-quote": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 		"swallow-6col-published-own-quote": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
@@ -65,13 +68,41 @@ func TestFindSwallows(t *testing.T) {
 	}{
 		{
 			// 上流 main の hash-strings.ps1 が認める「key 列に英文」の追記の形を、いまの
-			// 公開ファイルが飲み込む（批評の high、S1）。キーの形ではないが区切りの数で当たる。
+			// 公開ファイルが飲み込む（批評の high、S1）。キーの形ではないが区切りの数に当たる。
+			// 英文を開く引用符が「いち」を閉じ、後ろに Hello が続くので、理由は閉じ方にする。
 			name: "公開ファイルが key 列に英文のある行を飲み込む",
 			text: "key,section,node,order,speaker,translation\n" +
 				"0123456789abcdef,UI,,,UI,\"いち\n" +
 				"\"Hello, there\",UI,,,UI,こんにちは\n" +
 				"fedcba9876543210,UI,,,UI,に\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 区切りの数だけに当たる形。引用符は行の終わりで閉じ、後ろに文字は続かない。
+			name: "公開ファイルがヘッダーと同じ列の数の行を飲み込む",
+			text: "key,section,node,order,speaker,translation\n" +
+				"0123456789abcdef,UI,,,UI,\"いち\n" +
+				",UI,,,UI,こんにちは\"\n" +
+				"fedcba9876543210,UI,,,UI,に\n",
 			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
+		},
+		{
+			// キーの形の行でも、閉じ引用符の後ろに文字が続けば閉じ方の理由にする。キーの形の
+			// 理由は確かめたうえで通す指定で通せるので、それで返すと、正当な値ではありえない
+			// 飲み込みが通る（fedcba… の行が「いち」の訳に入って公開される）。
+			name: "キーの形の行で閉じ引用符の後ろに文字が続く",
+			text: "key,section,node,order,speaker,translation\n" +
+				"0123456789abcdef,UI,,,UI,\"いち\n" +
+				"fedcba9876543210,UI,,,UI,\"に\"さん\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 閉じ引用符の後ろに文字が続く行（4行目）があるレコードは、その行だけを返す。
+			// 3行目は単独で読むと区切りの数がヘッダーと同じだが、そのレコードは正当な値では
+			// ありえないので、通す指定で通せる理由として返さない。
+			name: "閉じ引用符の後ろに文字が続くレコードはその行だけを返す",
+			text: "key,source_en,translation\nk,s,\"a\nx,y,z\n\"tail,c\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 4, Sign: SignTextAfterQuote}},
 		},
 		{
 			name: "台詞ID で始まる行を飲み込む",

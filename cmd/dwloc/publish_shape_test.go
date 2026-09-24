@@ -524,6 +524,23 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
 		},
 		{
+			// 3行目は単独で読むとキーの形で始まるが、閉じ引用符の後ろに文字が続く。
+			// 通すと、Hi there! の行が「もし」の訳に入って公開され、その行は消える。
+			name: "キーの形の行で閉じ引用符の後ろに文字が続く",
+			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"やあ\"！\n",
+			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+		},
+		{
+			// 3行目は単独で読むとヘッダーと同じ6列に見える（key 列に英文を書いた追記の形）が、
+			// 英文を開く引用符が「もし」を閉じ、後ろに Good day が続く。
+			name: "ヘッダーと同じ列の数の行で閉じ引用符の後ろに文字が続く",
+			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n" +
+				"\"Good day, friend\",UI,,,UI,こんにちは\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\n",
+			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+		},
+		{
 			name:      "値の中の単独の CR",
 			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\rもし？\"\n",
 			want:      "2〜3行目: translation 列の値に単独の CR（後ろに LF の続かない CR）がある。",

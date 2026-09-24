@@ -37,7 +37,8 @@ publish は上流 main の hash-strings.ps1 と同じく、ファイル全体を
 	    2行目がカンマを多く含むなど）ので、単独で読むとレコードに見える行（キーの形、
 	    ヘッダーと同じ列の数）は、確かめたうえで通す指定（cmd/dwloc の
 	    --accept-multiline）で通せる。閉じ引用符の後ろに文字が続く形は、どの書き手も
-	    作らないので通さない。
+	    作らないので通さない。続きの行がレコードに見えても、同じレコードに閉じ引用符の
+	    後ろに文字が続く行があれば、そちらの理由で止める（csvfile.FindSwallows）。
 	(g) 単独の CR
 	    値の中の単独の CR（上流の道具はその行を落とす）と、引用の外の単独の CR で
 	    切れた値（ゲームは CR を捨ててつなげて読み、publish は切れた前半だけを書く）。
@@ -89,6 +90,12 @@ type Hazard struct {
 // 行をまたぐ）ので、止めたままにすると、そのロケールを publish できなくなる。
 // ほかの形は直せば通る（閉じ引用符の後ろに文字を書く書き手は無く、単独の CR は
 // LF に直せる）ので、通させない。
+//
+// 通せるかは理由の識別子だけで決める。続きの行がレコードに見えても、同じレコードに
+// 閉じ引用符の後ろに文字が続く行があれば、csvfile.FindSwallows がその行だけを
+// text-after-quote（reason.PublishSwallowTextAfterQuote）で返すので、ここで通せる
+// 形にはならない。その順を崩すと、
+// 英語の原文やキーを飲み込んだ訳が、通す指定で公開される。
 func (h Hazard) Acceptable() bool {
 	return h.Why.ID == reason.PublishSwallowKeyShaped || h.Why.ID == reason.PublishSwallowSameColumns
 }

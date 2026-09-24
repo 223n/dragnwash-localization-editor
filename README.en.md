@@ -630,6 +630,8 @@ The lines it lets through are printed on standard error.
 When you run it with `--path`, give the file you passed to `--path` instead of a locale.  
 A closing quote followed right away by text, a quote that is never closed, a lone `CR`, and the shapes of the play order data are never let through, even with this option.  
 None of them appear in files written by the tools, and fixing them gets you through.  
+A record with a line where text follows a closing quote right away is never let through, even when its continuation lines look like records.  
+It cannot be a valid value, and letting it through would publish the English source text or keys as translations.  
 Exporting from the screen has no such option.  
 When it stops on a valid multi-line value, write it with `dwloc publish`.
 
