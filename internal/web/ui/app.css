@@ -547,6 +547,16 @@ button {
   border-color: var(--muted);
 }
 
+/*
+  読み込みの最中の引き止めのボタン（app.js の syncBusy が disabled を付ける）。
+  読み終えるまで押しても何も起きないので、押せそうな印（cursor: pointer）を下ろす。
+  一覧の訳の欄（.list[aria-busy="true"]）と同じ考え。読み込んでいることは
+  #message が言う。
+*/
+.conflict .btn:disabled {
+  cursor: progress;
+}
+
 .orphans-list {
   margin: 0;
   padding-inline-start: 18px;
@@ -1194,6 +1204,17 @@ button {
 
 .row .translation[tabindex]:hover {
   border-color: var(--muted);
+}
+
+/*
+  読み込みの最中の一覧（app.js の load が aria-busy を立てる）。読み終えるまで
+  訳の欄は開かないので、cursor: text を下ろす。打てない欄に「打てそうな」印は
+  出さない（上の競合している行と同じ考え）。読み込んでいることは #message が言う。
+  .row まで書くのは、上の .row .translation[tabindex] に詳細度で勝つためである。
+  同じ詳細度だと、あとに書いたほうが勝つ。順序に頼らない。
+*/
+.list[aria-busy="true"] .row .translation[tabindex] {
+  cursor: progress;
 }
 
 /*
