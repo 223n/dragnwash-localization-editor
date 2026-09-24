@@ -65,6 +65,10 @@ type BaseResult struct {
 //
 // 見るのは訳だけである。section や order の食い違いは見ない。ゲーム側の
 // 再生順はリポジトリのものを使うので、そこがずれていても書き出す中身は変わらない。
+// 訳は値の中の CRLF を LF にそろえてから比べる（[sameTranslation]）。
+//
+// 読み方は publish と同じく全体を解釈する。ゲーム側の公開ファイルの形の崩れ
+// （閉じない引用符など）は、呼び出し側が先に形の確かめ（[CheckTargetShape]）で止める。
 //
 // ゲーム側に公開ファイルが無いときは、そろっているともいないとも言えないので
 // 何も返さない。そのロケールで訳が実際に消えるなら [CheckLoss] が捕まえる。
@@ -98,7 +102,7 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 	// 見本に入る5件とその並びが実行のたびに変わる。
 	for _, mine := range repo.order {
 		theirs, both := game.at[mine.folded]
-		if !both || mine.text == theirs.text {
+		if !both || sameTranslation(mine.text, theirs.text) {
 			continue
 		}
 		res.Count++
@@ -111,6 +115,18 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// sameTranslation は、コミット済みの訳とゲーム側の訳が同じかを返す。値の中の
+// CRLF は LF にそろえてから比べる（決まったことのそのほか 1）。
+//
+// 翻訳リポジトリの .gitattributes は `*.csv text eol=lf` なので、コミットで値の中の
+// CRLF も LF になる。一方ゲーム側の公開ファイルは Mod や翻訳者が書いたままで、CRLF の
+// ことがある。改行コードだけの違いで「ゲームが古い」と止めると、同じ訳なのに publish が
+// 通らない。単独の CR はそろえない。git も変えず、上流の道具はその行を落とすので、
+// 同じ訳とは言えない（形の確かめが止める）。台詞ID の行も同じ規則で比べる。
+func sameTranslation(repo, game string) bool {
+	return repo == game || strings.ReplaceAll(repo, "\r\n", "\n") == strings.ReplaceAll(game, "\r\n", "\n")
 }
 
 // driftHeads は、2つの訳の「違っているところが見える」切り出しを返す。

@@ -121,6 +121,38 @@ func TestCheckBaseStaysQuietWhenTheGameIsCurrent(t *testing.T) {
 	}
 }
 
+// TestCheckBaseNormalizesCRLF は、値の中の CRLF を LF にそろえてから比べることを
+// 見る（決まったことのそのほか 1）。
+//
+// 翻訳リポジトリの .gitattributes は eol=lf なので、コミットで値の中の CRLF は
+// LF になる。ゲーム側の公開ファイルは CRLF のままのことがある。改行コードだけの
+// 違いで止めると、同じ訳なのに publish が通らない。単独の CR はそろえない（上流の
+// 道具はその行を落とすので、同じ訳とは言えない）。台詞ID の行も同じ規則で比べる。
+func TestCheckBaseNormalizesCRLF(t *testing.T) {
+	repo := baseHeader +
+		"aaaaaaaaaaaaaaaa,UI,,,UI,\"一行目\n二行目\"\n" +
+		"line:aaaaaaaa,,,,,\"せりふ\nつづき\"\n" +
+		"bbbbbbbbbbbbbbbb,UI,,,UI,\"い\nち\"\n" +
+		"cccccccccccccccc,UI,,,UI,\"さ\r\nん\"\n"
+	game := baseHeader +
+		"aaaaaaaaaaaaaaaa,UI,,,UI,\"一行目\r\n二行目\"\r\n" +
+		"line:aaaaaaaa,,,,,\"せりふ\r\nつづき\"\r\n" +
+		// 単独の CR は LF と同じ訳と見なさない。
+		"bbbbbbbbbbbbbbbb,UI,,,UI,\"い\rち\"\r\n" +
+		// コミット済みが CRLF でゲーム側が LF でも同じ。
+		"cccccccccccccccc,UI,,,UI,\"さ\nん\"\r\n"
+	working := baseWorkingHeader + "aaaaaaaaaaaaaaaa,UI,,,UI,,訳\n"
+
+	target, current := newBaseTree(t, repo, game, working)
+	res, err := CheckBase(target, current)
+	if err != nil {
+		t.Fatalf("CheckBase: %v", err)
+	}
+	if res.Count != 1 || len(res.Sample) != 1 || res.Sample[0].Key != "bbbbbbbbbbbbbbbb" {
+		t.Errorf("改行コードだけの違いを数えている、または単独の CR を見逃している: %+v", res)
+	}
+}
+
 // TestCheckBaseIgnoresRowsOnlyOneSideHas は、片側にしか無い行を数えないことを見る。
 //
 // ゲームの版が古ければ、行そのものの増減は当たり前に起きる。それを数えると、
