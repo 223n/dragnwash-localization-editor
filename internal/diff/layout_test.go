@@ -109,6 +109,37 @@ func TestCompareLayoutRisk(t *testing.T) {
 		}
 	})
 
+	t.Run("改行コードだけが違う訳と原文は同じと見なす", func(t *testing.T) {
+		// 行をまたぐ原文と訳。はみ出しの記録（表計算ソフトなどで保存し直したもの）は
+		// CRLF、作業コピーは LF。キーは LF の原文から求める。単独の CR はそろえない。
+		const src = "para1\n\npara2"
+		multiKey := key.For(src)
+		for _, tc := range []struct {
+			name, source, translation string
+			want                      int
+		}{
+			{"CRLF", "para1\r\n\r\npara2", "いち\r\nに", 1},
+			{"LF", src, "いち\nに", 1},
+			{"訳の単独の CR", src, "いち\rに", 0},
+			{"原文の単独の CR", "para1\r\rpara2", "いち\nに", 0},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				repo := newRepo(t, map[string]string{
+					"data/script_order.csv":       orderTwo,
+					"Translations/ja/strings.csv": published,
+					"Translations/_discovered/ja.working.csv": workingHeader +
+						multiKey + ",UI,,,UI,\"" + src + "\",\"いち\nに\"\n",
+					"Translations/_discovered/layout_risks.csv": layoutRisksHeader +
+						"\"" + tc.source + "\",\"" + tc.translation + "\",x,240,180,1.33,Canvas/Label\n",
+				}, true)
+				rep := Compare(repo, nil)
+				if got := counts(t, rep, "ja")[CatLayoutRisk]; got != tc.want {
+					t.Errorf("件数 = %d、%d を期待", got, tc.want)
+				}
+			})
+		}
+	})
+
 	t.Run("同じキーに複数あれば比のいちばん大きい行", func(t *testing.T) {
 		repo := newRepo(t, map[string]string{
 			"data/script_order.csv":       orderTwo,

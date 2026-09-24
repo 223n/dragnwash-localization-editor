@@ -105,24 +105,39 @@ exportPublished は publish が作るのと同じCSVを組み立てる。
 返り値が (nil, "", nil) のときは、応答をこの中で書き終えている。
 */
 func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *publish.Target) ([]byte, string, error) {
-	data, err := publish.LoadOrder(s.opt.Root)
+	/*
+		再生順のデータ（data/script_order.csv と data/level_flow.csv）の形を、読む前に
+		見る。publish と同じ順（cmd/dwloc の runPublish は再生順のデータの形を最初に
+		見る）。閉じない引用符は読み込みの誤り（500）ではなく形の崩れとして断り、
+		見出しの行へそのまま書く値の改行は、書き出すと公開ファイルの見出しが壊れる
+		ので断る。どちらも画面の指定では通せない。
+	*/
+	orderHazards, err := publish.CheckOrderShape(s.opt.Root)
 	if err != nil {
 		return nil, "", err
 	}
-	out, _, err := publish.BuildTarget(data, *target)
+	if len(orderHazards) > 0 {
+		http.Error(w, s.cat.T(cat, "error.export_unsafe_shape",
+			"count", strconv.Itoa(len(orderHazards))), http.StatusConflict)
+		return nil, "", nil
+	}
+	data, err := publish.LoadOrder(s.opt.Root)
 	if err != nil {
 		return nil, "", err
 	}
 
 	/*
-		入力といまの公開ファイルが、1行ずつ読むと訳を失う形になっていないかを
-		最初に見る。publish と同じ順（cmd/dwloc の runPublish は、組み立て →
-		形 → 土台の食い違い → 失われる訳、の順で見る）。
+		入力・いまの公開ファイル・ゲーム側の公開ファイルが、読むと訳や原文を
+		取り違える形になっていないかを最初に見る。publish と同じ順（cmd/dwloc の
+		runPublish は、形 → 組み立て → 土台の食い違い → 失われる訳、の順で見る）。
 
-		この形のファイルは、下の2つの確かめも同じ読み方で読むので、読み違えた
-		まま「そろっている」「失われない」と判断してしまう。ここを通さないと、
-		publish が止める中身（切り詰めた訳や、黙って落ちた行）を画面からは
-		書き出せる。
+		ここを通さないと、publish が止める中身（英語の原文を飲み込んだ訳や、
+		黙って落ちた行）を画面からは書き出せる。組み立てより前に見るのは、
+		組み立てが読み方の誤り（閉じない引用符）で止まると、形の崩れとして
+		伝えられず、書き出しの失敗（500）になるためである。画面には、確かめた
+		うえで通す指定（dwloc publish --accept-multiline <ロケール>:<key>）が無い。
+		正しい複数行の値で止まったときは、文面で dwloc publish のレコード単位の
+		指定を案内する。
 	*/
 	hazards, err := publish.CheckTargetShape(*target)
 	if err != nil {
@@ -135,6 +150,10 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 			"count", strconv.Itoa(len(hazards))), http.StatusConflict)
 		return nil, "", nil
 	}
+	out, _, err := publish.BuildTarget(data, *target)
+	if err != nil {
+		return nil, "", err
+	}
 
 	/*
 		ゲーム側の作業コピーを入力にしたときは、その作業コピーが建っている土台が
@@ -143,8 +162,8 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 		ずれていると、訳は消えないまま古い版へ巻き戻る。下の [publish.CheckLoss] は
 		これを捕まえられない。訳は消えておらず、書き換わっただけだからである。
 
-		順番も publish と同じにする（cmd/dwloc の runPublish は、組み立て →
-		形 → 土台の食い違い → 失われる訳、の順で見る）。順番が違うと、同じ状態に
+		順番も publish と同じにする（cmd/dwloc の runPublish は、形 → 組み立て →
+		土台の食い違い → 失われる訳、の順で見る）。順番が違うと、同じ状態に
 		対して画面と publish が別の理由を出す。
 
 		コミット済みの公開ファイルがまだ無いロケール（新しい言語の最初の書き出し）は

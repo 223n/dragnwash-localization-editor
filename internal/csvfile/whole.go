@@ -49,11 +49,12 @@ func (h WholeHeader) MultiLine() bool { return h.EndLine > h.Line }
 // UnclosedLine に印を付けるだけで、列名の重複は確かめない（重複したときの値は
 // [NewRow] のとおり後の列が勝つ）。
 //
-// この関数は publish の守り（internal/publish の形の確かめ）専用である。publish は
-// まだ1物理行を1レコードとする [ReadPowerShellRows] で読むので、行単位では読み違える
-// ファイルを、この関数の結果と突き合わせて見つけて止める。列名の重複は行単位の
-// 読み方が先に確かめている。全体を解釈する読み手へ移す作業（docs/port-spec.md）の
-// PR2 で publish の読み手が [ReadPowerShell] へ移れば、この関数は使われなくなる。
+// この関数は PR1 まで publish の守り（internal/publish の形の確かめ）専用だった。
+// publish が1物理行を1レコードとする [ReadPowerShellRows] で読んでいたあいだ、
+// 行単位では読み違えるファイルを、この関数の結果と突き合わせて見つけて止めていた。
+// 全体を解釈する読み手へ移す作業（docs/port-spec.md）の PR2 で publish の読み手が
+// [ReadPowerShell] へ移り、この関数はどの使い手も使っていない。上流との突き合わせの
+// 表と、主の読み手と同じ結果を返すことを確かめる試験のためにだけ残っている。
 //
 // 上流と意図して違えている点は [SplitSegments] の doc コメントにある。"," だけの
 // 行は、全文の ConvertFrom-Csv なら空の値2つのレコードとして返す（pwsh 7.6.6 で

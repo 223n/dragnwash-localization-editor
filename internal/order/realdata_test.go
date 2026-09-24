@@ -272,10 +272,11 @@ func TestRealDataSpeakers(t *testing.T) {
 func TestRealDataSpeakerColumn(t *testing.T) {
 	data := loadRealData(t)
 
-	rows, err := csvfile.ReadPowerShellRows(readSourceFile(t, "Translations", "ja", "strings.csv"))
+	f, err := csvfile.ReadPowerShell(readSourceFile(t, "Translations", "ja", "strings.csv"))
 	if err != nil {
 		t.Fatalf("ja/strings.csv が読めない: %v", err)
 	}
+	rows := f.Rows()
 
 	checked := 0
 	for _, row := range rows {

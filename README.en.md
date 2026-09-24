@@ -546,6 +546,8 @@ When it stops, it writes no locale at all.
 
 When it stops, it lists the rows that would be lost by locale, line number, key and the beginning of the current translation only.  
 It does not print the whole translation.  
+For a row whose translation spans lines, it prints the line numbers as a range such as "lines 2 to 3" (`2〜3行目`).  
+Line breaks in the translation are replaced with visible marks, such as `↵` for LF and `␍` for CR.  
 The exit code is `1` (the same meaning as when `validate` finds a problem).  
 `--dry-run` makes the same judgement and gives the same report.
 
@@ -579,10 +581,10 @@ The original `Translations/ja/strings.csv` was 191,650 bytes with 1,721 data row
 | One translation of a row present in the published file emptied | 1 | No | 1 |
 | As-is (one untranslated row translated) | 0 | Yes | 0 |
 
-In the second row, `source_en` and `translation` fuse into a single column name, so the `translation` column can no longer be looked up.  
-Every row is then taken as "translation empty" and dropped.  
+In the second row, back when it read one line at a time, `source_en` and `translation` fused into a single column name, so the `translation` column could no longer be looked up.  
+Every row was then taken as "translation empty" and dropped.  
 Before this check existed, that passed with exit code 0 and left the published file with nothing but a header line.  
-Now that input is stopped earlier by the check in "publish does not write a file whose shape loses translations when read one line at a time" below (the exit code is the same `1`).
+Now that input is stopped earlier by the check in "publish does not write a file with a shape it would misread" below (it stops as a quote that is never closed; the exit code is the same `1`).
 
 In the last row, `ja/strings.csv` went from 191,650 bytes to 191,653 bytes.  
 The added translation row itself is 63 bytes.  
@@ -597,61 +599,127 @@ Even with a healthy working copy, the `speaker` column changes on 17 rows (`Ryan
 That is because the working copy does not carry the `speaker` of rows that are not in the playback order.  
 No translation is lost, so it does not stop here.
 
-#### publish does not write a file whose shape loses translations when read one line at a time
+#### publish does not write a file with a shape it would misread
 
-`publish` reads its input one physical line at a time, one line per record.  
-The upstream `tools/hash-strings.ps1` has moved to reading the whole file at once, but `dwloc` still reads line by line.  
-Read line by line, some files quietly lose translations.  
-And the check above reads the current published file the same way, so it cannot notice the loss.
+`publish` reads the whole file at once, the same way as the upstream `tools/hash-strings.ps1`.  
+A quoted value is read as one value even when it spans lines.  
+Line breaks inside a value are written back exactly as they were read.  
+The published file is byte for byte the same as the upstream tool writes.
 
-So before writing, it checks the shape of the input and of the current published file.  
+This way of reading, however, cannot tell a forgotten closing quote from a valid multi-line value.  
+From a working copy with a forgotten closing quote, the upstream tool writes the English source text or the keys of other rows into the published file as translations.  
+The check above finds translations that disappear, but not English text that gets added.
+
+So before writing, it checks the shape of the input, of the current published file and of the published file on the game side.  
 If any of the following applies, it stops without writing any locale (exit code `1`).  
 The checks run in this order: this shape check, the check of the translation in the game, and the check for lost translations.  
 `--dry-run` makes the same judgement.
 
-| Shape | File checked | Written as it is |
-| ---- | ---- | ---- |
-| The header has neither a `key` nor a `source_en` column, or no `translation` column | The input and the current published file | Every row is dropped |
-| A quoted value spans lines | The current published file | The translation is cut short at its first line |
-| A quoted value spans lines and that row has a translation | The input | The translation is cut short, or the whole row is dropped |
-| A quoted value spans lines and its continuation lines are read as other translations | The input | Translations nobody entered are published |
-| A quote is opened and never closed before the end of the file | The input and the current published file | Everything after it can be read as one value |
-| The file has non-empty lines, yet not a single row can be read | The input and the current published file | Every row is dropped |
+| Shape | Written as it is |
+| ---- | ---- |
+| The header has neither a `key` nor a `source_en` column, has no `translation` column, or its first column name starts with `#` | Every row is dropped |
+| A quote is opened and never closed before the end of the file | Everything after it (including the English source text) becomes one translation |
+| A quote seems to be closed on another line, swallowing the lines after it into a value | The English source text or the keys of other rows are published as translations |
+| A value contains a lone `CR` (a `CR` not followed by `LF`) | The upstream tool drops that row when the file goes through it |
+| An unquoted value is cut by a lone `CR` at the end of a line | Only the first half is published and the rest is dropped |
+| The file has non-empty lines, yet not a single row can be read | Every row is dropped |
 
 When it stops, it prints each case with the file, the line number, what would happen, and how to fix it.  
 It does not print the translations.  
-A working copy with only the two columns `source_en,translation` is valid input and passes.
+A working copy with only the two columns `source_en,translation` is valid input and passes.  
+When it hits the published file on the game side, copying the repository's `Translations/<locale>/strings.csv` to the same place fixes it.
 
-A value that spans lines is not necessarily a broken shape.  
-The upstream `tools/hash-strings.ps1` reads the whole file, so it treats a multi-line translation as a valid translation.  
-A multi-line translation in the current published file may be a valid translation that another translator committed.  
-`dwloc publish` still stops.  
-Until a way of reading the whole file comes to `dwloc`, it keeps stopping on that locale.  
-Run without `--locale`, it does not write the other locales either.  
-Removing the line breaks to get through would break that valid translation.  
-When it stops, get out of it like this.
+The play order data (`data/script_order.csv` and `data/level_flow.csv`) is checked before it is read, too.  
+It stops in the same way when a quote is opened and never closed before the end of the file, and when a value that `publish` writes as it is contains a line break.  
+The values written as they are are the columns used for heading lines, and the `order` column.  
+The columns used for heading lines are `section`, `phase`, `node` and `condition` in `script_order.csv`, and `dragon`, `weather`, `set_flags` and `end_flags` in `level_flow.csv`.  
+With a line break there, a heading line of the published file splits in two, and the second line is read as a data line the next time.  
+The upstream tool breaks in the same way.
 
-- The other locales can be published by listing every locale except the stopped one in `--locale`
-- The stopped locale can be written with `tools/hash-strings.ps1` or the in-game `Hash for commit`
-- If the line break got in by mistake, remove it and run again
+A swallowed line is spotted by whether a continuation line of a value that spans lines looks like a record on its own.  
+If it starts with a key, or has as many separators as the header has columns, a forgotten closing quote is suspected.  
+To fix it, check where the quotes close, and add the `"` that closes the value if it is missing.  
+Write a `"` inside a value as two, `""`.
 
-When you write with the upstream tools, note that neither of them carries the game-side working copy straight into the published file.  
-`tools/hash-strings.ps1` reads the working copy in the repository's `Translations/_discovered`.  
-If you are using the working copy on the game side, copy it there first.  
-`Hash for commit` writes the published file on the game side.  
-After it writes, copy that file to the repository's `Translations/<locale>/strings.csv`.  
-If you forget to copy, it can end with exit code 0 and still leave the translations out.
+A valid multi-line value can hit this check too.  
+That happens when the second line of the source text has many commas, or when the source text spans lines in a two-column working copy.  
+After checking the reported lines and making sure the value is correct, run it again with the option printed in the fix when it stopped.  
+The option names one record, in the form `<locale>:<key>`.  
+The fix prints it in a form you can copy as it is.
 
-A value in the input that spans lines does not stop it when that row's translation is empty.  
-The working copy on the game side has a row whose source text (`source_en`) spans lines and whose translation is empty.  
-Changing the source text changes the key, so a translator cannot fix it.  
-That row is not published by either way of reading, so the output does not change.
+```bash
+dwloc publish --accept-multiline ja:0123456789abcdef
+```
 
-Translating a row whose source text spans lines makes it stop.  
-While that translation is there, the current `dwloc publish` cannot write that locale.  
-The way out is the same as for the current published file.  
-Write the other locales with `--locale`, and write that locale with `tools/hash-strings.ps1` or `Hash for commit`.  
-If that translation does not need to be published yet, emptying it again lets `publish` go through for the other rows of that locale too.
+`<key>` is the value of the `key` column of that record.  
+When there is no `key` column or it is empty, it is the key made from the source text (for example in a two-column `source_en,translation` working copy).  
+Upper and lower case letters are not told apart.  
+A line ID (starting with `line:`), though, is compared exactly as written.
+
+It lets through only the shapes whose continuation lines look like records, and only in the given record.  
+It does not let through other records of the same locale.  
+The option applies to the record with that `key` in any of the input, the current published file, and the published file on the game side of that locale.  
+The lines it lets through, and the option that let each of them through, are printed on standard error.  
+To let through several records, give the option once for each.  
+When you run it with `--path`, write the file you passed to `--path` instead of a locale (`<file>:<key>`).  
+When the path has spaces, parentheses, or the like (such as `Program Files (x86)` or `Drag'n Wash`), the fix puts the option in double quotes.  
+You can then paste it as it is into PowerShell, the Command Prompt, or bash.  
+When it has a character that some shells still read specially inside double quotes, such as `$`, the fix adds that you should rewrite it for your shell.  
+A locale alone (a file alone with `--path`) is not accepted.  
+Given one, it stops and asks you to name a record (exit code `2`).  
+An option that matches no line it can let through stops it with exit code `2` too.
+
+A closing quote followed right away by text, a quote that is never closed, a lone `CR`, and the shapes of the play order data are never let through, even with this option.  
+None of them appear in files written by the tools, and fixing them gets you through.  
+For a lone `CR` in the source text (the `source_en` column), though, whether you may fix it depends on the key of the row (see the table below).  
+A record with a line where text follows a closing quote right away is never let through, even when its continuation lines look like records.  
+It cannot be a valid value, and letting it through would publish the English source text or keys as translations.
+
+The following records cannot be let through with the option either.  
+The fix printed when it stops does not offer the option for them.
+
+- A record without a key (when the header is what swallows the lines, and a record whose `key` column and source text are both empty)
+- A record whose `key` column holds a character other than ASCII letters, digits, `.`, `_`, `:` and `-` (a space, a quote, a line break, and so on)
+- A record whose `key` is shared with another record in the same file
+
+`publish` does not write the first two kinds as they are.  
+This also keeps a key that would break apart in a shell out of the printed option.  
+For the third kind, the option cannot tell which record you checked.  
+`publish` writes only the first of them that has a translation.  
+Remove the records you do not need, then run it again.  
+Keys never repeat in the game's working copy or in the published files `publish` writes.
+
+Once a value of this shape is published, the check of the current published file hits it every time.  
+So every run that writes that record needs the same option.  
+A forgotten closing quote that later gets into the working copy is in another record, so that option does not let it through.  
+One that later gets into a value of the same record, though, is let through by the same option.  
+Each time you run it, check the list of lines it lets through.  
+Exporting from the screen has no such option.  
+When it stops on a valid multi-line value, write it with `dwloc publish`.
+
+When it stops on a lone `CR` in the source text (the `source_en` column), how to fix it depends on the key of the row.  
+The fix printed for each row when it stops follows this table too.
+
+| Key of the row | How to fix | Why |
+| ---- | ---- | ---- |
+| A line ID (starting with `line:`) | Change the `CR` in the source text to `LF`, or remove it | The key is not made from the source text, so the translation is published after the fix |
+| The key in the `key` column matches the one made from the current source text | Leave the source text as it is, and empty the translation of that row | Fixing it makes the key no longer match, and the row is silently left out of the published file (the upstream tool does not publish this row either) |
+| The `key` column is missing or empty | Leave the source text as it is, and empty the translation of that row | The key is made from the current source text, so fixing it changes the key, and the row is published under a key the game does not look up |
+| The key in the `key` column matches once the line breaks in the source text are made `LF` | Make the line breaks in the source text `LF` (do not remove them) | The key was made from the source text with `LF`; for now it does not match, and the row is not published |
+| The key in the `key` column matches neither way | Empty the translation of that row | Fixing it does not get the row published |
+
+A row whose translation is emptied is not published, but the other rows can be written.
+
+A translation that spans lines does not stop it by itself.  
+The earlier `dwloc` read one line at a time, so it cut a translation that spans lines short at its first line.  
+It therefore stopped on a published file with a value that spans lines, and on a working copy with a translated row whose value spans lines.  
+Now both are written as valid values.  
+The row in the game-side working copy whose source text spans lines and whose translation is empty is read as an untranslated row.
+
+When a working copy is saved again in a spreadsheet application, the line breaks inside the source text can change from `LF` to `CRLF`.  
+A row whose key no longer matches is not published (the same as the upstream tool).  
+If a row's key would match once the `CRLF` in its source text became `LF`, it prints that row and key without stopping.  
+Exporting the working copy again in the game fixes it.
 
 A file whose line breaks are `CR` only does not stop it.  
 `dwloc` also splits lines at a lone `CR`, so it reads the file correctly (it writes `LF` back).  
@@ -819,7 +887,23 @@ You can fix a translation that does not fit the column while seeing all of it, w
 
 A translation cannot contain a line break.  
 `Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
-The published file reads one line as one record, so a translation containing a line break cannot be saved in the first place.
+Saving from the screen rewrites the file one line at a time, so a translation containing a line break cannot be saved yet.
+
+Rows whose quoted value spans lines (one record over several lines) cannot be edited on any of their lines.  
+`publish` reads such a record as one, so rewriting only its first line would leave the rest behind and break it.  
+Those rows show a lock icon and "This line belongs to a record that spans lines N to M, which cannot be edited yet".  
+The source column of the first line shows the whole source text.  
+The continuation lines are shown as they are in the file.  
+A line inside a value that starts with `#` is not made a heading.  
+The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row cannot be translated yet.
+
+A file where a quote is opened and never closed before the end of the file cannot be edited at all.  
+Read as a whole, everything after it becomes one value.  
+The "This file is read-only" note says on which line the quote was opened.  
+From the line where the quote was opened on, the lines are listed as they are in the file.  
+Close or remove the quote, then reload.  
+The screen still opens.  
+In the counts, the categories that depend on that file are "not judged".
 
 The controls on the screen are as follows.
 
@@ -865,7 +949,7 @@ Which rows are involved is printed by `dwloc publish`.
 
 | Reason for refusing | When it happens | How to fix it |
 | ---- | ---- | ---- |
-| A file whose shape loses translations when read one line at a time | The header lacks a key or translation column (it has neither `key` nor `source_en`, or it has no `translation`), a quoted value spans lines, a quote is never closed, or the line breaks are misread so that not a single row can be read | Run `dwloc publish` and fix the rows it reports, as it describes |
+| A file with a shape it would misread | The header lacks a key or translation column (it has neither `key` nor `source_en`, it has no `translation`, or its first column name starts with `#`), a quote is never closed, a quote is closed on another line and swallows the lines after it, a value contains a lone `CR`, an unquoted value is cut by a lone `CR`, the line breaks are misread so that not a single row can be read, or a value of the play order data that is written as it is, such as into a heading, contains a line break | Run `dwloc publish` and fix the rows it reports, as it describes. If it stops on a valid multi-line value, check it and write it with the `--accept-multiline <locale>:<key>` that `dwloc publish` prints in the fix, once per record |
 | The translation in the game is older | The published file on the game side has different translations from what is committed. The working copy carries those old translations too, so exporting would roll a new commit back | Put the latest translations back into the game |
 | A committed translation would not survive in the new output | A row that exists in the committed file is missing from the working copy | Open the screen containing the missing rows once inside the game, then rebuild the working copy with `F1 → Translation → Export working copy` |
 
@@ -1034,10 +1118,37 @@ If you run it before committing the updated playback order, it can read it strai
 What `diff` shows are candidates, not certainties.  
 It does not rewrite translations, so check the content before you move anything.
 
+`diff` reads the whole file at once, the same way as `publish`.  
+The number of working copy rows and the count of each category are counted in records, not in lines of the file.  
+A quoted value that spans lines still counts as one.  
+The earlier `dwloc` read one line at a time, so the numbers for the game-side ja working copy changed as follows (September 24, 2026, against upstream `main`).
+
+- Working copy rows went from 1770 to 1769
+- "Rows dropped by publish" went from 2 to 0
+- Untranslated went from 29 to 30, and carry-over sources from 8 to 9
+- Rows that need checking went from 10 to 9
+
+This is because one row has source text that spans three lines with a blank line in between.  
+Read one line at a time, the first line and the continuation line of this row were counted as rows dropped because their keys did not match.  
+Now it counts as one untranslated row with an empty translation.
+
+When a quote is opened and never closed before the end of a published file, a working copy, `layout_risks.csv` or `data/script_order.csv`, it goes on without reading that file.  
+The categories that depend on that file appear as "not judged (the quote on line N of the working copy is never closed)".  
+Which file and which line are printed on standard error.  
+For a published file, no category of that locale is judged, nor are "Missing here but present in another locale" and "No locale has a translation" of the other locales.  
+For `data/script_order.csv`, no category is judged at all.  
+Until it is fixed, the exit code is `1`.  
+The closing line of the `text` format does not say that nothing needs review either; it says that some categories are not judged.
+
+A quote never closed in `data/level_flow.csv` does not stop any judgement.  
+This is because `diff` does not use the heading texts, and the exit code does not change either.  
+`publish` and exporting from the screen do stop on that file, though.  
+So it prints the line where the quote opens on standard error, in a single line.
+
 `publish` assembles everything it targets before writing anything out.  
 If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  
-If a file has a shape that loses translations when read one line at a time, it also stops without writing.  
+If a file has a shape it would misread, it also stops without writing.  
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
@@ -1052,16 +1163,17 @@ With `--path` it stops scanning `Translations` and converts only the file you na
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these five cases.
+1 comes back in these six cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
+- When `diff` cannot read a file because a quote is never closed, and so leaves categories unjudged
 - When `publish` judges that writing would lose translations and stops
-- When `publish` judges that a file has a shape that loses translations when read one line at a time and stops
+- When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
 
 The last three are separate checks.  
-The difference and the way out are in "publish does not write a file whose shape loses translations when read one line at a time" and "It stops when the translation in the game is older" above.
+The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.
 
 #### Committing and opening a pull request
 

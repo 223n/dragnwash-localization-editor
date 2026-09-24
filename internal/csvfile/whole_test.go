@@ -200,9 +200,9 @@ func TestReadPowerShellWholeHeader(t *testing.T) {
 // ReadPowerShell）と行単位の読み方が同じ行を返すことを見る。
 //
 // ここが割れると、publish の守りが食い違いを見つけても、それが行をまたぐ値の
-// せいなのか、読み方そのものの差なのかを区別できない。PR2 で publish・diff・
-// order を主の読み手へ切り替えたとき、1行に収まるファイルでは結果が変わらない
-// ことの裏付けにもなる。
+// せいなのか、読み方そのものの差なのかを区別できない（PR1 までの守り）。PR2 で
+// publish・diff・order を主の読み手へ切り替えたので、1行に収まるファイルでは
+// 結果が変わらないことの裏付けとして残す。
 func TestReadPowerShellWholeAgreesWithRowsOnSingleLines(t *testing.T) {
 	text := bom +
 		"# 見出し\r\n" +

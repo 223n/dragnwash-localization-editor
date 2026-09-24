@@ -33,11 +33,11 @@ func testOrder(t *testing.T, scriptOrderCSV, levelFlowCSV string) *order.Data {
 func publishedRows(t *testing.T, out []byte) []csvfile.Row {
 	t.Helper()
 
-	rows, err := csvfile.ReadPowerShellRows(out)
+	f, err := csvfile.ReadPowerShell(out)
 	if err != nil {
 		t.Fatalf("出力を読み返せない: %v", err)
 	}
-	return rows
+	return f.Rows()
 }
 
 func TestBuild(t *testing.T) {
