@@ -40,7 +40,9 @@ func (e *DuplicateColumnError) Error() string {
 // 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。上流は f816618 で
 // 全文を1つの文字列として解釈する読み方へ移ったが、ここは行単位のまま据え置いて
 // ある。移すと publish だけでなく、同じ読み方を前提にしている diff・order・edit の
-// 結果まで変わるためである。
+// 結果まで変わるためである。代わりに、行単位では読み違える形のファイルを
+// [ReadPowerShellWhole] の結果と突き合わせて見つけ、publish が書く前に止める
+// （internal/publish の守り）。
 //
 // ヘッダー名の重複だけは [DuplicateColumnError] を返す。それ以外の壊れ方
 // （列数の過不足、閉じない引用符、裸の二重引用符）はエラーにしない。
@@ -234,69 +236,103 @@ func parsePowerShellFields(line string) []string {
 	var fields []string
 	i := 0
 	for {
-		value, closed, end := parsePowerShellField(line, i)
-		if end >= len(line) {
-			if value != "" || closed {
-				fields = append(fields, value)
+		f := parsePowerShellField(line, i, false)
+		if f.end >= len(line) {
+			if f.value != "" || f.closed {
+				fields = append(fields, f.value)
 			}
 			break
 		}
 		// end は区切りのカンマの位置。
-		fields = append(fields, value)
-		i = end + 1
+		fields = append(fields, f.value)
+		i = f.end + 1
 	}
 	return fields
 }
 
-// parsePowerShellField は start から1フィールドを読み、値と「引用符が閉じたか」と
-// 終了位置（区切りのカンマの位置、無ければ行の長さ）を返す。
+// psField は [parsePowerShellField] が読んだ1フィールド。
+type psField struct {
+	// value はフィールドの値。
+	value string
+	// quoted は引用符で始まったかどうか（先頭の空白は数えない）。
+	quoted bool
+	// closed は引用符で始まり、対応する閉じ引用符も見つかったときだけ true。
+	// 引用符なしのフィールドでは常に false になる。
+	closed bool
+	// end は終了位置。区切りのカンマの位置で、無ければ文字列の長さ。
+	// wholeText のときは、レコードを終える改行（'\r' か '\n'）の位置のこともある。
+	end int
+}
+
+// unclosed は、引用符で始まったのに閉じないまま終わったかを返す。
+func (f psField) unclosed() bool { return f.quoted && !f.closed }
+
+// parsePowerShellField は s の start から1フィールドを読む。
 //
-// closed は引用符で始まり、対応する閉じ引用符も見つかったときだけ true。
-// 引用符なしのフィールドでは常に false になる。
-func parsePowerShellField(line string, start int) (value string, closed bool, end int) {
+// wholeText が false のとき、s は1物理行（改行を含まない）である。ここまでの
+// 読み方（[ParsePowerShellRecord]）はこちらだけを使う。
+//
+// wholeText が true のときは、s はファイル全体で、引用の外の '\r' と '\n' も
+// フィールドを終わらせる（[ReadPowerShellWhole]）。引用の中の改行は値に入る。
+// 上流が ConvertFrom-Csv に全文を1つの文字列で渡したときの読み方で、
+// pwsh 7.6.6 で次を実測してある。引用の中の LF・CRLF・単独の CR はそのまま値に
+// 残る。フィールドの途中の '"' と、閉じ引用符の後ろに続く '"' はただの文字で、
+// 引用を開かない。先頭の空白の後ろの '"' は引用を開く。閉じない引用符は
+// ファイルの終わりまでを値にする。
+//
+// 1物理行を渡すかぎり改行は現れないので、どちらでも結果は変わらない。それでも
+// 切り替えにしてあるのは、[ParsePowerShellRecord] が公開の関数で、改行を含む
+// 文字列を渡されたときの結果をここで変えないためである。
+func parsePowerShellField(s string, start int, wholeText bool) psField {
 	i := start
-	n := len(line)
+	n := len(s)
+	stop := func(c byte) bool {
+		return c == ',' || (wholeText && (c == '\r' || c == '\n'))
+	}
 
 	// 先頭の空白は読み飛ばす。対象は半角スペースとタブだけ。
-	for i < n && (line[i] == ' ' || line[i] == '\t') {
+	for i < n && (s[i] == ' ' || s[i] == '\t') {
 		i++
 	}
 
-	if i < n && line[i] == '"' {
+	if i < n && s[i] == '"' {
+		f := psField{quoted: true}
 		var b strings.Builder
 		i++ // 開始の引用符
 		for i < n {
-			if line[i] == '"' {
-				if i+1 < n && line[i+1] == '"' {
+			if s[i] == '"' {
+				if i+1 < n && s[i+1] == '"' {
 					b.WriteByte('"')
 					i += 2
 					continue
 				}
 				i++ // 閉じの引用符
-				closed = true
+				f.closed = true
 				break
 			}
-			b.WriteByte(line[i])
+			b.WriteByte(s[i])
 			i++
 		}
 		// 閉じ引用符より後ろは次のカンマまでそのまま値に足す。`"a"x,b` は ax と b になる。
 		// ただし空白しか無いときは丸ごと捨てる（`"q"  ` は q）。
 		tailStart := i
-		for i < n && line[i] != ',' {
+		for i < n && !stop(s[i]) {
 			i++
 		}
-		if tail := line[tailStart:i]; strings.TrimRight(tail, " \t") != "" {
+		if tail := s[tailStart:i]; strings.TrimRight(tail, " \t") != "" {
 			b.WriteString(tail)
 		}
-		return b.String(), closed, i
+		f.value = b.String()
+		f.end = i
+		return f
 	}
 
 	// 引用符なし。二重引用符が途中に出てもただの文字（`he said "hi"` はそのまま）。
 	valueStart := i
-	for i < n && line[i] != ',' {
+	for i < n && !stop(s[i]) {
 		i++
 	}
-	return trimPowerShellTrailing(line[valueStart:i]), false, i
+	return psField{value: trimPowerShellTrailing(s[valueStart:i]), end: i}
 }
 
 // trimPowerShellTrailing は引用符なしフィールドの末尾空白を ConvertFrom-Csv と同じ
