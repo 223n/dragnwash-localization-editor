@@ -358,25 +358,9 @@ func TestLocaleListString(t *testing.T) {
 // 既定では入力と出力が同じファイルなので、書きかけで残ると原本を失う。
 // 「書き出しました」と言ってもいけない。コミットする中身が古いままになる。
 func TestRunPublishReportsWriteFailure(t *testing.T) {
-	if runtime.GOOS != "windows" && os.Geteuid() == 0 {
-		t.Skip("root は書き込みの権限を無視するので、失敗を作れない")
-	}
 	root := publishTree(t, "ja")
 	dir := filepath.Join(root, "Translations", "ja")
-	path := filepath.Join(dir, "strings.csv")
-	// Windows は読み取り専用のファイルへの置き換えを断り、Linux と macOS は
-	// 書けないディレクトリに一時ファイルを作れない。どちらでも書き出しが落ちる。
-	if err := os.Chmod(path, 0o444); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	// 戻さないと t.TempDir が後片付けで消せない。
-	t.Cleanup(func() {
-		_ = os.Chmod(dir, 0o755)
-		_ = os.Chmod(path, 0o644)
-	})
+	forbidPublishing(t, filepath.Join(dir, "strings.csv"))
 
 	code, stdout, stderr := runCLI("publish", "--root", root)
 	if code != exitError {
@@ -410,26 +394,9 @@ func TestRunPublishReportsWriteFailure(t *testing.T) {
 // すれば何も書きません」のままだと、利用者は先に書いたロケールも古いままだと
 // 思い込み、コミットする中身を取り違える。
 func TestRunPublishWriteFailureKeepsEarlierLocales(t *testing.T) {
-	if runtime.GOOS != "windows" && os.Geteuid() == 0 {
-		t.Skip("root は書き込みの権限を無視するので、失敗を作れない")
-	}
 	// 書き出しはディレクトリ名順。aa を書いたあと、zz で落とす。
 	root := publishTree(t, "aa", "zz")
-	dir := filepath.Join(root, "Translations", "zz")
-	path := filepath.Join(dir, "strings.csv")
-	// TestRunPublishReportsWriteFailure と同じ作り方。Windows は読み取り専用の
-	// ファイルへの置き換えを断り、Linux と macOS は書けないディレクトリに
-	// 一時ファイルを作れない。
-	if err := os.Chmod(path, 0o444); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(dir, 0o755)
-		_ = os.Chmod(path, 0o644)
-	})
+	forbidPublishing(t, filepath.Join(root, "Translations", "zz", "strings.csv"))
 
 	code, stdout, stderr := runCLI("publish", "--root", root)
 	if code != exitError {
@@ -459,6 +426,56 @@ func TestRunPublishWriteFailureKeepsEarlierLocales(t *testing.T) {
 		"新しい内容のまま残り",
 		"標準出力",
 	})
+}
+
+// forbidPublishing は、公開ファイル path の書き出しが失敗する状態にする。止められた
+// ことを確かめられなければ、呼んだ試験を飛ばす。
+//
+// Windows は読み取り専用のファイルへの置き換えを断り、Linux と macOS は書けない
+// ディレクトリに一時ファイルを作れない。どちらでも書き出しが落ちるように、
+// ファイルとディレクトリの両方を閉じる。
+//
+// 止められたかは、ここで実際に書いてみて確かめる（internal/publish の forbidNewFiles、
+// internal/edit の forbidSaving と同じ形）。POSIX ではディレクトリに新しいファイルを
+// 作れないこと、Windows ではファイルを書き込み用に開けないことを見る。euid が 0 か
+// どうかで先に飛ばしていたころは、root 以外で権限が効かない環境（CAP_DAC_OVERRIDE を
+// 持つプロセスなど）で書き出しが通り、試験が落ちていた。逆に、root でも権限が効く
+// 環境（DAC_OVERRIDE を外したコンテナなど）では、確かめられるのに飛ばしていた。
+//
+// 対象（dwloc publish）の成否で代用しないのは、書き出しが一時ファイルを経ずに
+// 出力先を直接書き換える形へ戻ったときも「止められなかった環境」と読んで飛ばして
+// しまうためである。
+func forbidPublishing(t *testing.T, path string) {
+	t.Helper()
+
+	dir := filepath.Dir(path)
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	// 戻さないと t.TempDir が後片付けで消せない。t.Cleanup は後入れ先出しなので、
+	// 呼び出し側が先に作った t.TempDir の削除より先に走る。
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o755)
+		_ = os.Chmod(path, 0o644)
+	})
+
+	if runtime.GOOS == "windows" {
+		probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err == nil {
+			_ = probe.Close()
+			t.Skipf("%s を読み取り専用にしても書き込み用に開けたので飛ばす", path)
+		}
+		return
+	}
+	probe, err := os.CreateTemp(dir, "probe*")
+	if err == nil {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Skipf("%s に新しいファイルを作れたので飛ばす。root で走っているか、権限を無視できる環境では効かない", dir)
+	}
 }
 
 func TestSelectLocales(t *testing.T) {
