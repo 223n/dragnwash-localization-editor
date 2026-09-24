@@ -222,6 +222,25 @@ async function failRow(page, n, value) {
   await expect(translationCell(page, n)).toHaveText(value);
 }
 
+// raiseConflict は goodbye の行に typed を打ち、送る前によそがその行の訳を external へ書き換えた
+// 状態で送って、競合の引き止めを出す（conflict.spec.mjs の同じ名前の道具と同じ手順）。待ち受けが
+// 409 を返したことまで確かめ、よそが書いたあとのファイルのバイトを返す。打ってからよそが
+// 書き換えるまでに自動保存の時計が切れると 409 にならないので、時計を止めた頁で使う。
+async function raiseConflict(page, server, external) {
+  const text = await server.readRootText(workingRel);
+  const row = `,${SAMPLE.goodbye.source},${SAMPLE.goodbye.ja}\n`;
+  expect(text).toContain(row);
+  await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
+  await server.writeRoot(workingRel, text.replace(row, `,${SAMPLE.goodbye.source},${external}\n`));
+  const saving = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === "/api/rows" && res.request().method() === "POST",
+  );
+  await editor(page).press("Escape");
+  expect((await saving).status()).toBe(409);
+  await expect(page.locator("#conflict")).toBeVisible();
+  return server.readRoot(workingRel);
+}
+
 test.describe("画面の言語", () => {
   // 目録から入る文言の代表。どれも index.html では空で、app.js の applyCatalog が埋める。
   const texts = [
@@ -698,92 +717,44 @@ test.describe("ロケールの切り替え", () => {
     await expect(rowByLine(app, 4).locator(".cell.translation")).toHaveText(SAMPLE.hello.he);
   });
 
-  // 切り替えの読み込みが返るまでのあいだは、前のロケールの行がまだ出ていて打てる。そこで
-  // 送った保存の応答が切り替えのあとに返っても、新しいロケールの画面には載せない（app.js の
-  // flush の世代）。載せると、別ロケールの版と件数が入り、誰も触っていない he のファイルで
-  // 次の保存が 409 になる。送った訳は前のロケールのファイルに入る。
+  // 切り替えの読み込みが返るまでのあいだも、前のロケールの行は出ている。以前はそこで打てたが、
+  // 読めた時点で抱えている訳ごと片付くので、打った訳は黙って消えた（app.js の load）。保存が
+  // 落ちていれば、ファイルにも画面にも残らず、保存の欄は「保存済み」になった。未保存が無く
+  // 尋ねずに切り替えるときも、読み終えるまでは前のロケールの行を開かせない。読めたら、新しい
+  // ロケールの行は読んだ版のまま打って保存できる。
   //
-  // 送っている保存を待ってから切り替えを決める（askDiscard）ようにしたので、応答が
-  // 切り替えのあとに返るのは、この「読み込みのあいだに送った」道だけになった。
-  test("読み込みのあいだに送った保存が切り替えのあとに返っても、新しいロケールの画面には載せない", async ({
+  // 読み込みのあいだに保存を送る道が無くなったので、送りかけの保存の応答が切り替えのあとに
+  // 返ることは、画面の操作では起きなくなった。flush の世代の見分けは、その守りとして残してある。
+  test("尋ねずに切り替えても、読み込みが返るまで前のロケールの行を開かせず、読めたら新しいロケールで打てる", async ({
     app,
     server,
   }) => {
-    const lines = gate();
-    await app.route(isPath("/api/lines"), async (route) => {
-      await lines.promise;
-      await route.continue();
-    });
-    const rows = gate();
-    await app.route(
-      isPath("/api/rows"),
-      async (route) => {
-        await rows.promise;
-        await route.continue();
-      },
-      { times: 1 },
-    );
+    const before = await server.readRoot(workingRel);
+    const lines = await holdLines(app);
+    const rows = watchRequests(app, "/api/rows");
 
     await app.locator("#locale").selectOption("he");
-    // 読み込みはまだ返らない。前のロケールの行に打って、欄から離れる（待たずに送る）。
-    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
-    const saved = app.waitForResponse((res) => new URL(res.url()).pathname === "/api/rows");
-    await editor(app).press("Escape");
-    lines.release();
-    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
-    rows.release();
-    expect((await saved).status()).toBe(200);
+    await expect.poll(() => lines.asked).toEqual(["he"]);
+    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.loading"));
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "true");
+    await translationCell(app, SAMPLE_LINES.goodbye).click();
+    await expect(editor(app)).toHaveCount(0);
 
-    // he の画面は、誰も触っていないまま。
-    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_clean"));
+    lines.release("he");
+    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "false");
     await expect(app.locator("#message")).toBeEmpty();
-    await expect(app.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 1 }));
-    // he で打てば、読んだ版のまま保存できる（ja の版を載せていれば 409 になる）。
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_clean"));
+    expect(rows).toHaveLength(0);
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+
+    // he で打てば、読んだ版のまま保存できる。
     const next = app.waitForResponse((res) => new URL(res.url()).pathname === "/api/rows");
     await typeTranslation(app, 4, `${SAMPLE.hello.he}!`);
     await editor(app).press("Escape");
     expect((await next).status()).toBe(200);
     await waitForSaved(app);
-    // 前のロケールで打った訳は、ja のファイルに入っている。
-    expect(await server.readRootText(workingRel)).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
-  });
-
-  // 上と同じく読み込みのあいだに打って保存を送り、その返事を待つあいだに別のロケールを
-  // 選んだとき。切り替えを決めるのは送り終えてからで、そのまえに先の読み込みが返ると、
-  // 欄は描いたロケールへそろい直す（app.js の load）。決めたときに欄の値を読むと、選んで
-  // いないロケールを読みにいく。読むのは change の時点で控えたロケール（chosen）。
-  test("保存の返事を待つあいだに選んだロケールは、先の読み込みが返って欄がそろい直しても、選んだとおりに読む", async ({
-    app,
-  }) => {
-    const lines = await holdLines(app);
-    const rows = gate();
-    await app.route(
-      isPath("/api/rows"),
-      async (route) => {
-        await rows.promise;
-        await route.continue();
-      },
-      { times: 1 },
-    );
-
-    await app.locator("#locale").selectOption("he");
-    await expect.poll(() => lines.asked).toEqual(["he"]);
-    // he はまだ返らない。前のロケール（ja）の行に打って欄から離れ、保存を送る。
-    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
-    await editor(app).press("Escape");
-    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
-    await app.locator("#locale").selectOption("ja");
-    lines.release("he");
-    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
-
-    lines.release("ja");
-    rows.release();
-    await expect(app.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
-    await expect(app.locator("#locale")).toHaveValue("ja");
-    expect(lines.asked).toEqual(["he", "ja"]);
-    // 送った訳は ja のファイルに入り、読み直した一覧にも出る。
-    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
-    await waitForSaved(app);
+    expect(await server.readRootText(heRel)).toContain(`,${SAMPLE.hello.he}!`);
   });
 
   // 失敗したときに条件だけ外すと、チップと一覧が前のロケールのまま、欄だけが新しい
@@ -841,6 +812,203 @@ test.describe("ロケールの切り替え", () => {
       await expect(page.locator("#message")).toBeEmpty();
     });
   }
+});
+
+test.describe("読み込みが返るまで", () => {
+  // 捨てると答えたあとの読み込みでは、flush が送らない（捨てると答えた訳をファイルに入れない）。
+  // 以前はそのあいだも前の一覧で打てたので、答えたあとに打った新しい訳は送られず、読めた時点で
+  // 捨てると答えた訳と一緒に消えた。ファイルにも画面にも残らず、保存の欄は「保存済み」になった
+  // （app.js の load）。読み終えるまでは、マウスでも Tab でも入力欄を開かない。読み込んでいる
+  // ことは画面に出し、打てそうな印（cursor: text）も下ろす。
+  test("捨てると答えた読み直しの読み込みが返るまで、訳の欄をマウスでも Tab でも開かず、読めたらまた開ける", async ({
+    app,
+    server,
+  }) => {
+    const before = await server.readRoot(workingRel);
+    await failRow(app, SAMPLE_LINES.goodbye, typed);
+    const dialogs = watchDialogs(app, true);
+    const lines = await holdLines(app);
+
+    await app.locator("#reload").click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.loading"));
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "true");
+    const hello = translationCell(app, SAMPLE_LINES.hello);
+    await expect(hello).toHaveCSS("cursor", "progress");
+
+    // マウスで押しても開かない。既定の動作は止めないので、焦点はその欄に入る。
+    await hello.click();
+    await expect(hello).toBeFocused();
+    await expect(editor(app)).toHaveCount(0);
+    // Tab で次の欄へ移っても開かない。
+    await app.keyboard.press("Tab");
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toBeFocused();
+    await expect(editor(app)).toHaveCount(0);
+
+    lines.release("ja");
+    await expect(app.locator("#message")).toBeEmpty();
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "false");
+    await expect(hello).toHaveCSS("cursor", "text");
+    // 捨てると答えた訳は捨てた。ファイルは1バイトも変わっていない。
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(SAMPLE.goodbye.ja);
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_clean"));
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+    // 読めたら、また開ける。
+    await openEditor(app, SAMPLE_LINES.hello);
+  });
+
+  // 競合の引き止めのボタンも、読み終えるまで押させない（app.js の keepMine と takeFile）。以前は
+  // 捨てると答えた読み直しの読み込みのあいだも押せた。「自分の訳を上に載せる」を押すと「読み込んで
+  // います…」が消え、行と保存の欄は自分の訳を載せ直したように見えた。捨てると答えたあとなので
+  // 送らず、読めた時点でそれも片付くので、押した訳はファイルにも画面にも残らず、保存の欄は
+  // 「保存済み」になった。
+  test("捨てると答えた読み直しの読み込みが返るまで、競合の引き止めのボタンを押させず、読めたら引き止めを下ろす", async ({
+    page,
+    server,
+  }) => {
+    await countRowPosts(page);
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await openApp(page, server);
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
+    const external = "またね。";
+    const conflicted = await raiseConflict(page, server, external);
+    const asked = await rowPosts(page);
+    const dialogs = watchDialogs(page, true);
+    const lines = await holdLines(page);
+    const keep = page.locator("#conflict-keep");
+    const take = page.locator("#conflict-take");
+
+    await page.locator("#reload").click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.loading"));
+    await expect(keep).toBeDisabled();
+    await expect(take).toBeDisabled();
+    await expect(keep).toHaveCSS("cursor", "progress");
+    // 押しても何も起きない。「読み込んでいます…」も引き止めも出たまま。
+    await keep.click({ force: true });
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.loading"));
+    await expect(page.locator("#conflict")).toBeVisible();
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_conflict"));
+
+    lines.release("ja");
+    await expect(page.locator("#conflict")).toBeHidden();
+    await expect(page.locator("#message")).toBeEmpty();
+    await expect(translationCell(page, SAMPLE_LINES.goodbye)).toHaveText(external);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
+    await page.clock.runFor(60_000);
+    expect(await rowPosts(page)).toBe(asked);
+    expect((await server.readRoot(workingRel)).equals(conflicted)).toBe(true);
+  });
+
+  // 読めなければ何も捨てていないので、引き止めのボタンはまた押せる。押したとおりに効く。
+  test("競合したまま読み直しに失敗したら、引き止めのボタンをまた押せるように戻す", async ({ page, server }) => {
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await openApp(page, server);
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
+    await raiseConflict(page, server, "またね。");
+    const dialogs = watchDialogs(page, true);
+    const lines = await holdLines(page, { fail: ["ja"] });
+    const keep = page.locator("#conflict-keep");
+    const take = page.locator("#conflict-take");
+
+    await page.locator("#reload").click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(keep).toBeDisabled();
+    await expect(take).toBeDisabled();
+
+    lines.release("ja");
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.load_failed"));
+    await expect(page.locator("#conflict")).toBeVisible();
+    await expect(keep).toBeEnabled();
+    await expect(take).toBeEnabled();
+    const saving = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/api/rows" && res.request().method() === "POST",
+    );
+    await keep.click();
+    expect((await saving).status()).toBe(200);
+    await waitForSaved(page);
+    await expect(translationCell(page, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    expect(await server.readRootText(workingRel)).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
+  });
+
+  // 読めなかったら何も変わっていないのが正しい（load の注記）。一覧もまた編集できる。
+  // 読み込みのあいだに開かせなかった欄も、押せば開く。
+  //
+  // 読み込みのあいだに Tab（やマウス）で焦点を載せた欄は、失敗したらそのまま開く。開かないと、
+  // 焦点はその欄に残るのに focusin はもう来ないので、字も Enter も効かない。キーボードだけで
+  // 打つ人は、Tab でいったん出て入り直すまで先へ進めない（nextEditable の注記が避けている
+  // 「開けない行で行き止まる」形）。
+  test("読み込みに失敗したら、一覧をまた編集できるように戻す", async ({ app, server }) => {
+    const lines = await holdLines(app, { fail: ["ja"] });
+    await app.locator("#reload").click();
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "true");
+    await translationCell(app, SAMPLE_LINES.hello).click();
+    await expect(editor(app)).toHaveCount(0);
+    await app.keyboard.press("Tab");
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toBeFocused();
+    await expect(editor(app)).toHaveCount(0);
+
+    lines.release("ja");
+    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.load_failed"));
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "false");
+    // 焦点の載っていた欄が開き、そのまま打てる。
+    await expect(rowByLine(app, SAMPLE_LINES.goodbye).locator("textarea.editor")).toBeFocused();
+    await app.keyboard.type(typed);
+    await app.keyboard.press("Escape");
+    await waitForSaved(app);
+    expect(await server.readRootText(workingRel)).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
+
+    // ほかの欄も、押せば開く。
+    await typeTranslation(app, SAMPLE_LINES.hello, "もしもし。");
+    await editor(app).press("Escape");
+    await waitForSaved(app);
+  });
+
+  // 送り終えるのを待つあいだ（読み込みを始める前）は、まだ打てる。そこで開いた入力欄は、読み込みを
+  // 始めるときに閉じる。開いたままだと、読み込みのあいだも打てる。打ってあった訳は、尋ねる前の
+  // 送り直し（settle）で送られ、読み直した一覧にファイルの値として出る。
+  test("送り終えるのを待つあいだに開いた入力欄は、読み込みを始めるときに閉じ、打ってあった訳は送る", async ({
+    app,
+    server,
+  }) => {
+    const added = "もしもし。";
+    const hold = gate();
+    await app.route(
+      isPath("/api/rows"),
+      async (route) => {
+        await hold.promise;
+        await route.continue();
+      },
+      { times: 1 },
+    );
+    const lines = await holdLines(app);
+    const dialogs = watchDialogs(app, false);
+
+    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
+    await editor(app).press("Escape");
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
+    await app.locator("#reload").click();
+    // まだ読みにいっていないので、開いて打てる。
+    await typeTranslation(app, SAMPLE_LINES.hello, added);
+    hold.release();
+
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(editor(app)).toHaveCount(0);
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "true");
+    lines.release("ja");
+    await expect(app.locator("#message")).toBeEmpty();
+    await waitForSaved(app);
+    expect(dialogs).toHaveLength(0);
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    await expect(translationCell(app, SAMPLE_LINES.hello)).toHaveText(added);
+    const text = await server.readRootText(workingRel);
+    expect(text).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
+    expect(text).toContain(`,${SAMPLE.hello.source},${added}\n`);
+  });
 });
 
 test.describe("保存できていない訳があるとき", () => {
@@ -1209,10 +1377,20 @@ test.describe("保存を送り直しているとき", () => {
     await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
     // 原因が消える。あとの読み込みはまだ返らないので、保存へ回る道を通っても送らない。
     // 送り直しの時計は、2つ目を尋ねる前の送り直し（settle）が止めているので、ここでは
-    // 行を開いて何も変えずに閉じ、保存へ回す（閉じると flush を呼ぶ）。
+    // 書き出しを押して保存へ回す（書き出しは先に flush を呼ぶ）。読み込みのあいだは
+    // 入力欄を開かない（app.js の load）ので、行を開いて閉じる道は使えない。
+    //
+    // 「送らない」ことは POST の数だけで確かめる。書き出しは押したその場で flush を呼ぶので、
+    // 送るなら押した直後に数が増えている。書き出しの結果の文言は確かめない。結果の欄が
+    // 空でなくなるのを待つのは、押した書き出しが画面に届いた（保存へ回った）ことの確かめに
+    // 使うだけにする（書き出しは始めに欄を空にし、flush を待ってから結果を出す）。
     down = false;
-    await openEditor(page, SAMPLE_LINES.goodbye);
-    await editor(page).press("Escape");
+    await translationCell(page, SAMPLE_LINES.goodbye).click();
+    await expect(editor(page)).toHaveCount(0);
+    await page.locator("#export-open").click();
+    await page.locator("#export-working").click();
+    expect(await rowPosts(page)).toBe(asked);
+    await expect(page.locator("#export-state")).not.toBeEmpty();
     await page.clock.runFor(60_000);
     expect(await rowPosts(page)).toBe(asked);
 
@@ -1249,6 +1427,56 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
     expect(lines).toHaveLength(1);
     expect(dialogs).toHaveLength(0);
+  });
+
+  // 2度押すと、2つの確認（askDiscard）が同じ送り終わりを待つ。待つあいだに別の行へ打ち足した訳は、
+  // 送っている最中なのでまだ送られない。返ったところで先に押したほうがそれを送り始めると、以前は
+  // あとで押したほうがその返事を待たずに尋ねた（送っている最中の flush はすぐ戻るため。app.js の
+  // settle）。受ければ読み込みが走り、「その訳は消えます」と尋ねた訳が、そのあと返った保存で
+  // ファイルに入った。その返事も待ってから決める。送れていれば尋ねずに読み直す。
+  test("待つあいだに打ち足した訳を先に押したほうが送り始めても、その返事を待ってから決める", async ({ app, server }) => {
+    const before = await server.readRootText(workingRel);
+    const added = "もしもし。";
+    const first = gate();
+    const second = gate();
+    const sent = [];
+    await app.route(isPath("/api/rows"), async (route) => {
+      sent.push(route.request().postDataJSON().edits.map((edit) => edit.line));
+      await (sent.length === 1 ? first.promise : second.promise);
+      await route.continue();
+    });
+    const dialogs = watchDialogs(app, true);
+    const lines = watchRequests(app, "/api/lines");
+
+    await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
+    await editor(app).press("Escape");
+    await expect.poll(() => sent.length).toBe(1);
+    await typeTranslation(app, SAMPLE_LINES.hello, added);
+    await editor(app).press("Escape");
+    await app.locator("#reload").click();
+    await app.locator("#reload").click();
+    first.release();
+
+    // 打ち足したぶんを送り始めた。その返事が返るまでは、尋ねもせず、読みにもいかない。
+    // 確認が開いていれば、閉じるまで evaluate は返らない（尋ねていれば dialogs に入っている）。
+    await expect.poll(() => sent).toEqual([[SAMPLE_LINES.goodbye], [SAMPLE_LINES.hello]]);
+    await app.evaluate(() => true);
+    expect(dialogs).toHaveLength(0);
+    expect(lines).toHaveLength(0);
+
+    second.release();
+    await expect.poll(() => lines.length).toBe(1);
+    await waitForSaved(app);
+    expect(dialogs).toHaveLength(0);
+    expect(sent).toHaveLength(2);
+    expect(await server.readRootText(workingRel)).toBe(
+      before
+        .replace(`,${SAMPLE.goodbye.source},\n`, `,${SAMPLE.goodbye.source},${typed}\n`)
+        .replace(`,${SAMPLE.hello.source},${SAMPLE.hello.ja}\n`, `,${SAMPLE.hello.source},${added}\n`),
+    );
+    // 読み直した一覧に、送った2つの訳がファイルの値として出る。
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    await expect(translationCell(app, SAMPLE_LINES.hello)).toHaveText(added);
   });
 
   // 切り替えでも同じ。he を選んだあとで ja へ戻したら、読むのは戻した ja だけで、

@@ -4,7 +4,8 @@ name: CI
 #   lint-ja         文書の書式（markdownlint）と日本語の書き方（textlint）。
 #                   規則は公開されている共有設定 @223n/lint-config-ja にあり、ここには「何を検査するか」だけを書く
 #   go              Goの書式（gofmt）、静的解析（go vet）、テストとカバレッジの閾値、全対象向けのビルド
-#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値
+#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値。
+#                   落ちたときは Playwright の出力（test-results/）を成果物として7日間残す
 #   lint-workflows  ワークフローの構文と型（actionlint）
 #   zizmor          ワークフローの安全性（zizmor）。アクションの SHA 固定、権限、危険な書き方を見る
 on:
@@ -141,13 +142,46 @@ jobs:
 
       - name: ブラウザーを入れる
         # Chromium だけを入れる。--with-deps は OS のライブラリも apt で入れるので、
-        # セルフホストのランナーでは sudo を使える必要がある
+        # セルフホストのランナーでは sudo を使える必要がある。
+        #
+        # apt で入れる包みの名前は OS の版ごとに違い、Playwright は版ごとの一覧を持っている。
+        # そのため ubuntu-latest が Ubuntu 26.04 へ移るとき（2026年10月19日から11月19日にかけて。
+        # https://github.com/actions/runner-images/issues/14748 ）、いちばん影響を受けるのはこの段である。
+        # Playwright は 1.61 から Ubuntu 26.04 を公式に扱い、26.04 向けの一覧を持つ。
+        # ubuntu:26.04（26.04.1）のコンテナに Node 22 と Go 1.27.1 だけを入れ、Playwright 1.63.0 で
+        # この段と npm run test:e2e が通ることを確かめた（2026年9月）。
+        # 同じコンテナで lint-ja と go の手順も通った。そのため runs-on は ubuntu-latest のままにする。
+        #
+        # 移る前に GitHub のランナーで試すときは、リポジトリの変数 RUNS_ON を ubuntu-26.04 にして、
+        # この CI を手で動かす。リリースを含むほかのワークフローも同じ変数を見るので、試したら消す。
+        # 移ったあとにこの段で落ちたら、e2e の runs-on の既定だけを ubuntu-24.04 にして、
+        # Playwright を上げて通るのを確かめてから戻す
         run: npx playwright install --with-deps chromium
 
       - name: E2Eテストをする
         # 閾値は package.json の coverageThresholds.e2e にある。
         # 下回ると失敗し、app.js のカバレッジをジョブの要約に出す
         run: npm run test:e2e
+
+      - name: 落ちたときにPlaywrightの出力を残す
+        # CI でだけ落ちた試験を、手元で追えるようにする。ログだけでは、そのとき画面がどうだったかが分からない。
+        # test-results/ には、落ちた試験ごとに trace.zip（操作、画面の写し、通信）と error-context.md が入る。
+        # trace.zip は npx playwright show-trace で開ける。
+        #
+        # 公開リポジトリなので、成果物は GitHub にログインした人なら誰でも落とせる。
+        # 中身は、試験が一時ディレクトリに作った見本（e2e/support/repo.mjs）と、127.0.0.1 の待ち受けとの
+        # やり取りだけである。待ち受けのセッションの Cookie も写るが、その実行の間だけ有効で、ランナーと一緒に消える。
+        # このジョブは秘密を環境に持たず、checkout も persist-credentials: false にしてある。
+        # それでも残す期間は短くする
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # 落ちたジョブだけを再実行すると、同じ実行の中でもう一度上げる。名前がぶつからないよう試行の番号を付ける
+          name: e2e-test-results-${{ github.run_attempt }}
+          path: test-results/
+          retention-days: 7
+          # 依存を入れる段などで落ちたときは、試験の出力がまだ無い
+          if-no-files-found: ignore
 
   lint-workflows:
     name: ワークフローの構文検査
@@ -162,7 +196,10 @@ jobs:
       - name: actionlintを入れる
         id: actionlint
         # 公式の導入スクリプトを使う。スクリプトはタグ v1.7.12 のコミットで固定し、版も渡す。
-        # shellcheck が入っていればシェルの検査も行い、無ければその規則だけ飛ばす
+        # shellcheck が入っていればシェルの検査も行い、無ければその規則だけ飛ばす。
+        # shellcheck はランナーに入っているものを使うので、ランナーの OS で版が変わる。
+        # Ubuntu 24.04 のランナーは 0.9.0、26.04 のランナーは 0.11.0 で、後者は規則が多い。
+        # rhysd/actionlint:1.7.12 のイメージ（shellcheck 0.11.0）で、指摘が無いことを確かめてある
         run: |
           bash <(curl -sSfL 'https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash') 1.7.12
 
