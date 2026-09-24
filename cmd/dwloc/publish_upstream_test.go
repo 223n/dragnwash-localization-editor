@@ -171,14 +171,17 @@ func upstreamPublish(t *testing.T, name string, exp publishExpected, i int) publ
 	}
 }
 
-// runFixturePublish は、上流の通しの実行と同じ並びのリポジトリを作り、
-// dwloc publish --no-game を走らせる。
+// publishFixturePublished は、上流の通しの実行で使った公開ファイルのルート相対パス。
+const publishFixturePublished = "Translations/" + publishFixtureLocale + "/strings.csv"
+
+// fixtureRun は、上流の通しの実行と同じ並びのリポジトリを作り、
+// dwloc publish --no-game を走らせて、そのリポジトリと結果をそのまま返す。
 //
 // extra は dwloc publish に足す指定（--accept-multiline など）。
-func runFixturePublish(t *testing.T, cases publishFixture, i int, extra ...string) publishView {
+func fixtureRun(t *testing.T, cases publishFixture, i int, extra ...string) (root string, code int, stdout, stderr string) {
 	t.Helper()
 	c := cases.Cases[i]
-	published := "Translations/" + publishFixtureLocale + "/strings.csv"
+	published := publishFixturePublished
 	files := map[string]string{
 		"data/script_order.csv": cases.Data.ScriptOrder,
 		"data/level_flow.csv":   cases.Data.LevelFlow,
@@ -195,16 +198,24 @@ func runFixturePublish(t *testing.T, cases publishFixture, i int, extra ...strin
 	default:
 		t.Fatalf("%s: as の値が分からない: %q", c.Name, c.As)
 	}
-	root := makeTree(t, files)
+	root = makeTree(t, files)
+	code, stdout, stderr = runCLI(append([]string{"publish", "--root", root, "--no-game"}, extra...)...)
+	return root, code, stdout, stderr
+}
 
-	code, stdout, stderr := runCLI(append([]string{"publish", "--root", root, "--no-game"}, extra...)...)
+// runFixturePublish は [fixtureRun] で dwloc publish を走らせ、結果を比べやすい形に
+// する。
+func runFixturePublish(t *testing.T, cases publishFixture, i int, extra ...string) publishView {
+	t.Helper()
+	c := cases.Cases[i]
+	root, code, stdout, stderr := fixtureRun(t, cases, i, extra...)
 	switch code {
 	case exitOK:
 		m := dwlocSummary.FindStringSubmatch(strings.TrimSpace(strings.SplitN(stdout, "\n", 2)[0]))
 		if m == nil {
 			t.Fatalf("%s: 集計の1行が読めない\n%s", c.Name, stdout)
 		}
-		v := publishView{outcome: outcomeWrote, output: readFile(t, root, published)}
+		v := publishView{outcome: outcomeWrote, output: readFile(t, root, publishFixturePublished)}
 		for k := range v.summary {
 			v.summary[k], _ = strconv.Atoi(m[k+1])
 		}
@@ -310,7 +321,8 @@ type knownPublishDiff struct {
 const (
 	whyPubAcceptable = "正しい複数行の値だが、続きの行が単独で読むとレコードに見える（2列の作業コピーでは" +
 		"区切りの数がヘッダーの列数 2 と同じ、7列では原文の2行目がカンマを多く含み7列）。飲み込みの確かめ (f) で止め、" +
-		"確かめたうえで通す指定（--accept-multiline）で上流と同じバイトを書く（[TestPublishAcceptMultilineMatchesUpstream]）"
+		"確かめたうえでレコード単位で通す指定（--accept-multiline <ロケール>:<key>）で上流と同じバイトを書く" +
+		"（[TestPublishAcceptMultilineMatchesUpstream]）"
 	whyPubHeaderColumns = "ヘッダーに key 列も source_en 列も無いか、translation 列が無いので、形の確かめ (a) で止める。" +
 		"上流はすべての行を捨て、ヘッダーとコメントだけを書く"
 	whyPubUnclosed = "閉じない引用符 (e)。上流は後ろの行（英語の原文を含む）を訳に飲み込んで書く（上流の報告 #11）。" +
@@ -490,9 +502,15 @@ func TestPublishAgainstUpstream(t *testing.T) {
 // [TestPublishAcceptMultilineMatchesUpstream] で固定する。
 var acceptableFixtures = []string{"ml-continuation-looks-like-row", "ml-source-translated-2col"}
 
+// acceptGuide は、止めたときの直し方が案内する、通すための指定を取り出す。
+var acceptGuide = regexp.MustCompile(`--accept-multiline (\S+) を付けると書けます。`)
+
 // TestPublishAcceptMultilineMatchesUpstream は、正しい複数行の値なのに飲み込みの確かめで
 // 止まる入力が、確かめたうえで通す指定（--accept-multiline）を付けると、上流と同じ
-// バイトと集計で書けることを見る（決まったことの 4）。
+// バイトと集計で書けることを見る（決まったことの 4 と 16）。
+//
+// 指定は、止めたときの直し方に出たものをそのまま写す。指定はレコード単位
+// （<ロケール>:<key>）で、直し方が写せる形で出すことも、ここで確かめる。
 func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
 	cases, exp := loadPublishFixture(t)
 	for _, name := range acceptableFixtures {
@@ -503,16 +521,32 @@ func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
 		if pin, ok := publishDiffs[name]; !ok || pin.kind != pubIntended || pin.why != whyPubAcceptable {
 			t.Errorf("%s: 表で、確かめたうえで通す形として止めることを固定していない: %+v", name, pin)
 		}
-		got := runFixturePublish(t, cases, i, "--accept-multiline", publishFixtureLocale)
+		_, code, _, stderr := fixtureRun(t, cases, i)
+		if code != exitProblems {
+			t.Fatalf("%s: 指定が無いときの終了コード = %d、1 を期待\n%s", name, code, stderr)
+		}
+		var extra []string
+		for _, m := range acceptGuide.FindAllStringSubmatch(stderr, -1) {
+			if !strings.HasPrefix(m[1], publishFixtureLocale+":") {
+				t.Errorf("%s: 案内した指定がレコード単位（%s:<key>）でない: %s", name, publishFixtureLocale, m[1])
+			}
+			if !slices.Contains(extra, m[1]) {
+				extra = append(extra, "--accept-multiline", m[1])
+			}
+		}
+		if len(extra) == 0 {
+			t.Fatalf("%s: 通すための指定を案内していない\n%s", name, stderr)
+		}
+		got := runFixturePublish(t, cases, i, extra...)
 		if d := describePublishDiff(upstreamPublish(t, name, exp, i), got); len(d) > 0 {
-			t.Errorf("%s: 通す指定を付けても上流と違う\n%s", name, quotePublishLines(d))
+			t.Errorf("%s: 案内どおりに指定しても上流と違う（%v）\n%s", name, extra, quotePublishLines(d))
 		}
 	}
 }
 
 // stopsOnlyOnUnacceptableShapes は、表の違い方 diff が、形の確かめで止まり、確かめた
 // うえで通す指定では通せない理由だけを含むかを返す。通せる理由は
-// publish.Hazard.Acceptable と同じ（続きの行が単独で読むとレコードに見える形）。
+// publish.Hazard.AcceptableShape と同じ（続きの行が単独で読むとレコードに見える形）。
 func stopsOnlyOnUnacceptableShapes(diff []string) bool {
 	if len(diff) == 0 {
 		return false
@@ -527,32 +561,80 @@ func stopsOnlyOnUnacceptableShapes(diff []string) bool {
 }
 
 // TestPublishAcceptMultilineKeepsOtherStops は、確かめたうえで通す指定
-// （--accept-multiline）を付けても、通せない形で止まる入力の止まり方が変わらない
-// ことを見る。対象は表の違い方のうち、形の確かめで止まり、通せる理由を含まないもの。
+// （--accept-multiline）を付けても、通せない形で止まる入力が書かれないことを見る。
+// 対象は表の違い方のうち、形の確かめで止まり、通せる理由を含まないもの。
+//
+// 指定はレコード単位（<ロケール>:<key>）なので、止まった形のレコードを名指す指定を
+// 付ける。どれも通せない形なので、指定は当たらない指定として終了コード2で止まり、
+// 公開ファイルは1バイトも変わらない。形に key の無い入力（単独の CR、閉じない
+// 引用符など）は、名指せるレコードが無いので、そのロケールの架空の key で確かめる。
 //
 // 閉じ引用符の後ろに文字が続く飲み込みは、続きの行が単独で読むとレコードに見えても
 // 通さない（swallow-7col-empty-key-english、swallow-6col-published）。通すと、英語の
-// 原文やキーが訳として公開される。
+// 原文やキーが訳として公開される。この2件は、そのレコードを名指して確かめる。
 func TestPublishAcceptMultilineKeepsOtherStops(t *testing.T) {
 	cases, _ := loadPublishFixture(t)
-	var checked []string
+	var checked, named []string
 	for i, c := range cases.Cases {
 		pin, ok := publishDiffs[c.Name]
 		if !ok || !stopsOnlyOnUnacceptableShapes(pin.diff) {
 			continue
 		}
 		checked = append(checked, c.Name)
-		want := runFixturePublish(t, cases, i)
-		if got := runFixturePublish(t, cases, i, "--accept-multiline", publishFixtureLocale); got != want {
-			t.Errorf("%s: 通す指定で止まり方が変わった\n got %+v\nwant %+v", c.Name, got, want)
+		root, code, _, _ := fixtureRun(t, cases, i)
+		if code != exitProblems {
+			t.Fatalf("%s: 指定が無いときの終了コード = %d、1 を期待", c.Name, code)
+		}
+		targets, err := publish.DiscoverTargets(root)
+		if err != nil || len(targets) != 1 {
+			t.Fatalf("%s: 対象を決められない: %v %+v", c.Name, err, targets)
+		}
+		hazards, err := publish.CheckTargetShape(targets[0])
+		if err != nil {
+			t.Fatalf("%s: CheckTargetShape: %v", c.Name, err)
+		}
+		var keys []string
+		for _, h := range hazards {
+			if h.Acceptable() {
+				t.Errorf("%s: 通せる形がある: %+v", c.Name, h)
+			}
+			if publish.NameableKey(h.Key) && !slices.Contains(keys, h.Key) {
+				keys = append(keys, h.Key)
+			}
+		}
+		if len(keys) > 0 {
+			named = append(named, c.Name)
+		} else {
+			keys = []string{shapeKeyUnrelated}
+		}
+		for _, k := range keys {
+			spec := publishFixtureLocale + ":" + k
+			root, code, stdout, stderr := fixtureRun(t, cases, i, "--accept-multiline", spec)
+			if code != exitError {
+				t.Errorf("%s: %s を付けた終了コード = %d、2 を期待\n%s", c.Name, spec, code, stderr)
+				continue
+			}
+			if !strings.Contains(stderr, "--accept-multiline の指定が、通せる行に当たりません: "+spec) ||
+				strings.Contains(stderr, "として通します") || stdout != "" {
+				t.Errorf("%s: %s を付けたときの報告が違う\n%s%s", c.Name, spec, stderr, stdout)
+			}
+			published := cases.PublishedDefault
+			if c.As == "published" {
+				published = c.Text
+			} else if c.Published != nil {
+				published = *c.Published
+			}
+			if got := readFile(t, root, publishFixturePublished); got != published {
+				t.Errorf("%s: %s を付けたら公開ファイルが変わった", c.Name, spec)
+			}
 		}
 	}
 	for _, name := range []string{"swallow-7col-empty-key-english", "swallow-6col-published"} {
-		if !slices.Contains(checked, name) {
-			t.Errorf("%s を確かめていない（表で通せない理由で止まることを固定していない）", name)
+		if !slices.Contains(named, name) {
+			t.Errorf("%s を、そのレコードを名指して確かめていない（表で通せない理由で止まることを固定していない）", name)
 		}
 	}
-	t.Logf("確かめた入力: %d 件", len(checked))
+	t.Logf("確かめた入力: %d 件（止まった形のレコードを名指したもの %d 件）", len(checked), len(named))
 }
 
 // portSpecPath は移植仕様。表の分類を、仕様の表と突き合わせるのに使う。

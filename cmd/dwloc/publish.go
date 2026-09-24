@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
@@ -17,7 +18,7 @@ import (
 )
 
 // publishUsage は publish の説明。
-const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>] [--dry-run]
+const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>:<key>] [--dry-run]
 
 <ルート>/Translations 配下の各ロケールについて、公開用の strings.csv を作り直します。
 tools/hash-strings.ps1 と同じ出力です。
@@ -65,8 +66,8 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
 読まれるからです。
 
 行をまたぐ値の続きの行がレコードに見える形は、正しい複数行の値でも当たることが
-あります。値を確かめて正しければ、--accept-multiline でそのロケールを指定すると
-書けます。
+あります。値を確かめて正しければ、止まったときの直し方に出る指定
+（--accept-multiline <ロケール>:<key>）を付けると、そのレコードだけを通して書けます。
 
 表計算ソフトなどで作業コピーを保存し直すと、原文の中の改行が CRLF に変わり、
 キーと合わなくなった行は公開されません（tools/hash-strings.ps1 と同じです）。
@@ -90,21 +91,25 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
         Translations の走査をやめて、指定したファイルだけを変換します。
         入力と出力が同じファイルになります。複数回指定できます。
         --locale と同時には使えません。
-  --accept-multiline <ロケール>
+  --accept-multiline <ロケール>:<key>
         行をまたぐ値の続きの行がそれだけでレコードに見える形を、確かめたうえで
-        正しい複数行の値として通します。止まったときに表示された行を見て、
+        正しい複数行の値として通します。指定はレコード単位です。<key> はその
+        レコードの key（key 列の値。key 列が無いか空なら、原文から作るキー）で、
+        止まったときの直し方に、そのまま写せる形で出ます。表示された行を見て、
         引用符の閉じ位置が正しいと確かめてから指定してください。通した行は
-        標準エラーに出します。複数のロケールを通すときは、1つずつ複数回
-        指定します（ファイル名にカンマを入れられるので、カンマでは分けません）。
-        --path で走らせたときは、ロケールの代わりにそのファイルを指定します。
-        閉じない引用符、閉じ引用符の後ろに文字が続く形、単独の CR、
+        標準エラーに出します。通すレコードごとに1つずつ、複数回指定します
+        （ファイル名にカンマを入れられるので、カンマでは分けません）。
+        --path で走らせたときは、ロケールの代わりに --path に渡したファイルを
+        書きます（<ファイル>:<key>）。ロケールやファイルだけの指定はできません。
+        指定は、そのロケールの入力・いまの公開ファイル・ゲーム側の公開ファイルの
+        どれでも、その key のレコードに効きます。同じロケールのほかのレコードは
+        通しません。閉じない引用符、閉じ引用符の後ろに文字が続く形、単独の CR、
         再生順のデータの形は通しません。閉じ引用符の後ろに文字が続く行の
-        あるレコードは、続きの行がレコードに見えても通しません。
-        指定はロケール（--path ではファイル）ごとに効き、そのロケールで当たった
-        通せる行をすべて通します。行やキーでは選べません。一度公開した行は
-        いまの公開ファイルで毎回当たるので、そのロケールを書くたびに指定が
-        要ります。その指定は、新しく入った閉じ忘れの行も同じように通すので、
-        通した行の一覧を毎回確かめてください。
+        あるレコードは、続きの行がレコードに見えても通しません。key が無いか、
+        英数字と . _ : - のほかの文字を含むレコード（どれも publish は書きません）と、
+        同じファイルに同じ key のレコードが2つ以上あるレコードも通せません。
+        一度公開した行はいまの公開ファイルで毎回当たるので、そのレコードを
+        書くたびに同じ指定が要ります。通せる行に当たらない指定は誤りにします。
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
 
@@ -119,7 +124,8 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
   0   成功
   1   書くと訳が失われる、読み違える形のファイルがある、または
       ゲームに入っている翻訳が古いので止めた（どれも1バイトも書いていません）
-  2   実行時のエラー（Translations が読めない、指定したロケールが無い、など）
+  2   実行時のエラー（Translations が読めない、指定したロケールが無い、
+      --accept-multiline の指定が通せる行に当たらない、など）
 `
 
 // publishLossText は、書くと訳が失われると分かったときの見出しです。
@@ -203,7 +209,8 @@ func (l *pathList) Set(value string) error {
 //
 // カンマでは分けません。--path で走らせたときはファイル名を受けるので、
 // pathList と同じ理由でカンマを区切りにできません。1つ指定するたびに1件ずつ
-// 足してください。
+// 足してください。値をロケールかファイルと key に分けるのは [resolveAccepts] です。
+// 分けるには対象（ロケール名と --path のファイル）が要るので、ここでは分けません。
 type acceptList []string
 
 // String は flag.Value の求めに応じた表示です。
@@ -220,74 +227,166 @@ func (l *acceptList) Set(value string) error {
 	if value == "" {
 		// 空の指定を黙って受けると、通したつもりの行が止まったままになり、
 		// 何が効いていないのか分からなくなります。
-		return fmt.Errorf("ロケール名かファイル名が空です")
+		return fmt.Errorf("指定が空です（<ロケール>:<key> の形で指定します）")
 	}
 	*l = append(*l, value)
 	return nil
 }
 
-// acceptSet は、--accept-multiline で通してよいと指定された対象です。
-//
-// ロケールで走らせたときはロケール名で、--path で走らせたときはファイルで引きます。
-// --path ではロケール名が決まらないためです。
-//
-// 行やキーでは引きません（決まったことの 4 の例「--accept-multiline <ロケール>」の
-// とおり）。そのため、正しい複数行の値を一度公開すると、いまの公開ファイルの形の
-// 確かめで毎回当たり、そのロケールを書くたびに指定が要ります。その指定は、同じ
-// ロケールに新しく入った飲み込み（続きの行がレコードに見える形）も通します。通した
-// 行を毎回標準エラーに出すのは、このためでもあります。
-type acceptSet struct {
-	locales map[string]bool
-	paths   map[string]bool
+// acceptSpec は、--accept-multiline の指定1つを、対象（ロケールかファイル）と
+// レコードの key に分けたものです。
+type acceptSpec struct {
+	// raw は指定の綴りのままです。報告に使います。
+	raw string
+	// locales は、ロケールで走らせたときに当たったロケール名（ディレクトリ名の綴り）です。
+	// 照合は --locale と同じで、大文字小文字だけが違うディレクトリがあれば2つ以上に
+	// なります。--path で走らせたときは空です。
+	locales []string
+	// path は、--path で走らせたときの対象のファイル（filepath.Clean 済み）です。
+	path string
+	// key はレコードの key です。比べ方は publish.SameKey です。
+	key string
 }
 
-// covers は h を指定で通してよいかを返します。通せる形（[publish.Hazard.Acceptable]）で、
-// そのロケールかファイルが指定されているときだけです。
-func (a acceptSet) covers(h publish.Hazard) bool {
-	if !h.Acceptable() {
+// names は、s が h のレコード（ロケールかファイルと key）を名指すかを返します。
+// 形が通せるかは見ません。
+func (s acceptSpec) names(h publish.Hazard) bool {
+	if h.Key == "" {
 		return false
 	}
 	if h.Locale != "" {
-		return a.locales[h.Locale]
+		if !slices.Contains(s.locales, h.Locale) {
+			return false
+		}
+	} else if s.path == "" || s.path != filepath.Clean(h.Path) {
+		return false
 	}
-	return a.paths[filepath.Clean(h.Path)]
+	return publish.SameKey(s.key, h.Key)
 }
 
-// resolveAccepts は --accept-multiline の指定を、対象の中から引き当てます。
+// acceptSet は、--accept-multiline で通してよいと指定されたレコードです。
 //
-// 当たらない指定は誤りにします。打ち間違えた名前を黙って無視すると、通したつもりの
-// ロケールが止まったままになり、何度走らせても同じところで止まります。ロケール名の
-// 照合は --locale と同じです（[matchLocales]）。--path で走らせたときは、--path に
-// 渡したファイルのどれかと同じファイルを指定します。
-func resolveAccepts(targets []publish.Target, values []string, byPath bool) (acceptSet, error) {
-	set := acceptSet{locales: map[string]bool{}, paths: map[string]bool{}}
-	if len(values) == 0 {
-		return set, nil
+// 通す単位はレコードです（決まったことの 16）。ロケールで走らせたときはロケール名と
+// key で、--path で走らせたときはファイルと key で引きます。--path ではロケール名が
+// 決まらないためです。
+//
+// ロケール単位で通していたころは、正しい複数行の値を一度公開すると、いまの公開
+// ファイルの形の確かめで毎回当たり、そのロケールを書くたびに付ける指定が、同じ
+// ロケールに新しく入った飲み込み（続きの行がレコードに見える形）まで通していました。
+// レコード単位なら、新しく入った飲み込みは別のレコードなので止まります。
+type acceptSet struct {
+	specs []acceptSpec
+}
+
+// covers は h を通す指定の番号をすべて返します。通さないなら空です。同じレコードを
+// 2回指定したときは、どちらの番号も返します（どちらも当たった指定として数えます）。
+//
+// 通すのは、指定で通せる形（[publish.Hazard.Acceptable]。形と、key で1つのレコードに
+// 名指せること）で、指定がそのレコードを名指すときだけです。
+func (a acceptSet) covers(h publish.Hazard) []int {
+	if !h.Acceptable() {
+		return nil
 	}
-	if !byPath {
-		found, err := matchLocales(targets, values, "--accept-multiline")
+	var out []int
+	for i, s := range a.specs {
+		if s.names(h) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// acceptFormText は、--accept-multiline の指定の形を案内する文です。ロケール単位の
+// 指定（決まったことの 4 の例）を無くしたので、その形で渡されたときにも出します。
+const acceptFormText = "通すレコードごとに <ロケール>:<key>（--path では <ファイル>:<key>）の形で1つずつ指定します。" +
+	"止まったときの直し方に、写せる形で出ます。ロケールやファイルだけの指定はできません"
+
+// resolveAccepts は --accept-multiline の指定を、対象（ロケールかファイル）と key に
+// 分けます。
+//
+// 対象の無い指定は誤りにします。打ち間違えた名前を黙って無視すると、通したつもりの
+// レコードが止まったままになり、何度走らせても同じところで止まります。レコードに
+// 当たらない指定は、形を確かめてから [reportShape] が誤りにします。
+func resolveAccepts(targets []publish.Target, values []string, byPath bool) (acceptSet, error) {
+	parse := parseLocaleAccept
+	if byPath {
+		parse = parsePathAccept
+	}
+	var set acceptSet
+	for _, v := range values {
+		spec, err := parse(targets, v)
 		if err != nil {
 			return acceptSet{}, err
 		}
-		for _, t := range found {
-			set.locales[t.Locale] = true
-		}
-		return set, nil
-	}
-	var missing []string
-	for _, v := range values {
-		want := filepath.Clean(v)
-		if !slices.ContainsFunc(targets, func(t publish.Target) bool { return filepath.Clean(t.Input) == want }) {
-			missing = append(missing, v)
-			continue
-		}
-		set.paths[want] = true
-	}
-	if len(missing) > 0 {
-		return acceptSet{}, fmt.Errorf("--accept-multiline に指定したファイルが --path にありません: %s",
-			strings.Join(missing, ", "))
+		set.specs = append(set.specs, spec)
 	}
 	return set, nil
+}
+
+// parseLocaleAccept は、ロケールで走らせたときの指定 <ロケール>:<key> を分けます。
+//
+// 最初の ':' で分けます。ロケール名（ディレクトリ名）に ':' は入らず、key には
+// 入ることがある（台詞ID の line:）からです。ロケール名の照合は --locale と同じです
+// （[matchLocales]）。
+func parseLocaleAccept(targets []publish.Target, v string) (acceptSpec, error) {
+	locale, k, ok := strings.Cut(v, ":")
+	locale, k = strings.TrimSpace(locale), strings.TrimSpace(k)
+	if !ok || locale == "" || k == "" {
+		return acceptSpec{}, fmt.Errorf("--accept-multiline はレコード単位で指定してください: %s（%s）", v, acceptFormText)
+	}
+	found, err := matchLocales(targets, []string{locale}, "--accept-multiline")
+	if err != nil {
+		return acceptSpec{}, err
+	}
+	return acceptSpec{raw: v, locales: localeNames(found), key: k}, nil
+}
+
+// parsePathAccept は、--path で走らせたときの指定 <ファイル>:<key> を分けます。
+//
+// ファイル名にも key にも ':' が入りうる（Windows のドライブ名、台詞ID の line:）ので、
+// ':' のどの位置で分けると前半が --path のファイル（filepath.Clean で比べる）に
+// なるかで決めます。2か所以上で分けられるときは、どこまでがファイル名か決められない
+// ので誤りにします。
+func parsePathAccept(targets []publish.Target, v string) (acceptSpec, error) {
+	isTarget := func(p string) bool {
+		want := filepath.Clean(p)
+		return slices.ContainsFunc(targets, func(t publish.Target) bool { return filepath.Clean(t.Input) == want })
+	}
+	if isTarget(v) {
+		return acceptSpec{}, fmt.Errorf("--accept-multiline はレコード単位で指定してください: %s（%s）", v, acceptFormText)
+	}
+	var found []acceptSpec
+	for i := 0; i < len(v); i++ {
+		if v[i] == ':' && i > 0 && isTarget(v[:i]) {
+			found = append(found, acceptSpec{raw: v, path: filepath.Clean(v[:i]), key: strings.TrimSpace(v[i+1:])})
+		}
+	}
+	switch {
+	case len(found) == 0:
+		return acceptSpec{}, fmt.Errorf("--accept-multiline に指定したファイルが --path にありません: %s（%s）", v, acceptFormText)
+	case len(found) > 1:
+		return acceptSpec{}, fmt.Errorf("--accept-multiline の指定で、どこまでがファイル名か決められません: %s", v)
+	case found[0].key == "":
+		return acceptSpec{}, fmt.Errorf("--accept-multiline はレコード単位で指定してください: %s（%s）", v, acceptFormText)
+	}
+	return found[0], nil
+}
+
+// unmatchedAccepts は、どの行も通さなかった指定を、当たらなかった理由を添えて返します。
+// used は指定ごとに通した行があったか、all は形の確かめで見つけたすべての形です。
+func (a acceptSet) unmatchedAccepts(used []bool, all []publish.Hazard) []string {
+	var out []string
+	for i, s := range a.specs {
+		if used[i] {
+			continue
+		}
+		why := "そのレコードに、指定で通せる行がありません"
+		if slices.ContainsFunc(all, s.names) {
+			why = "そのレコードの行は、指定では通せない形です。直し方は上の一覧にあります"
+		}
+		out = append(out, s.raw+"（"+why+"）")
+	}
+	return out
 }
 
 // runPublish は公開用CSVを生成します。
@@ -300,7 +399,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	var paths pathList
 	fs.Var(&paths, "path", "変換するファイル（入出力兼用）")
 	var accepts acceptList
-	fs.Var(&accepts, "accept-multiline", "確かめたうえで複数行の値として通すロケール（--path ではファイル）")
+	fs.Var(&accepts, "accept-multiline", "確かめたうえで複数行の値として通すレコード（<ロケール>:<key>。--path では <ファイル>:<key>）")
 	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	dryRun := fs.Bool("dry-run", false, "書き込まずに内容だけ表示する")
 	if code, ok := parseFlags(fs, args, publishUsage, stdout, stderr); !ok {
@@ -485,16 +584,33 @@ dwloc:       publish はファイル全体を解釈して読みます。下の�
 dwloc:       英語の原文やほかの行が訳として公開されたり、訳が黙って落ちたりします。
 `
 
+// publishSwallowFix は、飲み込み（引用符が別の行で閉じる形）の直し方の頭です。
+//
+// 引用符の閉じ位置を確かめることと、値の中の " を "" と書くことです。閉じ忘れた " を
+// 足すか、値の中の " を重ねれば、後ろの行は値から外れます。
+const publishSwallowFix = "引用符の閉じ位置を確かめてください。値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。"
+
+// 続きの行がレコードに見えるだけの飲み込みの直し方の後ろに添える文です。正しい
+// 複数行の値でも当たる（原文の2行目がカンマを多く含むなど）ので、確かめたうえで
+// 通す指定を案内します。指定はレコード単位で、{accept} は --accept-multiline に
+// 渡す値（<ロケール>:<key>）です。そのレコードを key で1つに名指せないときは、
+// 指定を案内せず、なぜ通せないかを書きます（[publish.Hazard.Acceptable]）。
+const (
+	publishSwallowAcceptFix = "{line}行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline {accept} を付けると書けます。"
+	publishSwallowNoKeyFix  = "{line}行目が値の一部として正しくても、このレコードには指定に使える key が無いので、--accept-multiline では通せません" +
+		"（飲み込んだのがヘッダーか、key 列も原文も空のレコードか、key 列の値に英数字と . _ : - のほかの文字があるレコードです。" +
+		"レコードなら、その key のままでは公開されません）。"
+	publishSwallowDupKeyFix = "{line}行目が値の一部として正しくても、同じ key（{key}）のレコードがこのファイルに {count} 件あり、" +
+		"どのレコードを通すか決められないので、--accept-multiline では通せません。" +
+		"publish が書くのは、そのうち訳の入った最初のレコードだけです。要らないレコードを消してから、もう一度実行してください。"
+)
+
 // publishShapeFix は、形ごとの直し方です。キーは reason の識別子です。
 //
 // 文面の {line} は、理由の置換の line（飲み込まれたと疑う物理行など）で、
 // {accept} は --accept-multiline に渡す値です。どちらも [shapeFix] が埋めます。
 //
-// 飲み込み（引用符が別の行で閉じる形）の直し方は、引用符の閉じ位置を確かめることと、
-// 値の中の " を "" と書くことです。閉じ忘れた " を足すか、値の中の " を重ねれば、
-// 後ろの行は値から外れます。続きの行がレコードに見えるだけの形は、正しい複数行の
-// 値でも当たる（原文の2行目がカンマを多く含むなど）ので、確かめたうえで通す指定を
-// 案内します。閉じ引用符の後ろに文字が続く形は、どの書き手も作らないので、指定を
+// 閉じ引用符の後ろに文字が続く飲み込みは、どの書き手も作らないので、指定を
 // 案内しません。
 var publishShapeFix = map[string]string{
 	reason.PublishNoKeyColumn: "ヘッダーの行を key,section,node,order,speaker,translation などの形に直してください。" +
@@ -506,10 +622,8 @@ var publishShapeFix = map[string]string{
 	reason.PublishRowsUnread: "改行を LF か CRLF にして保存し直してから、もう一度実行してください。",
 	reason.PublishUnclosedQuote: "引用符を閉じるか取り除いてから、もう一度実行してください。" +
 		"値の中の \" は \"\" と2つ重ねて書きます。",
-	reason.PublishSwallowKeyShaped: "引用符の閉じ位置を確かめてください。値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。" +
-		"{line}行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline {accept} を付けると書けます。",
-	reason.PublishSwallowSameColumns: "引用符の閉じ位置を確かめてください。値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。" +
-		"{line}行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline {accept} を付けると書けます。",
+	reason.PublishSwallowKeyShaped:   publishSwallowFix + publishSwallowAcceptFix,
+	reason.PublishSwallowSameColumns: publishSwallowFix + publishSwallowAcceptFix,
 	reason.PublishSwallowTextAfterQuote: "引用符の閉じ位置を確かめてください。{line}行目の \" が、前の行で開いた値を閉じています。" +
 		"値を閉じる \" が抜けていれば足し、値の中の \" は \"\" と2つ重ねて書きます。",
 	reason.PublishLoneCR: "値の中の単独の CR を LF に直すか取り除いてから、もう一度実行してください。",
@@ -584,17 +698,30 @@ func loneCRFix(column, keyKind string) string {
 const publishGameBaseFix = "ゲーム側の公開ファイルは、リポジトリの Translations/<ロケール>/strings.csv を同じ場所へ写し直すと直ります。" +
 	"手で直すときは次のとおりです。"
 
+// acceptValue は、h のレコードを通すときに --accept-multiline に渡す値です。
+//
+// ロケールを決めて走らせたなら <ロケール>:<key>、--path で走らせたなら
+// <--path に渡したとおりのファイル>:<key> です。--path ではロケール名が決まらない
+// ためです。ファイルを相対にして出さないのは、--accept-multiline は --path に渡した
+// 綴りと引き当てるので、書き換えると当たらなくなるからです。
+//
+// key はそのまま出します（publish.Visible の印に置き換えません）。写した値で
+// 引き当てるので、印に置き換えると当たらなくなるからです。出すのは指定に使える
+// key（publish.NameableKey。英数字と . _ : - だけ）のときだけなので、報告の行を
+// 崩す文字は入りません。
+func acceptValue(h publish.Hazard) string {
+	target := h.Locale
+	if target == "" {
+		target = h.Path
+	}
+	return target + ":" + h.Key
+}
+
 // shapeFix は、h の直し方を報告に出す形にします。
 //
-// --accept-multiline に渡す値は、ロケールを決めて走らせたならロケール名、--path で
-// 走らせたなら --path に渡したとおりのファイルです。--path ではロケール名が
-// 決まらないためです。ファイルを相対にして出さないのは、--accept-multiline は
-// --path に渡した綴りと引き当てるので、書き換えると当たらなくなるからです。
+// 続きの行がレコードに見える飲み込みでは、そのレコードを key で1つに名指せるときだけ
+// 通す指定（[acceptValue]）を案内します。名指せないときは、なぜ通せないかを書きます。
 func shapeFix(h publish.Hazard) string {
-	accept := h.Locale
-	if accept == "" {
-		accept = h.Path
-	}
 	line, column, keyKind := "", "", ""
 	for i := 0; i+1 < len(h.Why.Args); i += 2 {
 		switch h.Why.Args[i] {
@@ -607,10 +734,16 @@ func shapeFix(h publish.Hazard) string {
 		}
 	}
 	fix := publishShapeFix[h.Why.ID]
-	if h.Why.ID == reason.PublishLoneCR {
+	switch {
+	case h.Why.ID == reason.PublishLoneCR:
 		fix = loneCRFix(column, keyKind)
+	case h.AcceptableShape() && !publish.NameableKey(h.Key):
+		fix = publishSwallowFix + publishSwallowNoKeyFix
+	case h.AcceptableShape() && h.KeyRecords > 1:
+		fix = publishSwallowFix + publishSwallowDupKeyFix
 	}
-	fix = strings.NewReplacer("{line}", line, "{accept}", accept, "{column}", column).Replace(fix)
+	fix = strings.NewReplacer("{line}", line, "{accept}", acceptValue(h), "{column}", column,
+		"{key}", h.Key, "{count}", strconv.Itoa(h.KeyRecords)).Replace(fix)
 	if h.GameBase {
 		fix = publishGameBaseFix + fix
 	}
@@ -632,13 +765,20 @@ const publishAcceptText = "dwloc: --accept-multiline の指定で、次の行を
 //
 // 1件でも残れば exitProblems（1）で、どのロケールも書きません。reportLosses と
 // 同じく、読んだうえで「書けば訳を取り違える」と分かったので 1 です。読めなくて
-// 確かめられなかったときだけが 2 で、そのときの文面は reportLosses と同じにします。
+// 確かめられなかったときは 2 で、そのときの文面は reportLosses と同じにします。
 // どちらの確認でも、読めないファイルに対してすることは同じだからです。
+//
+// --accept-multiline の指定が1つでも、通せる行に当たらなければ 2 です（決まったことの
+// 16）。打ち間違えた key を黙って無視すると、通したつもりのレコードが止まったままに
+// なります。そのときも、形の報告（通した行と止めた行）は先に出します。当たらない
+// 理由が、そのレコードの形にあることがあるからです。
 //
 // 通した行は、止めるときも書くときも標準エラーに出します。止めるときに出すのは、
 // 止まった原因を直したあとで、同じ指定で何が通るかを先に見せるためです。
 func reportShape(root string, targets []publish.Target, accept acceptSet, stderr io.Writer) int {
-	var found, passed []publish.Hazard
+	var all, found, passed []publish.Hazard
+	var passedBy []string
+	used := make([]bool, len(accept.specs))
 	for _, t := range targets {
 		hazards, err := publish.CheckTargetShape(t)
 		if err != nil {
@@ -653,25 +793,39 @@ func reportShape(root string, targets []publish.Target, accept acceptSet, stderr
 			return exitError
 		}
 		for _, h := range hazards {
-			if accept.covers(h) {
-				passed = append(passed, h)
-			} else {
+			all = append(all, h)
+			by := accept.covers(h)
+			if len(by) == 0 {
 				found = append(found, h)
+				continue
 			}
+			for _, i := range by {
+				used[i] = true
+			}
+			passed = append(passed, h)
+			passedBy = append(passedBy, accept.specs[by[0]].raw)
 		}
 	}
 	if len(passed) > 0 {
 		fmt.Fprint(stderr, publishAcceptText)
-		writeHazards(root, passed, stderr, false)
+		writeHazards(root, passed, stderr, func(i int, _ publish.Hazard) string {
+			return "指定: --accept-multiline " + passedBy[i]
+		})
 	}
-	if len(found) == 0 {
-		return exitOK
+	code := exitOK
+	if len(found) > 0 {
+		fmt.Fprint(stderr, publishShapeText)
+		writeHazards(root, found, stderr, func(_ int, h publish.Hazard) string { return "直し方: " + shapeFix(h) })
+		fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(found))
+		code = exitProblems
 	}
-
-	fmt.Fprint(stderr, publishShapeText)
-	writeHazards(root, found, stderr, true)
-	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(found))
-	return exitProblems
+	if unmatched := accept.unmatchedAccepts(used, all); len(unmatched) > 0 {
+		for _, u := range unmatched {
+			fmt.Fprintf(stderr, "dwloc: --accept-multiline の指定が、通せる行に当たりません: %s\n", u)
+		}
+		code = exitError
+	}
+	return code
 }
 
 // reportOrderShape は、再生順のデータ（data/script_order.csv と data/level_flow.csv）の
@@ -696,14 +850,15 @@ func reportOrderShape(root string, stderr io.Writer) int {
 		return exitOK
 	}
 	fmt.Fprint(stderr, publishShapeText)
-	writeHazards(root, hazards, stderr, true)
+	writeHazards(root, hazards, stderr, func(_ int, h publish.Hazard) string { return "直し方: " + shapeFix(h) })
 	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(hazards))
 	return exitProblems
 }
 
 // writeHazards は形の崩れを1件ずつ出します。ファイルの見出しはファイルが変わる
-// ときだけ出し、先頭の [publishShapeListMax] 件で切ります。withFix なら直し方も添えます。
-func writeHazards(root string, hazards []publish.Hazard, stderr io.Writer, withFix bool) {
+// ときだけ出し、先頭の [publishShapeListMax] 件で切ります。1件ごとに、detail が返す
+// 1行（直し方、または通した指定）を添えます。detail の引数は hazards の中の番号です。
+func writeHazards(root string, hazards []publish.Hazard, stderr io.Writer, detail func(int, publish.Hazard) string) {
 	lastFile := ""
 	for i, h := range hazards {
 		if i >= publishShapeListMax {
@@ -716,9 +871,7 @@ func writeHazards(root string, hazards []publish.Hazard, stderr io.Writer, withF
 			lastFile = file
 		}
 		fmt.Fprintf(stderr, "dwloc:       %s: %s\n", lineRange(h.Line, h.EndLine), h.Why)
-		if withFix {
-			fmt.Fprintf(stderr, "dwloc:         直し方: %s\n", shapeFix(h))
-		}
+		fmt.Fprintf(stderr, "dwloc:         %s\n", detail(i, h))
 	}
 }
 

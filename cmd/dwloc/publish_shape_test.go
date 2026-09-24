@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,8 +52,38 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 				"ja: " + jaPublishedPath + "（いまの公開ファイル）",
 				"2〜3行目: 3行目が、単独で読むとキーの形で始まるレコードに見える。",
 				`直し方: 引用符の閉じ位置を確かめてください。値を閉じる " が抜けていれば足し、値の中の " は "" と2つ重ねて書きます。`,
-				"3行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline ja を付けると書けます。",
+				// 通す指定はレコード単位で、そのまま写せる形（<ロケール>:<key>）で出す。
+				"3行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline ja:" + keyHello + " を付けると書けます。",
 			},
+		},
+		{
+			// 同じ key のレコードが2つあると、指定ではどちらを通すか決められない。
+			// 通す指定は案内せず、要らないレコードを消すよう案内する。
+			name: "いまの公開ファイルで同じ key のレコードが2つあり、片方が飲み込む",
+			published: "key,section,node,order,speaker,translation\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\"\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n",
+			want: []string{
+				"2〜3行目: 3行目が、単独で読むとキーの形で始まるレコードに見える。",
+				"3行目が値の一部として正しくても、同じ key（" + keyHello + "）のレコードがこのファイルに 2 件あり、" +
+					"どのレコードを通すか決められないので、--accept-multiline では通せません。",
+				"要らないレコードを消してから、もう一度実行してください。",
+			},
+			notWant: []string{"を付けると書けます"},
+		},
+		{
+			// key 列の値に空白がある。publish はこのレコードを書かない（R15）。指定に
+			// 写すとシェルで割れるので、key を出さず、通せないと案内する。
+			name: "作業コピーの key 列の値に指定に使えない文字",
+			working: "key,section,node,order,speaker,source_en,translation\n" +
+				"bad key,L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,\"もしもし\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,Hi there!,やあ！\"\n",
+			want: []string{
+				"2〜3行目: 3行目が、単独で読むとキーの形で始まるレコードに見える。",
+				"3行目が値の一部として正しくても、このレコードには指定に使える key が無いので、--accept-multiline では通せません",
+			},
+			notWant: []string{"を付けると書けます", "bad key"},
 		},
 		{
 			// 飲み込まれた行が自分の値を引用符で開く形。どの書き手も作らないので、
@@ -448,7 +479,7 @@ func TestPublishShapeReportIsCapped(t *testing.T) {
 
 // TestPublishShapeWithPathHasNoLocale は、--path で走らせたときの報告を見る。
 // ロケールが決まらないので頭に付けず、ファイルの名前だけを出す。通す指定には、
-// --path に渡したとおりのファイルを案内する。
+// --path に渡したとおりのファイルと key（<ファイル>:<key>）を案内する。
 func TestPublishShapeWithPathHasNoLocale(t *testing.T) {
 	root := lossRepo(t)
 	path := filepath.Join(root, filepath.FromSlash(jaPublishedPath))
@@ -459,30 +490,43 @@ func TestPublishShapeWithPathHasNoLocale(t *testing.T) {
 	if code != exitProblems {
 		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
 	}
+	spec := path + ":" + keyHello
 	checkContains(t, "標準エラー", stderr, []string{
 		"dwloc:   " + jaPublishedPath + "（いまの公開ファイル）",
-		"--accept-multiline " + path + " を付けると書けます。",
+		"--accept-multiline " + spec + " を付けると書けます。",
 	})
-	if strings.Contains(stderr, "ja: ") {
+	if strings.Contains(stderr, "ja: ") || strings.Contains(stderr, "ja:"+keyHello) {
 		t.Errorf("--path なのにロケールを付けている:\n%s", stderr)
 	}
 	if strings.Contains(stderr, "--locale") || strings.Contains(stderr, "このロケール") {
 		t.Errorf("--path なのにロケールで案内している:\n%s", stderr)
 	}
 
-	// 案内どおりにそのファイルを指定すると書ける。
+	// ファイルだけの指定（ロケール単位にあたる古い形）は、レコード単位で指定するよう
+	// 案内して止める。
 	code, _, stderr = runCLI("publish", "--root", root, "--path", path, "--accept-multiline", path)
+	if code != exitError {
+		t.Fatalf("ファイルだけの指定の終了コード = %d、2 を期待\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--accept-multiline はレコード単位で指定してください: " + path + "（"})
+
+	// 案内どおりに写すと書ける。
+	code, _, stderr = runCLI("publish", "--root", root, "--path", path, "--accept-multiline", spec)
 	if code != exitOK {
 		t.Fatalf("--accept-multiline を付けた終了コード = %d\n%s", code, stderr)
 	}
-	checkContains(t, "標準エラー", stderr, []string{"--accept-multiline の指定で、次の行を正しい複数行の値として通します。"})
+	checkContains(t, "標準エラー", stderr, []string{
+		"--accept-multiline の指定で、次の行を正しい複数行の値として通します。",
+		"指定: --accept-multiline " + spec,
+	})
 }
 
 // TestPublishAcceptMultiline は、確かめたうえで通す指定（--accept-multiline）を見る。
 //
-// 通すのは、指定したロケールの、続きの行が単独で読むとレコードに見える形だけである。
-// 正しい複数行の値でも当たる（原文の2行目がカンマを多く含むなど）ので、止めたまま
-// にすると、そのロケールを publish できなくなる。通した行は標準エラーに出す。
+// 通すのは、指定したレコード（<ロケール>:<key>）の、続きの行が単独で読むとレコードに
+// 見える形だけである（決まったことの 16）。正しい複数行の値でも当たる（原文の2行目が
+// カンマを多く含むなど）ので、止めたままにすると、そのロケールを publish できなくなる。
+// 通した行は標準エラーに出す。
 func TestPublishAcceptMultiline(t *testing.T) {
 	// de の訳の2行目は、単独で読むとヘッダーと同じ6列のレコードに見える。
 	dePublished := "key,section,node,order,speaker,translation\n" +
@@ -494,8 +538,22 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		"Translations/de/strings.csv": dePublished,
 		"Translations/ja/strings.csv": jaPublished,
 	}
+	deSpec := "de:" + helloKey
 
-	t.Run("指定が無ければ止める", func(t *testing.T) {
+	// unchanged は、止めたときにどのファイルも書いていないことを見る。
+	unchanged := func(t *testing.T, root string, want map[string]string) {
+		t.Helper()
+		for rel, content := range want {
+			if !strings.HasPrefix(rel, "Translations/") {
+				continue
+			}
+			if got := readFile(t, root, rel); got != content {
+				t.Errorf("止めたのに %s を書いている:\n%s", rel, got)
+			}
+		}
+	}
+
+	t.Run("指定が無ければ止め、通すための指定を写せる形で出す", func(t *testing.T) {
 		root := makeTree(t, files)
 		code, _, stderr := runCLI("publish", "--root", root, "--no-game")
 		if code != exitProblems {
@@ -504,17 +562,17 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		checkContains(t, "標準エラー", stderr, []string{
 			"de: Translations/de/strings.csv（いまの公開ファイル）",
 			"2〜3行目: 3行目が、単独で読むとヘッダーと同じ列の数のレコードに見える。",
-			"--accept-multiline de を付けると書けます。",
+			"--accept-multiline " + deSpec + " を付けると書けます。",
 		})
-		if got := readFile(t, root, "Translations/ja/strings.csv"); got != jaPublished {
-			t.Errorf("止めたのに ja を書いている:\n%s", got)
-		}
+		unchanged(t, root, files)
 	})
 
-	t.Run("指定したロケールの行を通して書く", func(t *testing.T) {
+	t.Run("指定したレコードの行を通して書く", func(t *testing.T) {
 		root := makeTree(t, files)
-		// 大文字小文字は --locale と同じく問わない。
-		code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "DE")
+		// ロケール名の大文字小文字は --locale と同じく問わない。key も、台詞ID の
+		// ほかは問わない（publish がキーを小文字にしてから扱う。R13）。
+		spec := "DE:" + strings.ToUpper(helloKey)
+		code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", spec)
 		if code != exitOK {
 			t.Fatalf("終了コード = %d\n%s", code, stderr)
 		}
@@ -522,6 +580,7 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			"--accept-multiline の指定で、次の行を正しい複数行の値として通します。",
 			"de: Translations/de/strings.csv（いまの公開ファイル）",
 			"2〜3行目: 3行目が、単独で読むとヘッダーと同じ列の数のレコードに見える。",
+			"指定: --accept-multiline " + spec,
 		})
 		if strings.Contains(stderr, "直し方") || strings.Contains(stderr, shapeStopText) {
 			t.Errorf("通したのに止めるときの文面が出ている:\n%s", stderr)
@@ -531,21 +590,131 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			[]string{"\"Hallo\n,,,,,Welt\"\n"})
 	})
 
-	t.Run("ほかのロケールの指定では通さない", func(t *testing.T) {
-		root := makeTree(t, files)
-		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
-		if code != exitProblems {
-			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
-		}
-		if strings.Contains(stderr, "として通します") {
-			t.Errorf("指定していない de を通している:\n%s", stderr)
+	t.Run("ロケールだけの指定は止めてレコード単位の形を案内する", func(t *testing.T) {
+		for _, spec := range []string{"de", "de:", "de: ", ":" + helloKey} {
+			root := makeTree(t, files)
+			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", spec)
+			if code != exitError {
+				t.Fatalf("%q: 終了コード = %d、2 を期待\n%s", spec, code, stderr)
+			}
+			checkContains(t, "標準エラー", stderr, []string{
+				"--accept-multiline はレコード単位で指定してください: " + strings.TrimSpace(spec) + "（" + acceptFormText + "）",
+			})
+			if stdout != "" {
+				t.Errorf("%q: 止めたのに標準出力へ書いている:\n%s", spec, stdout)
+			}
+			unchanged(t, root, files)
 		}
 	})
 
-	// 通せない形は、指定しても形の確かめで止まる。どの見本も、形の確かめを通して
-	// しまえば、組み立てと失われる訳の確かめは止めない（書くか、閉じない引用符は
-	// 組み立ての誤りで終了コード2になる）。ほかの確かめで止まる見本では、通す指定が
-	// 形を通してしまっても試験が通るので、守りを確かめたことにならない。
+	t.Run("同じロケールのほかの飲み込みは通さない", func(t *testing.T) {
+		// 検証の指摘の筋書き。de の公開ファイルには、確かめて公開した正しい複数行の訳が
+		// ある。de の作業コピーでは Alpha の訳の引用符が閉じず、キーの形で始まる
+		// Bravo と Charlie の行を飲み込む。ロケール単位の指定では、公開済みの行を通す
+		// ための指定が、この飲み込みまで通していた。
+		keyAlpha := key.For("Alpha")
+		working := "key,section,node,order,speaker,source_en,translation\n" +
+			helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello,\"Hallo\n,,,,,Welt\"\n" +
+			keyAlpha + ",UI,,,UI,Alpha,\"Eins\n" +
+			key.For("Bravo") + ",UI,,,UI,Bravo,Zwei\n" +
+			key.For("Charlie") + ",UI,,,UI,Charlie,Drei\"\n"
+		withWorking := maps.Clone(files)
+		withWorking["Translations/_discovered/de.working.csv"] = working
+		root := makeTree(t, withWorking)
+
+		code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", deSpec)
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		passed, stopped, ok := strings.Cut(stderr, shapeStopText)
+		if !ok {
+			t.Fatalf("形の確かめで止めていない:\n%s", stderr)
+		}
+		checkContains(t, "通した行", passed, []string{
+			publishAcceptText, "de: Translations/de/strings.csv（いまの公開ファイル）", "指定: --accept-multiline " + deSpec,
+		})
+		checkContains(t, "止めた行", stopped, []string{
+			"de: Translations/_discovered/de.working.csv（入力）",
+			"4〜6行目: 5行目が、単独で読むとキーの形で始まるレコードに見える。",
+			"4〜6行目: 6行目が、単独で読むとキーの形で始まるレコードに見える。",
+			"--accept-multiline de:" + keyAlpha + " を付けると書けます。",
+			"読み違える形が 2 か所あります。直すまでは書きません。",
+		})
+		if strings.Contains(passed, "de.working.csv") {
+			t.Errorf("指定していないレコードの飲み込みを通している:\n%s", stderr)
+		}
+		if stdout != "" {
+			t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+		}
+		unchanged(t, root, withWorking)
+	})
+
+	t.Run("複数のレコードは1つずつ複数回指定する", func(t *testing.T) {
+		both := maps.Clone(files)
+		both["Translations/ja/strings.csv"] = "key,section,node,order,speaker,translation\n" +
+			helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n,,,,,もし\"\n"
+		jaSpec := "ja:" + helloKey
+
+		// カンマでは分けない。--path ではファイル名を受けるので、カンマを区切りに
+		// できない。カンマで並べると1つの指定として読み、key が当たらない。
+		root := makeTree(t, both)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", deSpec+","+jaSpec)
+		if code != exitError {
+			t.Fatalf("カンマで並べた指定: 終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"--accept-multiline の指定が、通せる行に当たりません: " + deSpec + "," + jaSpec + "（そのレコードに、指定で通せる行がありません）",
+		})
+		unchanged(t, root, both)
+
+		code, _, stderr = runCLI("publish", "--root", root, "--no-game", "--accept-multiline", deSpec, "--accept-multiline", jaSpec)
+		if code != exitOK {
+			t.Fatalf("複数回の指定: 終了コード = %d\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"指定: --accept-multiline " + deSpec, "指定: --accept-multiline " + jaSpec})
+
+		// 同じ指定を2回書いても、どちらも当たった指定として数える。
+		root = makeTree(t, files)
+		code, _, stderr = runCLI("publish", "--root", root, "--no-game", "--accept-multiline", deSpec, "--accept-multiline", deSpec)
+		if code != exitOK {
+			t.Fatalf("同じ指定を2回: 終了コード = %d\n%s", code, stderr)
+		}
+
+		_, usage, _ := runCLI("publish", "--help")
+		checkContains(t, "使い方", usage, []string{
+			"--accept-multiline <ロケール>:<key>",
+			"通すレコードごとに1つずつ、複数回指定します\n        （ファイル名にカンマを入れられるので、カンマでは分けません）。",
+		})
+	})
+
+	t.Run("同じ key のレコードが2つあれば通さない", func(t *testing.T) {
+		// 指定はレコードを key で名指すので、同じファイルに同じ key のレコードが2つ
+		// あると、どちらを確かめたのかが決まらない。ゲームの作業コピーと publish の
+		// 書く公開ファイルでは key が重ならないので、手で直したファイルだけに起きる。
+		dup := maps.Clone(files)
+		dup["Translations/de/strings.csv"] = dePublished + helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hallo\n"
+		root := makeTree(t, dup)
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", deSpec)
+		if code != exitError {
+			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			shapeStopText,
+			"同じ key（" + helloKey + "）のレコードがこのファイルに 2 件あり",
+			"--accept-multiline の指定が、通せる行に当たりません: " + deSpec +
+				"（そのレコードの行は、指定では通せない形です。直し方は上の一覧にあります）",
+		})
+		if strings.Contains(stderr, "として通します") || strings.Contains(stderr, "を付けると書けます") {
+			t.Errorf("同じ key のレコードを通すか、通す指定を案内している:\n%s", stderr)
+		}
+		unchanged(t, root, dup)
+	})
+
+	// 通せない形は、そのレコードを指定しても形の確かめで止まり、指定は当たらない指定
+	// （終了コード2）になる。どの見本も、形の確かめを通してしまえば、組み立てと失われる
+	// 訳の確かめは止めない（書くか、閉じない引用符は組み立ての誤りで終了コード2になる）。
+	// ほかの確かめで止まる見本では、通す指定が形を通してしまっても試験が通るので、
+	// 守りを確かめたことにならない。
 	for _, tc := range []struct {
 		name string
 		// published は ja の公開ファイル（入力と書き出し先が同じ経路）。1行目は
@@ -553,6 +722,10 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		published string
 		// want は、形の確かめが出す理由の一部。
 		want string
+		// named は、指定したレコード（ja:keyHello）に形の崩れがあるか。あれば当たらない
+		// 理由は「通せない形」、無ければ「通せる行がない」になる。飲み込みのほかの形の
+		// Hazard は key を持たない。
+		named bool
 	}{
 		{
 			// 飲み込まれた行が自分の値を引用符で開く形。4行目は正しいレコードなので、
@@ -561,7 +734,8 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n" +
 				"\"Alpha\n" +
 				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\n",
-			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+			want:  "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+			named: true,
 		},
 		{
 			// 3行目は単独で読むとキーの形で始まるが、閉じ引用符の後ろに文字が続く。
@@ -569,7 +743,8 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			name: "キーの形の行で閉じ引用符の後ろに文字が続く",
 			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n" +
 				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"やあ\"！\n",
-			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+			want:  "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+			named: true,
 		},
 		{
 			// 3行目は単独で読むとヘッダーと同じ6列に見える（key 列に英文を書いた追記の形）が、
@@ -578,7 +753,8 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n" +
 				"\"Good day, friend\",UI,,,UI,こんにちは\n" +
 				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\n",
-			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+			want:  "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+			named: true,
 		},
 		{
 			name:      "値の中の単独の CR",
@@ -604,15 +780,21 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(jaPublishedPath)), []byte(published), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
-			if code != exitProblems {
-				t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+			spec := "ja:" + keyHello
+			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", spec)
+			if code != exitError {
+				t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+			}
+			why := "そのレコードに、指定で通せる行がありません"
+			if tc.named {
+				why = "そのレコードの行は、指定では通せない形です。直し方は上の一覧にあります"
 			}
 			// 止めたのが形の確かめで、通す指定が1件も通していないこと。
 			checkContains(t, "標準エラー", stderr, []string{
 				shapeStopText, tc.want, "直し方: ", "読み違える形が 1 か所あります。直すまでは書きません。",
+				"--accept-multiline の指定が、通せる行に当たりません: " + spec + "（" + why + "）",
 			})
-			for _, s := range []string{"として通します", "--accept-multiline ja を付けると書けます", "訳が失われるので"} {
+			for _, s := range []string{"として通します", "を付けると書けます", "訳が失われるので"} {
 				if strings.Contains(stderr, s) {
 					t.Errorf("標準エラーに %q が出ている:\n%s", s, stderr)
 				}
@@ -627,17 +809,57 @@ func TestPublishAcceptMultiline(t *testing.T) {
 	}
 
 	t.Run("当たらない指定は誤りにする", func(t *testing.T) {
+		// 無いロケールは、形を確かめる前に止める。
 		root := makeTree(t, files)
-		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "xx")
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "xx:"+helloKey)
 		if code != exitError {
-			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+			t.Fatalf("無いロケール: 終了コード = %d、2 を期待\n%s", code, stderr)
 		}
 		checkContains(t, "標準エラー", stderr, []string{
 			"--accept-multiline に指定したロケールがありません: xx（対象にできるのは de, ja）",
 		})
+		if strings.Contains(stderr, shapeStopText) {
+			t.Errorf("無いロケールなのに形を確かめている:\n%s", stderr)
+		}
+
+		// ロケールはあるが、そのロケールに、その key のレコードで止まる行が無い。
+		// 形の報告を先に出してから誤りにする（de は指定が無いので止まったまま）。
+		for _, spec := range []string{"de:" + shapeKeyUnrelated, "ja:" + helloKey} {
+			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", spec)
+			if code != exitError {
+				t.Fatalf("%s: 終了コード = %d、2 を期待\n%s", spec, code, stderr)
+			}
+			checkContains(t, "標準エラー", stderr, []string{
+				shapeStopText,
+				"--accept-multiline " + deSpec + " を付けると書けます。",
+				"--accept-multiline の指定が、通せる行に当たりません: " + spec + "（そのレコードに、指定で通せる行がありません）",
+			})
+			if strings.Contains(stderr, "として通します") {
+				t.Errorf("%s: 指定していない de のレコードを通している:\n%s", spec, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("%s: 止めたのに標準出力へ書いている:\n%s", spec, stdout)
+			}
+		}
+		unchanged(t, root, files)
+
+		// ほかがすべて通っても、当たらない指定が1つでもあれば書かない。
+		code, stdout, stderr := runCLI("publish", "--root", root, "--no-game",
+			"--accept-multiline", deSpec, "--accept-multiline", "de:"+shapeKeyUnrelated)
+		if code != exitError {
+			t.Fatalf("当たる指定と当たらない指定: 終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			publishAcceptText,
+			"--accept-multiline の指定が、通せる行に当たりません: de:" + shapeKeyUnrelated,
+		})
+		if strings.Contains(stderr, shapeStopText) || stdout != "" {
+			t.Errorf("止める文面が出ているか、書いている:\n%s\n%s", stderr, stdout)
+		}
+		unchanged(t, root, files)
 	})
 
-	t.Run("--path では指定したファイルだけを通す", func(t *testing.T) {
+	t.Run("--path では指定したファイルのレコードだけを通す", func(t *testing.T) {
 		// 2つのファイルに同じ形（de と同じ、2行目が6列に見える複数行の訳）を置き、
 		// 片方だけを指定する。もう片方は、確かめていないので止める。
 		root := makeTree(t, map[string]string{
@@ -647,7 +869,7 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		})
 		a := filepath.Join(root, "a", "strings.csv")
 		b := filepath.Join(root, "b", "strings.csv")
-		code, stdout, stderr := runCLI("publish", "--root", root, "--path", a, "--path", b, "--accept-multiline", a)
+		code, stdout, stderr := runCLI("publish", "--root", root, "--path", a, "--path", b, "--accept-multiline", a+":"+helloKey)
 		if code != exitProblems {
 			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
 		}
@@ -659,7 +881,7 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		labelB := "dwloc:   b/strings.csv（いまの公開ファイル）"
 		checkContains(t, "通した行", passed, []string{publishAcceptText, labelA})
 		checkContains(t, "止めた行", stopped, []string{
-			labelB, "--accept-multiline " + b + " を付けると書けます。", "読み違える形が 1 か所あります。",
+			labelB, "--accept-multiline " + b + ":" + helloKey + " を付けると書けます。", "読み違える形が 1 か所あります。",
 		})
 		if strings.Contains(passed, labelB) || strings.Contains(stopped, labelA) {
 			t.Errorf("指定していない b を通したか、指定した a を止めている:\n%s", stderr)
@@ -674,37 +896,36 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		}
 	})
 
+	t.Run("--path で台詞ID の key を指定する", func(t *testing.T) {
+		// ファイル名（Windows ではドライブ名）にも key（line:）にも ':' が入る。
+		// ':' のどこで分けると前半が --path のファイルになるかで分ける。
+		published := "key,section,node,order,speaker,translation\n" +
+			"line:aaaaaaaa,L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\n,,,,,Welt\"\n"
+		root := makeTree(t, map[string]string{"data/script_order.csv": scriptOrderCSV, "a/strings.csv": published})
+		a := filepath.Join(root, "a", "strings.csv")
+		_, _, stderr := runCLI("publish", "--root", root, "--path", a)
+		spec := a + ":line:aaaaaaaa"
+		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline " + spec + " を付けると書けます。"})
+		code, _, stderr := runCLI("publish", "--root", root, "--path", a, "--accept-multiline", spec)
+		if code != exitOK {
+			t.Fatalf("終了コード = %d\n%s", code, stderr)
+		}
+		// 台詞ID は綴りのまま比べる。
+		code, _, stderr = runCLI("publish", "--root", root, "--path", a, "--accept-multiline", a+":LINE:aaaaaaaa")
+		if code != exitError {
+			t.Fatalf("綴りの違う台詞ID: 終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+	})
+
 	t.Run("--path に無いファイルの指定は誤りにする", func(t *testing.T) {
 		root := makeTree(t, files)
 		path := filepath.Join(root, "Translations", "ja", "strings.csv")
-		code, _, stderr := runCLI("publish", "--root", root, "--path", path,
-			"--accept-multiline", filepath.Join(root, "Translations", "de", "strings.csv"))
+		other := filepath.Join(root, "Translations", "de", "strings.csv")
+		code, _, stderr := runCLI("publish", "--root", root, "--path", path, "--accept-multiline", other+":"+helloKey)
 		if code != exitError {
 			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
 		}
-		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline に指定したファイルが --path にありません"})
-	})
-
-	t.Run("カンマでは分けない", func(t *testing.T) {
-		// --path ではファイル名を受けるので、カンマを区切りにできない。使い方の
-		// 説明も「1つずつ複数回指定する」と書く（前は「カンマ区切りで並べられます」と
-		// 書いていたが、実際には当たらない指定として止まっていた）。
-		root := makeTree(t, files)
-		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "de,ja")
-		if code != exitError {
-			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
-		}
-		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline に指定したロケールがありません: de,ja"})
-
-		code, _, stderr = runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "de", "--accept-multiline", "ja")
-		if code != exitOK {
-			t.Fatalf("複数回の指定: 終了コード = %d\n%s", code, stderr)
-		}
-		_, usage, _ := runCLI("publish", "--help")
-		checkContains(t, "使い方", usage, []string{"1つずつ複数回\n        指定します（ファイル名にカンマを入れられるので、カンマでは分けません）。"})
-		if strings.Contains(usage, "複数回指定するか、カンマ区切りで並べられます。\n        --path で走らせたときは") {
-			t.Error("使い方の説明が、--accept-multiline をカンマで並べられると書いている")
-		}
+		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline に指定したファイルが --path にありません: " + other + ":" + helloKey})
 	})
 
 	t.Run("空の指定は誤りにする", func(t *testing.T) {
@@ -713,8 +934,25 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		if code != exitError {
 			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
 		}
-		checkContains(t, "標準エラー", stderr, []string{"ロケール名かファイル名が空です"})
+		checkContains(t, "標準エラー", stderr, []string{"指定が空です（<ロケール>:<key> の形で指定します）"})
 	})
+}
+
+// TestParsePathAccept は、--path で走らせたときの指定の分け方を見る。どこまでが
+// ファイル名か決められない指定は誤りにする。
+func TestParsePathAccept(t *testing.T) {
+	targets := []publish.Target{{Input: "a", Output: "a"}, {Input: "a:b", Output: "a:b"}}
+	if _, err := parsePathAccept(targets, "a:b:c"); err == nil || !strings.Contains(err.Error(), "どこまでがファイル名か決められません") {
+		t.Errorf("2通りに分けられる指定を受けた: %v", err)
+	}
+	got, err := parsePathAccept(targets, "a:b:line:x")
+	if err == nil {
+		t.Errorf("2通りに分けられる指定を受けた: %+v", got)
+	}
+	got, err = parsePathAccept(targets[:1], "a: "+shapeKeyUnrelated+" ")
+	if err != nil || got.path != "a" || got.key != shapeKeyUnrelated {
+		t.Errorf("分け方が違う: %+v, %v", got, err)
+	}
 }
 
 // TestAcceptListString は flag.Value としての表示を確かめる。
@@ -759,19 +997,39 @@ func TestPublishShapeFixCoversEveryReason(t *testing.T) {
 }
 
 // TestShapeFixNamesTheAcceptTarget は、直し方が、確かめたうえで通す指定を案内する形を
-// 固定する。通せる形だけに案内し、渡す値はロケールを決めて走らせたならロケール名、
-// --path で走らせたならそのファイルにする。ゲーム側の公開ファイルでは、写し直す直し方を
-// 先に出す。
+// 固定する。通せる形だけに案内し、渡す値はレコード単位で、ロケールを決めて走らせたなら
+// <ロケール>:<key>、--path で走らせたなら <ファイル>:<key> にする。key で1つの
+// レコードに名指せないときは案内せず、なぜ通せないかを書く。ゲーム側の公開ファイル
+// では、写し直す直し方を先に出す。
 func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
 	for _, id := range []string{reason.PublishSwallowKeyShaped, reason.PublishSwallowSameColumns} {
 		why := reason.New(id, "", "line", "7")
-		byLocale := shapeFix(publish.Hazard{Locale: "ja", Path: "Translations/ja/strings.csv", Why: why})
-		byPath := shapeFix(publish.Hazard{Path: "some/file.csv", Why: why})
-		if !strings.Contains(byLocale, "7行目が値の一部として正しい") || !strings.Contains(byLocale, "--accept-multiline ja を") {
+		byLocale := shapeFix(publish.Hazard{Locale: "ja", Path: "Translations/ja/strings.csv", Why: why,
+			Key: "line:0a0b0c01", KeyRecords: 1})
+		byPath := shapeFix(publish.Hazard{Path: "some/file.csv", Why: why, Key: keyHello, KeyRecords: 1})
+		if !strings.Contains(byLocale, "7行目が値の一部として正しい") ||
+			!strings.Contains(byLocale, "--accept-multiline ja:line:0a0b0c01 を付けると書けます。") {
 			t.Errorf("%s: ロケールで走らせたときの案内が違う: %s", id, byLocale)
 		}
-		if !strings.Contains(byPath, "--accept-multiline some/file.csv を") {
+		if !strings.Contains(byPath, "--accept-multiline some/file.csv:"+keyHello+" を付けると書けます。") {
 			t.Errorf("%s: --path で走らせたときの案内が違う: %s", id, byPath)
+		}
+
+		// key が無いか、指定に使えない文字を含むなら、key を出さずに通せないと書く。
+		// 印に置き換えた key（publish.Visible）を写しても当たらないので、出さない。
+		for _, k := range []string{"", "bad key", "k\r\n" + keyHiThere} {
+			fix := shapeFix(publish.Hazard{Locale: "ja", Why: why, Key: k, KeyRecords: 1})
+			if !strings.Contains(fix, "このレコードには指定に使える key が無いので、--accept-multiline では通せません") ||
+				strings.Contains(fix, "を付けると書けます") || (k != "" && strings.Contains(fix, k)) ||
+				strings.ContainsAny(fix, "\r\n{}") {
+				t.Errorf("%s: key %q の案内が違う: %q", id, k, fix)
+			}
+		}
+		// 同じ key のレコードが2つ以上あるなら、どれを通すか決められない。
+		dup := shapeFix(publish.Hazard{Locale: "ja", Why: why, Key: keyHello, KeyRecords: 3})
+		if !strings.Contains(dup, "同じ key（"+keyHello+"）のレコードがこのファイルに 3 件あり") ||
+			strings.Contains(dup, "を付けると書けます") {
+			t.Errorf("%s: 同じ key のレコードの案内が違う: %s", id, dup)
 		}
 	}
 	for _, id := range []string{
@@ -1096,7 +1354,7 @@ func TestPublishStopsOnOrderShape(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := readFile(t, root, jaPublishedPath)
-			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
+			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja:"+keyHello)
 			if code != exitProblems {
 				t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
 			}

@@ -501,10 +501,13 @@ func TestCheckShapeMultilineValues(t *testing.T) {
 // 通せるのは、続きの行が単独で読むとレコードに見える形だけである。正当な複数行の
 // 値でも当たる（ml-continuation-looks-like-row、ml-source-translated-2col）。
 // 閉じ引用符の後ろに文字が続く形は、どの書き手も作らないので通させない。
+//
+// 指定はレコード単位なので、形が通せても、key で1つのレコードに名指せなければ
+// 通させない（決まったことの 16）。
 func TestHazardAcceptable(t *testing.T) {
 	for _, tc := range []struct {
-		id   string
-		want bool
+		id    string
+		shape bool
 	}{
 		{reason.PublishSwallowKeyShaped, true},
 		{reason.PublishSwallowSameColumns, true},
@@ -516,9 +519,176 @@ func TestHazardAcceptable(t *testing.T) {
 		{reason.PublishNoKeyColumn, false},
 		{reason.PublishRowsUnread, false},
 	} {
-		if got := (Hazard{Why: reason.New(tc.id, "")}).Acceptable(); got != tc.want {
-			t.Errorf("%s: Acceptable = %v、want %v", tc.id, got, tc.want)
+		named := Hazard{Why: reason.New(tc.id, ""), Key: shapeK1, KeyRecords: 1}
+		if got := named.AcceptableShape(); got != tc.shape {
+			t.Errorf("%s: AcceptableShape = %v、want %v", tc.id, got, tc.shape)
 		}
+		if got := named.Acceptable(); got != tc.shape {
+			t.Errorf("%s: key で名指せるときの Acceptable = %v、want %v", tc.id, got, tc.shape)
+		}
+		// key が無い（ヘッダー、key 列も原文も空）、指定に使えない文字（空白、改行）、
+		// 同じ key のレコードが2つ。
+		for _, h := range []Hazard{
+			{Why: named.Why},
+			{Why: named.Why, Key: "bad key", KeyRecords: 1},
+			{Why: named.Why, Key: "line:a\nb", KeyRecords: 1},
+			{Why: named.Why, Key: shapeK1, KeyRecords: 2},
+		} {
+			if h.Acceptable() {
+				t.Errorf("%s: key で1つに名指せないのに通せる: %+v", tc.id, h)
+			}
+		}
+	}
+}
+
+// TestNameableKey は、確かめたうえで通す指定に書ける key を固定する。16桁の16進と
+// 台詞ID（R10 の文字）は書ける。ほかの文字を含む key のレコードは publish が書かない。
+func TestNameableKey(t *testing.T) {
+	for _, tc := range []struct {
+		k    string
+		want bool
+	}{
+		{shapeK1, true},
+		{strings.ToUpper(shapeK1), true},
+		{"line:0a0b_c.d-E", true},
+		{"", false},
+		{"bad key", false},
+		{"a,b", false},
+		{"\"k\"", false},
+		{"k\r", false},
+		{"k\n", false},
+		{"k\t", false},
+		{"キー", false},
+		{"k$HOME", false},
+		{"k'", false},
+	} {
+		if got := NameableKey(tc.k); got != tc.want {
+			t.Errorf("NameableKey(%q) = %v、want %v", tc.k, got, tc.want)
+		}
+	}
+}
+
+// TestSameKey は key の比べ方を固定する。台詞ID は綴りのまま、それ以外は ASCII の
+// 大文字小文字を区別しない（publish がキーを小文字にしてから扱う。R13）。
+func TestSameKey(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{shapeK1, shapeK1, true},
+		{shapeK1, strings.ToUpper(shapeK1), true},
+		{shapeK1, shapeK2, false},
+		{"line:abc", "line:abc", true},
+		{"line:abc", "line:ABC", false},
+		{"line:abc", "LINE:abc", false},
+		{"LINE:abc", "line:ABC", false},
+		// 台詞ID の形でない key どうしは畳む。
+		{"LINE:abc", "Line:ABC", true},
+		// ASCII のほかの文字では畳まない（K は KELVIN SIGN）。
+		{"k", "K", false},
+	} {
+		if got := SameKey(tc.a, tc.b); got != tc.want {
+			t.Errorf("SameKey(%q, %q) = %v、want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestCheckShapeSwallowKeys は、飲み込みの Hazard に、飲み込んだレコードの key と、
+// 同じファイルで同じ key を持つレコードの数が入ることを見る（決まったことの 16）。
+func TestCheckShapeSwallowKeys(t *testing.T) {
+	keyOne, keyTwo := key.For("one"), key.For("two")
+	for _, tt := range []struct {
+		name  string
+		input string
+		// keys と counts は、飲み込みの Hazard ごとの Key と KeyRecords。
+		keys   []string
+		counts []int
+		// acceptable は、形が通せる Hazard が指定で通せるか。
+		acceptable []bool
+	}{
+		{
+			name: "key 列の値",
+			input: "key,source_en,translation\n" +
+				keyOne + ",one,\"いち\n" + keyTwo + ",two,に\"\n",
+			keys: []string{keyOne}, counts: []int{1}, acceptable: []bool{true},
+		},
+		{
+			// 大文字の16進は綴りのまま返す。比べるときは SameKey で畳む。
+			name: "key 列の値（大文字）",
+			input: "key,source_en,translation\n" +
+				strings.ToUpper(keyOne) + ",one,\"いち\n" + keyTwo + ",two,に\"\n",
+			keys: []string{strings.ToUpper(keyOne)}, counts: []int{1}, acceptable: []bool{true},
+		},
+		{
+			// key 列が空なら、原文から作るキー（R14）。
+			name: "key 列が空",
+			input: "key,section,node,order,speaker,source_en,translation\n" +
+				",UI,,,UI,one,\"いち\n,,,,,,に\"\n",
+			keys: []string{keyOne}, counts: []int{1}, acceptable: []bool{true},
+		},
+		{
+			// 2列の作業コピーでは原文から作るキー。原文が行をまたげば、その全体から作る。
+			// 続きの行「para2",段落」は、単独で読むとヘッダーと同じ2列に見える。
+			name:  "2列の作業コピー",
+			input: "source_en,translation\n\"para1\npara2\",段落\n",
+			keys:  []string{key.For("para1\npara2")}, counts: []int{1}, acceptable: []bool{true},
+		},
+		{
+			// 同じ key のレコードがほかにあれば数える。形の崩れの無いレコードも入れる。
+			name: "同じ key のレコードが2つ",
+			input: "key,source_en,translation\n" +
+				keyOne + ",one,\"いち\n" + keyTwo + ",two,に\"\n" +
+				strings.ToUpper(keyOne) + ",one,いち\n",
+			keys: []string{keyOne}, counts: []int{2}, acceptable: []bool{false},
+		},
+		{
+			// key 列の値に空白があると指定に書けない。publish もこのレコードを書かない。
+			name: "key 列の値に空白",
+			input: "key,source_en,translation\n" +
+				"bad key,one,\"いち\n" + keyTwo + ",two,に\"\n",
+			keys: []string{"bad key"}, counts: []int{1}, acceptable: []bool{false},
+		},
+		{
+			// key 列も原文も空なら key は無い。
+			name: "key 列も原文も空",
+			input: "key,source_en,translation\n" +
+				",,\"いち\n" + keyTwo + ",two,に\"\n",
+			keys: []string{""}, counts: []int{0}, acceptable: []bool{false},
+		},
+		{
+			// 飲み込んだのがヘッダーなら、レコードが無いので key も無い。
+			name:  "ヘッダーが飲み込む",
+			input: "key,\"translation\n" + keyTwo + ",に\"\n" + keyOne + ",いち\n",
+			keys:  []string{""}, counts: []int{0}, acceptable: []bool{false},
+		},
+		{
+			// 閉じ引用符の後ろに文字が続く形にも key は入る（報告と、当たらない指定の
+			// 理由に使う）が、形が通せないので通さない。
+			name:  "閉じ引用符の後ろに文字が続く",
+			input: "source_en,translation\none,\"いち\n\"Alpha line\nBeta line\",に\ntwo,さん\n",
+			keys:  []string{keyOne}, counts: []int{1}, acceptable: []bool{false},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var keys []string
+			var counts []int
+			var acceptable []bool
+			for _, h := range CheckShape([]byte(tt.input)) {
+				if !strings.HasPrefix(h.Why.ID, "publish_swallow_") {
+					if h.Key != "" || h.KeyRecords != 0 {
+						t.Errorf("飲み込みでない形に key を入れている: %+v", h)
+					}
+					continue
+				}
+				keys = append(keys, h.Key)
+				counts = append(counts, h.KeyRecords)
+				acceptable = append(acceptable, h.Acceptable())
+			}
+			if !slices.Equal(keys, tt.keys) || !slices.Equal(counts, tt.counts) || !slices.Equal(acceptable, tt.acceptable) {
+				t.Errorf("key %q、数 %v、通せる %v\nwant key %q、数 %v、通せる %v",
+					keys, counts, acceptable, tt.keys, tt.counts, tt.acceptable)
+			}
+		})
 	}
 }
 

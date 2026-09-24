@@ -619,30 +619,54 @@ Write a `"` inside a value as two, `""`.
 
 A valid multi-line value can hit this check too.  
 That happens when the second line of the source text has many commas, or when the source text spans lines in a two-column working copy.  
-After checking the reported lines and making sure the value is correct, run it with that locale given to `--accept-multiline`.
+After checking the reported lines and making sure the value is correct, run it again with the option printed in the fix when it stopped.  
+The option names one record, in the form `<locale>:<key>`.  
+The fix prints it in a form you can copy as it is.
 
 ```bash
-dwloc publish --accept-multiline ja
+dwloc publish --accept-multiline ja:0123456789abcdef
 ```
 
-It lets through only the shapes whose continuation lines look like records, and only in the given locale.  
-The lines it lets through are printed on standard error.  
-When you run it with `--path`, give the file you passed to `--path` instead of a locale.  
+`<key>` is the value of the `key` column of that record.  
+When there is no `key` column or it is empty, it is the key made from the source text (for example in a two-column `source_en,translation` working copy).  
+Upper and lower case letters are not told apart.  
+A line ID (starting with `line:`), though, is compared exactly as written.
+
+It lets through only the shapes whose continuation lines look like records, and only in the given record.  
+It does not let through other records of the same locale.  
+The option applies to the record with that `key` in any of the input, the current published file, and the published file on the game side of that locale.  
+The lines it lets through, and the option that let each of them through, are printed on standard error.  
+To let through several records, give the option once for each.  
+When you run it with `--path`, write the file you passed to `--path` instead of a locale (`<file>:<key>`).  
+A locale alone (a file alone with `--path`) is not accepted.  
+Given one, it stops and asks you to name a record (exit code `2`).  
+An option that matches no line it can let through stops it with exit code `2` too.
+
 A closing quote followed right away by text, a quote that is never closed, a lone `CR`, and the shapes of the play order data are never let through, even with this option.  
 None of them appear in files written by the tools, and fixing them gets you through.  
 For a lone `CR` in the source text (the `source_en` column), though, whether you may fix it depends on the key of the row (see the table below).  
 A record with a line where text follows a closing quote right away is never let through, even when its continuation lines look like records.  
-It cannot be a valid value, and letting it through would publish the English source text or keys as translations.  
+It cannot be a valid value, and letting it through would publish the English source text or keys as translations.
+
+The following records cannot be let through with the option either.  
+The fix printed when it stops does not offer the option for them.
+
+- A record without a key (when the header is what swallows the lines, and a record whose `key` column and source text are both empty)
+- A record whose `key` column holds a character other than ASCII letters, digits, `.`, `_`, `:` and `-` (a space, a quote, a line break, and so on)
+- A record whose `key` is shared with another record in the same file
+
+`publish` does not write the first two kinds as they are.  
+This also keeps a key that would break apart in a shell out of the printed option.  
+For the third kind, the option cannot tell which record you checked.  
+`publish` writes only the first of them that has a translation.  
+Remove the records you do not need, then run it again.  
+Keys never repeat in the game's working copy or in the published files `publish` writes.
+
+Once a value of this shape is published, the check of the current published file hits it every time.  
+So every run that writes that record needs the same option.  
+A forgotten closing quote that later gets into the working copy is in another record, so that option does not let it through.  
 Exporting from the screen has no such option.  
 When it stops on a valid multi-line value, write it with `dwloc publish`.
-
-The option works per locale (per file with `--path`).  
-It cannot pick rows or keys; it lets through every row of the passable shapes found in that locale.  
-Once a value of this shape is published, the check of the current published file hits it every time.  
-So every run that writes that locale needs `--accept-multiline`.  
-That option also lets through a forgotten closing quote that later gets into the working copy, as long as its continuation lines look like records.  
-Each time you run it, check that the list of lines it lets through contains no line you do not know.  
-Exporting from the screen keeps stopping for that locale.
 
 When it stops on a lone `CR` in the source text (the `source_en` column), how to fix it depends on the key of the row.  
 The fix printed for each row when it stops follows this table too.
@@ -892,7 +916,7 @@ Which rows are involved is printed by `dwloc publish`.
 
 | Reason for refusing | When it happens | How to fix it |
 | ---- | ---- | ---- |
-| A file with a shape it would misread | The header lacks a key or translation column (it has neither `key` nor `source_en`, it has no `translation`, or its first column name starts with `#`), a quote is never closed, a quote is closed on another line and swallows the lines after it, a value contains a lone `CR`, an unquoted value is cut by a lone `CR`, the line breaks are misread so that not a single row can be read, or a value of the play order data that is written as it is, such as into a heading, contains a line break | Run `dwloc publish` and fix the rows it reports, as it describes. If it stops on a valid multi-line value, check it and write it with `dwloc publish --accept-multiline` |
+| A file with a shape it would misread | The header lacks a key or translation column (it has neither `key` nor `source_en`, it has no `translation`, or its first column name starts with `#`), a quote is never closed, a quote is closed on another line and swallows the lines after it, a value contains a lone `CR`, an unquoted value is cut by a lone `CR`, the line breaks are misread so that not a single row can be read, or a value of the play order data that is written as it is, such as into a heading, contains a line break | Run `dwloc publish` and fix the rows it reports, as it describes. If it stops on a valid multi-line value, check it and write it with the `--accept-multiline <locale>:<key>` that `dwloc publish` prints in the fix, once per record |
 | The translation in the game is older | The published file on the game side has different translations from what is committed. The working copy carries those old translations too, so exporting would roll a new commit back | Put the latest translations back into the game |
 | A committed translation would not survive in the new output | A row that exists in the committed file is missing from the working copy | Open the screen containing the missing rows once inside the game, then rebuild the working copy with `F1 → Translation → Export working copy` |
 

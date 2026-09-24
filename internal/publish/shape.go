@@ -37,9 +37,13 @@ publish は上流 main の hash-strings.ps1 と同じく、ファイル全体を
 	    見分けは csvfile.FindSwallows。正当な複数行の値でも当たることがある（原文の
 	    2行目がカンマを多く含むなど）ので、単独で読むとレコードに見える行（キーの形、
 	    ヘッダーと同じ列の数）は、確かめたうえで通す指定（cmd/dwloc の
-	    --accept-multiline）で通せる。閉じ引用符の後ろに文字が続く形は、どの書き手も
-	    作らないので通さない。続きの行がレコードに見えても、同じレコードに閉じ引用符の
-	    後ろに文字が続く行があれば、そちらの理由で止める（csvfile.FindSwallows）。
+	    --accept-multiline <ロケール>:<key>）で、レコードごとに通せる。通す単位を
+	    レコードにするのは、正しい複数行の値を一度公開すると、いまの公開ファイルの形の
+	    確かめで毎回当たるからである。ロケール単位で通すと、その指定が同じロケールに
+	    新しく入った閉じ忘れまで通す（決まったことの 16）。閉じ引用符の後ろに文字が
+	    続く形は、どの書き手も作らないので通さない。続きの行がレコードに見えても、
+	    同じレコードに閉じ引用符の後ろに文字が続く行があれば、そちらの理由で止める
+	    （csvfile.FindSwallows）。
 	(g) 単独の CR
 	    値の中の単独の CR（上流の道具はその行を落とす）と、引用の外の単独の CR で
 	    切れた値（ゲームは CR を捨ててつなげて読み、publish は切れた前半だけを書く）。
@@ -81,9 +85,29 @@ type Hazard struct {
 	EndLine int
 	// Why は止める理由。
 	Why reason.Reason
+	// Key は、形の崩れがあるレコードの key（[RecordKey]）。飲み込み (f) のときだけ
+	// 入る。確かめたうえで通す指定（cmd/dwloc の --accept-multiline <ロケール>:<key>）は、
+	// これでレコードを名指す。飲み込んだのがヘッダーのときと、key 列も原文も空の
+	// レコードでは空になる。
+	Key string
+	// KeyRecords は、同じファイルの中で Key と同じ key（[SameKey]）を持つレコードの
+	// 数。Key が空なら 0。2以上なら、key では1つのレコードに決まらない。
+	KeyRecords int
 }
 
-// Acceptable は、確かめたうえで通す指定で通してよい形かを返す。
+// Acceptable は、確かめたうえで通す指定で通してよいかを返す。形が通せる形
+// （[Hazard.AcceptableShape]）で、そのレコードを key で1つに名指せるときだけである。
+//
+// key で名指せないのは、key が空か、指定に使えない文字を含む（[NameableKey]）とき、
+// または同じファイルに同じ key のレコードが2つ以上あるときである。前者のレコードは
+// publish が書かない（R15〜R17 で捨てる）ので、通しても訳は公開されない。後者は、
+// どのレコードを確かめたのかを指定から決められない。ゲームの作業コピーと publish の
+// 書く公開ファイルでは key が重ならないので、重なるのは手で直したファイルだけである。
+func (h Hazard) Acceptable() bool {
+	return h.AcceptableShape() && NameableKey(h.Key) && h.KeyRecords == 1
+}
+
+// AcceptableShape は、形だけを見て、確かめたうえで通してよい形かを返す。
 //
 // 通せるのは、行をまたぐレコードの続きの行が、単独で読むとレコードに見える形
 // （キーの形、ヘッダーと同じ列の数）だけである。正当な複数行の値でも当たる
@@ -92,13 +116,70 @@ type Hazard struct {
 // ほかの形は直せば通る（閉じ引用符の後ろに文字を書く書き手は無く、単独の CR は
 // LF に直せる）ので、通させない。
 //
-// 通せるかは理由の識別子だけで決める。続きの行がレコードに見えても、同じレコードに
+// 形は理由の識別子だけで決める。続きの行がレコードに見えても、同じレコードに
 // 閉じ引用符の後ろに文字が続く行があれば、csvfile.FindSwallows がその行だけを
 // text-after-quote（reason.PublishSwallowTextAfterQuote）で返すので、ここで通せる
 // 形にはならない。その順を崩すと、
 // 英語の原文やキーを飲み込んだ訳が、通す指定で公開される。
-func (h Hazard) Acceptable() bool {
+func (h Hazard) AcceptableShape() bool {
 	return h.Why.ID == reason.PublishSwallowKeyShaped || h.Why.ID == reason.PublishSwallowSameColumns
+}
+
+// RecordKey は、レコード r の key を返す。報告に出し、確かめたうえで通す指定が
+// レコードを名指すのに使う。
+//
+// key 列の値（前後の空白を除く。R11）が空でなければそれ、空か key 列が無ければ、
+// 原文（source_en 列）から作るキー（R14）である。source_en,translation の2列の
+// 作業コピーでは後者になる。どちらも空なら空を返す。key 列の値は大文字小文字を
+// そのまま返す。比べるときは [SameKey] を使う。
+func RecordKey(r csvfile.Row) string {
+	if k := strings.TrimSpace(r.Get(colKey)); k != "" {
+		return k
+	}
+	if src := r.Get(colSourceEn); src != "" {
+		return key.For(src)
+	}
+	return ""
+}
+
+// SameKey は、2つの key が同じレコードを指すかを返す。台詞ID は綴りのまま比べ、
+// それ以外は ASCII の大文字小文字を区別しない。publish が台詞ID でないキーを
+// 小文字にしてから扱う（R13）のと同じである。台詞ID と、台詞ID の形でない key
+// （"LINE:…" など）は、小文字にすると同じ綴りになっても別のレコードである。
+func SameKey(a, b string) bool {
+	return foldKey(a) == foldKey(b)
+}
+
+// foldKey は [SameKey] で比べる形に key をそろえる。台詞ID とそれ以外が同じ形に
+// ならないよう、頭に種類の印を付ける。
+func foldKey(k string) string {
+	if key.LooksLikeLineID(k) {
+		return "line_id\x00" + k
+	}
+	return "key\x00" + csvfile.FoldASCII(k)
+}
+
+// NameableKey は、key を確かめたうえで通す指定（cmd/dwloc の
+// --accept-multiline <ロケール>:<key>）に書けるかを返す。空でなく、ASCII の英数字と
+// "." "_" ":" "-" だけでできていれば書ける。
+//
+// 16桁の16進のキーと台詞ID（R10 の文字）はどれもこの文字だけでできている。ほかの
+// 文字（空白・引用符・カンマ・改行などの制御文字・ASCII 以外の文字）を含む key の
+// レコードは、publish が書かない（R15〜R17 で捨てる）。そうした key を案内に出すと、
+// シェルに写すときに割れたり、改行で報告の行が崩れたりするので、指定には使わせない。
+func NameableKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		switch c := k[i]; {
+		case '0' <= c && c <= '9', 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z':
+		case c == '.', c == '_', c == ':', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // CheckTargetShape は、t の入力・いまの書き出し先・ゲーム側の公開ファイルを読み、
@@ -289,9 +370,25 @@ func unclosedHazards(f csvfile.PowerShellFile) []Hazard {
 // swallowHazards は (f) を確かめる。見分けは [csvfile.FindSwallows] で、飲み込まれたと
 // 疑う物理行1つにつき1件を返す。範囲は飲み込んだレコード（ヘッダーのこともある）の
 // 物理行で、疑う物理行は理由の置換 line に入れる。
+//
+// 飲み込んだレコードの key（[RecordKey]）と、同じファイルで同じ key を持つレコードの数を
+// 添える。確かめたうえで通す指定は、これでレコードを名指す（[Hazard.Acceptable]）。
+// 数えるのはファイルのすべてのレコードで、形の崩れの無いレコードも入れる。
 func swallowHazards(f csvfile.PowerShellFile) []Hazard {
+	swallows := csvfile.FindSwallows(f.Segments)
+	if len(swallows) == 0 {
+		return nil
+	}
+	records := make(map[int]csvfile.Row, len(f.Records))
+	counts := make(map[string]int, len(f.Records))
+	for _, r := range f.Records {
+		records[r.ID] = r.Row
+		if k := RecordKey(r.Row); k != "" {
+			counts[foldKey(k)]++
+		}
+	}
 	var out []Hazard
-	for _, s := range csvfile.FindSwallows(f.Segments) {
+	for _, s := range swallows {
 		line := strconv.Itoa(s.SwallowedLine)
 		var why reason.Reason
 		switch s.Sign {
@@ -308,7 +405,14 @@ func swallowHazards(f csvfile.PowerShellFile) []Hazard {
 				line+"行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。引用符が閉じ損ね、後ろの行を値に飲み込んでいると見られる",
 				"line", line)
 		}
-		out = append(out, Hazard{Line: s.Line, EndLine: s.EndLine, Why: why})
+		h := Hazard{Line: s.Line, EndLine: s.EndLine, Why: why}
+		// 飲み込んだのがヘッダーなら、レコードが無いので key も無い。
+		if r, ok := records[s.ID]; ok {
+			if h.Key = RecordKey(r); h.Key != "" {
+				h.KeyRecords = counts[foldKey(h.Key)]
+			}
+		}
+		out = append(out, h)
 	}
 	return out
 }
