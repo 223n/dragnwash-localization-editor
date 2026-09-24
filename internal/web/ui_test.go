@@ -1061,10 +1061,17 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if end < 0 {
 		t.Fatal("ロケールの切り替えの終わりが分からない")
 	}
-	// 読むのは change の時点で控えた値（chosen）。尋ねるのは送り終えてからなので、
-	// そのあいだに欄の値は変わりうる（app.js の load が欄を描いたロケールへそろえる）。
-	if !strings.Contains(js[start:start+end], "load(chosen, true)") {
+	// 読むのは change の時点で控えた値。少し待ってから（localeDelay）、送り終えるのを
+	// 待って尋ねるので、そのあいだに欄の値は変わりうる（app.js の load が欄を描いた
+	// ロケールへそろえる）。
+	if !strings.Contains(js[start:start+end], "state.localeChosen = el.locale.value;") {
+		t.Error("ロケールの欄の change で、選んだ値を控えていない")
+	}
+	if !strings.Contains(functionBody(t, js, "switchLocale"), "load(chosen, true)") {
 		t.Error("ロケールを切り替えても条件と検索語が残る。前のロケールの条件を持ち越す")
+	}
+	if strings.Contains(functionBody(t, js, "switchLocale"), "clearFinder()") {
+		t.Error("切り替えの手前で条件を外している。読み込みに失敗すると条件・検索欄・一覧が食い違う")
 	}
 	// 外すのは切り替えの手前ではなく、読めたときだけ。
 	//

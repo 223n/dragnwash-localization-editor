@@ -53,6 +53,9 @@ const retryDelays = [500, 1_000, 2_000, 5_000, 15_000, 30_000];
 // 自動保存の待ち（internal/web の api.go の autosaveDelay。/api/bootstrap で画面へ渡る）。
 const autosaveDelay = 1_500;
 
+// ロケールの欄で選んでから読みにいくまでの待ち（app.js の localeDelay）。
+const localeDelay = 400;
+
 // 帯（#save-state）と行の class を見る。saving は送っている最中、failed は帯の
 // 「保存できない」側、unsaved と save-failed は行の印（app.js の markRow）。
 const SAVING = /(^|\s)saving(\s|$)/;
@@ -545,6 +548,7 @@ test.describe("要求そのものが落ちたとき", () => {
 
     // 送っている最中に he を選ぶ。返るまでは尋ねず、移りもしない。
     await page.locator("#locale").selectOption("he");
+    await page.clock.runFor(localeDelay);
     expect(dialogs).toHaveLength(0);
     await expect(page.locator("#file-path")).toHaveText(`${msg("ja", "ui.file")}: ${workingRel}`);
     release();

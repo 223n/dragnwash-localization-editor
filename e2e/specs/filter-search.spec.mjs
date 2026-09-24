@@ -153,6 +153,8 @@ test.use({ repo: finderRepo() });
 // 時計を進めるときに、境目より少し先まで進めるための値。
 const searchDelay = 120;
 const autosaveDelay = 1500;
+// ロケールの欄で選んでから読みにいくまでの待ち（app.js の localeDelay）。
+const localeDelay = 400;
 
 // cat はカテゴリの表示名。待ち受けは目録の category.<識別子> をそのまま返す。
 function cat(id) {
@@ -953,6 +955,7 @@ test.describe("ロケールを省いて起動したとき", () => {
     await openPaused(page, server);
     await expect(page.locator('#locale option[value=""]')).toHaveCount(1);
     await page.locator("#locale").selectOption("ja");
+    await page.clock.runFor(localeDelay);
     await expect(visibleRows(page)).toHaveText(ALL_ROWS);
     await expect(page.locator('#locale option[value=""]')).toHaveCount(0);
 
@@ -976,6 +979,7 @@ test.describe("ロケールを省いて起動したとき", () => {
     await expect(page.locator("#filters label.chip")).toHaveCount(0);
 
     await page.locator("#locale").selectOption("ja");
+    await page.clock.runFor(localeDelay);
     await expect(visibleRows(page)).toHaveText(ALL_ROWS);
     await expect(page.locator("#filters label.chip")).not.toHaveCount(0);
   });

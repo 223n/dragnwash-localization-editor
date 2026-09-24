@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { expect, test } from "../support/test.mjs";
 import { msg } from "../support/catalog.mjs";
 import { root } from "../support/paths.mjs";
-import { SAMPLE, SAMPLE_LINES, keyFor, sampleRepo } from "../support/repo.mjs";
+import { SAMPLE, SAMPLE_LINES, keyFor, publishedFile, sampleRepo } from "../support/repo.mjs";
 import {
   dataRows,
   editor,
@@ -31,6 +31,10 @@ import {
 const workingRel = "Translations/_discovered/ja.working.csv";
 const heRel = "Translations/he/strings.csv";
 const typed = "さようなら。";
+
+// ロケールの欄で選んでから読みにいくまでの待ち（app.js の localeDelay）。変えたら、ここも合わせる。
+// 時計を止めた試験では、選んだあとにこれだけ進めないと読みにいかない。
+const localeDelay = 400;
 
 // wrongKey はファイルに無いキー。保存の要求をこれに差し替えると、待ち受けは
 // 「この行はずれています」で書かずに断る（internal/web の keyMatches）。行ごとの
@@ -391,6 +395,99 @@ test("ロケールの選択肢は待ち受けが返した一覧で、起動時�
   await expect(app.locator('#locale option[value=""]')).toHaveCount(0);
 });
 
+// 閉じたロケールの欄に焦点を置いて矢印キーを押すと、Windows と Linux のブラウザーは押す
+// たびに change を出す。以前はそのたびに読みにいき、選び終える前の途中のロケールを1つずつ
+// 読んだ（未保存の訳があれば、そのたびに「切り替えると消えます」と尋ねた）。最後の change
+// から少し（app.js の localeDelay）待ってから、そのとき選ばれているロケールだけを読む。
+// 見本にロケールを1つ足し、he / ja / ko の3つにして、ja から ko を経て he まで動かす。
+test.describe("ロケールの欄を矢印キーで動かしたとき", () => {
+  const koRel = "Translations/ko/strings.csv";
+  const repo = sampleRepo();
+  test.use({
+    repo: {
+      ...repo,
+      root: { ...repo.root, [koRel]: publishedFile(["", { ...SAMPLE.hello, translation: "안녕?" }, ""]) },
+    },
+  });
+  // openPaused は偽の時計を入れてから画面を開き、開き終えたところで時計を止める。
+  async function openPaused(page, server) {
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await openApp(page, server);
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
+  }
+
+  // asked は /api/lines に尋ねたロケールの並び。
+  function asked(requests) {
+    return requests.map((req) => new URL(req.url()).searchParams.get("locale"));
+  }
+
+  test("続けて動かしても、途中のロケールは読まず、止めたところのロケールだけを読む", async ({ page, server }) => {
+    await openPaused(page, server);
+    const lines = watchRequests(page, "/api/lines");
+    await page.locator("#locale").focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator("#locale")).toHaveValue("ko");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await expect(page.locator("#locale")).toHaveValue("he");
+
+    // 最後に動かしてから localeDelay たつまでは読みにいかない。
+    await page.clock.runFor(localeDelay - 1);
+    expect(asked(lines)).toEqual([]);
+    await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+
+    await page.clock.runFor(1);
+    await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", heRel));
+    await expect(page.locator("#rows")).toHaveText(msg("ja", "ui.rows", { count: 1 }));
+    expect(asked(lines)).toEqual(["he"]);
+  });
+
+  // 行って戻っただけなら、切り替えていない。読み直すと、条件と検索語が外れ、未保存の訳が
+  // あれば「切り替えると消えます」と尋ねる。
+  test("元のロケールへ戻しただけなら、読みにいかず、検索語も外さない", async ({ page, server }) => {
+    await openPaused(page, server);
+    await page.locator("#search").fill("Hello");
+    await page.clock.runFor(200);
+    await expect(page.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 1 }));
+    const lines = watchRequests(page, "/api/lines");
+    const dialogs = watchDialogs(page, true);
+    // 保存を落として、未保存の訳を抱えた状態にする（切り替えるなら尋ねる状態）。
+    await page.route(isPath("/api/rows"), (route) => route.abort("connectionrefused"));
+    await typeTranslation(page, SAMPLE_LINES.hello, typed);
+    await page.locator("#locale").focus();
+    await expect(saveState(page)).toHaveClass(/(^|\s)failed(\s|$)/);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowUp");
+    await expect(page.locator("#locale")).toHaveValue("ja");
+
+    await page.clock.runFor(localeDelay * 2);
+    expect(asked(lines)).toEqual([]);
+    expect(dialogs).toEqual([]);
+    await expect(page.locator("#search")).toHaveValue("Hello");
+    await expect(page.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 1 }));
+  });
+
+  // 待っているあいだに読み直しを押したら、あとから押した読み直しを採る。待っていた切り替えが
+  // あとから走ると、読み直しを押したのに別のロケールへ移る。
+  test("選んで待つあいだに読み直しを押すと、切り替えをやめて、出ているロケールを読み直す", async ({
+    page,
+    server,
+  }) => {
+    await openPaused(page, server);
+    const lines = watchRequests(page, "/api/lines");
+    await page.locator("#locale").selectOption("ko");
+    await page.locator("#reload").click();
+    await expect(page.locator("#locale")).toHaveValue("ja");
+    await expect.poll(() => asked(lines)).toEqual(["ja"]);
+    await expect(page.locator("#list")).toHaveAttribute("aria-busy", "false");
+
+    await page.clock.runFor(localeDelay * 2);
+    expect(asked(lines)).toEqual(["ja"]);
+    await expect(page.locator("#file-path")).toHaveText(fileLabel("ja", workingRel));
+    await expect(page.locator("#locale")).toHaveValue("ja");
+  });
+});
+
 test.describe("ロケールを省いて起動したとき", () => {
   test.use({ dwloc: { locale: "" } });
 
@@ -452,7 +549,9 @@ test.describe("ロケールを省いて起動したとき", () => {
     await expect(app.locator("#locale option")).toHaveText(["he", "ja"]);
   });
 
-  // 最初の読み込みが返る前にもう1つ選んだとき（欄に焦点を置いて↓を続けて押すと起きる）。
+  // 最初の読み込みが返る前にもう1つ選んだとき（選んでから読みにいくまでの待ち、app.js の
+  // localeDelay より長く置いてから選び直し、そのあいだに応答が返っていないと起きる。待ちが
+  // 入る前は、欄に焦点を置いて↓を続けて押すだけで起きた）。
   // 以前は、先に返った応答が選択肢を組み直して欄をそのロケールにし、空の選択肢が消えた
   // あとに返った応答は欄に触れずに一覧だけを描いた。欄と、一覧・ファイルの名前・保存の
   // 宛先（state.locale）が別のロケールを指した。欄に出ているロケールを選び直しても change
@@ -470,6 +569,9 @@ test.describe("ロケールを省いて起動したとき", () => {
       await openApp(page, server);
       const lines = await holdLines(page);
       await page.locator("#locale").selectOption("ja");
+      // 選んだロケールを読みにいってから（localeDelay のあと）選び直す。待たずに選び直すと、
+      // 画面は最後に選んだほうだけを読む（「ロケールの欄を矢印キーで動かしたとき」）。
+      await expect.poll(() => lines.asked).toEqual(["ja"]);
       await page.locator("#locale").selectOption("he");
       await expect.poll(() => lines.asked.toSorted()).toEqual(["he", "ja"]);
 
@@ -863,6 +965,8 @@ test.describe("ロケールの切り替え", () => {
       await openApp(page, server);
       const lines = await holdLines(page, { fail });
       await page.locator("#locale").selectOption("he");
+      // he を読みにいってから（app.js の localeDelay のあと）選び直す。
+      await expect.poll(() => lines.asked).toEqual(["he"]);
       await page.locator("#locale").selectOption("ja");
       await expect.poll(() => lines.asked.toSorted()).toEqual(["he", "ja"]);
 
@@ -1431,9 +1535,11 @@ test.describe("保存を送り直しているとき", () => {
     const lines = await holdLines(page);
     const dialogs = watchDialogs(page, true);
     await page.locator("#locale").selectOption("he");
+    await page.clock.runFor(localeDelay);
     await expect.poll(() => dialogs.length).toBe(1);
     await expect.poll(() => lines.asked).toEqual(["he"]);
     await page.locator("#locale").selectOption("ja");
+    await page.clock.runFor(localeDelay);
     await expect.poll(() => dialogs.length).toBe(2);
     await expect.poll(() => lines.asked).toEqual(["he", "ja"]);
     const asked = await rowPosts(page);
@@ -1472,6 +1578,16 @@ test.describe("保存を送り直しているとき", () => {
 });
 
 test.describe("送り終えるのを待っているあいだに、もう一度押したとき", () => {
+  // openWithClock は偽の時計を入れてから画面を開く。時計は止めないので、ふだんどおり進む。
+  // ロケールの欄で選んだあとに page.clock.runFor(localeDelay) を呼ぶと、読みにいくまでの待ち
+  // （app.js の localeDelay）をその場で終えられる。切り替えが送り終えるのを待っている状態を、
+  // 実時間の待ちに頼らずに作るためにある。
+  async function openWithClock(page, server) {
+    await page.clock.install();
+    await openApp(page, server);
+    return page;
+  }
+
   // 読み直し（切り替え）は、送っている保存が返るまで決めない（askDiscard）。そのあいだに
   // もう一度押すと、前に押したほうは何もせず、あとで押したほうに任せる。任せないと、
   // 返ったところで2回読み、残る訳があれば2回尋ねる。
@@ -1548,7 +1664,8 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
 
   // 切り替えでも同じ。he を選んだあとで ja へ戻したら、読むのは戻した ja だけで、
   // he は1度も読まない。
-  test("返る前にロケールを選び直したら、あとで選んだほうだけを読む", async ({ app }) => {
+  test("返る前にロケールを選び直したら、あとで選んだほうだけを読む", async ({ page, server }) => {
+    const app = await openWithClock(page, server);
     const hold = gate();
     await app.route(isPath("/api/rows"), async (route) => {
       await hold.promise;
@@ -1565,7 +1682,10 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     await typeTranslation(app, SAMPLE_LINES.goodbye, typed);
     await editor(app).press("Escape");
     await app.locator("#locale").selectOption("he");
+    // he への切り替えが、送り終えるのを待つところまで進める。
+    await app.clock.runFor(localeDelay);
     await app.locator("#locale").selectOption("ja");
+    await app.clock.runFor(localeDelay);
     hold.release();
 
     await expect.poll(() => lines).toEqual(["ja"]);
@@ -1581,8 +1701,10 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
   // 外す。「ロケールの切り替え」の試験）。読み直すのは画面に出ているロケールで、欄も押した
   // 時点でそこへ戻す（app.js の読み直し）。
   test("切り替えの返事を待つあいだに読み直しを押すと、画面に出ているロケールを条件と検索語を付けたまま読み直す", async ({
-    app,
+    page,
+    server,
   }) => {
+    const app = await openWithClock(page, server);
     const hold = gate();
     await app.route(
       isPath("/api/rows"),
@@ -1608,6 +1730,8 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     await editor(app).press("Escape");
     await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
     await app.locator("#locale").selectOption("he");
+    // he への切り替えが、送り終えるのを待つところまで進める。
+    await app.clock.runFor(localeDelay);
     await app.locator("#reload").click();
     // 押した時点で切り替えは取りやめになり、欄も画面に出ているロケールへ戻る。
     await expect(app.locator("#locale")).toHaveValue("ja");
@@ -1629,9 +1753,10 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
   // 前のロケールを選び直すと「切り替えると消えます」と尋ねられ、受けると、画面に出ている
   // ロケールのまま、送り直している訳を捨てた。断ったのだから、欄も画面に出ているロケールを指す。
   test("切り替えの返事を待つあいだに読み直しを押し、送れずに読み直しを断っても、欄は画面に出ているロケールを指す", async ({
-    app,
+    page,
     server,
   }) => {
+    const app = await openWithClock(page, server);
     const before = await server.readRoot(workingRel);
     const hold = gate();
     let first = true;
@@ -1655,6 +1780,8 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     await editor(app).press("Escape");
     await expect(saveState(app)).toHaveText(msg("ja", "ui.save_saving"));
     await app.locator("#locale").selectOption("he");
+    // he への切り替えが、送り終えるのを待つところまで進める。
+    await app.clock.runFor(localeDelay);
     await app.locator("#reload").click();
     hold.release();
 

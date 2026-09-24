@@ -210,6 +210,20 @@
     composedAt: -Infinity,
     searchComposing: false,
     searchTimer: null,
+    /*
+      ロケールの欄を選んでから読みにいくまでの時計と、そのあいだに最後に選ばれた
+      ロケール（localeDelay を見よ）。選ばれた値は change の時点で控える。待つあいだに
+      別の読み込みが返ると、欄は描いたロケールへそろえ直される（syncLocale）ので、
+      時計が切れたときに欄の値を読むと、選んでいないロケールを読みにいく。
+    */
+    localeTimer: null,
+    localeChosen: "",
+    /*
+      返事を待っている切り替えの札（{ locale: 行き先 }）。送り終えるのを待って尋ねる
+      あいだだけ立つ。無ければ null。欄で元のロケールへ戻したときに、待っている
+      切り替えを取りやめるために持つ（switchLocale を見よ）。
+    */
+    switching: null,
     saving: false,
     saveError: false,
     inflight: null,
@@ -266,6 +280,22 @@
     変わらない時間ができる。
   */
   var searchDelay = 120;
+
+  /*
+    ロケールの欄を選んでから、そのロケールを読みにいくまでの待ち。
+
+    Windows と Linux のブラウザーでは、閉じた欄に焦点を置いて矢印キーを押すと、押す
+    たびに change が出る（macOS では矢印で一覧が開くので出ない）。そのたびに読みに
+    いくと、選び終える前の途中のロケールを1つずつ読み、未保存の訳があれば、その
+    たびに「切り替えると消えます」と尋ねる。入力しただけで画面の中身が入れ替わる
+    （WCAG 3.2.2）形でもある。
+
+    最後の change から少し待ってから、そのとき選ばれているロケールだけを読む。
+    矢印を続けて押す間隔より長く、選び終えてから待たされると感じるほどは長くない
+    値として 400ms にしてある。マウスで一覧から選んだときも同じだけ待つ。一覧を開いて
+    から選ぶ道（Alt+↓）は、キー操作の説明（ui.keys_help）に書いてある。
+  */
+  var localeDelay = 400;
 
   /*
     変換が確定してから、Enter を行送りに使わないでおく長さ。
@@ -3287,6 +3317,82 @@
     });
   }
 
+  /* 待っているロケールの切り替えをやめる。待っていなければ何もしない。 */
+  function cancelLocaleSwitch() {
+    if (state.localeTimer) {
+      clearTimeout(state.localeTimer);
+      state.localeTimer = null;
+    }
+  }
+
+  /*
+    ロケールの欄で選んだロケールへ切り替える。欄の change から localeDelay だけ待って
+    呼ばれる。chosen は change の時点で控えた値である。
+
+    尋ねるのは送り終えてからなので、そのあいだに先に始めた読み込みが返ると、欄は
+    描いたロケールへそろえ直される（load）。欄の値を読み直すと、選んでいないロケールを
+    読みにいく。読み込みのあいだは一覧を編集させない（load）ので、読み込みと保存が
+    重なるこの並びは、いまは画面の操作では起きない。控えるのは守りとして残す。
+  */
+  function switchLocale(chosen) {
+    /*
+      画面が向かっている先へ戻ってきただけなら、何もしない。向かっている先は、返事を
+      待っている切り替えがあればその行き先、読んでいる最中ならその行き先、どちらでも
+      なければ出ているロケールである。矢印で動かして元のロケールへ戻したときに読みに
+      いくと、同じロケールを読み直して条件と検索語を外し、未保存の訳があれば、
+      切り替えていないのに「切り替えると消えます」と尋ねる。
+
+      返事を待っている切り替えを先に見るのは、そちらを取りやめるためである。he への
+      切り替えが送り終えるのを待っているあいだに ja（出ているロケール）へ戻したとき、
+      出ているロケールと比べて何もしないと、待っていた he への切り替えがそのまま
+      走る。あとで選んだ ja を尋ね直し（askDiscard）、he のほうは stale で終わらせる。
+    */
+    var heading = state.switching
+      ? state.switching.locale
+      : state.loading
+        ? state.loading.locale
+        : state.locale;
+    if (chosen === heading) {
+      return;
+    }
+    var ticket = { locale: chosen };
+    state.switching = ticket;
+    askDiscard("ui.switch_confirm").then(function (answer) {
+      if (state.switching === ticket) {
+        state.switching = null;
+      }
+      if (answer === "stale") {
+        /*
+          あとから押されたほうに任せる。欄にも触らない。あとから選び直したなら
+          欄はもうそのロケールを指しており、読み直しなら押した時点で欄を
+          そろえてある。
+        */
+        return;
+      }
+      if (answer === "keep") {
+        /*
+          断ったので何も変えない。欄は選ぶ前に指していた先へ戻す。読んでいる
+          最中ならその行き先で、画面に出ている前のロケールではない。前のロケールへ
+          戻すと、読み込みが返ったときに欄と一覧が食い違う。
+        */
+        syncLocale();
+        return;
+      }
+      /*
+        前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
+        「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
+        言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
+        ものなので、ロケールが変われば外すのが素直である。
+        読み直し（el.reload）では外さない。同じロケールを見続けている。
+
+        外すのは load に任せる。読めたときだけ外させるためで、ここで先に
+        外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
+        チップと一覧は前のロケールのまま残る（load を見よ）。
+      */
+      load(chosen, true);
+    });
+  }
+
   function boot() {
     getJSON("/api/bootstrap")
       .then(function (data) {
@@ -3301,44 +3407,16 @@
         fillLocales(data.selected);
         el.locale.addEventListener("change", function () {
           /*
-            選んだロケールはここで控える。尋ねるのは送り終えてからなので、そのあいだに
-            先に始めた読み込みが返ると、欄は描いたロケールへそろえ直される（load）。
-            欄の値を読み直すと、選んでいないロケールを読みにいく。
-            読み込みのあいだは一覧を編集させない（load）ので、読み込みと保存が重なる
-            この並びは、いまは画面の操作では起きない。控えるのは守りとして残す。
+            選んだロケールはここで控え、少し待ってから読みにいく（localeDelay）。矢印
+            キーで続けて動かしたときは、時計を引き直して最後に選んだものだけを読む。
+            控えた値を使う理由は state.localeChosen に書いてある。
           */
-          var chosen = el.locale.value;
-          askDiscard("ui.switch_confirm").then(function (answer) {
-            if (answer === "stale") {
-              /*
-                あとから押されたほうに任せる。欄にも触らない。あとから選び直したなら
-                欄はもうそのロケールを指しており、読み直しなら押した時点で欄を
-                そろえてある。
-              */
-              return;
-            }
-            if (answer === "keep") {
-              /*
-                断ったので何も変えない。欄は選ぶ前に指していた先へ戻す。読んでいる
-                最中ならその行き先で、画面に出ている前のロケールではない。前のロケールへ
-                戻すと、読み込みが返ったときに欄と一覧が食い違う。
-              */
-              syncLocale();
-              return;
-            }
-            /*
-              前のロケールの条件と検索語を持ち越さない。持ち越すと、ja で打った
-              「もしもし」のまま ko へ移ったときに、ヘッダーが「行: 1713」と
-              言っているのに一覧が空になる。条件はそのロケールを見ながら決めた
-              ものなので、ロケールが変われば外すのが素直である。
-              読み直し（el.reload）では外さない。同じロケールを見続けている。
-
-              外すのは load に任せる。読めたときだけ外させるためで、ここで先に
-              外すと、読み込みに失敗したときに条件と検索欄だけが空になり、
-              チップと一覧は前のロケールのまま残る（load を見よ）。
-            */
-            load(chosen, true);
-          });
+          state.localeChosen = el.locale.value;
+          cancelLocaleSwitch();
+          state.localeTimer = setTimeout(function () {
+            state.localeTimer = null;
+            switchLocale(state.localeChosen);
+          }, localeDelay);
         });
         el.reload.addEventListener("click", function () {
           /*
@@ -3363,6 +3441,13 @@
           if (!state.locale) {
             return;
           }
+          /*
+            ロケールの欄で選んで、読みにいくのを待っている（localeDelay）あいだに押された
+            ときは、その切り替えをやめる。あとから押した読み直しのほうを採る。やめずに
+            おくと、読み直しを押したのに、待っていた切り替えがあとから走って別のロケールへ
+            移る。欄は下の syncLocale が画面に出ているロケールへ戻す。
+          */
+          cancelLocaleSwitch();
           syncLocale();
           askDiscard("ui.discard_confirm").then(function (answer) {
             if (answer !== "go") {

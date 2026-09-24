@@ -805,6 +805,7 @@ The controls on the screen are as follows.
 | `Escape` | Closes the input box. What you typed is kept |
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
+| Locale box | Loads a moment (0.4 seconds) after you choose. Moving through it with the arrow keys only loads the locale you stop on. To open the list before choosing, press `Alt+Down` |
 
 "Save a copy" in the bar at the top saves the CSV of the locale you have open to wherever you like.  
 Pressing it opens a menu where you choose the form.  
