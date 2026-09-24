@@ -1299,8 +1299,10 @@ npm run lint:ja:fix   # 日本語の指摘のうち、機械的に直せるも�
 `main`と`develop`への`push`、およびすべてのPull RequestでCIが同じ検査をします。  
 CIではあわせて、ワークフローの構文を`actionlint`で、安全性を`zizmor`で検査します。  
 ワークフローで使うアクションは、完全なコミットのSHAで固定します。  
-リポジトリの設定「Require actions to be pinned to a full-length commit SHA」を有効にしてあり、固定していないアクションは動きません。  
+固定していないアクションは、CIの`zizmor`が指摘します。  
+リポジトリの設定「Require actions to be pinned to a full-length commit SHA」も有効にします。  
 この設定は`scripts/setup.sh`（Windowsでは`scripts/setup.ps1`）が行います。  
+有効にしたリポジトリでは、固定していないアクションは動きません。  
 CIは6種類の対象向けのビルドも通します。  
 単一バイナリで配れる前提が崩れていないかを見るためです。
 
