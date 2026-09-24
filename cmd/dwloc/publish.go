@@ -517,14 +517,15 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 下の書き出しの繰り返しは巻き戻さないので、そこで失敗したときは先に書いた
 	// ロケールだけが新しい内容になります。使い方の説明はそのとおりに書いてあります。
 	built := make([][]byte, len(targets))
+	inputs := make([][]byte, len(targets))
 	stats := make([]publish.Stats, len(targets))
 	for i, t := range targets {
-		out, st, err := publish.BuildTarget(data, t)
+		out, input, st, err := publish.BuildTargetInput(data, t)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %s を変換できません: %v\n", displayPath(*root, t.Input), err)
 			return exitError
 		}
-		built[i], stats[i] = out, st
+		built[i], inputs[i], stats[i] = out, input, st
 	}
 
 	// ゲーム側の作業コピーを入力にしたロケールでは、その作業コピーが建っている
@@ -564,6 +565,23 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		fmt.Fprintf(stdout, "[dry-run] %d 件中 %d 件が変わります。ファイルは書いていません。\n",
 			len(targets), changed)
 		return exitOK
+	}
+
+	// 書く直前に、組み立てに使った入力を読み直して確かめます（改善の決定 3）。
+	// 組み立てたあとに画面の保存（dwloc edit）やゲームが入力を書き換えていたら、
+	// その訳の入っていない中身を書くことになり、入力と書き出し先が同じファイル
+	// （作業コピーの無いロケールと --path）なら、書き換えた訳そのものを消します。
+	// 読み直してから書き終えるまでは、画面の保存と同じ OS の錠を入力に掛けておき、
+	// そのあいだに dwloc edit の保存が入らないようにします。
+	beforePublishWrite()
+	unlock, err := lockInputs(targets)
+	if err != nil {
+		fmt.Fprintf(stderr, "dwloc: 入力の錠を取れないので、1バイトも書きませんでした: %v\n", err)
+		return exitError
+	}
+	defer unlock()
+	if code := reportInputChanged(*root, targets, inputs, stderr); code != exitOK {
+		return code
 	}
 
 	for i, t := range targets {

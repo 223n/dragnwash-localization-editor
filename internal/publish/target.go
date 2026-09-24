@@ -281,15 +281,31 @@ func LoadOrderMarked(root string) (*order.Data, []UnclosedFile, error) {
 // 入力と出力が同じパスのとき（作業コピーが無い既定の場合）は同じファイルを2回読む。
 // 元実装も「CSVとして1回」「コメント引き継ぎ用に1回」の2回読んでいる（R8e）。
 func BuildTarget(data *order.Data, t Target) ([]byte, Stats, error) {
-	inputCSV, err := os.ReadFile(t.Input)
+	out, _, stats, err := BuildTargetInput(data, t)
+	return out, stats, err
+}
+
+// BuildTargetInput は [BuildTarget] と同じく組み立て、組み立てに使った入力のバイト列も
+// 返す。
+//
+// 書き出す直前に入力を読み直して、組み立てたときと同じかを確かめる呼び出し側
+// （cmd/dwloc の publish）のためにある（改善の決定 3）。組み立てたあとに画面の保存や
+// ゲームが入力を書き換えていたら、その訳の入っていない中身を書くことになる。入力と
+// 書き出し先が同じファイルなら、書き換えた訳そのものを消す。
+func BuildTargetInput(data *order.Data, t Target) (out, input []byte, stats Stats, err error) {
+	input, err = os.ReadFile(t.Input)
 	if err != nil {
-		return nil, Stats{}, err
+		return nil, nil, Stats{}, err
 	}
 	existingCSV, err := readIfExists(t.Output)
 	if err != nil {
-		return nil, Stats{}, err
+		return nil, nil, Stats{}, err
 	}
-	return Build(data, inputCSV, existingCSV)
+	out, stats, err = Build(data, input, existingCSV)
+	if err != nil {
+		return nil, nil, Stats{}, err
+	}
+	return out, input, stats, nil
 }
 
 // SourceLineEndHint は、原文の CRLF を LF にするとキーが一致する入力の行1つ。

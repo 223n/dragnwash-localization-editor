@@ -5,8 +5,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
 
 // writeTemp はテスト用のファイルを作ってパスを返す。
@@ -261,6 +264,46 @@ func TestSaveCreatesNoLeftovers(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("余計なファイルが残った: %v", names)
+	}
+}
+
+// TestSaveWaitsForTheLock は、ほかの dwloc が書き込みの錠を持っているあいだ、保存が
+// 版の照合も書き込みも始めずに待ち、放されたら書くことを見る（改善の決定 3）。
+//
+// 錠を持つのは publish.LockFile を呼んだこの試験で、ほかの dwloc edit や publish の
+// 代わりである。錠が効いていなければ、保存は待たずに書き終える。
+func TestSaveWaitsForTheLock(t *testing.T) {
+	path := writeTemp(t, sampleWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetTranslation(6, "こんにちは"); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock, err := publish.LockFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.Save() }()
+
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("錠を持っているあいだに保存が終わった: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if got := readFile(t, path); got != sampleWorking {
+		t.Fatalf("錠を持っているあいだに書いた: %q", got)
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("放したあとの保存が失敗した: %v", err)
+	}
+	if got := readFile(t, path); !strings.Contains(got, ",こんにちは\n") {
+		t.Errorf("放したあとに書いていない: %q", got)
 	}
 }
 
