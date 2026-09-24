@@ -194,7 +194,15 @@ func TestGitTrackedOutsideRepository(t *testing.T) {
 
 // TestDisplayPath は報告に出すパスの整形を見る。
 func TestDisplayPath(t *testing.T) {
-	root := t.TempDir()
+	// root のリンクを先に解いておく。newDisplay は root のリンクを解くが、下の inside は
+	// まだ無いパスなので、of の側では解けない。TMP が 8.3 形式の短い名前だったり、
+	// リンクを含んでいたり（macOS の /var）すると、解いた root と解けない inside で
+	// 綴りが食い違い、配下なのに外と判定される。製品の呼び出し元はどれも実在する
+	// パスを渡すので、この食い違いは試験の側だけで起きる。
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("一時ディレクトリのリンクを解けない: %v", err)
+	}
 	show := newDisplay(root)
 
 	inside := filepath.Join(root, TranslationsDir, "ja", PublishedFile)

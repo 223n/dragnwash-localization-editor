@@ -38,6 +38,22 @@ func makeGame(t *testing.T, files map[string]string) string {
 	return game
 }
 
+// realPath は path のリンクを解いた形を返す。
+//
+// dwloc は --game で渡された場所を、リンクを解いてから端末に出す（gamedir の
+// canonical が EvalSymlinks をかける）。t.TempDir() は TMP の綴りのままなので、
+// TMP が 8.3 形式の短い名前（C:\Users\RUNNER~1\... など）だったり、リンクを含んで
+// いたり（macOS の /var は /private/var へのリンク）すると、出力と字面が合わない。
+// 期待する側も、製品と同じ形にそろえてから比べる。
+func realPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("%s のリンクを解けない: %v", path, err)
+	}
+	return resolved
+}
+
 // gameWorkingCSV は原文つきの作業コピー1件分。訳は1行目だけ入っている。
 const gameWorkingCSV = "key,section,node,order,speaker,source_en,translation\n" +
 	"0da72197e898ebe1,L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\n" +
@@ -69,7 +85,7 @@ func TestRunDiffWithGameFindsUntranslated(t *testing.T) {
 	// 探し先は必ず伝える。黙って別の場所を読み始めない。
 	// パスはスラッシュ区切りで出す（cmd/dwloc の displayPath と同じ扱い）。
 	checkContains(t, "標準エラー", stderr,
-		[]string{"作業コピーの探し先にします", filepath.ToSlash(game)})
+		[]string{"作業コピーの探し先にします", filepath.ToSlash(realPath(t, game))})
 	// 「使います」とは書かない。そのロケールの作業コピーがそこに無いこともある。
 	if strings.Contains(stderr, "ゲームのフォルダーを使います") {
 		t.Errorf("読む前から使うと言い切っている:\n%s", stderr)
@@ -356,9 +372,13 @@ func TestEditWithGameIgnoresTheAutoSearch(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("終了コード = %d\n%s", code, stderr)
 	}
-	checkContains(t, "標準エラー", stderr, []string{filepath.ToSlash(asked)})
-	if strings.Contains(stderr, filepath.ToSlash(other)) {
-		t.Errorf("自動検出の結果が混ざっている:\n%s", stderr)
+	checkContains(t, "標準エラー", stderr, []string{filepath.ToSlash(realPath(t, asked))})
+	// 混ざったときにどちらの綴りで出るかは道筋しだいなので、両方の形で探す。
+	// 解いた形だけで探すと、TMP が 8.3 形式のときに素の形で混ざっても見逃す。
+	for _, p := range []string{other, realPath(t, other)} {
+		if strings.Contains(stderr, filepath.ToSlash(p)) {
+			t.Errorf("自動検出の結果が混ざっている:\n%s", stderr)
+		}
 	}
 }
 

@@ -167,7 +167,13 @@ func TestGitOldOrderUnderLongRoot(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git が無いので飛ばす")
 	}
-	root := t.TempDir()
+	// 長さは git が見る形で数える。Git for Windows は作業ディレクトリを 8.3 形式の
+	// 短い名前から長い名前に戻すので、TMP が短い形だと、字面で数えた長さより
+	// 実際は長くなり、init の時点で 260 字を超えてしまう。
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("一時ディレクトリのリンクを解けない: %v", err)
+	}
 	if pad := longRootLen - len(root) - 1; pad > 0 {
 		root = filepath.Join(root, strings.Repeat("d", pad))
 		if err := os.Mkdir(root, 0o755); err != nil {
