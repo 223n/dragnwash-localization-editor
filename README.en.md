@@ -1140,7 +1140,8 @@ With `--verbose`, the same thing is printed on screen as well.
 It writes only the method, path, status code, duration, locale name and count.  
 The counts are such things as the number of lines read (`lines`), translations sent (`edits`) and translations actually saved (`saved`).  
 The path is wrapped in `"`, with line breaks and the like written as `\n`. Anything past 200 bytes is cut off.  
-Requests that were turned away (`404`) are logged too, so this keeps their paths from adding fake lines or bloating the log.  
+The method is written as it is when it is a standard name such as `GET` or `POST`; anything else is wrapped in `"` and cut off past 32 bytes.  
+Requests that were turned away (`404`) are logged too, so this keeps their paths and methods from adding fake lines or bloating the log.  
 **It does not write the source text or the translation.**  
 The token that appears in the URL the first time is replaced with `***` too.  
 You can paste a log file as it is without the game's script leaving with it.

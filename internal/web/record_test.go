@@ -74,7 +74,7 @@ func TestRecordHasNoRowContent(t *testing.T) {
 // 記録は認証より外側で取るので、トークンを持たない相手の要求も記録に残る
 // （起動し直したあとに古いタブが出す 404 を、あとから辿れるようにするため）。
 // 経路をそのまま書くと、そうした相手が改行を入れて本物と見分けの付かない行を
-// 足したり、1回の要求で記録を 1MB 近く太らせたりできる。
+// 足したり、1回の要求で記録を 1MB 近く太らせたりできる。メソッドも同じく切る。
 func TestRecordQuotesAndClipsThePath(t *testing.T) {
 	var file bytes.Buffer
 	s := newTestServer(t, Options{Record: &file})
@@ -108,6 +108,52 @@ func TestRecordQuotesAndClipsThePath(t *testing.T) {
 	}
 	if want := `"/` + strings.Repeat("a", recordPathMax-1) + `"…(5001 bytes) 404 `; !strings.Contains(got, want) {
 		t.Errorf("記録が %q、%q を含むことを期待", got, want)
+	}
+
+	// 長いメソッドも切る。メソッドも、トークンを持たない相手が決められる。
+	// net/http はヘッダーの上限（既定で 1MB）まで通すので、切らなければ経路と
+	// 同じく、1回の要求で記録を太らされる。
+	file.Reset()
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(strings.Repeat("A", 5000), "/", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("状態コードが %d、404 を期待", rec.Code)
+	}
+	got = file.String()
+	if len(got) > 2*recordPathMax {
+		t.Errorf("長いメソッドを切らずに書いている（%d バイト）", len(got))
+	}
+	if want := `dwloc edit: "` + strings.Repeat("A", recordMethodMax) + `"…(5000 bytes) "/" 404 `; !strings.HasPrefix(got, want) {
+		t.Errorf("記録が %q、%q で始まることを期待", got, want)
+	}
+}
+
+// TestRecordMethod は、記録に書くメソッドの形を見る。
+//
+// ふだんの GET と POST は囲まずに書き、行の形を README の例のまま保つ。
+// 名前の無いメソッドは経路と同じく %q で囲み、長ければ切る。
+func TestRecordMethod(t *testing.T) {
+	tests := []struct {
+		method string
+		want   string
+	}{
+		{method: http.MethodGet, want: "GET"},
+		{method: http.MethodPost, want: "POST"},
+		{method: http.MethodOptions, want: "OPTIONS"},
+		{method: "PROPFIND", want: `"PROPFIND"`},
+		// net/http を通らない呼び出しでも、改行で行を割らせない。
+		{method: "A\nB", want: `"A\nB"`},
+		{method: "", want: `""`},
+		{method: strings.Repeat("A", recordMethodMax), want: `"` + strings.Repeat("A", recordMethodMax) + `"`},
+		{
+			method: strings.Repeat("A", recordMethodMax+1),
+			want:   `"` + strings.Repeat("A", recordMethodMax) + `"…(` + strconv.Itoa(recordMethodMax+1) + " bytes)",
+		},
+	}
+	for _, tt := range tests {
+		if got := recordMethod(tt.method); got != tt.want {
+			t.Errorf("recordMethod(%q) = %q、%q を期待", tt.method, got, tt.want)
+		}
 	}
 }
 
