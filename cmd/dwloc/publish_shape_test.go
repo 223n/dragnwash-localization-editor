@@ -597,6 +597,43 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		})
 	})
 
+	t.Run("--path では指定したファイルだけを通す", func(t *testing.T) {
+		// 2つのファイルに同じ形（de と同じ、2行目が6列に見える複数行の訳）を置き、
+		// 片方だけを指定する。もう片方は、確かめていないので止める。
+		root := makeTree(t, map[string]string{
+			"data/script_order.csv": scriptOrderCSV,
+			"a/strings.csv":         dePublished,
+			"b/strings.csv":         dePublished,
+		})
+		a := filepath.Join(root, "a", "strings.csv")
+		b := filepath.Join(root, "b", "strings.csv")
+		code, stdout, stderr := runCLI("publish", "--root", root, "--path", a, "--path", b, "--accept-multiline", a)
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		passed, stopped, ok := strings.Cut(stderr, shapeStopText)
+		if !ok {
+			t.Fatalf("形の確かめで止めていない:\n%s", stderr)
+		}
+		labelA := "dwloc:   a/strings.csv（いまの公開ファイル）"
+		labelB := "dwloc:   b/strings.csv（いまの公開ファイル）"
+		checkContains(t, "通した行", passed, []string{publishAcceptText, labelA})
+		checkContains(t, "止めた行", stopped, []string{
+			labelB, "--accept-multiline " + b + " を付けると書けます。", "読み違える形が 1 か所あります。",
+		})
+		if strings.Contains(passed, labelB) || strings.Contains(stopped, labelA) {
+			t.Errorf("指定していない b を通したか、指定した a を止めている:\n%s", stderr)
+		}
+		if stdout != "" {
+			t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+		}
+		for _, rel := range []string{"a/strings.csv", "b/strings.csv"} {
+			if got := readFile(t, root, rel); got != dePublished {
+				t.Errorf("%s が変わっている:\n%s", rel, got)
+			}
+		}
+	})
+
 	t.Run("--path に無いファイルの指定は誤りにする", func(t *testing.T) {
 		root := makeTree(t, files)
 		path := filepath.Join(root, "Translations", "ja", "strings.csv")
