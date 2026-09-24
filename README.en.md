@@ -1412,7 +1412,7 @@ That is because the "Publish release" workflow has the same check.
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
 | `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
-| `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the safety of the workflows with CodeQL |
+| `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the workflows, the Go code and the JavaScript (the screen's `app.js` and the `.mjs` files for tests and tools) with CodeQL. The results are not a required check |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |

@@ -392,7 +392,8 @@ if ($failures.Count -eq 0) {
 Write-Host @'
 
 残りは GitHub の画面で行います。
-  - main と develop のルール（Pull Request 必須、Code scanning の結果）: Settings > Rules
+  - main と develop のルール（Pull Request 必須）: Settings > Rules
+  - CodeQL の指摘を仕分ける（結果は必須のチェックにしない）: Security > Code scanning
   - SECURITY.md に非公開の連絡先を書く
   - package.json の description と README を書き換える
 '@

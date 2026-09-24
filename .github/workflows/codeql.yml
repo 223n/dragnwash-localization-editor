@@ -1,15 +1,18 @@
 name: CodeQL
 
-# ワークフローの安全性を CodeQL で走査する（言語: actions）。
+# CodeQL で3つを走査する。
+#   actions                ワークフローの安全性
+#   go                     dwloc の本体（internal/web の待ち受け、パスを受けて読み書きする処理、ブラウザーを起こす処理）
+#   javascript-typescript  画面の app.js と、試験や道具の .mjs
 # 結果は「Security」→「Code scanning」に出る。
-# develop のルール「Require code scanning results」は、この走査の結果で満たされる。
+#
+# 結果は必須のチェックにしていない。main と develop のルールセットに「Require code scanning results」は無い。
+# 指摘は Code scanning の画面で仕分け、直すか、理由を添えて閉じる。
 #
 # 注意: Settings の Code scanning で「Default setup」を有効にしていると、
 # このワークフロー（advanced setup）の結果は受け付けられない。Default setup は使わない。
 #
-# ソースコードを持つリポジトリでは、matrix の language に言語を足す（例: javascript-typescript、python）。
-# 対応する言語は https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning にある。
-# PHP は対応していないため、PHP のリポジトリではワークフローの走査だけになる。
+# 対応する言語と build-mode は https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning にある。
 on:
   push:
     branches: [main, develop]
@@ -45,7 +48,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [actions]
+        include:
+          - language: actions
+            build-mode: none
+          # Go はビルドしながら走査する。依存は標準ライブラリだけなので、autobuild で足りる
+          - language: go
+            build-mode: autobuild
+          # ビルドせずにソースを読む。このジョブは npm ci をしないので、node_modules は走査に入らない
+          - language: javascript-typescript
+            build-mode: none
     steps:
       - name: リポジトリを取得
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,11 +64,22 @@ jobs:
           # 走査だけなので、認証情報は残さない
           persist-credentials: false
 
+      - name: Goを用意
+        # go.mod の go 行の版をそのまま入れる。ランナーに入っている Go が古いと、autobuild は
+        # ツールチェーンの自動取得に頼ることになり、何でビルドしたかが実行ごとに変わりうる。
+        # 走査だけで配布物は作らないが、ほかのブランチの実行が書き込めるキャッシュは持ち込まない
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: CodeQLを初期化する
         uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           languages: ${{ matrix.language }}
-          # コンパイルが要る言語（C/C++、Java など）を足したときは build-mode を設定する
+          # autobuild を指定すると、走査の段がビルドも行う。別に autobuild の段を置かない
+          build-mode: ${{ matrix.build-mode }}
 
       - name: 走査する
         uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
