@@ -223,7 +223,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 `[System.IO.File]::WriteAllText($t.Output, $out.ToString(), (New-Object System.Text.UTF8Encoding $false))`。組み立ては全て `$out.AppendLine(...)`。
 
-**Goでの注意**: (a) `UTF8Encoding $false` ＝ BOM を出力しない（実ファイルもBOM無しを確認）。(b) AppendLine は Environment.NewLine を使うので Windows では "\r\n"。ただしリポジトリの blob は LF（`git config core.autocrlf` が `input` で、コミット時に正規化されている）。Go で「作業ツリー上のファイルとバイト一致」を狙うなら CRLF、「git の中身と一致」を狙うなら LF。どちらを正とするかは要確認（openQuestions参照）。(c) 最後の行も AppendLine なので必ず末尾改行が付く。
+**Goでの注意**: (a) `UTF8Encoding $false` ＝ BOM を出力しない（実ファイルもBOM無しを確認）。(b) AppendLine は Environment.NewLine を使うので Windows では "\r\n"。ただしリポジトリの blob は LF（`git config core.autocrlf` が `input` で、コミット時に正規化されている）。Go で「作業ツリー上のファイルとバイト一致」を狙うなら CRLF、「git の中身と一致」を狙うなら LF。どちらを正とするかは要確認（openQuestions参照）。(c) 最後の行も AppendLine なので必ず末尾改行が付く。(d) 上流は f816618 で StringWriter（NewLine は LF）に変え、どの環境でも LF で書くようになった。(b) の「要確認」は LF で確定した（「未決の点」の1つ目）。
 
 #### R28. ターゲットごとに1行の集計ログを出す。
 
@@ -258,7 +258,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 - level 番号のゼロ埋め有無が2箇所で異なる：セクションキー側は `{0:00}` で2桁ゼロ埋め（L01）、見出し文言側は `{0}` でゼロ埋めなし（Level 1）。
 - $e.order と $lid はエスケープされず素のまま連結される。現行データは数値と `line:xxxxxxxx` なので問題ないが、カンマや引用符を含む値が来ると出力CSVが壊れる。
 - ハッシュ行と台詞ID行が同じ script_order 行に両方該当した場合、同じ order 番号を持つ2行が連続して出力される（ja/strings.csv 13〜14行目が実例）。
-- 改行コード：スクリプトが書き出すのは Environment.NewLine（Windows では CRLF）だが、リポジトリに入っている strings.csv は LF（core.autocrlf=input による正規化）。バイト一致検証をする際はこの差を考慮する必要がある。
+- 改行コード：スクリプトが書き出すのは Environment.NewLine（Windows では CRLF）だが、リポジトリに入っている strings.csv は LF（core.autocrlf=input による正規化）。バイト一致検証をする際はこの差を考慮する必要がある。上流は f816618 から LF で書くので、上流 main と比べるときはこの差が無い。
 
 ### 敵対検証で見つかった食い違い
 
@@ -336,6 +336,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 ### 未決の点
 
 - 出力の改行コードを CRLF と LF のどちらに固定すべきか。スクリプトは Environment.NewLine 依存（Windows で CRLF）だが、リポジトリの blob は LF（core.autocrlf=input）。Go は環境非依存なので、どちらかに決め打つ必要がある。仕様としてどちらが「正」なのかはコードからは判断できない。
+  - **確定（LF）**: 上流の hash-strings.ps1 は f816618（2026-09-16）で、出力を StringBuilder.AppendLine から StringWriter（`` $out.NewLine = "`n" ``）に変え、Windows でも LF で書くようになった。コメントは「the file is LF on every platform, matching the repository (see .gitattributes)」としている。移植の LF 固定（csvfile.LineTerminator）と一致するので、この点は未決ではなくなった。上流の調査（上流の報告 #12）で、上流 main の16ロケールを上流の pwsh 版と dwloc publish で一括変換し、どちらもコミット済みとバイト単位で一致した（冪等）。以前の食い違い（003ed1e 版は Windows で CRLF を書く）は、上流の側で解消した。
 - Translations/_discovered/<locale>.working.csv の正確な列構成。ディレクトリが現リポジトリに存在せず実例を確認できなかった。ドキュメンテーションコメントには "a working copy from the in-game menu, or plain source_en,translation rows" とあるので、少なくとも source_en と translation、おそらく key と speaker も持ちうる、と読めるが未検証。
 - PowerShell 由来の大文字小文字の扱い（Section-Title の switch、$levels.ContainsKey、$rows.ContainsKey、lineRows.Contains、$e.section -ne $lastSection、-notlike '_*'）が意図的な仕様なのか、単に PowerShell の既定を使った結果なのか。Go に移す際に case-sensitive にすると挙動が変わりうるが、現行データでは差が出ない。厳密移植なら case-insensitive、意図なら case-sensitive のどちらを選ぶか要判断。
 - speakers の重複判定 List<string>.Contains が case-sensitive である一方、他のマップが case-insensitive である点が意図的かどうか。`Ryan` と `ryan` が両方 script_order にあれば `Ryan/ryan` と連結されるが、現行データでは発生しない。
