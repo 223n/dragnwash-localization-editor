@@ -65,6 +65,8 @@ const SAVING = /(^|\s)saving(\s|$)/;
 const FAILED = /(^|\s)failed(\s|$)/;
 const UNSAVED = /(^|\s)unsaved(\s|$)/;
 const SAVE_FAILED = /(^|\s)save-failed(\s|$)/;
+// #message の失敗の出し方（app.js の showMessage。案内は info）。
+const FAILED_NOTICE = /(^|\s)error(\s|$)/;
 
 // 見本はわざと BOM 付きで、行ごとに LF と CRLF を混ぜる（autosave.spec.mjs と同じ）。
 // 失敗のあとで送り直した保存が、触っていない行を1バイトも動かさないことまで見るため。
@@ -136,6 +138,27 @@ async function expectUnsent(page, n, key, value) {
   const items = page.locator("#unsent-list > li");
   await expect(items).toHaveCount(1);
   await expect(items.first()).toHaveText(`${msg("ja", "ui.unsent_line", { line: n })} ${key}: ${value}`);
+}
+
+// watchMessages は、いまから #message の文が変わるたびに控え、控えを読む関数を返す。
+// 同じ文を入れ直しただけ（送り直しがまた届かなかった、など）は数えない。
+//
+// toHaveText は待つあいだに一度でも当たれば通るので、途中で別の文が出て、そのあと
+// 別の理由（送り直しの応答など）で同じ文へ戻った場合を見分けられない。移り変わりを
+// 控えれば、どの文が出たかを順に見られる。
+async function watchMessages(page) {
+  await page.evaluate(() => {
+    const node = document.getElementById("message");
+    let last = node.textContent;
+    window.__messages = [];
+    new MutationObserver(() => {
+      if (node.textContent !== last) {
+        last = node.textContent;
+        window.__messages.push(last);
+      }
+    }).observe(node, { childList: true, subtree: true, characterData: true });
+  });
+  return () => page.evaluate(() => window.__messages);
 }
 
 // closeEditor は Escape で入力欄を閉じる。閉じると、待たずに保存へ回る（commitEditor）。
@@ -747,6 +770,25 @@ test.describe("要求そのものが落ちたとき", () => {
     await expect(rowByLine(page, n)).toHaveClass(UNSAVED);
     await expect(translationCell(page, n)).toHaveText("さようなら。");
   });
+
+  // 読み直し（/api/lines）そのものが待ち受けに届かないときに「読み込めませんでした。読み直して
+  // ください。」と言っても、読み直しも届かない。保存が届かないときと同じく、届かないことと
+  // 起動し直し方を言う（app.js の load の .catch と getJSON の unreachable の印）。
+  // 抱えている訳が無いときに見るので、ここで #message を書き換えるのは読み直しだけである。
+  test("読み直しが待ち受けに届かなければ、読み直しを勧めずに届かないことを言う", async ({ app }) => {
+    await app.route(
+      (url) => url.pathname === "/api/lines",
+      (route) => route.abort("connectionrefused"),
+    );
+    const messages = await watchMessages(app);
+    await app.locator("#reload").click();
+    await expect.poll(messages).toEqual([msg("ja", "ui.loading"), msg("ja", "ui.unreachable")]);
+    await expect(app.locator("#message")).toHaveClass(FAILED_NOTICE);
+    await expect(app.locator("#list")).toHaveAttribute("aria-busy", "false");
+    // 抱えている訳は無いので、並べるものも無い。前の一覧はそのまま出ている。
+    await expect(unsent(app)).toBeHidden();
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toHaveText(SAMPLE.goodbye.ja);
+  });
 });
 
 test.describe("行ごとに断られたとき", () => {
@@ -1100,6 +1142,13 @@ test.describe("待ち受けが操作の無いまま時間切れで終わった�
 
     // 読み直しも届かない。受けても、読み直しを勧める「読み込めませんでした。読み直して
     // ください。」ではなく、届かないことを言う。抱えている訳も一覧もそのまま残る。
+    //
+    // 押す前から #message は「待ち受けに届きません」なので、押したあとに同じ文が出て
+    // いても、読み直しがそう言ったとは限らない。読み込みの案内のあとに何が出たかを順に
+    // 見る。送り直しの時計は止めてあるので、ここで #message を書き換えるのは読み直しだけ
+    // である（以前は時計が実時間で進み、読み直しが「読み直してください」を出しても、
+    // あとから切れた送り直しが「届きません」に書き戻して、この確かめが通っていた）。
+    const messages = await watchMessages(page);
     const dialogs = [];
     page.on("dialog", (dialog) => {
       dialogs.push(dialog.message());
@@ -1107,6 +1156,7 @@ test.describe("待ち受けが操作の無いまま時間切れで終わった�
     });
     await page.locator("#reload").click();
     await expect.poll(() => dialogs).toEqual([msg("ja", "ui.discard_confirm")]);
+    await expect.poll(messages).toEqual([msg("ja", "ui.loading"), msg("ja", "ui.unreachable")]);
     await expect(page.locator("#list")).toHaveAttribute("aria-busy", "false");
     await expect(page.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
     await expect(translationCell(page, n)).toHaveText(typed);
