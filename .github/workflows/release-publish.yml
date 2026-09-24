@@ -231,11 +231,12 @@ jobs:
             The screen of dwloc edit follows the language of your browser.
             The messages dwloc edit prints in the window are in English
             only when you start it with --ui-lang en.
-            When it stops, the first line tells you why. The most common ones:
+            The first line it prints tells you what happened. The most common ones:
               ここは翻訳リポジトリではないようです。
                 This does not look like a translation repository.
               ゲームのフォルダーを探しましたが、見つかりませんでした。
                 It looked for the game folder and did not find it.
+                It carries on without the game (the source text column stays empty).
               訳が失われるので、1バイトも書きませんでした。
                 Translations would be lost, so not a single byte was written.
               ゲームに入っている翻訳が古いので、1バイトも書きませんでした。
