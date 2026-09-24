@@ -340,6 +340,10 @@ type knownDiff struct {
 const (
 	whyLoneCR = "単独の CR も行の区切りにする。上流の Remove-NonRecords は単独の CR を行末と見なさず、" +
 		"その手前を捨てる（上流の不具合。写さない）"
+	whyLoneCRUnquoted = "引用符で囲まない値の中の単独の CR も、行の区切りにする規則のまま読む。値は CR の手前で切れ" +
+		"（訳が「い」）、続きの「ち」は上流と同じく別のレコードになる。上流は CR の手前を捨ててその行を失い、ゲームは" +
+		"引用の外の CR を捨てて「いち」と読む。読み方の規則は意図して違えるが、切れた訳を publish が止めずに公開する点は" +
+		"未決（docs/port-spec.md「上流と違うが未決の点」、cmd/dwloc の publish の試験）"
 	whyCROnly = "CR だけで改行したファイルも読む。上流は Remove-NonRecords が全行を捨て、" +
 		"訳がすべて消える（上流の不具合。写さない）"
 	whyCommaRow = "',' だけの行は空行相当として落とす。上流は空の値のレコードにし、publish の集計で " +
@@ -373,7 +377,7 @@ var wholeReaderDiffs = map[string]knownDiff{
 	"lone-cr-line-end": {diffIntended, whyLoneCR, []string{
 		`dwloc だけ L2 ["0123456789abcdef" "UI" "" "" "UI" "a"]`,
 	}},
-	"lone-cr-unquoted-value": {diffIntended, whyLoneCR, []string{
+	"lone-cr-unquoted-value": {diffIntended, whyLoneCRUnquoted, []string{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "L01 Ember" "Ember_1_intro" "1" "Ember" "one" "い"]`,
 	}},
 	"cr-only-published": {diffIntended, whyCROnly, []string{
@@ -551,7 +555,7 @@ var lineReaderDiffs = map[string]knownDiff{
 	"lone-cr-line-end": {diffIntended, whyLoneCR, []string{
 		`dwloc だけ L2 ["0123456789abcdef" "UI" "" "" "UI" "a"]`,
 	}},
-	"lone-cr-unquoted-value": {diffIntended, whyLoneCR, []string{
+	"lone-cr-unquoted-value": {diffIntended, whyLoneCRUnquoted, []string{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "L01 Ember" "Ember_1_intro" "1" "Ember" "one" "い"]`,
 	}},
 	"cr-only-published": {diffIntended, whyCROnly, []string{

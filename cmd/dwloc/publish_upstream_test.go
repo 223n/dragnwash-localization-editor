@@ -328,8 +328,11 @@ const (
 	whyPubLoneCRQuoted = "引用した訳の中の単独の CR。上流はその行を失う。いまは (c) で止める。" +
 		"PR2 でも止めるが、理由が単独の CR（LF に直す案内）に変わる見込み"
 	whyPubLoneCR         = "単独の CR も行の区切りにして読む。上流は単独の CR の手前を捨て、その行の訳を失う（上流の不具合。写さない）"
-	whyPubLoneCRUnquoted = "引用符で囲まない値の中の単独の CR。dwloc は行の区切りとして値を切り（訳が「い」になる）、" +
-		"上流はその行を失う。docs/port-spec.md の「残る隙間」で、どちらの道具の書き手も作らない形"
+	whyPubLoneCRUnquoted = "引用符で囲まない値の中の単独の CR（docs/port-spec.md の「残る隙間」。どちらの道具の書き手も" +
+		"作らない、手で書いた形）。dwloc は行の区切りとして値を切り、切れた訳「い」を止めずに公開する。続きの「ち」は" +
+		"malformed dropped に数えるだけで、ほかに知らせない。ゲームは引用の外の CR を捨てて「いち」と読み、上流はその行を" +
+		"失う。訳を失わない約束と、値の中の単独の CR は publish で止めて LF に直すよう案内する方針に照らして、" +
+		"PR2 で止めるかはまだ決めていない"
 	whyPubCROnly     = "CR だけで改行したファイルも読む。上流は全行を失い、ヘッダーだけを書く（上流の不具合。写さない）"
 	whyPubCommaRow   = "',' だけの行を黙って落とす。上流は空のレコードとして malformed dropped に数える。違うのは集計の数だけ"
 	whyPubHashHeader = "'#' で始まるヘッダーをそのまま読み、source_en 列から訳を書く。上流はそのヘッダーを飛ばして" +
@@ -439,7 +442,7 @@ var publishDiffs = map[string]knownPublishDiff{
 		`other: 上流 2 / dwloc 3`,
 		`出力の 4 行目: 上流 "fedcba9876543210,UI,,,UI,b" / dwloc "0123456789abcdef,UI,,,UI,a"`,
 	}},
-	"lone-cr-unquoted-value": {pubIntended, whyPubLoneCRUnquoted, []string{
+	"lone-cr-unquoted-value": {pubUndecided, whyPubLoneCRUnquoted, []string{
 		`malformed dropped: 上流 0 / dwloc 1`,
 		`in play order: 上流 1 / dwloc 2`,
 		`出力の 7 行目: 上流 "3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に" / dwloc "7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,い"`,
