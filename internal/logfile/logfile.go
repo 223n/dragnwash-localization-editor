@@ -102,6 +102,8 @@ type shortPath struct {
 //
 // 区切りが \ と / のどちらで書かれていても置き換えます。dwloc は同じパスを
 // スラッシュ区切りに直して出すことがあるためです（displayPath など）。
+// \ を重ねた形（C:\\Users\\<名前>）も置き換えます。%q や JSON で書いたパスは
+// この形になり、区切りの2つの形だけを探すと、そう書いた行にだけ利用者名が残ります。
 // Windows では大文字と小文字を区別しません。打たれた --root の綴りが、
 // ホームの綴りとそろっているとは限らないためです。
 //
@@ -117,7 +119,8 @@ func (w *Writer) ShortenPath(dir, short string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, form := range []string{dir, filepath.ToSlash(dir)} {
+	// \ の無いパスでは、重ねた形は元と同じなので、下の重複の検査で落ちます。
+	for _, form := range []string{dir, filepath.ToSlash(dir), strings.ReplaceAll(dir, `\`, `\\`)} {
 		dup := false
 		for _, s := range w.shortened {
 			if string(s.from) == form {
