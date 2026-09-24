@@ -329,10 +329,10 @@ const (
 		"PR2 でも止めるが、理由が単独の CR（LF に直す案内）に変わる見込み"
 	whyPubLoneCR         = "単独の CR も行の区切りにして読む。上流は単独の CR の手前を捨て、その行の訳を失う（上流の不具合。写さない）"
 	whyPubLoneCRUnquoted = "引用符で囲まない値の中の単独の CR（docs/port-spec.md の「残る隙間」。どちらの道具の書き手も" +
-		"作らない、手で書いた形）。dwloc は行の区切りとして値を切り、切れた訳「い」を止めずに公開する。続きの「ち」は" +
+		"作らない、手で書いた形）。dwloc は行の区切りとして値を切り、いまは切れた訳「い」を止めずに公開する。続きの「ち」は" +
 		"malformed dropped に数えるだけで、ほかに知らせない。ゲームは引用の外の CR を捨てて「いち」と読み、上流はその行を" +
-		"失う。訳を失わない約束と、値の中の単独の CR は publish で止めて LF に直すよう案内する方針に照らして、" +
-		"PR2 で止めるかはまだ決めていない"
+		"失う。PR2 で止める（PR0 のあとで決めた。単独の CR で終わるレコードの次のセグメントがレコードに見えなければ止め、" +
+		"CR を取り除くか値を引用符で囲むよう案内する。見つけるのは csvfile.FindCRCuts）"
 	whyPubCROnly     = "CR だけで改行したファイルも読む。上流は全行を失い、ヘッダーだけを書く（上流の不具合。写さない）"
 	whyPubCommaRow   = "',' だけの行を黙って落とす。上流は空のレコードとして malformed dropped に数える。違うのは集計の数だけ"
 	whyPubHashHeader = "'#' で始まるヘッダーをそのまま読み、source_en 列から訳を書く。上流はそのヘッダーを飛ばして" +
@@ -434,6 +434,15 @@ var publishDiffs = map[string]knownPublishDiff{
 	"swallow-6col-published": {pubPR2, whyPubSwallow, []string{
 		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
 	}},
+	"swallow-2col-own-quote": {pubPR2, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	}},
+	"swallow-7col-empty-key-own-quote": {pubPR2, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	}},
+	"swallow-6col-published-own-quote": {pubPR2, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
+	}},
 	"lone-cr-in-quoted-translation": {pubPR2, whyPubLoneCRQuoted, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
 	}},
@@ -442,7 +451,7 @@ var publishDiffs = map[string]knownPublishDiff{
 		`other: 上流 2 / dwloc 3`,
 		`出力の 4 行目: 上流 "fedcba9876543210,UI,,,UI,b" / dwloc "0123456789abcdef,UI,,,UI,a"`,
 	}},
-	"lone-cr-unquoted-value": {pubUndecided, whyPubLoneCRUnquoted, []string{
+	"lone-cr-unquoted-value": {pubPR2, whyPubLoneCRUnquoted, []string{
 		`malformed dropped: 上流 0 / dwloc 1`,
 		`in play order: 上流 1 / dwloc 2`,
 		`出力の 7 行目: 上流 "3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に" / dwloc "7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,い"`,
@@ -476,6 +485,10 @@ var publishDiffs = map[string]knownPublishDiff{
 		`in play order: 上流 0 / dwloc 2`,
 		`出力の 5 行目: 上流 "（無い）" / dwloc "# ===== Level 1: Ember (Rainy) ====="`,
 	}},
+	// hash-header-quoted-space と hash-header-nbsp は、上流と同じバイトを書くので
+	// ここに無い。上流はそのヘッダーを飛ばさない（読んだ最初の値が '#' で始まらない）。
+	// PR2 で (a) に足す csvfile.PowerShellHeader.CommentLike も読んだ最初の値そのもので
+	// 見るので、PR2 のあとも止まらずに上流と同じに書く。
 	"dup-columns-no-data": {pubPR2, whyPubDupNoData, []string{
 		`上流 変換できない / dwloc 書く`,
 	}},

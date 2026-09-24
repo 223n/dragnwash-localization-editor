@@ -176,6 +176,24 @@
       "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"いち\n\"Good day, friend\",UI,,,UI,こんにちは\nfedcba9876543210,UI,,,UI,に\n"
     },
     {
+      "name": "swallow-2col-own-quote",
+      "note": "2列の作業コピー。one の訳の引用符が閉じず、次の行（原文が複数行）が原文を開く引用符で閉じる。続きの行を単独で読むと引用が開いたまま終わる。",
+      "as": "working",
+      "text": "source_en,translation\none,\"いち\n\"Alpha line\nBeta line\",に\ntwo,さん\n"
+    },
+    {
+      "name": "swallow-7col-empty-key-own-quote",
+      "note": "7列、区切りは CRLF。次の行はキーが空で、原文が空行を挟む複数行（訳は空）。その原文を開く引用符で閉じる。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,UI,,,UI,one,\"いち\r\n,UI,,,UI,\"Alpha line\n\nBeta line\",\r\n8b5b9db0c13db242,UI,,,UI,three,さん\r\n"
+    },
+    {
+      "name": "swallow-6col-published-own-quote",
+      "note": "6列の公開ファイル（入力と書き出し先が同じ）。次の行は key 列に複数行の英文を書いた追記の形で、その key を開く引用符で閉じる。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"いち\n\"Alpha line\nBeta line\",UI,,,UI,訳\nfedcba9876543210,UI,,,UI,に\n"
+    },
+    {
       "name": "lone-cr-in-quoted-translation",
       "note": "引用した訳の中に単独の CR がある。",
       "as": "working",
@@ -252,6 +270,18 @@
       "note": "ヘッダーが空白1つのあとの '#' で始まる。",
       "as": "working",
       "text": " #key,source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "hash-header-quoted-space",
+      "note": "ヘッダーの最初の列名が、引用の中の空白1つのあとの '#' で始まる。",
+      "as": "working",
+      "text": "\" #key\",source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "hash-header-nbsp",
+      "note": "ヘッダーが NO-BREAK SPACE のあとの '#' で始まる（引用符なし）。",
+      "as": "working",
+      "text": " #key,source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
     },
     {
       "name": "lines-above-header",

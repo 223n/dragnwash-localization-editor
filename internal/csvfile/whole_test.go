@@ -196,10 +196,13 @@ func TestReadPowerShellWholeHeader(t *testing.T) {
 }
 
 // TestReadPowerShellWholeAgreesWithRowsOnSingleLines は、どのレコードも1行に
-// 収まるファイルなら、全文の読み方と行単位の読み方が同じ行を返すことを見る。
+// 収まるファイルなら、全文の読み方（守り専用の ReadPowerShellWhole と主の読み手
+// ReadPowerShell）と行単位の読み方が同じ行を返すことを見る。
 //
 // ここが割れると、publish の守りが食い違いを見つけても、それが行をまたぐ値の
-// せいなのか、読み方そのものの差なのかを区別できない。
+// せいなのか、読み方そのものの差なのかを区別できない。PR2 で publish・diff・
+// order を主の読み手へ切り替えたとき、1行に収まるファイルでは結果が変わらない
+// ことの裏付けにもなる。
 func TestReadPowerShellWholeAgreesWithRowsOnSingleLines(t *testing.T) {
 	text := bom +
 		"# 見出し\r\n" +
@@ -220,6 +223,13 @@ func TestReadPowerShellWholeAgreesWithRowsOnSingleLines(t *testing.T) {
 	if len(rows) != len(w.Rows) {
 		t.Fatalf("行数: 行単位 %d、全文 %d", len(rows), len(w.Rows))
 	}
+	f, err := ReadPowerShell([]byte(text))
+	if err != nil {
+		t.Fatalf("主の読み手が失敗した: %v", err)
+	}
+	if len(rows) != len(f.Records) {
+		t.Fatalf("行数: 行単位 %d、主の読み手 %d", len(rows), len(f.Records))
+	}
 	numbered, err := ReadPowerShellRowsNumbered([]byte(text))
 	if err != nil {
 		t.Fatal(err)
@@ -229,9 +239,15 @@ func TestReadPowerShellWholeAgreesWithRowsOnSingleLines(t *testing.T) {
 			if rows[i].Get(col) != w.Rows[i].Get(col) {
 				t.Errorf("[%d] %s: 行単位 %q、全文 %q", i, col, rows[i].Get(col), w.Rows[i].Get(col))
 			}
+			if rows[i].Get(col) != f.Records[i].Get(col) {
+				t.Errorf("[%d] %s: 行単位 %q、主の読み手 %q", i, col, rows[i].Get(col), f.Records[i].Get(col))
+			}
 		}
 		if numbered[i].Line != w.Rows[i].Line || w.Rows[i].MultiLine() {
 			t.Errorf("[%d] 行番号: 行単位 %d、全文 %d〜%d", i, numbered[i].Line, w.Rows[i].Line, w.Rows[i].EndLine)
+		}
+		if numbered[i].Line != f.Records[i].Line || f.Records[i].MultiLine() {
+			t.Errorf("[%d] 行番号: 行単位 %d、主の読み手 %d〜%d", i, numbered[i].Line, f.Records[i].Line, f.Records[i].EndLine)
 		}
 	}
 	if w.UnclosedLine != 0 {

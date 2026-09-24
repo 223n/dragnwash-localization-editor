@@ -27,13 +27,18 @@ import (
 作ったもので、手では直さない（作り方は testdata/upstream/README.md）。CI には pwsh も
 上流のリポジトリも無いので、ふだんは保存した正解とだけ比べる。
 
-上流と違ってよいのは、下の表（[wholeReaderDiffs] と [lineReaderDiffs]）に載せた
-入力だけである。表の各行は、どう違うか（[describeReadDiff] の出力）まで固定する。
-表に無い入力で違いが出たとき、表にある入力が一致するようになったとき、違い方が
-変わったときは、どれも落ちる。全体を解釈する読み手を入れる PR1 では、diffPR1 の行が
-消えていくはずである。そのとき閉じない引用符は、上流と同じく飲み込むのではなく
-型付きの誤りになるので、その入力は diffIntended として表に加わる（docs/port-spec.md
-「上流と意図して違える点」の閉じない引用符の行）。
+上流と違ってよいのは、下の表（[mainReaderDiffs]、[wholeReaderDiffs]、
+[lineReaderDiffs]）に載せた入力だけである。表の各行は、どう違うか
+（[describeReadDiff] の出力）まで固定する。表に無い入力で違いが出たとき、表にある
+入力が一致するようになったとき、違い方が変わったときは、どれも落ちる。
+
+PR0 では、全体を解釈する新しい読み手で上流にそろえる違いを「PR1 で直す」として
+表に載せていた（ReadPowerShellWhole が列名の重複を確かめない3件）。PR1 で主の読み手
+[ReadPowerShell] が入り、その3件は主の読み手では上流と一致する。守り専用のまま残る
+ReadPowerShellWhole の表では、同じ3件を「守り専用の読み方」に移した。閉じない引用符は、
+上流と同じく飲み込むのではなく型付きの誤りになるので、主の読み手の表では
+diffIntended として加わる（docs/port-spec.md「上流と意図して違える点」の閉じない
+引用符の行）。
 */
 
 // upstreamDir は入力の表と正解の置き場。試験はパッケージのディレクトリを
@@ -189,6 +194,30 @@ func upstreamView(c fixtureExpCase) readView {
 	return v
 }
 
+// errUnclosedPrefix は、閉じない引用符で読めなかったことを表す印の頭。後ろに行が付く。
+const errUnclosedPrefix = "閉じない引用符 L"
+
+// mainView は主の読み手 [ReadPowerShell] で読んだ結果。
+func mainView(text string) readView {
+	f, err := ReadPowerShell([]byte(text))
+	if err != nil {
+		var dup *DuplicateColumnError
+		var unclosed *UnclosedQuoteError
+		switch {
+		case errors.As(err, &dup):
+			return readView{err: errDuplicateColumns}
+		case errors.As(err, &unclosed):
+			return readView{err: errUnclosedPrefix + strconv.Itoa(unclosed.Line)}
+		}
+		return readView{err: err.Error()}
+	}
+	var v readView
+	for _, r := range f.Records {
+		v.records = append(v.records, rowRecord(r.Row, r.Line, r.EndLine))
+	}
+	return v
+}
+
 // wholeView は [ReadPowerShellWhole] で読んだ結果。
 func wholeView(text string) readView {
 	w := ReadPowerShellWhole([]byte(text))
@@ -319,8 +348,10 @@ const (
 	// diffIntended は、上流と意図して違える点（docs/port-spec.md「上流と意図して
 	// 違える点」）。直さない。
 	diffIntended diffKind = "意図して違える"
-	// diffPR1 は、全体を解釈する新しい読み手（PR1）で上流にそろえるもの。
-	diffPR1 diffKind = "PR1 で直す"
+	// diffGuardOnly は、publish の守り専用の読み手（[ReadPowerShellWhole]）だけの違い。
+	// 主の読み手 [ReadPowerShell] は上流とそろっている。PR2 で publish の守りが主の
+	// 読み手へ移ると、この読み手は使われなくなる。
+	diffGuardOnly diffKind = "守り専用の読み方"
 	// diffLineBased は、1物理行を1レコードとして読むことから来る違い。publish・diff・
 	// order が全体を解釈する読み手へ移る PR2 で、この読み手は使われなくなる。
 	diffLineBased diffKind = "行単位の読み方"
@@ -342,8 +373,8 @@ const (
 		"その手前を捨てる（上流の不具合。写さない）"
 	whyLoneCRUnquoted = "引用符で囲まない値の中の単独の CR も、行の区切りにする規則のまま読む。値は CR の手前で切れ" +
 		"（訳が「い」）、続きの「ち」は上流と同じく別のレコードになる。上流は CR の手前を捨ててその行を失い、ゲームは" +
-		"引用の外の CR を捨てて「いち」と読む。読み方の規則は意図して違えるが、切れた訳を publish が止めずに公開する点は" +
-		"未決（docs/port-spec.md「上流と違うが未決の点」、cmd/dwloc の publish の試験）"
+		"引用の外の CR を捨てて「いち」と読む。読み方の規則は意図して違える。切れた訳を publish はいま止めずに公開するが、" +
+		"PR2 で止める（docs/port-spec.md「上流と意図して違える点」、FindCRCuts、cmd/dwloc の publish の試験）"
 	whyCROnly = "CR だけで改行したファイルも読む。上流は Remove-NonRecords が全行を捨て、" +
 		"訳がすべて消える（上流の不具合。写さない）"
 	whyCommaRow = "',' だけの行は空行相当として落とす。上流は空の値のレコードにし、publish の集計で " +
@@ -357,8 +388,10 @@ const (
 		"（列が多いと公開ファイルに漏れる。上流の不具合。写さない）"
 	whyCultureHash = "行頭の '#' は序数で比べる。上流の StartsWith('#') はカルチャに依存する照合で、" +
 		"U+00AD のように照合上無視される文字を飛ばす。Go では照合表を持てない"
-	whyWholeDupColumns = "ReadPowerShellWhole は列名の重複を確かめない。PR1 の読み手は、データが0件でも " +
-		"DuplicateColumnError を返す（上流に合わせる）"
+	whyWholeDupColumns = "ReadPowerShellWhole は publish の守り専用で、列名の重複を確かめない（行単位の読み手が" +
+		"先に確かめる）。主の読み手 ReadPowerShell は、データが0件でも DuplicateColumnError を返して上流とそろう"
+	whyUnclosed = "閉じない引用符は型付きの誤り（UnclosedQuoteError）にし、値を返さない。上流はファイルの終わりまでを" +
+		"1つの値に飲み込み、英語の原文ごと書く（上流の報告 #11。写さない）"
 	whyLineSplit    = "1物理行を1レコードとして読むので、引用した値が最初の行で切れ、続きの行が別のレコードになる"
 	whyLineUnclosed = "行単位では、閉じない引用符が行の終わりで閉じたことになる。上流はファイルの終わりまでを" +
 		"1つの値に飲み込む"
@@ -399,13 +432,13 @@ var wholeReaderDiffs = map[string]knownDiff{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "one" "いち"]`,
 		`L3 の列: 上流 ["7692c3ad3540bb80" "one" "いち"] / dwloc ["#key" "source_en" "translation"]`,
 	}},
-	"dup-columns-with-data": {diffPR1, whyWholeDupColumns, []string{
+	"dup-columns-with-data": {diffGuardOnly, whyWholeDupColumns, []string{
 		`読めるか: 上流 列名の重複 / dwloc 読める`,
 	}},
-	"dup-columns-no-data": {diffPR1, whyWholeDupColumns, []string{
+	"dup-columns-no-data": {diffGuardOnly, whyWholeDupColumns, []string{
 		`読めるか: 上流 列名の重複 / dwloc 読める`,
 	}},
-	"dup-columns-blank-after": {diffPR1, whyWholeDupColumns, []string{
+	"dup-columns-blank-after": {diffGuardOnly, whyWholeDupColumns, []string{
 		`読めるか: 上流 列名の重複 / dwloc 読める`,
 	}},
 	"bare-quote-then-comment": {diffIntended, whyBareQuote, []string{
@@ -421,6 +454,31 @@ var wholeReaderDiffs = map[string]knownDiff{
 		`dwloc だけ L3 ["\u00ad# note" "" "" "" "" ""]`,
 	}},
 }
+
+// mainReaderDiffs は、主の読み手 [ReadPowerShell] が上流と違ってよい入力。
+//
+// 読み方は [ReadPowerShellWhole] と同じ区切りの関数に載っているので、その表から
+// 守り専用の違い（列名の重複）を除き、閉じない引用符の4件を加えたものになる。
+// 表を写して持たないのは、読み方の違いを2か所で直す形にしないためである。
+var mainReaderDiffs = func() map[string]knownDiff {
+	out := make(map[string]knownDiff, len(wholeReaderDiffs)+4)
+	for name, d := range wholeReaderDiffs {
+		if d.kind != diffGuardOnly {
+			out[name] = d
+		}
+	}
+	for name, line := range map[string]int{
+		"unclosed-to-eof":           2,
+		"unclosed-last-line":        3,
+		"unclosed-header":           1,
+		"unclosed-published-middle": 2,
+	} {
+		out[name] = knownDiff{diffIntended, whyUnclosed, []string{
+			"読めるか: 上流 読める / dwloc " + errUnclosedPrefix + strconv.Itoa(line),
+		}}
+	}
+	return out
+}()
 
 // lineReaderDiffs は、行単位の読み手（[ReadPowerShellTable]）が上流と違ってよい入力。
 //
@@ -549,6 +607,21 @@ var lineReaderDiffs = map[string]knownDiff{
 		`L2 translation: 上流 "いち\nGood day" / dwloc "いち"`,
 		`dwloc だけ L3 ["Good day, friend" "UI" "" "" "UI" "こんにちは"]`,
 	}},
+	"swallow-2col-own-quote": {diffLineBased, whyLineSplit, []string{
+		`L2 の終わり: 上流 3 / dwloc 2`,
+		`L2 translation: 上流 "いち\nAlpha line" / dwloc "いち"`,
+		`dwloc だけ L3 ["Alpha line" ""]`,
+	}},
+	"swallow-7col-empty-key-own-quote": {diffLineBased, whyLineSplit, []string{
+		`L2 の終わり: 上流 3 / dwloc 2`,
+		`L2 translation: 上流 "いち\r\n,UI,,,UI,Alpha line" / dwloc "いち"`,
+		`dwloc だけ L3 ["" "UI" "" "" "UI" "Alpha line" ""]`,
+	}},
+	"swallow-6col-published-own-quote": {diffLineBased, whyLineSplit, []string{
+		`L2 の終わり: 上流 3 / dwloc 2`,
+		`L2 translation: 上流 "いち\nAlpha line" / dwloc "いち"`,
+		`dwloc だけ L3 ["Alpha line" "" "" "" "" ""]`,
+	}},
 	"lone-cr-in-quoted-translation": {diffIntended, whyLoneCR, []string{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "L01 Ember" "Ember_1_intro" "1" "Ember" "one" "い"]`,
 	}},
@@ -609,6 +682,7 @@ func TestReadersAgainstUpstream(t *testing.T) {
 		read  func(string) readView
 		known map[string]knownDiff
 	}{
+		{"ReadPowerShell", mainView, mainReaderDiffs},
 		{"ReadPowerShellWhole", wholeView, wholeReaderDiffs},
 		{"ReadPowerShellTable", lineView, lineReaderDiffs},
 	}

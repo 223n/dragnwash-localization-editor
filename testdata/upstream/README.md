@@ -30,7 +30,7 @@ BOMは数えません。
 
 | 試験 | 比べるもの |
 | ---- | ---- |
-| `internal/csvfile/upstream_fixture_test.go` | `ReadPowerShellWhole`と行単位の読み手（`ReadPowerShellTable`）を`read`と比べます |
+| `internal/csvfile/upstream_fixture_test.go` | 主の読み手（`ReadPowerShell`）、守り専用の`ReadPowerShellWhole`、行単位の読み手（`ReadPowerShellTable`）を`read`と比べます |
 | `cmd/dwloc/publish_upstream_test.go` | `dwloc publish --no-game`の結果を`run`と比べます |
 
 上流と違ってよい入力は、試験の表に理由と一緒に載せてあります。
@@ -39,7 +39,7 @@ BOMは数えません。
 表の分類は次のとおりです。
 
 - 意図して違える：上流の不具合や、dwlocが止める形です。一覧は[移植仕様](../../docs/port-spec.md)の「上流と意図して違える点」にあります
-- PR1で直す：全体を解釈する新しい読み手で、上流にそろえるものです
+- 守り専用の読み方：`publish`の守り専用の`ReadPowerShellWhole`だけの違いです。主の読み手は上流とそろっています。PR2で守りが主の読み手へ移ると、この読み手は使われなくなります
 - PR2で変わる：`publish`・`diff`・`order`が新しい読み手へ移ると、振る舞いが変わるものです
 - 行単位の読み方：1物理行を1レコードとして読むことから来る違いです
 - 未決：上流と違えてよいかを、まだ決めていないものです。いまの振る舞いを固定するだけで、正しいとは見なしません。一覧は[移植仕様](../../docs/port-spec.md)の「上流と違うが未決の点」にあります
