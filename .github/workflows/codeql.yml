@@ -13,8 +13,10 @@ name: CodeQL
 on:
   push:
     branches: [main, develop]
+  # base を絞らない。積み重ねた PR（base が feature/* の PR）でも走らせるためである。
+  # 下の PR がマージされて base が develop に自動で付け替わっても、その出来事では何も走らない。
+  # base を main と develop に絞ると、積み重ねた PR は一度も走査されないまま develop に入りうる
   pull_request:
-    branches: [main, develop]
   schedule:
     # 毎週月曜の朝（日本時間 9:00）。CodeQL の規則が更新されたときに新しい指摘を拾う
     - cron: '0 0 * * 1'
