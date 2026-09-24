@@ -137,7 +137,8 @@ func (r PowerShellRecord) MultiLine() bool { return r.EndLine > r.Line }
 // ヘッダーとして返す（[PowerShellHeader.CommentLike]）。
 //
 // publish・diff・order は、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
-// PR2 から、この読み手で読む。edit は PR3 で移す。
+// PR2 から、この読み手で読む。edit は PR2 から行の種類を区切りの関数で決め、保存の
+// 単位をレコードへ移すのは PR3 である。
 func ReadPowerShell(data []byte) (PowerShellFile, error) {
 	f := ReadPowerShellMarked(data)
 	if err := f.Err(); err != nil {

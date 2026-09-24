@@ -21,7 +21,8 @@
 //
 //     publish・diff・order は、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
 //     PR2 からこの読み手で読む（行だけが要る使い手は [PowerShellFile.Rows]）。
-//     edit は PR3 で移す。
+//     edit は PR2 で行の種類を区切りの関数（[SplitSegments]）で決めるようにし、
+//     保存の単位をレコードへ移すのは PR3 である。
 //
 //     [ReadPowerShellRows] は、移植の基準 003ed1e の行単位の読み方（'#' の物理行を
 //     落としてから、1物理行を1レコードとして読む）で、引用フィールド内の改行を
@@ -72,7 +73,7 @@
 //   - [FindSwallows]: 引用符が別の行で閉じ、後ろの行を値に飲み込んだと見られる形
 //   - [FindCRCuts]: 引用符で囲まない値が単独の CR で切れたと見られる形
 //   - [LoneCRValues]: 値の中の単独の CR
-//   - [LineBreakValues]: 見出しに使う値の中の改行
+//   - [LineBreakValues]: 見出しに使う値の中の改行（publish が再生順のデータに使う）
 //   - [CSharpDisagreements]: ゲームの読み方と値が割れるレコード
 //
 // # 書き出し

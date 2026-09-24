@@ -40,8 +40,8 @@ func (e *DuplicateColumnError) Error() string {
 // 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。上流は f816618 で
 // 全文を1つの文字列として解釈する読み方へ移った。この移植の全体を解釈する読み手は
 // [ReadPowerShell] で、publish・diff・order は、全体を解釈する読み手へ移す作業
-// （docs/port-spec.md）の PR2 でそちらへ切り替えた。edit は PR3 で移す（edit は
-// この関数でなく、物理行を1行ずつ見る自前の編集モデルで読んでいる）。
+// （docs/port-spec.md）の PR2 でそちらへ切り替えた。edit はこの関数を使わず、PR2 から
+// 行の種類を区切りの関数（[SplitSegments]）で決める。保存の単位をレコードへ移すのは PR3。
 //
 // 切り替えたので、この関数（と [ReadPowerShellRowsNumbered]・[ReadPowerShellTable]）は、
 // 「どのレコードも1行に収まるファイルでは、全体を解釈する読み方と結果が同じ」ことを
