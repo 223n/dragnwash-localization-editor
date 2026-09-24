@@ -1,6 +1,6 @@
 name: CI
 
-# 6つの検査をする。
+# 7つの検査をする。
 #   lint-ja         文書の書式（markdownlint）と日本語の書き方（textlint）。
 #                   規則は公開されている共有設定 @223n/lint-config-ja にあり、ここには「何を検査するか」だけを書く
 #   go              Goの書式（gofmt）、静的解析（go vet）、テストとカバレッジの閾値、全対象向けのビルド
@@ -9,10 +9,17 @@ name: CI
 #                   落ちたときは Playwright の出力（test-results/）を成果物として7日間残す
 #   lint-workflows  ワークフローの構文と型（actionlint）
 #   zizmor          ワークフローの安全性（zizmor）。アクションの SHA 固定、権限、危険な書き方を見る
+#   govulncheck     Goの標準ライブラリの既知の脆弱性（govulncheck）。go.mod の版の Go で、呼んでいる箇所を見る
+#
+# 週1回の実行（schedule）では govulncheck だけを走らせる。脆弱性の一覧はコードを変えなくても増えるため、
+# push と pull_request を待たずに気付けるようにする。ほかの検査はコードが変わらなければ結果も変わらない
 on:
   push:
     branches: [main, develop]
   pull_request:
+  schedule:
+    # 毎週月曜の朝（日本時間 9:30）。CodeQL（9:00）と重ならないようにずらす
+    - cron: '30 0 * * 1'
   # 手で動かすため。
   # GITHUB_TOKEN が開いた PR（リリースの PR など）では、pull_request の実行は「承認待ち」で作られ、
   # 書き込み権限のある人が「Approve workflows to run」を押すまで動かない
@@ -41,6 +48,7 @@ permissions:
 jobs:
   lint-ja:
     name: 日本語Lint
+    if: github.event_name != 'schedule'
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
     # 無ければ GitHub がホストする ubuntu-latest で動く。
     # 手で動かすときだけ、入力 runner がどちらよりも先に効く
@@ -72,6 +80,7 @@ jobs:
 
   go:
     name: Go
+    if: github.event_name != 'schedule'
     runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
@@ -130,6 +139,7 @@ jobs:
 
   go-windows:
     name: Go（Windows）
+    if: github.event_name != 'schedule'
     # 翻訳者の多くは Windows で使う。Windows でだけ通る道（ドライブ文字、大文字と小文字を区別しない
     # ファイルシステム、Steam の既定の場所）は、Linux のジョブでは飛ぶか別の期待値になるため、ここで試す。
     # 変数 RUNS_ON と入力 runner は見ない。どちらも Linux のランナーを選ぶためのものである。
@@ -167,6 +177,7 @@ jobs:
 
   e2e:
     name: 画面のE2E
+    if: github.event_name != 'schedule'
     runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
@@ -237,6 +248,7 @@ jobs:
 
   lint-workflows:
     name: ワークフローの構文検査
+    if: github.event_name != 'schedule'
     runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
@@ -263,6 +275,7 @@ jobs:
 
   zizmor:
     name: ワークフローの安全性検査
+    if: github.event_name != 'schedule'
     runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
@@ -282,3 +295,31 @@ jobs:
         with:
           version: v1.30.0
           advanced-security: false
+
+  govulncheck:
+    name: Goの脆弱性検査
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Goを用意
+        # 配る実行ファイルと同じく、go.mod の go 行の版を入れる。govulncheck は、動いている Go の版を
+        # 標準ライブラリの版とみなして照らし合わせる。依存は標準ライブラリだけなので、キャッシュは要らない
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: 既知の脆弱性を調べる
+        # 呼んでいる関数に既知の脆弱性があれば失敗する。直すときは、go.mod の go 行を修正の入った版へ上げる。
+        # 版の上げは手で行う（依存が標準ライブラリだけなので、Dependabot は go 行を上げない）。
+        #
+        # govulncheck は、golang.org/x/vuln の版を固定して go run で取る。取った中身は、Go のチェックサムの
+        # データベース（sum.golang.org）で照合される。golang/govulncheck-action は使わない。
+        # あちらは govulncheck を毎回 @latest で入れるので、道具の版が実行ごとに変わりうる。
+        # 版を上げるときは、公開から7日以上たった版を選ぶ（Dependabot の cooldown と同じ考え）
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./cmd/... ./internal/...

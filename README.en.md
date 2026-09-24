@@ -1292,6 +1292,12 @@ In CI it also checks the workflow syntax with `actionlint` and the safety of the
 CI builds all six targets as well.  
 That is to see whether the premise of shipping a single binary still holds.
 
+Known vulnerabilities in the Go standard library are checked with `govulncheck`.  
+It runs on `push` and pull requests, and also every Monday.  
+That is because the list of vulnerabilities grows even when the code does not change.  
+It fails when a function the code calls is affected, so raise the `go` line in `go.mod` by hand to a version with the fix.  
+The only dependency is the standard library, so Dependabot does not raise that line.
+
 ## Things to watch out for
 
 | Situation | What happens | What to do |
@@ -1417,7 +1423,7 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, every Monday (`govulncheck` only), manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, the syntax and safety of the workflows, and known vulnerabilities in the Go standard library, and sees whether it builds for all six targets |
 | `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually (the `runner` input picks the runner for that run only) | Scans the workflows, the Go code and the JavaScript (the screen's `app.js` and the `.mjs` files for tests and tools) with CodeQL. The results are not a required check |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
