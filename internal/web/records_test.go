@@ -126,6 +126,96 @@ func TestSaveAddressesRecordsByID(t *testing.T) {
 	}
 }
 
+// TestOneRequestWritesEachEditToItsRecord は、1回の保存の要求に入った複数の編集が、
+// それぞれ ID の指すレコードの最終フィールドに入り、ほかは1バイトも変わらないことを、
+// ファイル全体のバイト列で見る。見本は実物と同じ形（区切りは CRLF、値の中は LF、
+// 空行・'#' の行・カンマの多い続きの行を含む）で、行をまたぐレコードの後ろでは ID と
+// 行番号がずれる。
+func TestOneRequestWritesEachEditToItsRecord(t *testing.T) {
+	const para = "Rinse the plates, cups, and bowls.\n\n# Then dry, stack, and sort them."
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	head := "key,section,node,order,speaker,source_en,translation\r\n" +
+		"\r\n" +
+		"# ===== Level 1: Ryan (Sunny) =====\r\n" +
+		"# --- intro: Ryan_1_intro ---\r\n"
+	hello := key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ","
+	paraRow := key.For(para) + ",UI,,,UI,\"" + para + "\","
+	bye := key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + ","
+	body := head + hello + jaHello + "\r\n" + "\r\n" + paraRow + "\r\n" + bye + "\r\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root})
+	lines := getLines(t, s, "ja")
+	ids := make(map[string]int)
+	for _, l := range lines.Lines {
+		ids[l.Key] = l.ID
+	}
+	// 物理行: 5 hello / 6 空行 / 7〜9 para / 10 bye。ID: 5 / 6 / 7 / 8。
+	if ids[key.For(srcHello)] != 5 || ids[key.For(para)] != 7 || ids[key.For(srcBye)] != 8 {
+		t.Fatalf("ID = %v", ids)
+	}
+
+	rec := save(t, s, "ja", lines.Version,
+		rowEdit{ID: 8, Key: key.For(srcBye), Translation: "さようなら, また"},
+		rowEdit{ID: 5, Key: key.For(srcHello), Translation: ""},
+		rowEdit{ID: 7, Key: key.For(para), Translation: `すすいで "ふく"`})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[rowsResponse](t, rec.Body.Bytes())
+	for i, want := range []struct{ id, n int }{{8, 10}, {5, 5}, {7, 7}} {
+		if r := got.Results[i]; !r.Saved || r.ID != want.id || r.Number != want.n {
+			t.Errorf("%d番目の結果 = %+v", i, r)
+		}
+	}
+	want := head + hello + "\r\n" + "\r\n" + paraRow + `"すすいで ""ふく"""` + "\r\n" + bye + `"さようなら, また"` + "\r\n"
+	if after := readFile(t, path); after != want {
+		t.Errorf("書いた結果が違う\n got %q\nwant %q", after, want)
+	}
+
+	// 訳を元に戻すと、元のバイト列に戻る。
+	rec = save(t, s, "ja", got.Version,
+		rowEdit{ID: 5, Key: key.For(srcHello), Translation: jaHello},
+		rowEdit{ID: 7, Key: key.For(para), Translation: ""},
+		rowEdit{ID: 8, Key: key.For(srcBye), Translation: ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("戻す保存の状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	if after := readFile(t, path); after != body {
+		t.Errorf("元のバイト列に戻らない\n got %q\nwant %q", after, body)
+	}
+}
+
+// TestLineBreaksInValuesAreSentAsLF は、値の中の改行を LF にそろえて渡すことを見る
+// （model.go の lfLineBreaks）。表計算ソフトなどで保存し直すと、値の中の改行が CRLF に
+// なることがある。そろえるのは描くための値だけで、ファイルは変えない。
+func TestLineBreaksInValuesAreSentAsLF(t *testing.T) {
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	body := "key,section,node,order,speaker,source_en,translation\r\n" +
+		key.For("para1\r\n\r\npara2") + ",UI,,,UI,\"para1\r\n\r\npara2\",\r\n" +
+		key.For("two") + ",UI,,,UI,two,\"に\r\nさん\"\r\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	lines := getLines(t, s, "ja")
+	if len(lines.Lines) != 2 {
+		t.Fatalf("並べた行 = %+v", lines.Lines)
+	}
+	if l := lines.Lines[0]; l.Source != "para1\n\npara2" || !l.Editable || l.End != 4 {
+		t.Errorf("原文が行をまたぐレコード = %+v", l)
+	}
+	if l := lines.Lines[1]; l.Editable || l.Text != key.For("two")+",UI,,,UI,two,\"に\nさん\"" {
+		t.Errorf("訳が行をまたぐレコード = %+v", l)
+	}
+	if readFile(t, path) != body {
+		t.Error("ファイルが変わった")
+	}
+}
+
 // TestRowsThatCannotBeWrittenSafelyAreReadOnly は、publish やゲームが別の値に読む
 // レコードを、理由（目録の文面）を付けて編集させず、値がどれも空のレコードを並べない
 // ことを見る。

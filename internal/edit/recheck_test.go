@@ -133,6 +133,23 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			},
 			blame: 2,
 		},
+		{
+			// 最後に触っていないレコードが1つ増える形。セグメントの数だけが変わる。
+			name: "レコードが増える",
+			breakModel: func(f *File) {
+				f.lines[3].Text += key.For("four") + ",UI,,,UI,four,よん\r\n"
+			},
+			blame: 2,
+		},
+		{
+			// 書き換えより前（ヘッダー）が変わる形。その前に書き換えが無いので、最初の
+			// 書き換えを指す。
+			name: "書き換えより前が変わる",
+			breakModel: func(f *File) {
+				f.lines[0].Text = "#" + f.lines[0].Text
+			},
+			blame: 2,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

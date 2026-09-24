@@ -110,6 +110,51 @@ func TestEditListsRecords(t *testing.T) {
 	}
 }
 
+// TestSavedRecordsAgreeAcrossReaders は、実物と同じ形の作業コピーで、原文が行をまたぐ
+// レコードを含む複数のレコードに書いたあと、3つの読み手（ゲーム内Mod、publish、
+// validate）がどのレコードのどの列も同じ値に読むことを見る。
+func TestSavedRecordsAgreeAcrossReaders(t *testing.T) {
+	f := Parse([]byte(nowWorking))
+	writes := map[int]string{
+		5:  "カンマ, と \"引用符\"",
+		6:  " 前後に空白 ",
+		9:  "すすいで、ふく",
+		10: "#で始まる訳",
+	}
+	for id, v := range writes {
+		if err := f.SetTranslation(id, v); err != nil {
+			t.Fatalf("ID %d: %v", id, err)
+		}
+	}
+	out := f.Bytes()
+
+	game := csvfile.ReadCSharpRows(out)
+	ps, err := csvfile.ReadPowerShell(out)
+	if err != nil {
+		t.Fatalf("主の読み手で読めない: %v", err)
+	}
+	py, err := csvfile.ReadPythonRecords(out)
+	if err != nil {
+		t.Fatalf("validate の読み手で読めない: %v", err)
+	}
+	if len(game) != 4 || len(ps.Records) != 4 || len(py) != 5 {
+		t.Fatalf("レコードの数: ゲーム内Mod %d、主の読み手 %d、validate %d（ヘッダーを含む）", len(game), len(ps.Records), len(py))
+	}
+	for i, r := range ps.Records {
+		for c, col := range workingHeader {
+			if p, g, v := r.Get(col), game[i].Get(col), py[i+1].Fields[c]; p != g || p != v {
+				t.Errorf("ID %d の %s が食い違う: 主の読み手 %q、ゲーム内Mod %q、validate %q", r.ID, col, p, g, v)
+			}
+		}
+		if want, ok := writes[r.ID]; ok && r.Get("translation") != want {
+			t.Errorf("ID %d の訳 = %q、%q を期待", r.ID, r.Get("translation"), want)
+		}
+	}
+	if csvfile.FindSwallows(ps.Segments) != nil || csvfile.CSharpDisagreements(ps) != nil {
+		t.Error("書いたあとのファイルが、飲み込みの疑いか読み方の食い違いに当たる")
+	}
+}
+
 // TestEditCommaOnlyRowIsBlank は、値がどれも空になるレコード（",,,,,," の行）を
 // 空行相当にし、編集させないことを見る（改善の ui-15）。キーも原文も空なので publish は
 // この行を捨て（移植仕様 R17）、ここへ打った訳は黙って落ちる。
