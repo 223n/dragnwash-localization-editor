@@ -89,11 +89,11 @@ func TestRealDataJaStrings(t *testing.T) {
 	})
 
 	t.Run("Python方式", func(t *testing.T) {
-		kept := ReadPythonLines(data)
-		if len(kept) != jaContentLines {
-			t.Fatalf("残った物理行 = %d, want %d", len(kept), jaContentLines)
+		records, err := ReadPythonRecords(data)
+		if err != nil {
+			t.Fatalf("ReadPythonRecords が失敗した: %v", err)
 		}
-		records := ParsePythonRecords(kept)
+		// 空白だけの行は無いので、コメントと空行を捨てたレコードは内容行と同じ数になる。
 		if len(records) != jaContentLines {
 			t.Fatalf("レコード数 = %d, want %d（ヘッダーを含む）", len(records), jaContentLines)
 		}
@@ -118,7 +118,10 @@ func TestRealDataJaStrings(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadPowerShellRows が失敗した: %v", err)
 		}
-		python := ParsePythonRecords(ReadPythonLines(data))
+		python, err := ReadPythonRecords(data)
+		if err != nil {
+			t.Fatalf("ReadPythonRecords が失敗した: %v", err)
+		}
 		if len(csharp) != len(powershell) || len(csharp) != len(python)-1 {
 			t.Fatalf("行数が揃わない: C#=%d PowerShell=%d Python=%d（Pythonはヘッダー込み）",
 				len(csharp), len(powershell), len(python))
@@ -136,7 +139,17 @@ func TestRealDataJaStrings(t *testing.T) {
 	// 読んだ値を書き戻すと元の行に戻る。エスケープ規則（移植仕様 R3 / R14）を
 	// 実データで裏付ける。ja/strings.csv には引用符を含む行が8行ある。
 	t.Run("読み書きの往復で元の行に戻る", func(t *testing.T) {
-		lines := ReadPythonLines(data)
+		records, err := ReadPythonRecords(data)
+		if err != nil {
+			t.Fatalf("ReadPythonRecords が失敗した: %v", err)
+		}
+		// 各レコードの元の物理行。実データの値は1行に収まっているので、
+		// レコードの先頭行がそのままその行の全体になる。
+		physical := SplitPythonLines(data)
+		lines := make([]Line, 0, len(records))
+		for _, r := range records {
+			lines = append(lines, physical[r.Number-1])
+		}
 		rows := ReadCSharpRows(data)
 		if len(lines) != len(rows)+1 {
 			t.Fatalf("物理行とレコードの数が揃わない: %d と %d", len(lines), len(rows))

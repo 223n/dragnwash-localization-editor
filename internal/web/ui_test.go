@@ -477,6 +477,11 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 	if !strings.Contains(js, "state.sending = postJSON(") {
 		t.Error("flush が送り終わりを控えていない。送っている最中の保存を待てない")
 	}
+	// 待ち終えたら、送っている最中かをもう一度見てやり直すこと。2度押すと、先に動いた
+	// ほうが送り始めた保存を、あとのほうが待たずに尋ねていた（実際に起きた）。
+	if !strings.Contains(functionBody(t, js, "settle"), "return state.sending.then(settle);") {
+		t.Error("settle が、待っているあいだに送り始められた保存を待たずに尋ねる")
+	}
 	// 捨てると答えたあとは送らない。印を見るのは、送る要求を組むより前であること。
 	fl := strings.Index(js, "function flush()")
 	if fl < 0 {
@@ -495,6 +500,61 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 	fail := strings.Index(js[ld:], ".catch(function ()")
 	if fail < 0 || !strings.Contains(js[ld+fail:ld+fail+800], "stopHolding(holding)") {
 		t.Error("読み込みに失敗したときに、止めていた送り直しを戻していない")
+	}
+}
+
+// TestListIsNotEditableWhileLoading は、読み直しと切り替えの読み込みが返るまで、
+// 一覧の訳を開かせず、競合の引き止めのボタンも押させないことを見る。
+//
+// 実際に起きた: 読み込みのあいだも前の一覧で打てた。読めた時点で load が抱えている
+// 訳（state.pending）ごと片付けるので、打った訳はファイルにも画面にも残らず、保存の
+// 欄は「保存済み」になった。捨てると答えたあとは flush が送らないので必ず消え、
+// 答えていなくても保存が落ちれば同じだった。振る舞いは E2E の boot.spec.mjs が
+// 見ている。
+func TestListIsNotEditableWhileLoading(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	if !strings.Contains(functionBody(t, js, "openEditor"), "if (state.loading) {") {
+		t.Error("openEditor が読み込みの最中にも開く。打った訳が読めた時点で消える")
+	}
+	// 読みにいく前に、開いている入力欄を閉じること。開いたままだと読み込みのあいだも打てる。
+	body := functionBody(t, js, "load")
+	commit := strings.Index(body, "commitEditor();")
+	fetch := strings.Index(body, `getJSON("/api/lines`)
+	if commit < 0 || fetch < 0 || commit > fetch {
+		t.Error("load が、読みにいく前に開いている入力欄を閉じていない")
+	}
+	// 読めなかったら、読み込みのあいだに焦点を載せた訳の欄を開き直すこと。開き直さないと、
+	// 焦点は欄に載ったまま focusin がもう来ないので、字も Enter も効かない（実際に起きた）。
+	failed := strings.Index(body, ".catch(")
+	reopen := strings.Index(body, "lineOf(document.activeElement)")
+	if failed < 0 || reopen < failed {
+		t.Error("load が、読めなかったときに焦点の載った訳の欄を開き直さない")
+	}
+	// 読み込みの最中であることを一覧に出し、打てそうな印を下ろすこと。出さないと、
+	// 押しても開かない欄が黙って並ぶ。
+	busy := functionBody(t, js, "syncBusy")
+	if !strings.Contains(busy, `el.list.setAttribute("aria-busy"`) {
+		t.Error("読み込みの最中であることを一覧に出していない")
+	}
+	// 競合の引き止めのボタンも、読み込みの最中は押させないこと。捨てると答えたあとに
+	// 「自分の訳を上に載せる」を押せたころは、押した訳が読めた時点で黙って消えた
+	// （実際に起きた）。ボタンを押せなくするだけでなく、関数の先頭でも止める。
+	for _, button := range []string{"el.conflictKeep.disabled = busy;", "el.conflictTake.disabled = busy;"} {
+		if !strings.Contains(busy, button) {
+			t.Errorf("読み込みの最中に、競合の引き止めのボタンを押せなくしていない（%s が無い）", button)
+		}
+	}
+	for _, name := range []string{"keepMine", "takeFile"} {
+		fn := functionBody(t, js, name)
+		guard := strings.Index(fn, "if (state.loading) {")
+		if guard < 0 || guard > strings.Index(fn, "state.mine") {
+			t.Errorf("%s が、読み込みの最中にも競合を片付ける", name)
+		}
+	}
+	css := uiSource(t, "ui/app.css")
+	if !strings.Contains(css, `.list[aria-busy="true"] .row .translation[tabindex] {`) {
+		t.Error("読み込みの最中に、訳の欄の打てそうな印を下ろしていない")
 	}
 }
 

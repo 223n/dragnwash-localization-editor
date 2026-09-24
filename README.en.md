@@ -292,7 +292,7 @@ The options you will use most are these.
 | `--dry-run` | `publish` | Only shows what it would do and writes no file. The safety checks are the same |
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
-| `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet |
+| `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |
@@ -908,9 +908,16 @@ Conditions chosen for the previous locale are not carried over.
 They are only cleared when the load succeeded.  
 When the load fails, the conditions, the search box and the list are all left as they were.
 
+When you reload or switch locale, the translation column does not open until the load has finished.  
+The two buttons of the conflict prompt cannot be pressed either.  
+While it loads, the bar says "Loading...".  
+Anything typed during the load, or kept with `Put my translations on top`, would be dropped unsaved the moment the load succeeded.  
+When the load fails, the previous list stays and can be edited again.  
+If you moved the focus onto a translation cell during the load (with `Tab`, for example), its input box opens right away.
+
 A row in conflict (the file changed underneath you) cannot be edited until you choose which side to keep.  
 Pressing the translation column on that row does not open the input box; the row says that you can edit it once you have chosen which side to keep.  
-Typing into an undecided row could mean either "put my translation on top" or "take the translation from the file".  
+Typing into an undecided row could mean either `Put my translations on top` or `Take what is in the file`.  
 Rows that are not in conflict can still be edited as usual while the prompt is up.
 
 ![The conflict prompt. Two buttons appear at the top of the bar, and the row in conflict shows the translation in the file and yours side by side](docs/images/edit-conflict-en.png)
@@ -1034,7 +1041,16 @@ Once `publish` goes through, `Translations/<locale>/strings.csv` in the reposito
 From there on it is not `dwloc`'s job but the procedure of the translation repository.
 
 `dwloc validate` is a replacement for `tools/check-translations.py`, which runs on pull requests.  
+Besides the shape of `strings.csv`, it checks the status word in `credits.txt` (the first line that is not a comment or blank) and the pictures in `textures/`.  
+Pictures must be lowercase `.png` files of at most 8 MB and at most 4096 pixels on each side.  
+`textures/credits.csv` needs one row per picture (`file,author,note`).  
 Running it locally before you send anything lets you fix things before the automated check stops you.
+
+The checks follow the version on the `dev` branch of the translation repository.  
+Upstream has so far merged `dev` into `main` as a whole, so that version is expected to go into `main` with the next release.  
+Pull requests go to `main`, so for now the automated check runs the version on `main`.  
+The only difference between the versions on `main` and `dev` is the `credits.txt` check, and `dwloc validate` is stricter by that much.  
+Apart from that, `dwloc validate` alone may report a problem for inputs where it does not copy an upstream bug (such as a quote in a comment line).
 
 | What to do | Where it is written |
 | ---- | ---- |
@@ -1228,10 +1244,15 @@ When you run a narrowed set of specs with `npx playwright test -c e2e <spec>`, f
 Aggregate the results afterwards with `npm run test:e2e:report`.  
 If raw data from an earlier run is left behind, the aggregation stops without counting.
 
-Both fail when coverage falls below `coverageThresholds` in `package.json`.  
+Both `npm run test:go` and `npm run test:e2e` fail when coverage falls below `coverageThresholds` in `package.json`.  
 The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
 Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
 When you add tests and the figures go up, raise the thresholds too.
+
+When the E2E tests fail in CI, Playwright's output (`test-results/`) is kept as an artifact for 7 days.  
+It is named `e2e-test-results-<attempt number>`.  
+Each failed test leaves a `trace.zip` and an `error-context.md`.  
+Open the trace with `npx playwright show-trace <trace.zip>` to follow the actions and the screen at that moment.
 
 ### Trying the screen with the sample
 
@@ -1307,6 +1328,24 @@ The binaries are built before the tag is created.
 If even one build fails, it stops without creating the tag or the GitHub Release.  
 That is so no Release goes out carrying only some of the six.
 
+The archives are unpacked and run before the tag is created.  
+Only the archive for the runner's own target can be run, which is `linux/amd64` on GitHub-hosted runners.  
+Publishing runs on a Linux or macOS runner on amd64 or arm64.  
+On any other runner, it stops without creating the tag or the GitHub Release.  
+It checks three things.
+
+- `dwloc version` prints the version being released
+- On a copy of the sample (`samples/harbor`), `dwloc validate` ends with exit code 0
+- On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
+
+It also checks that the checksum list matches the archives.  
+It also checks that the archive holds all four files and that the executable permission is set.  
+If any of these fails, it stops without creating the tag or the GitHub Release.  
+Even when the build succeeds, a version left out of the binary or a mistake in how the archive was made only shows up when it is run.  
+The sample is copied first because its working copy is committed to this repository.  
+Running `validate` on it in place reports it as a working copy that must not be committed.  
+A Go test (`cmd/dwloc/samples_test.go`) checks on each pull request that the sample still passes these checks.
+
 Seven files are attached: the six archives and `dwloc_<version>_checksums.txt`.  
 The Release is created as a draft, and the seven files are attached at that point.  
 It counts what was attached, stops without publishing if it is not seven, and publishes the draft only once they are all there.  
@@ -1378,7 +1417,7 @@ That is because the "Publish release" workflow has the same check.
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
 | `release.yml` | Manually | Branches a release branch from `develop`, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
-| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
+| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels
 

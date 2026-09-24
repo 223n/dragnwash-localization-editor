@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -48,21 +49,38 @@ func AcceptedHeaders() [][]string {
 // 不正なUTF-8が混ざっていてもエラーにはしない（元実装は UnicodeDecodeError で
 // 異常終了する。パッケージコメント「元実装と意図的に変えたところ」参照）。
 //
-// 検査の順序は元実装のまま（移植仕様「形式検証 R11〜R21」）:
+// 検査の順序は上流 dev の check_file のまま（移植仕様「形式検証 R11〜R21」）:
 //
-//  1. 実質的な内容行が1行も無ければ "empty file" 1件だけを返す。
-//  2. ヘッダーが3種のいずれでもなければ、その1件だけを返して行の検査はしない。
-//  3. 以降、各行について「フィールド数 → キーの形 → 重複 → 空の訳 →
+//  1. CSV として読めなければ（フィールドが長すぎる）、"could not be parsed as CSV"
+//     1件だけを返す。
+//  2. コメントと空行を除いたレコードが1つも無ければ "empty file" 1件だけを返す。
+//  3. ヘッダーが3種のいずれでもなければ、その1件だけを返して行の検査はしない。
+//  4. 以降、各行について「フィールド数 → キーの形 → 重複 → 空の訳 →
 //     section → node」の順に見る。フィールド数が合わない行は残りを飛ばす。
 func CheckFile(name string, data []byte) []Problem {
 	problems := []Problem{}
 
-	// 物理行番号を覚えたまま、空白だけの行と '#' 始まりの行を落とす。
+	// 物理行番号を覚えたまま、コメント行と空行を除いたレコードにする。
 	// 報告に出る行番号はすべてこの対応付けから来る（移植仕様 R9 / R10）。
-	records := csvfile.ParsePythonRecords(csvfile.ReadPythonLines(data))
+	records, err := csvfile.ReadPythonRecords(data)
+	if err != nil {
+		// 上流（f816618）は csv.Error を捕まえて、この1件だけを返す。途中までに
+		// 読めた行の問題も出さない。行番号は reader.line_num で、長すぎる
+		// フィールドが複数行にまたがるときは、超えた文字のある行を指す。
+		line, message := 0, err.Error()
+		var perr *csvfile.PythonParseError
+		if errors.As(err, &perr) {
+			line, message = perr.Line, perr.Message
+		}
+		return append(problems, Problem{
+			Path: name, Line: line,
+			Message: "could not be parsed as CSV (" + message + ")",
+		})
+	}
 	if len(records) == 0 {
-		// 規則（R11）: サイズ0のファイルだけでなく、全行がコメントか空行の
-		// ファイルもここに来る。行番号は付かない。
+		// 規則（R11）: サイズ0のファイルだけでなく、全行がコメントか完全な空行の
+		// ファイルもここに来る。行番号は付かない。空白だけの行はレコードとして
+		// 残るので、ここではなく次のヘッダー不正になる（上流 f816618）。
 		return append(problems, Problem{Path: name, Message: "empty file"})
 	}
 

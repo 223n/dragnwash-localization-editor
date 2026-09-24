@@ -306,6 +306,42 @@ func TestCarryFromCandidates(t *testing.T) {
 		}
 	})
 
+	// 再生順が丸ごと読めないときは、norm 列が無いことも理由にしない。norm は
+	// キーのある行からしか拾わないので、キーが無ければ norm も無いのは当たり前で、
+	// 「norm 列がありません」と書くと、見出しの「再生順を読めていません」と
+	// 食い違い、norm 列だけを直しに行かせる。csv の標準エラー（cmd/dwloc）も、
+	// この理由を見て再生順の警告に任せる。
+	t.Run("再生順を読めなければ、理由は norm 列ではなく再生順", func(t *testing.T) {
+		repo := newRepo(t, map[string]string{
+			"Translations/ja/strings.csv": carryPublished,
+			"Translations/_discovered/ja.working.csv": workingHeader +
+				workingRow("Gate_1", "1", "Ryan", srcGateNew, ""),
+		}, true)
+		rep := Compare(repo, nil)
+		sum := rep.Locales[0]
+		if !sum.HasWorking || sum.OrderKeys {
+			t.Fatalf("前提が崩れている: 作業コピー %v / 再生順のキー %v", sum.HasWorking, sum.OrderKeys)
+		}
+		if sum.CanJudge(CatCarryFrom) {
+			t.Fatal("再生順を読めないのに判定した")
+		}
+		if why := sum.JudgeBlockReason(CatCarryFrom); why.ID != reason.JudgeOrderUnreadable {
+			t.Errorf("理由が違う: %q (%q)", why.ID, why.Text)
+		}
+
+		var b strings.Builder
+		if err := rep.WriteText(&b, TextOptions{}); err != nil {
+			t.Fatalf("WriteText が失敗した: %v", err)
+		}
+		want := pad(CatCarryFrom.String(), categoryNameWidth()) + "判定していません（再生順を読めていません）"
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("本文に %q が無い:\n%s", want, b.String())
+		}
+		if strings.Contains(b.String(), "norm 列がありません") {
+			t.Errorf("再生順を読めないのに norm 列のことを書いている:\n%s", b.String())
+		}
+	})
+
 	t.Run("作業コピーが無ければ判定しない", func(t *testing.T) {
 		repo := newRepo(t, map[string]string{
 			"data/script_order.csv":       carryOrderFile(carryOrderRows...),

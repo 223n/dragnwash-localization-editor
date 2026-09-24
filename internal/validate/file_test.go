@@ -127,19 +127,31 @@ func TestCheckFileEmpty(t *testing.T) {
 			want: []string{"f.csv: empty file"},
 		},
 		{
-			name: "全部空行と空白だけの行",
-			data: "\n   \n\t\n\r\n",
+			name: "全部完全な空行",
+			data: "\n\r\n\n",
 			want: []string{"f.csv: empty file"},
 		},
 		{
-			// Python の str.isspace() は U+001C〜U+001F を空白とみなす。
-			// Go の strings.TrimSpace は含めないので、そのまま書くとここで差が出る。
-			name: "Python だけが空白とみなす文字だけの行",
+			// 上流 f816618 から、空白だけの行は落とさずに1フィールドのレコードとして
+			// 読む。最初のレコードなのでヘッダーとして比べられて外れる。
+			// 003ed1e までは物理行ごと落として "empty file" だった。
+			name: "空白だけの行はヘッダーになる",
+			data: "\n   \n\t\n\r\n",
+			want: []string{`f.csv: header is ['   ']` + headerSuffix},
+		},
+		{
+			// Python の str.isspace() は U+001C〜U+001F を空白とみなすが、
+			// csv.reader にとってはただの文字なので、これも1フィールドのレコード。
+			name: "Python だけが空白とみなす文字だけの行もヘッダーになる",
 			data: "\x1c\n\x1f\n",
-			want: []string{"f.csv: empty file"},
+			want: []string{`f.csv: header is ['\x1c']` + headerSuffix},
 		},
 	})
 }
+
+// headerSuffix はヘッダー不正の文面の後半。
+const headerSuffix = "; the published file must be 'key,section,node,order,speaker,translation'" +
+	" (run tools/hash-strings.ps1 before committing)"
 
 // TestCheckFileKey はキーの形の検査を見る。メッセージにキーの値は出さない。
 func TestCheckFileKey(t *testing.T) {
@@ -310,6 +322,20 @@ func TestCheckFileFieldCount(t *testing.T) {
 			data: "key,translation\n # メモ\n",
 			want: []string{"f.csv:2: expected 2 fields, got 1"},
 		},
+		{
+			// 上流 f816618 から、空白だけの行も1フィールドのレコードとして読む。
+			name: "空白だけの行は列数不一致",
+			data: "key,translation\n" + keyA + ",やあ\n   \n\t\n" + keyB + ",やあ\n",
+			want: []string{
+				"f.csv:3: expected 2 fields, got 1",
+				"f.csv:4: expected 2 fields, got 1",
+			},
+		},
+		{
+			// 完全な空行は0フィールドのレコードで、番号を消費するだけ。
+			name: "完全な空行は問題にならない",
+			data: "key,translation\n\n" + keyA + ",やあ\r\n\r\n",
+		},
 	})
 }
 
@@ -472,10 +498,10 @@ func TestCheckFileMultilineQuoted(t *testing.T) {
 			},
 		},
 		{
-			// 前処理はCSVの構文を見ずに物理行単位で動くので、引用フィールドの
-			// 途中にある空行はそのまま落ちる。訳文から改行が1つ消えるが、
-			// 行番号の対応は崩れない。元実装の癖なので、そうなることを固定する。
-			name: "またいだ途中の空行が落ちて訳文から改行が消える",
+			// 上流 f816618 から、引用フィールドの途中にある空行は値の一部として残る。
+			// 003ed1e までは物理行ごと落として、訳文から改行が1つ消えていた。
+			// どちらでも行番号の対応は崩れない。
+			name: "またいだ途中の空行は値に残る",
 			data: "key,translation\nあいう,\"ふた\n\nつの行\"\nえおか,やあ\n",
 			want: []string{
 				"f.csv:2: key is not 16 lowercase hex digits or a line ID",
@@ -483,13 +509,12 @@ func TestCheckFileMultilineQuoted(t *testing.T) {
 			},
 		},
 		{
-			// 引用フィールドの途中に '#' 始まりの行があると、閉じ引用符ごと
-			// 落ちる。引用が閉じないまま残りの行を飲み込み、ファイルの後半が
-			// まるごと検査されなくなる。元実装も同じ結果になる（移植仕様
-			// 「形式検証 / 境界条件」）。ここでは3行目の閉じ引用符が消えるため、
-			// 4行目の空の訳が見逃される。
-			name: "またいだ途中の'#'始まりの行が落ちて残りを飲み込む",
+			// 上流 c8fda90 から、引用フィールドの途中にある '#' 始まりの行は
+			// コメントではなく値の一部になる。003ed1e までは閉じ引用符ごと落ちて
+			// 残りの行を飲み込み、4行目の空の訳を見逃していた。
+			name: "またいだ途中の'#'始まりの行は値に残り後ろも検査される",
 			data: "key,translation\n" + keyA + ",\"ふた\n#つの行\"\n" + keyB + ",\n",
+			want: []string{"f.csv:4: empty translation"},
 		},
 	})
 }

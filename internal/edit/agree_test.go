@@ -19,7 +19,7 @@ import (
 //
 //	ゲーム内Mod   csvfile.ParseCSharpRecords（CsvReader.cs の移植）
 //	publish       csvfile.ParsePowerShellRecord（ConvertFrom-Csv の移植）
-//	validate      csvfile.ParsePythonRecords（Python の csv.reader の移植）
+//	validate      csvfile.ReadPythonRecords（Python の csv.reader の移植）
 func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 	values := []string{
 		"ふつうの訳",
@@ -72,7 +72,10 @@ func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 			}
 
 			// validate の読み方。
-			recs := csvfile.ParsePythonRecords(csvfile.ReadPythonLines(out))
+			recs, err := csvfile.ReadPythonRecords(out)
+			if err != nil {
+				t.Fatalf("validate の読みが失敗した: %v", err)
+			}
 			if len(recs) >= 2 {
 				got := recs[1].Fields[len(recs[1].Fields)-1]
 				if got != want {
@@ -148,37 +151,22 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// 書けない状態にする。閉じる相手が OS で違う。[publish.WriteBytes] は
-		// 同じディレクトリに一時ファイルを作ってから rename で置き換えるので、
-		// Windows はファイルの読み取り専用属性で止まり、POSIX はディレクトリの
-		// 書き込み権で止まる。ファイルだけを 0444 にしていたころは、POSIX では
-		// 置き換えが通ってしまい、この節は毎回飛ばされていた。
-		// 版の照合は読むだけなので、どちらでも通って再試行の経路まで届く。
-		closed, open := path, path
-		var closedMode, openMode os.FileMode = 0o444, 0o644
-		if runtime.GOOS != "windows" {
-			closed, open = dir, dir
-			closedMode, openMode = 0o555, 0o755
-		}
-		if err := os.Chmod(closed, closedMode); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(open, openMode) })
+		// 版の照合は読むだけなので、書けなくしても通って再試行の経路まで届く。
+		forbidSaving(t, path)
 
 		start := time.Now()
 		saveErr := f.Save()
 		elapsed := time.Since(start)
 
 		if saveErr == nil {
-			// root で走るとどちらの手も効かない。再試行の経路を確かめられないので飛ばす。
-			t.Skip("この環境では書けない状態にできなかったので飛ばす")
+			// 書けないことは forbidSaving が確かめてある。それでも通るのは、
+			// 一時ファイルを経ずに path を直接書き換えたときである（POSIX では
+			// 0o555 のディレクトリの中でも、既にあるファイルの上書きは通る）。
+			t.Fatalf("書けない状態で保存が通った。一時ファイルを経ていない（中身: %q）", readFile(t, path))
 		}
 		// 10ms + 30ms + 100ms を空けて4回試す。
 		if elapsed < 140*time.Millisecond {
 			t.Errorf("再試行していない: %v しか掛かっていない（誤り: %v）", elapsed, saveErr)
-		}
-		if err := os.Chmod(open, openMode); err != nil {
-			t.Fatal(err)
 		}
 		got, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -224,6 +212,53 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 			t.Errorf("第三者の書き込みを消した\ngot  %q\nwant %q", got, other)
 		}
 	})
+}
+
+// forbidSaving は path への保存が失敗する状態にする。止められたことを
+// 確かめられなければ、呼んだ試験を飛ばす。
+//
+// 閉じる相手が OS で違う。[publish.WriteBytes] は同じディレクトリに一時ファイルを
+// 作ってから rename で置き換えるので、Windows はファイルの読み取り専用属性で止まり、
+// POSIX はディレクトリの書き込み権で止まる。ファイルだけを 0444 にしていたころは、
+// POSIX では置き換えが通ってしまい、この節は毎回飛ばされていた。
+//
+// 止められたかは、調べる対象（[File.Save]）の成否ではなく、ここで実際に書いてみて
+// 確かめる。POSIX ではディレクトリに新しいファイルを作れないこと、Windows では
+// ファイルを書き込み用に開けないことを見る。対象の成否で代用していたころは、
+// 対象が一時ファイルを経ずに path を直接書き換える形へ戻ったときも「止められ
+// なかった環境」と読んで飛ばしていた。go test は飛ばした試験を成功として数えるので、
+// 再試行の経路が CI で1度も通らなくなっても誰も気づけない。
+//
+// 飛ばすのは、閉じても書けてしまう環境（root で走っている、など）だけである。
+func forbidSaving(t *testing.T, path string) {
+	t.Helper()
+
+	target := path
+	var closed, open os.FileMode = 0o444, 0o644
+	if runtime.GOOS != "windows" {
+		target, closed, open = filepath.Dir(path), 0o555, 0o755
+	}
+	if err := os.Chmod(target, closed); err != nil {
+		t.Fatal(err)
+	}
+	// 後始末で消せるように戻す。t.Cleanup は後入れ先出しなので、呼び出し側が
+	// 先に作った t.TempDir の削除より先に走る。
+	t.Cleanup(func() { _ = os.Chmod(target, open) })
+
+	if runtime.GOOS == "windows" {
+		probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err == nil {
+			_ = probe.Close()
+			t.Skipf("%s を読み取り専用にしても書き込み用に開けたので飛ばす", path)
+		}
+		return
+	}
+	probe, err := os.CreateTemp(target, "probe*")
+	if err == nil {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Skipf("%s に新しいファイルを作れたので飛ばす。root で走っていると効かない", target)
+	}
 }
 
 // TestSaveWithoutChangesKeepsModTime は「中身が同じなら書かない」を、時刻の

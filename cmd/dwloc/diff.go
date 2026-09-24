@@ -9,6 +9,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // diffUsage は diff の説明。
@@ -59,6 +60,9 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         出力の形式（既定 text）。csv は
         locale,category,status,key,section,node,order,speaker,source_en,translation,note
         の11列で、表計算にそのまま貼れます。
+        判定しなかったカテゴリ（作業コピーが無いときの未翻訳など）は
+        行が無いだけになるので、そのカテゴリと理由を標準エラーへ
+        理由ごとに1行で書きます。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
@@ -146,6 +150,17 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "dwloc: %s\n", diffErrorText(*root, err))
 		return exitError
 	}
+	if len(repo.EmptyLocales) > 0 {
+		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
+		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
+		//
+		// 再生順の警告より先に出します。csv 形式では、再生順の警告のあとに
+		// 判定を保留したカテゴリの行と、字下げした締めの1行が続きます
+		// （warnHeldCategories）。あいだにこの行が挟まると、締めがこの行の
+		// 続きに読めてしまいます。
+		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
+			strings.Join(repo.EmptyLocales, ", "))
+	}
 	if len(repo.Order.Entries) == 0 || !hasOrderKeys(repo) {
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
 		// どれも成り立ちません。internal/diff はその判定を止めますが、
@@ -153,12 +168,6 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr,
 			"dwloc: 警告: %s から再生順を読めません。台本から消えた行などは判定しません。\n",
 			displayPath(*root, repo.OrderPath))
-	}
-	if len(repo.EmptyLocales) > 0 {
-		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
-		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
-		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
-			strings.Join(repo.EmptyLocales, ", "))
 	}
 	if len(repo.Locales) == 0 {
 		// 比較する相手が1つも無い状態です。報告を「0 件」と書いて成功で終わると、
@@ -177,13 +186,13 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 	if *format == diffFormatCSV {
 		// csv には「判定していません」が出ません。行が無いことと、判定して
-		// いないことが見分けられないので、台詞IDを要るカテゴリ（引き継ぎ候補と
-		// 台本に無い台詞ID行）の保留は必ず標準エラーへ書きます。
+		// いないことが見分けられないので、判定を保留したカテゴリは必ず
+		// 標準エラーへ書きます。
 		//
 		// text 形式では重ねて出しません。本文がロケールごとに同じことを既に
-		// 書いているからです。git を使っていない利用者の毎回の実行に、
-		// 読む必要のない警告を足すことになります。
-		warnHeldLineIDCategories(report, stderr)
+		// 書いているからです。作業コピーや git を使っていない利用者の毎回の
+		// 実行に、読む必要のない警告を足すことになります。
+		warnHeldCategories(report, stderr)
 	}
 
 	if *format == diffFormatCSV {
@@ -271,43 +280,47 @@ func diffErrorText(root string, err error) string {
 	return err.Error()
 }
 
-// warnHeldLineIDCategories は、再生順の台詞IDを要るカテゴリ（いまは引き継ぎ候補と
-// 台本に無い台詞ID行）を保留したことを標準エラーへ書きます。
+// warnHeldCategories は、判定を保留したカテゴリを標準エラーへ書きます。
 //
 // csv 形式のためにあります。csv は Finding を1行ずつ並べるだけなので、
 // 「0件だった」と「判定していない」が同じ姿（行が無い）になります。黙っていると、
-// 引き継ぎ候補なら「移すべき訳は無い」と読まれ、消えた行の訳を捨てる判断に
-// 直結します。台本に無い台詞ID行なら、publish が末尾のブロックへ回す行を
-// 見落とします。
+// 未翻訳なら「訳し残しは無い」、publish で捨てられる行なら「捨てられる訳は無い」と
+// 読まれます。引き継ぎ候補なら「移すべき訳は無い」と読まれ、消えた行の訳を
+// 捨てる判断に直結します。
 //
-// 台詞IDを要るカテゴリを受け持つのは、再生順のキーを読めていても止まることが
-// あるからです。キーを読めていれば runDiff の「再生順を読めません」は出ないので、
-// ここで書かなければ誰も書きません。引き継ぎ候補は1つ前の再生順も要るので、
-// そちらの理由で止めたときもここで書きます。引き継ぎ候補だけを見ていたころは、
-// 台詞IDが無いときに台本に無い台詞ID行の保留を書いていませんでした。
-//
-// どのカテゴリが台詞IDを要るかは [diff.OrderLineIDCategories] に尋ね、その表示順の
-// まま並べます。名前を CLI 側に並べて持つと、表の印を足し引きしたときに、
-// 警告だけが古い名指しのまま残ります。text 形式の見出しと画面の断り書きも、
-// 同じ関数から名前を引いています。
+// 見るのは全カテゴリです。台詞IDを要るカテゴリ（引き継ぎ候補と台本に無い台詞ID行）
+// だけを見ていたころは、作業コピーやはみ出しの記録が無いことによる保留を書いて
+// いませんでした。使い方の「無ければ、その判定だけを『判定できません』と
+// 伝えます」が、text 形式でしか成り立っていませんでした。
 //
 // 保留したかどうかと理由は、ロケールごとの要約（[diff.Summary.CanJudge] と
 // [diff.Summary.JudgeBlockReason]）から取ります。text 形式の本文の
 // 「判定していません（理由）」と同じ判断・同じ文面になります。理由が空のときの
 // 受け皿も JudgeBlockReason が持っているので、「（）」にはなりません。
+// どのカテゴリが何を要るかを CLI 側に並べて持つと、表の印を足し引きしたときに、
+// 警告だけが古いまま残ります。並べる順は [diff.Categories] の表示順です。
 // csv には text 形式の見出しが無いので、キーは読めていて台詞IDだけが無いことは、
 // この理由の文面（「再生順に台詞ID (line_id) がありません」）だけで伝わります。
 //
 // 同じ理由で止めたカテゴリは1行にまとめ、同じ行になるロケールも1行にまとめます。
-// 報告するロケールが全部同じなら、ロケール名は書きません。git を使っていない
-// 利用者の毎回の実行に、全ロケールの名前を並べることになるためです。
-// 台詞IDが無いときは2つのカテゴリが同じ理由で止まるので、1行で済みます。
+// 報告するロケールが全部同じなら、ロケール名は書きません。作業コピーの無い CI では
+// 毎回の実行で全ロケールが同じ理由で止まるので、全ロケールの名前を並べずに、
+// 理由ごとに1行で済みます。台詞IDが無いときも2つのカテゴリが同じ理由で止まるので、
+// 1行です。
 //
-// 再生順のキーを読めていないロケールは飛ばします。runDiff が先に「再生順を
-// 読めません。台本から消えた行などは判定しません」と書いていて、どちらの
-// カテゴリもそこに入るからです。同じ理由を2度書くことになります。
-func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
-	cats := diff.OrderLineIDCategories()
+// 再生順のキーを読めていないロケールでは、「再生順を読めていません」で止めた
+// カテゴリの理由の行を書きません。runDiff が先に「再生順を読めません。台本から
+// 消えた行などは判定しません」と書いていて、同じ理由を2度書くことになるためです。
+// ロケールごとは飛ばしません。作業コピーやはみ出しの記録による保留はその警告に
+// 入らないので、飛ばすと未翻訳を判定していないことが消えます。
+//
+// 締めの1行（csv の category 列の値を並べる行）には、理由の行を省いたカテゴリも
+// 並べます。runDiff の警告が名指しするのは「台本から消えた行など」までで、
+// not_published や script_gap で絞った人には、その行が無いことが 0 件に見えます。
+// 理由の行が1つも無いときも締めは書きます。字下げした締めは、すぐ上の再生順の
+// 警告の続きとして読めます。
+func warnHeldCategories(report *diff.Report, stderr io.Writer) {
+	cats := diff.Categories()
 	type held struct {
 		why     string
 		cats    []diff.Category
@@ -316,11 +329,9 @@ func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
 	var groups []held
 	index := make(map[string]int)
 	// どこかのロケールで止めたカテゴリ。締めの1行で csv の category 列の値を並べる。
+	// 理由の行を再生順の警告に任せたカテゴリも入れる。
 	anyHeld := make(map[diff.Category]bool)
 	for _, sum := range report.Locales {
-		if !sum.OrderKeys {
-			continue
-		}
 		// このロケールで止めたカテゴリを、理由ごとに寄せる。
 		var whys []string
 		byWhy := make(map[string][]diff.Category)
@@ -328,12 +339,16 @@ func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
 			if sum.CanJudge(c) {
 				continue
 			}
-			why := sum.JudgeBlockReason(c).Text
+			anyHeld[c] = true
+			block := sum.JudgeBlockReason(c)
+			if !sum.OrderKeys && block.ID == reason.JudgeOrderUnreadable {
+				continue
+			}
+			why := block.Text
 			if _, ok := byWhy[why]; !ok {
 				whys = append(whys, why)
 			}
 			byWhy[why] = append(byWhy[why], c)
-			anyHeld[c] = true
 		}
 		for _, why := range whys {
 			key := why + "\x00" + joinCategoryIDs(byWhy[why])
@@ -346,7 +361,7 @@ func warnHeldLineIDCategories(report *diff.Report, stderr io.Writer) {
 			groups[i].locales = append(groups[i].locales, sum.Locale)
 		}
 	}
-	if len(groups) == 0 {
+	if len(anyHeld) == 0 {
 		return
 	}
 	for _, g := range groups {
