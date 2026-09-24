@@ -411,6 +411,21 @@ var wholeReaderDiffs = map[string]knownDiff{
 	"lone-cr-line-end": {diffIntended, whyLoneCR, []string{
 		`dwloc だけ L2 ["0123456789abcdef" "UI" "" "" "UI" "a"]`,
 	}},
+	// 原文（source_en）の中の単独の CR。上流は CR の手前を捨て、CR の後ろの残り（閉じ
+	// 引用符を含む）を最初の列にしたレコードを読む。7列では key 列が崩れてその行を
+	// 書かず、2列ではその残りから作った別のキーで訳を書く（cmd/dwloc の publish の試験）。
+	"lone-cr-source-key": {diffIntended, whyLoneCR, []string{
+		`dwloc だけ L2-3 ["ffdf6471efafbe64" "UI" "" "" "UI" "Alpha\rBeta" "訳"]`,
+		`上流だけ L3 ["Beta\"" "訳" "" "" "" "" ""]`,
+	}},
+	"lone-cr-source-line-id": {diffIntended, whyLoneCR, []string{
+		`dwloc だけ L2-3 ["line:0a0b0c01" "L01 Ember" "Ember_1_intro" "1" "Ember" "Alpha\rBeta" "訳"]`,
+		`上流だけ L3 ["Beta\"" "訳" "" "" "" "" ""]`,
+	}},
+	"lone-cr-source-2col": {diffIntended, whyLoneCR, []string{
+		`dwloc だけ L2-3 ["Alpha\rBeta" "訳"]`,
+		`上流だけ L3 ["Beta\"" "訳"]`,
+	}},
 	"lone-cr-unquoted-value": {diffIntended, whyLoneCRUnquoted, []string{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "L01 Ember" "Ember_1_intro" "1" "Ember" "one" "い"]`,
 	}},
@@ -630,6 +645,15 @@ var lineReaderDiffs = map[string]knownDiff{
 	}},
 	"lone-cr-line-end": {diffIntended, whyLoneCR, []string{
 		`dwloc だけ L2 ["0123456789abcdef" "UI" "" "" "UI" "a"]`,
+	}},
+	"lone-cr-source-key": {diffIntended, whyLoneCR, []string{
+		`dwloc だけ L2 ["ffdf6471efafbe64" "UI" "" "" "UI" "Alpha" ""]`,
+	}},
+	"lone-cr-source-line-id": {diffIntended, whyLoneCR, []string{
+		`dwloc だけ L2 ["line:0a0b0c01" "L01 Ember" "Ember_1_intro" "1" "Ember" "Alpha" ""]`,
+	}},
+	"lone-cr-source-2col": {diffIntended, whyLoneCR, []string{
+		`dwloc だけ L2 ["Alpha" ""]`,
 	}},
 	"lone-cr-unquoted-value": {diffIntended, whyLoneCRUnquoted, []string{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "L01 Ember" "Ember_1_intro" "1" "Ember" "one" "い"]`,

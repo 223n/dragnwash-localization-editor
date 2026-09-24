@@ -637,7 +637,9 @@ var publishShapeFix = map[string]string{
 //
 // 値の中の単独の CR は LF に直すよう案内しますが、原文を直してよいかは、その行の
 // キーの決まり方で変わります（移植仕様 R12〜R17）。どれも架空の作業コピーを上流の
-// tools/hash-strings.ps1（pwsh 7.6.6）と dwloc に通して確かめました。
+// tools/hash-strings.ps1（pwsh 7.6.6）と dwloc に通して確かめました。キーの決まり方
+// （key 列のキー、台詞ID、2列）ごとの代表は、上流との突き合わせの入力の表
+// （testdata/upstream の lone-cr-source-*）に置いてあります。
 //
 //   - 台詞ID の行: キーを原文から作らないので、LF に直しても取り除いても公開されます。
 //   - key 列のキーがいまの原文から作ったものと一致する行: 直すとキーと合わなくなり、

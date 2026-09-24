@@ -27,7 +27,10 @@ import (
 // 正当でも当たるものが2件ある。原文の2行目がカンマを多く含む形
 // （ml-continuation-looks-like-row）と、2列の作業コピーで原文が行をまたぐ形
 // （ml-source-translated-2col）である。形だけでは閉じ誤りと見分けられないので、
-// 確かめたうえで通す指定（dwloc publish --accept-multiline）で書く。
+// 確かめたうえでレコード単位で通す指定（dwloc publish --accept-multiline
+// <ロケール>:<key>）で書く。2列の作業コピーの原文に単独の CR がある形
+// （lone-cr-source-2col）も、単独の CR で物理行が分かれ、続きの行が2列に見えるので
+// 同じ理由で当たる。こちらは単独の CR の確かめも止めるので、指定しても書かない。
 func TestFindSwallowsOnFixture(t *testing.T) {
 	want := map[string][]Swallow{
 		"swallow-3col":                   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
@@ -35,6 +38,7 @@ func TestFindSwallowsOnFixture(t *testing.T) {
 		"swallow-2col-hash-close":        {{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-continuation-looks-like-row": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-source-translated-2col":      {{ID: 3, Line: 3, EndLine: 5, SwallowedLine: 5, Sign: SignSameColumns}},
+		"lone-cr-source-2col":            {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		// 次の5件は閉じ引用符の後ろの文字で当たる。最初の2件は区切りの数にも当たるが、
 		// 閉じ引用符の後ろの文字を先に採る。
 		"swallow-7col-empty-key-english":   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
@@ -415,6 +419,12 @@ func TestLoneCRValues(t *testing.T) {
 		switch c.Name {
 		case "lone-cr-in-quoted-translation":
 			if want := []ValueSpot{{ID: 2, Line: 2, EndLine: 3, Column: "translation"}}; !slices.Equal(got, want) {
+				t.Errorf("%s: got %+v, want %+v", c.Name, got, want)
+			}
+		case "lone-cr-source-key", "lone-cr-source-line-id", "lone-cr-source-2col":
+			// 原文の中の単独の CR。キーの決まり方（key 列、台詞ID、2列）で直し方が変わる
+			// （internal/publish の LoneCRKeyKind）が、見つけ方は同じ。
+			if want := []ValueSpot{{ID: 2, Line: 2, EndLine: 3, Column: "source_en"}}; !slices.Equal(got, want) {
 				t.Errorf("%s: got %+v, want %+v", c.Name, got, want)
 			}
 		default:

@@ -333,6 +333,12 @@ const (
 		"確かめたうえで通す指定で通せるが、閉じ引用符の後ろに文字が続く形は通せない"
 	whyPubLoneCRQuoted = "引用した訳の中の単独の CR。上流はその行を失う（Remove-NonRecords が単独の CR を行末と見なさない）。" +
 		"dwloc は単独の CR として止め、LF に直すよう案内する（決まったことのそのほか 1）"
+	whyPubLoneCRSource = "原文（source_en）の中の単独の CR。上流は Remove-NonRecords が単独の CR を行末と見なさず、" +
+		"CR の手前を捨て、CR の後ろの残り（閉じ引用符を含む）を最初の列にしたレコードを読む。7列の作業コピー（key 列のキー、" +
+		"台詞ID）ではその行を書かず、2列の作業コピーではその残りから作った別のキー（ゲームが引かないキー）で訳を書く" +
+		"（上流の不具合。写さない）。dwloc は形の確かめ (g) で止め、原文を直してよいかをその行のキーの決まり方で分けて" +
+		"案内する（決まったことの 19 と 20。publish.LoneCRKeyKind）。2列では続きの行が2列に見えるので飲み込みの確かめ (f) にも" +
+		"当たり、そのレコードを指定で通しても (g) で止まる（[TestPublishAcceptMultilineKeepsOtherStops]）"
 	whyPubLoneCR         = "単独の CR も行の区切りにして読む。上流は単独の CR の手前を捨て、その行の訳を失う（上流の不具合。写さない）"
 	whyPubLoneCRUnquoted = "引用符で囲まない値の中の単独の CR（どちらの道具の書き手も作らない、手で書いた形）。" +
 		"ゲームは引用の外の CR を捨てて「いち」と読み、上流はその行を失う。dwloc は行の区切りの規則のまま読むと" +
@@ -410,6 +416,18 @@ var publishDiffs = map[string]knownPublishDiff{
 	}},
 	"lone-cr-in-quoted-translation": {pubIntended, whyPubLoneCRQuoted, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_lone_cr）`,
+	}},
+	// 原文の中の単独の CR は、キーの決まり方（key 列、台詞ID、2列）ごとに1件ずつ置く。
+	// 上流は、7列ではその行を書かず、2列では別のキー（f7a0c0aa975ae1e8。CR の後ろの
+	// 残り `Beta"` から作ったもの）で書く。
+	"lone-cr-source-key": {pubIntended, whyPubLoneCRSource, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_lone_cr）`,
+	}},
+	"lone-cr-source-line-id": {pubIntended, whyPubLoneCRSource, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_lone_cr）`,
+	}},
+	"lone-cr-source-2col": {pubIntended, whyPubLoneCRSource, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_swallow_same_columns、入力 2〜3行目 publish_lone_cr）`,
 	}},
 	"lone-cr-line-end": {pubIntended, whyPubLoneCR, []string{
 		`already hashed: 上流 2 / dwloc 3`,
@@ -544,40 +562,56 @@ func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
 	}
 }
 
-// stopsOnlyOnUnacceptableShapes は、表の違い方 diff が、形の確かめで止まり、確かめた
-// うえで通す指定では通せない理由だけを含むかを返す。通せる理由は
-// publish.Hazard.AcceptableShape と同じ（続きの行が単独で読むとレコードに見える形）。
-func stopsOnlyOnUnacceptableShapes(diff []string) bool {
+// shapeStopReasons は、表の違い方 diff が形の確かめで止まることだけを言うなら、
+// 止めた理由の識別子を並べて返す。そうでなければ nil。
+func shapeStopReasons(diff []string) []string {
 	if len(diff) == 0 {
-		return false
+		return nil
 	}
+	var out []string
 	for _, line := range diff {
-		if !strings.Contains(line, "dwloc 止まる（形: ") ||
-			strings.Contains(line, reason.PublishSwallowKeyShaped) || strings.Contains(line, reason.PublishSwallowSameColumns) {
-			return false
+		if !strings.Contains(line, "dwloc 止まる（形: ") {
+			return nil
 		}
+		out = append(out, publishReasonID.FindAllString(line, -1)...)
 	}
-	return true
+	return out
+}
+
+// publishReasonID は、表の違い方に書いた形の理由の識別子。
+var publishReasonID = regexp.MustCompile(`publish_[a-z_]+`)
+
+// acceptableShapeReason は、形の理由が、確かめたうえで通す指定で通せる形かを返す
+// （publish.Hazard.AcceptableShape と同じ。続きの行が単独で読むとレコードに見える形）。
+func acceptableShapeReason(id string) bool {
+	return id == reason.PublishSwallowKeyShaped || id == reason.PublishSwallowSameColumns
 }
 
 // TestPublishAcceptMultilineKeepsOtherStops は、確かめたうえで通す指定
 // （--accept-multiline）を付けても、通せない形で止まる入力が書かれないことを見る。
-// 対象は表の違い方のうち、形の確かめで止まり、通せる理由を含まないもの。
+// 対象は表の違い方のうち、形の確かめで止まり、通せない理由を含むもの。
 //
 // 指定はレコード単位（<ロケール>:<key>）なので、止まった形のレコードを名指す指定を
-// 付ける。どれも通せない形なので、指定は当たらない指定として終了コード2で止まり、
-// 公開ファイルは1バイトも変わらない。形に key の無い入力（単独の CR、閉じない
-// 引用符など）は、名指せるレコードが無いので、そのロケールの架空の key で確かめる。
+// 付ける。
+//
+//   - 通せない形だけで止まる入力: 指定は当たらない指定として終了コード2で止まる。
+//     形に key の無い入力（単独の CR、閉じない引用符など）は、名指せるレコードが無いので、
+//     そのロケールの架空の key で確かめる。
+//   - 通せる形と通せない形の両方で止まる入力（2列の作業コピーの原文の単独の CR。
+//     続きの行が2列に見える）: 通せる形のレコードを名指す指定を付けると、その行は
+//     通るが、通せない形で終了コード1のまま止まる。
+//
+// どちらも公開ファイルは1バイトも変わらない。
 //
 // 閉じ引用符の後ろに文字が続く飲み込みは、続きの行が単独で読むとレコードに見えても
 // 通さない（swallow-7col-empty-key-english、swallow-6col-published）。通すと、英語の
 // 原文やキーが訳として公開される。この2件は、そのレコードを名指して確かめる。
 func TestPublishAcceptMultilineKeepsOtherStops(t *testing.T) {
 	cases, _ := loadPublishFixture(t)
-	var checked, named []string
+	var checked, named, mixed []string
 	for i, c := range cases.Cases {
 		pin, ok := publishDiffs[c.Name]
-		if !ok || !stopsOnlyOnUnacceptableShapes(pin.diff) {
+		if !ok || !slices.ContainsFunc(shapeStopReasons(pin.diff), func(id string) bool { return !acceptableShapeReason(id) }) {
 			continue
 		}
 		checked = append(checked, c.Name)
@@ -593,15 +627,45 @@ func TestPublishAcceptMultilineKeepsOtherStops(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: CheckTargetShape: %v", c.Name, err)
 		}
-		var keys []string
+		published := cases.PublishedDefault
+		if c.As == "published" {
+			published = c.Text
+		} else if c.Published != nil {
+			published = *c.Published
+		}
+		unchanged := func(root, spec string) {
+			t.Helper()
+			if got := readFile(t, root, publishFixturePublished); got != published {
+				t.Errorf("%s: %s を付けたら公開ファイルが変わった", c.Name, spec)
+			}
+		}
+
+		var keys, acceptable []string
+		stops := 0
 		for _, h := range hazards {
 			if h.Acceptable() {
-				t.Errorf("%s: 通せる形がある: %+v", c.Name, h)
+				acceptable = append(acceptable, "--accept-multiline", publishFixtureLocale+":"+h.Key)
+			} else {
+				stops++
 			}
 			if publish.NameableKey(h.Key) && !slices.Contains(keys, h.Key) {
 				keys = append(keys, h.Key)
 			}
 		}
+		if len(acceptable) > 0 {
+			mixed = append(mixed, c.Name)
+			root, code, stdout, stderr := fixtureRun(t, cases, i, acceptable...)
+			if code != exitProblems {
+				t.Errorf("%s: 通せる形を指定した終了コード = %d、1 を期待\n%s", c.Name, code, stderr)
+			}
+			if !strings.Contains(stderr, publishAcceptText) || !strings.Contains(stderr, shapeStopText) ||
+				!strings.Contains(stderr, fmt.Sprintf("読み違える形が %d か所あります。", stops)) || stdout != "" {
+				t.Errorf("%s: 通せる形を指定したときの報告が違う\n%s%s", c.Name, stderr, stdout)
+			}
+			unchanged(root, strings.Join(acceptable, " "))
+			continue
+		}
+
 		if len(keys) > 0 {
 			named = append(named, c.Name)
 		} else {
@@ -618,15 +682,7 @@ func TestPublishAcceptMultilineKeepsOtherStops(t *testing.T) {
 				strings.Contains(stderr, "として通します") || stdout != "" {
 				t.Errorf("%s: %s を付けたときの報告が違う\n%s%s", c.Name, spec, stderr, stdout)
 			}
-			published := cases.PublishedDefault
-			if c.As == "published" {
-				published = c.Text
-			} else if c.Published != nil {
-				published = *c.Published
-			}
-			if got := readFile(t, root, publishFixturePublished); got != published {
-				t.Errorf("%s: %s を付けたら公開ファイルが変わった", c.Name, spec)
-			}
+			unchanged(root, spec)
 		}
 	}
 	for _, name := range []string{"swallow-7col-empty-key-english", "swallow-6col-published"} {
@@ -634,7 +690,11 @@ func TestPublishAcceptMultilineKeepsOtherStops(t *testing.T) {
 			t.Errorf("%s を、そのレコードを名指して確かめていない（表で通せない理由で止まることを固定していない）", name)
 		}
 	}
-	t.Logf("確かめた入力: %d 件（止まった形のレコードを名指したもの %d 件）", len(checked), len(named))
+	if !slices.Contains(mixed, "lone-cr-source-2col") {
+		t.Errorf("lone-cr-source-2col を、通せる形のレコードを名指して確かめていない")
+	}
+	t.Logf("確かめた入力: %d 件（止まった形のレコードを名指したもの %d 件、通せる形と通せない形の両方で止まるもの %d 件）",
+		len(checked), len(named), len(mixed))
 }
 
 // portSpecPath は移植仕様。表の分類を、仕様の表と突き合わせるのに使う。
