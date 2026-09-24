@@ -217,6 +217,11 @@
     loading: null,
     /* 書き出しの最中かどうか。2つのボタンを二重に押させないために持つ。 */
     exporting: false,
+    /*
+      保存の状態の欄（#save-state）にいま出している文と種類（{ text, kind }）。まだ
+      描いていなければ null。同じなら描き直さないために持つ（updateStatus を見よ）。
+    */
+    status: null,
     timer: null,
     retry: 0,
     /*
@@ -2480,6 +2485,16 @@
       text = t("ui.save_orphans", { count: state.orphans.length });
       kind = "failed";
     }
+    /*
+      文と種類がいま出ているものと同じなら触らない。この欄は読み上げの見張り
+      （aria-live="polite"）で、onInput は打鍵のたびにここを呼ぶ。同じ「未保存 1 件」でも
+      中身を作り直すと、読み上げによっては変わったものとして読み直し、打つ手の横で
+      同じ文を繰り返す。
+    */
+    if (state.status && state.status.text === text && state.status.kind === kind) {
+      return;
+    }
+    state.status = { text: text, kind: kind };
     el.saveState.replaceChildren(icon(saveIcons[kind]), span(null, text));
     el.saveState.className = "save-state " + kind;
   }

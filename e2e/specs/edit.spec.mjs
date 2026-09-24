@@ -499,6 +499,31 @@ test("打つたびに自動保存の時計を引き直し、止まってから 1
   await expectEditorIn(page, SAMPLE_LINES.goodbye);
 });
 
+// 保存の状態（#save-state）は読み上げの見張り（aria-live="polite"）である。打鍵のたびに
+// 中身を作り直すと、文が同じ「未保存 1 件」でも、読み上げによっては変わったものとして
+// 読み直され、打つ手の横で同じ文が繰り返される。文と種類が同じあいだは触らない。
+test("打っているあいだ、保存の状態の文が変わらなければ、見張りの中身を作り直さない", async ({ page, server }) => {
+  await openPaused(page, server);
+  await openEditor(page, SAMPLE_LINES.goodbye);
+  await editor(page).pressSequentially("B");
+  await expect(saveState(page)).toHaveText(msg("ja", "ui.save_pending", { count: 1 }));
+
+  await saveState(page).evaluate((node) => {
+    window.__saveStateMutations = 0;
+    new MutationObserver((records) => {
+      window.__saveStateMutations += records.length;
+    }).observe(node, { childList: true, subtree: true, characterData: true, attributes: true });
+  });
+  await editor(page).pressSequentially("ye!");
+  await expect(editor(page)).toHaveValue("Bye!");
+  expect(await page.evaluate(() => window.__saveStateMutations)).toBe(0);
+
+  // 文が変わるときは書き換える（送り始めると「保存しています」になる）。
+  await page.clock.runFor(1_500);
+  await waitForSaved(page);
+  expect(await page.evaluate(() => window.__saveStateMutations)).toBeGreaterThan(0);
+});
+
 // 送った訳を未保存の控えから先に消すと、応答が来なかったときにその訳がどこにも
 // 残らない。応答で「保存できた」と分かった行も、送ったあとに打ち直していれば
 // 控えに残し、続けて送る。ここが崩れると、保存の往復の間に打った字が黙って消える。
