@@ -14,10 +14,11 @@ func TestParseAllEntriesKeepsEmptyKey(t *testing.T) {
 		"Reaction,,N9,1,line:bbb1,,Ryan,\n" +
 		"Reaction,,N9,2,line:bbb2,aaaaaaaaaaaaaaaa,Ryan,\n"
 
-	rows, err := csvfile.ReadPowerShellRows([]byte(csv))
+	f, err := csvfile.ReadPowerShell([]byte(csv))
 	if err != nil {
 		t.Fatalf("読み込みに失敗した: %v", err)
 	}
+	rows := f.Rows()
 
 	all := ParseAllEntries(rows)
 	if len(all) != 2 {
@@ -67,11 +68,11 @@ func TestParseEntriesColumnPresence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := csvfile.ReadPowerShellRows([]byte(tt.csv))
+			f, err := csvfile.ReadPowerShell([]byte(tt.csv))
 			if err != nil {
 				t.Fatalf("読み込みに失敗した: %v", err)
 			}
-			entries := ParseAllEntries(rows)
+			entries := ParseAllEntries(f.Rows())
 			if len(entries) != 1 {
 				t.Fatalf("Entries = %d件, want 1", len(entries))
 			}

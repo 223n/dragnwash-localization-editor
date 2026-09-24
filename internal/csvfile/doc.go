@@ -19,12 +19,18 @@
 //     ファイルを画面に並べるときだけ、誤りにせず印を付けて返す
 //     [ReadPowerShellMarked] を使う。
 //
+//     publish・diff・order は、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
+//     PR2 からこの読み手で読む（行だけが要る使い手は [PowerShellFile.Rows]）。
+//     edit は PR3 で移す。
+//
 //     [ReadPowerShellRows] は、移植の基準 003ed1e の行単位の読み方（'#' の物理行を
 //     落としてから、1物理行を1レコードとして読む）で、引用フィールド内の改行を
-//     扱えない。いまの publish・diff・order・edit はまだこちらで読む。全体を解釈する
-//     読み手へ移す作業（docs/port-spec.md）の PR2 で主の読み手へ切り替える。
-//     [ReadPowerShellWhole] は、publish の守りが行単位の読み違いを見つけるための
-//     全文の読み方で、主の読み手と同じ区切りに載る。誤りを返さない点だけが違う。
+//     扱えない。どの使い手も使っていない。「どのレコードも1行に収まるファイルでは、
+//     全体を解釈する読み方と結果が同じ」ことを確かめる回帰試験と、上流との突き合わせの
+//     表のためにだけ残す。[ReadPowerShellWhole] は、PR1 まで publish の守りが行単位の
+//     読み違いを見つけるのに使っていた全文の読み方で、主の読み手と同じ区切りに載る
+//     （誤りを返さない点だけが違う）。PR2 で守りが主の読み手へ移り、これもどの使い手も
+//     使っていない。
 //
 //   - [ReadPythonRecords] / [ParsePythonRecords]
 //     tools/check-translations.py（形式検証）の再現。基準は上流の dev。

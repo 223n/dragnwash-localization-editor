@@ -347,7 +347,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 ### 全体を解釈する読み手（csvfile）
 
-全体を解釈する読み手へ移す作業（PR0〜PR4）の PR1 で、internal/csvfile に読み方の土台を足した。PR2 で publish（集め方・失われる訳の確かめ・土台の確かめ・形の確かめ）がこの読み手へ移った。diff・order・edit・画面は PR2 と PR3 で移す。ここに書くのは、その土台の約束である。
+全体を解釈する読み手へ移す作業（PR0〜PR4）の PR1 で、internal/csvfile に読み方の土台を足した。PR2 で publish（集め方・失われる訳の確かめ・土台の確かめ・形の確かめ）、diff（ReadRows と ParseLayoutRisks）、order（LoadPowerShell）がこの読み手へ移った（行だけが要る使い手は PowerShellFile.Rows を使う）。edit と画面は PR3 で移す。行単位の読み手（csvfile.ReadPowerShellRows・ReadPowerShellRowsNumbered・ReadPowerShellTable）と、PR1 まで publish の守りが使っていた csvfile.ReadPowerShellWhole は、どの使い手も使わなくなり、回帰試験と上流との突き合わせの表のためにだけ残す。ここに書くのは、その土台の約束である。
 
 区切りの関数（csvfile.SplitSegments）は、ファイル全体を1つの文字列として、コメント行・空行・レコードのセグメントに分ける。読み方の規則はこの関数だけが持ち、主の読み手、守り専用の読み手（csvfile.ReadPowerShellWhole）、形の検出が、みなこの結果に載る。保存（internal/edit）も PR3 でここに載せ、レコードの最終フィールドの開始位置から本体の終わりまでを差し替える。書く側と読む側で区切りを別々に持つと、最終フィールドの位置がずれて、訳ではない値を書き換えるためである。
 

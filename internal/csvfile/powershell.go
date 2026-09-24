@@ -39,16 +39,14 @@ func (e *DuplicateColumnError) Error() string {
 // 物理行ごとに別レコードへ割れて壊れる。これは '#' で始まるかどうかに関係なく
 // 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。上流は f816618 で
 // 全文を1つの文字列として解釈する読み方へ移った。この移植の全体を解釈する読み手は
-// [ReadPowerShell] で、いまの publish・diff・order・edit はまだこの関数で読む。
-// 使い手を1つずつ移すと「edit が書く先を publish が同じ読み方で読む」という前提が
-// 崩れる期間ができるので、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
-// PR2 でまとめて切り替える。それまでは、行単位では読み違える形のファイルを
-// [ReadPowerShellWhole] の結果と突き合わせて見つけ、publish が書く前に止める
-// （internal/publish の守り）。
+// [ReadPowerShell] で、publish・diff・order は、全体を解釈する読み手へ移す作業
+// （docs/port-spec.md）の PR2 でそちらへ切り替えた。edit は PR3 で移す（edit は
+// この関数でなく、物理行を1行ずつ見る自前の編集モデルで読んでいる）。
 //
-// 切り替えたあとは、この関数（と [ReadPowerShellRowsNumbered]・[ReadPowerShellTable]）は、
+// 切り替えたので、この関数（と [ReadPowerShellRowsNumbered]・[ReadPowerShellTable]）は、
 // 「どのレコードも1行に収まるファイルでは、全体を解釈する読み方と結果が同じ」ことを
-// 確かめる回帰試験のためにだけ残す。形の検出（[FindSwallows] など）が物理行を
+// 確かめる回帰試験と、上流との突き合わせの表のためにだけ残す。新しい使い手は
+// [ReadPowerShell] を使うこと。形の検出（[FindSwallows] など）が物理行を
 // 単独で読むのに使うのは、1物理行の読み方（[ParsePowerShellRecord] と [FieldOffsets]
 // の中身）で、この関数ではない。
 //

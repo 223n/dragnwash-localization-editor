@@ -67,12 +67,14 @@ type LayoutRisk struct {
 // ParseLayoutRisks は layout_risks.csv を読む。
 //
 // 原文が空の行は捨てる。キーを導けないので、どの行の話か決められない。
-// 読み方は公開ファイルや作業コピーと同じ（[csvfile.ReadPowerShellRows]）。
+// 読み方は公開ファイルや作業コピーと同じ（[csvfile.ReadPowerShell]）。原文が行を
+// またいでも1つの値として読むので、作業コピーの行と同じキーで結び付く。
 func ParseLayoutRisks(data []byte) ([]LayoutRisk, error) {
-	records, err := csvfile.ReadPowerShellRows(data)
+	f, err := csvfile.ReadPowerShell(data)
 	if err != nil {
 		return nil, err
 	}
+	records := f.Rows()
 	out := make([]LayoutRisk, 0, len(records))
 	for _, rec := range records {
 		source := rec.Get("source_en")

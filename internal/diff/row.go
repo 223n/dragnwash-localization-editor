@@ -60,18 +60,21 @@ type Row struct {
 
 // ReadRows はCSVのバイト列を [Row] の並びに直す。
 //
-// 読み方は publish と同じ csvfile.ReadPowerShellRows に固定する。この道具の
-// 主張は「publish を回すとどうなるか」なので、読み方が publish とずれた瞬間に
-// 主張が嘘になる。引用フィールド内の改行を値として読む csvfile.ReadCSharpRows を
-// 使うと、同じファイルから別のレコード集合が出てくる。
+// 読み方は publish と同じ csvfile.ReadPowerShell（全体を解釈する読み手）に固定する。
+// この道具の主張は「publish を回すとどうなるか」なので、読み方が publish とずれた
+// 瞬間に主張が嘘になる。引用符で囲んだ値は行をまたいでも1つの値になる。ゲームの
+// 読み方（csvfile.ReadCSharpRows）は、フィールドの途中の '"' などで値が割れるので
+// 使わない。
 //
-// エラーを返すのはヘッダーの列名が重複しているときだけ（csvfile.DuplicateColumnError）。
-// 空ファイルとヘッダーだけのファイルは0行として返し、エラーにしない。
+// エラーを返すのは、ヘッダーの列名が重複しているとき（csvfile.DuplicateColumnError）と、
+// 閉じない引用符があるとき（csvfile.UnclosedQuoteError）だけ。空ファイルとヘッダー
+// だけのファイルは0行として返し、エラーにしない。
 func ReadRows(csvBytes []byte) ([]Row, error) {
-	records, err := csvfile.ReadPowerShellRows(csvBytes)
+	f, err := csvfile.ReadPowerShell(csvBytes)
 	if err != nil {
 		return nil, err
 	}
+	records := f.Rows()
 
 	rows := make([]Row, 0, len(records))
 	for _, rec := range records {

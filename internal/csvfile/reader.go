@@ -136,8 +136,8 @@ func (r PowerShellRecord) MultiLine() bool { return r.EndLine > r.Line }
 // 最初の列名が '#' で始まるヘッダー（`"#key"` など）は、上流と違って飛ばさずに
 // ヘッダーとして返す（[PowerShellHeader.CommentLike]）。
 //
-// いまの publish・diff・order・edit は、まだ行単位の [ReadPowerShellRows] で読む。
-// 全体を解釈する読み手へ移す作業（docs/port-spec.md）の PR2 で、これに切り替える。
+// publish・diff・order は、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
+// PR2 から、この読み手で読む。edit は PR3 で移す。
 func ReadPowerShell(data []byte) (PowerShellFile, error) {
 	f := ReadPowerShellMarked(data)
 	if err := f.Err(); err != nil {
