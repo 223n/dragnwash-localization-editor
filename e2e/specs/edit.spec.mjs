@@ -993,4 +993,16 @@ test.describe("キーの欄が空の行がある作業コピー", () => {
     await expect(translationCell(app, 6)).toHaveText(typed);
     expectOnlyLines(before, await server.readRoot(workingRel), { 6: line });
   });
+
+  // 待ち受けに届かないときは、まだファイルに入っていない訳を行番号とキーを添えて並べる
+  // （app.js の renderUnsent）。キーの無い行では行番号だけにし、空のキーを並べない。
+  test("待ち受けに届かないとき、キーの無い行の訳は行番号だけを添えて並べる", async ({ app }) => {
+    await app.route("**/api/rows", (route) => route.abort("connectionrefused"));
+    await typeTranslation(app, 6, "さようなら。");
+    await editor(app).press("Escape");
+    await expect(app.locator("#message")).toHaveText(msg("ja", "ui.unreachable"));
+    await expect(app.locator("#unsent-list > li")).toHaveText([
+      `${msg("ja", "ui.unsent_line", { line: 6 })}: さようなら。`,
+    ]);
+  });
 });

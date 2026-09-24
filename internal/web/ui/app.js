@@ -2395,10 +2395,14 @@
     }
     clear(el.unsentList);
     items.forEach(function (item) {
-      /* 並べるのは描いてある行の訳だけなので、その行は必ずある。 */
+      /*
+        並べるのは描いてある行の訳だけなので、その行は必ずある。キーの欄が空の行
+        （作業コピーにはありうる）では、行番号だけにする。
+      */
       var entry = state.rows.get(item.line);
+      var label = [t("ui.unsent_line", { line: item.line }), entry.key].join(" ").trim();
       var row = li(null, "");
-      row.appendChild(span("note-label", t("ui.unsent_line", { line: item.line }) + " " + entry.key + ": "));
+      row.appendChild(span("note-label", label + ": "));
       var text = span("note-value", item.text);
       /* 訳なので向きは中身から決めさせる（renderOrphans と同じ）。 */
       text.dir = "auto";
