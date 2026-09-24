@@ -944,13 +944,14 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
 
-Saving also stops when the screen cannot reach the server.
+Saving also stops when the screen cannot reach the server, and when the server does not accept saves from this screen.
 
 | What the screen says | What happened | Retrying |
 | ---- | ---- | ---- |
 | Cannot reach the server | `dwloc` has stopped (no activity for a while, or the black window was closed) | Keeps retrying. If it gets through, the translation goes in |
+| The server does not accept saves from this screen (404) | `dwloc` was restarted and this screen has an old `Cookie` (400 and 415 mean the screen and the server are different versions) | Stops. Typing the translation again sends it once |
 
-Then the top bar lists the translations that are not in the file yet.  
+In both cases, the top bar lists the translations that are not in the file yet.  
 It shows the line number, the key and the translation, so copy them down before you restart.  
 After a restart the `URL` changes, and the old tab can no longer send them.  
 On the new screen, typing the key into the search box brings up the row.

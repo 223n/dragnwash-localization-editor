@@ -107,6 +107,12 @@ func TestSaveRetryDoesNotGiveUp(t *testing.T) {
 	if !strings.Contains(js, "i = retryDelays.length - 1") {
 		t.Error("最後の間隔で送り続ける形になっていない")
 	}
+	// 送り直さないのは、待っても直らないと分かっている 400・404・415 だけ。503（Windows の
+	// 共有違反）や 422 を足すと、原因が消えても訳が送られなくなる。振る舞いは E2E の
+	// save-failure.spec.mjs が見ている。
+	if !strings.Contains(js, "var refusedStatus = { 400: true, 404: true, 415: true };") {
+		t.Error("送り直さない状態コードが 400・404・415 から変わっている")
+	}
 }
 
 // topRegion は index.html の `<div class="top">` から、それに対応する閉じ div

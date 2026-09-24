@@ -136,9 +136,9 @@ func TestSaveFailedDetailDoesNotAdviseReloading(t *testing.T) {
 		"ja": {"読み直してください"},
 		"en": {"or reload"},
 	}
-	// 待ち受けに届かないとき（ui.unreachable）の案内も同じ。読み直しでは直らず、
-	// 読み直せば送れていない訳が消える。
-	keys := []string{"ui.save_failed_detail", "ui.unreachable"}
+	// 待ち受けに届かないとき（ui.unreachable）と受け付けないとき（ui.save_refused）の案内も
+	// 同じ。どちらも読み直しでは直らず、読み直せば送れていない訳が消える。
+	keys := []string{"ui.save_failed_detail", "ui.unreachable", "ui.save_refused"}
 	for lang, bad := range advice {
 		cat := c.byLang[lang]
 		if cat == nil {

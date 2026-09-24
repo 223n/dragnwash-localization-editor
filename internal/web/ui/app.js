@@ -170,9 +170,10 @@
     state.saveError 要求そのものが落ちているか（届かない、404、503）。行ごとの
                     理由（state.failed）とは別に持つ。
     state.stall     保存がどう止まっているか。"unreachable" は待ち受けに届かない
-                    （dwloc が終わったあとなど。送り直しは続ける）。止まって
-                    いなければ null。立っているあいだは、まだファイルに入って
-                    いない訳を一覧に並べる（renderUnsent）。
+                    （dwloc が終わったあとなど。送り直しは続ける）、"refused" は
+                    待ち受けが受け付けない（400・404・415。待っても直らないので
+                    送り直さない）。どちらでもなければ null。立っているあいだは、
+                    まだファイルに入っていない訳を一覧に並べる（renderUnsent）。
     state.inflight  いま送っている訳（行番号 → 値）。送っていなければ null。
                     返るまでのあいだ、その行の「ファイルの値」は entry.saved では
                     なくこちらになる見込みなので、onInput が未保存かどうかを決める
@@ -274,8 +275,25 @@
     諦めると、原因（ゲームがファイルを開いている）が消えたあとも、その訳は
     二度と送られない。翻訳者が別の行を触るまで、訳はブラウザーの中だけに残る。
     送り先は自分自身なので、間隔さえ広げれば送り続けても重くない。
+
+    例外は、待っても直らないと分かっている失敗（refusedStatus）だけである。
   */
   var retryDelays = [500, 1000, 2000, 5000, 15000, 30000];
+
+  /*
+    待ち受けが保存を受け付けない、待っても直らない状態コード。送り直さない。
+
+      400  要求の形が違う（画面と待ち受けの版が食い違ったときなど）
+      404  Cookie か Origin が合わない（多くは、dwloc を起動し直してこの画面の
+           Cookie が古くなったとき。起動し直すとトークンが変わる）
+      415  本文が application/json でない
+
+    以前はこれも送り直し続け、画面は「少し置いてから自動でもう一度送ります」と
+    言い続けた。待っても送られないので、送り直しは止め、訳は抱えたまま、まだ
+    ファイルに入っていない訳を写せるように並べる（renderUnsent）。打ち直せば、
+    その訳をもう一度送る。
+  */
+  var refusedStatus = { 400: true, 404: true, 415: true };
 
   /*
     検索の字を打ってから、絞り込みを走らせるまでの待ち。
@@ -1774,7 +1792,7 @@
           ので、「保存できません（もう一度試しています）」を下ろす。下ろさないと、
           閉じても何も失われないのに、翻訳者は存在しない失敗を直しにいく。
           scheduleRetry の早い戻りと同じ扱いで、1行ずつの理由（state.failed）は
-          そちらの表示に任せる。届かないの印も下ろし、まだファイルに
+          そちらの表示に任せる。届かない・受け付けないの印も下ろし、まだファイルに
           入っていない訳の一覧も閉じる（保存できない行は、行に理由と訳が出ている）。
         */
         state.saveError = false;
@@ -2155,6 +2173,15 @@
       state.stall = "unreachable";
       showMessage(t("ui.unreachable"));
       scheduleRetry();
+    } else if (refusedStatus[res.status]) {
+      /*
+        待ち受けが受け付けない。待っても直らないので送り直さない（refusedStatus）。
+        訳は未保存のまま抱える（閉じる前の引き止めも効く）。
+      */
+      state.stall = "refused";
+      state.saveError = state.pending.size > 0;
+      state.retry = 0;
+      showMessage(t("ui.save_refused", { status: res.status }));
     } else {
       state.stall = null;
       showMessage(body.message ? body.message : t("ui.save_failed_detail"));
@@ -2339,7 +2366,7 @@
 
   /*
     まだファイルに入っていない訳を、帯の中の一覧（#unsent）に並べる。保存が止まって
-    いるとき（state.stall。待ち受けに届かない）だけ出す。
+    いるとき（state.stall。待ち受けに届かない、受け付けない）だけ出す。
 
     待ち受けが終わったあと（--idle-timeout）は、起動し直すと URL（ポートとトークン）が
     変わり、このタブの訳は新しい待ち受けへは送れない。翻訳者が手で写すしかないので、
@@ -2646,8 +2673,10 @@
         要求そのものが落ちている（届かない、404、503を出し切った）。ここで
         「未保存 N 件」と出すと、打ったばかりでまだ送っていない状態と
         見分けが付かない。常に見えている場所で、保存できていないことを言う。
+        受け付けないと言われたとき（state.stall が refused）は送り直していないので、
+        「もう一度試しています」とは言わない。
       */
-      text = t("ui.save_retrying");
+      text = state.stall === "refused" ? t("ui.save_failed") : t("ui.save_retrying");
       kind = "failed";
     } else if (state.failed.size) {
       text = t("ui.save_failed");

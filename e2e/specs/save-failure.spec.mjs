@@ -3,8 +3,11 @@
 // app.js の冒頭の約束のうち、いちばん重いのは「訳を失わない」である。保存が失敗する
 // 道は2つあり、画面はそれぞれ別の形で訳を抱える（app.js の state.pending と state.failed）。
 //
-//   要求そのものが落ちる  届かない、404、503（ゲームがファイルを開いていて書けない）。
+//   要求そのものが落ちる  届かない、503（ゲームがファイルを開いていて書けない）など。
 //                         訳は未保存のまま抱え、間隔を広げながら送り直し続ける。
+//                         待っても直らない 400・404・415 だけは送り直さず、案内する。
+//                         届かないときと、この3つのときは、まだファイルに入っていない
+//                         訳を帯に並べる（app.js の renderUnsent）。
 //   行ごとに断られる      待ち受けがその行を書かなかった（行がずれた、など）。
 //                         訳は「保存できない行」として値ごと残し、自動保存の対象からだけ外す。
 //
@@ -120,7 +123,7 @@ async function openPaused(page, server) {
 }
 
 // unsent は、まだファイルに入っていない訳の一覧（帯の中の #unsent）。待ち受けに届かない
-// ときにだけ出る（app.js の renderUnsent）。
+// ときと、待ち受けが保存を受け付けないときにだけ出る（app.js の renderUnsent）。
 function unsent(page) {
   return page.locator("#unsent");
 }
@@ -461,40 +464,97 @@ test.describe("要求そのものが落ちたとき", () => {
     });
   });
 
-  test("Cookie を失って 404 の平文が返っても、未保存を抱えて送り直し、戻ればファイルに入る", async ({
+  test("Cookie を失って 404 の平文が返ったら、送り直しを止め、訳を抱えたまま案内し、打ち直せば送る", async ({
     page,
     server,
   }) => {
     // 待ち受けは Cookie が無い要求に「404 page not found」の平文を返す。本文が JSON で
-    // ないからといって例外で処理が途切れると、失敗が画面に出ず、送り直しも始まらない。
+    // ないからといって例外で処理が途切れると、失敗が画面に出ない。
+    //
+    // 404 は待っても直らない（Cookie か Origin が合わない。多くは dwloc を起動し直して、
+    // この画面の Cookie が古くなったとき）。以前は送り直し続け、画面は「少し置いてから自動で
+    // もう一度送ります」と言い続けた。送り直しは止め、訳は抱えたまま（閉じる前の引き止めも
+    // 効く）、まだ入っていない訳を写せるように並べる。打ち直せば、その1回は送る。
     await openPaused(page, server);
     const before = await server.readRoot(workingRel);
     const context = page.context();
     const cookies = await context.cookies();
     expect(cookies.length).toBeGreaterThan(0);
     await context.clearCookies();
+    const posts = [];
+    page.on("request", (req) => {
+      if (new URL(req.url()).pathname === "/api/rows") {
+        posts.push(req);
+      }
+    });
 
-    const typed = "さようなら。";
+    const typed = "さようなら";
     const n = SAMPLE_LINES.goodbye;
     await typeTranslation(page, n, typed);
     const refused = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/rows");
     await closeEditor(page);
     expect((await refused).status()).toBe(404);
 
-    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
-    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.save_failed_detail"));
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_failed"));
+    await expect(saveState(page)).toHaveClass(FAILED);
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.save_refused", { status: 404 }));
     await expect(rowByLine(page, n)).toHaveClass(UNSAVED);
+    await expectUnsent(page, n, keyFor(SAMPLE.goodbye.source), typed);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
 
+    // 時計を進めても、送り直さない。
+    await page.clock.runFor(120_000);
+    await expectNoNewPost(page, posts, 1);
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.save_refused", { status: 404 }));
+
+    // Cookie が戻ったあと、打ち直せばその訳を送る。
     await context.addCookies(cookies);
+    await openEditor(page, n);
+    await editor(page).press("End");
+    await editor(page).pressSequentially("。");
     const accepted = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/rows");
-    await page.clock.runFor(retryDelays[0]);
+    await closeEditor(page);
     expect((await accepted).status()).toBe(200);
     await waitForSaved(page);
+    await expect(page.locator("#message")).toHaveText("");
+    await expect(unsent(page)).toBeHidden();
     expectOnlyChanged(before, await server.readRoot(workingRel), {
-      [n]: withTranslation(splitLines(before)[n - 1], typed),
+      [n]: withTranslation(splitLines(before)[n - 1], `${typed}。`),
     });
   });
+
+  // 400（要求の形が違う）と 415（本文が JSON でない）も待っても直らない。画面と待ち受けの版が
+  // 食い違ったときなどに起きる。送り直さず、状態コードを添えて案内する。
+  for (const c of [
+    {
+      status: 400,
+      contentType: "application/json",
+      body: () => JSON.stringify({ message: msg("ja", "error.bad_request") }),
+    },
+    { status: 415, contentType: "text/plain; charset=utf-8", body: () => msg("ja", "error.not_json") },
+  ]) {
+    test(`${c.status} が返ったら、送り直さず、状態コードを添えて案内する`, async ({ page, server }) => {
+      await openPaused(page, server);
+      const before = await server.readRoot(workingRel);
+      const posts = [];
+      await page.route("**/api/rows", (route) => {
+        posts.push(route.request().postDataJSON());
+        return route.fulfill({ status: c.status, contentType: c.contentType, body: c.body() });
+      });
+
+      const typed = "さようなら。";
+      const n = SAMPLE_LINES.goodbye;
+      await typeTranslation(page, n, typed);
+      await closeEditor(page);
+      await expect(page.locator("#message")).toHaveText(msg("ja", "ui.save_refused", { status: c.status }));
+      await expect(saveState(page)).toHaveText(msg("ja", "ui.save_failed"));
+      await expectUnsent(page, n, keyFor(SAMPLE.goodbye.source), typed);
+
+      await page.clock.runFor(120_000);
+      await expectNoNewPost(page, posts, 1);
+      expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+    });
+  }
 
   // 200 の応答が壊れていて、画面が受け止めるところで投げても、黙らない。未保存の訳は
   // 抱えたまま、失敗を出して送り直しへ回す（app.js の flush の最後の catch）。
