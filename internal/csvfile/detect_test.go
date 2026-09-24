@@ -220,12 +220,38 @@ func TestFindCRCuts(t *testing.T) {
 				"3fc4ccfe745870e2,UI,,,UI,two,に\r",
 		},
 		{
+			// LF で改行したファイルでは、単独の CR の次が空行でも切れた値と見る
+			// （決まったことの 14）。空白だけの行も空行である。
 			name: "次の行が空白だけ",
 			text: "key,translation\nk,a\r  \nk2,b\nk3,c\r\t\nk4,d\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}, {ID: 5, Line: 5, EndLine: 5, NextLine: 6}},
 		},
 		{
 			name: "次の行が全角空白だけ",
 			text: "key,translation\nk,a\r　\nk2,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			name: "次の行が空行",
+			text: "key,translation\r\nk,a\r\r\nk2,b\r\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			// 値が CR の直後の '#' で切れる形（い\r# ち）。後半はコメントとして落ちる。
+			name: "次の行が '#' で始まる",
+			text: "key,translation\nk,い\r# ち\nk2,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			name: "次の行が空のレコード",
+			text: "key,translation\nk,い\r,\nk2,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			// CRLF で改行したファイルの行末に、単独の CR が1つだけ紛れ込んだ形。次の行が
+			// レコードに見えるので、改行しただけと見る。
+			name: "改行の混ざったファイルで次がレコード",
+			text: "key,translation\r\n0123456789abcdef,a\rfedcba9876543210,b\r\n",
 		},
 		{
 			// 行をまたぐレコードでも、区切りがヘッダーより少なくキーの形でもなければ当たる。
@@ -258,27 +284,89 @@ func TestFindCRCuts(t *testing.T) {
 		}
 	}
 
-	// 入力の表の改行をすべて単独の CR に直した写し（CR だけの改行のファイル）でも、
-	// 当たるのは次の入力だけである。CR だけの改行のファイルは意図して読む形なので、
-	// ここで当たる入力が増えると、正当なファイルの publish が塞がる。
+	// 入力の表の改行をすべて単独の CR に直した写し（CR だけの改行のファイル）では、
+	// どの入力にも当たらない（決まったことの 14）。CR だけの改行のファイルは意図して
+	// 読む形で、単独の CR は行の区切りと見分けられないためである。ファイルで分ける前は、
+	// 次の2件が切れた値ではないのに当たっていた。
 	//
-	// lone-cr-unquoted-value のほかの2件は、切れた値ではないのに当たる（未決）。
-	// どちらも次のレコードが単独ではレコードに見えない形で、単独の CR の後ろでは
-	// 切れた値の後半と見分けられない。PR2 で止める前に扱いを決める。
-	crOnlyHits := map[string]string{
-		// 値が単独の CR で切れている。改行を直しても切れたまま。
-		"lone-cr-unquoted-value": "切れた値",
-		// U+00AD のあとの '#' の行は、読み手が序数で比べてデータのレコードにする（上流と
-		// 意図して違える点）。単独ではレコードに見えないので、その前の CR で当たる。
-		"soft-hyphen-comment": "U+00AD の行",
-		// ヘッダーは3列（最後の列名が行をまたぐ）、データは2列で、キーの形でもない。
-		"ml-header": "列の足りないレコード",
-	}
+	//   - soft-hyphen-comment: U+00AD のあとの '#' の行は、読み手が序数で比べて
+	//     データのレコードにする（上流と意図して違える点）。単独ではレコードに見えない
+	//   - ml-header: ヘッダーは3列（最後の列名が行をまたぐ）、データは2列で、キーの
+	//     形でもない
+	//
+	// lone-cr-unquoted-value も、改行を単独の CR に直すと、値の中の CR と行の区切りを
+	// 見分けられなくなり、当たらない。
 	crOnly := strings.NewReplacer("\r\n", "\r", "\n", "\r")
 	for _, c := range loadFixtureCases(t).Cases {
-		got := FindCRCuts(SplitSegments([]byte(crOnly.Replace(c.Text))))
-		if _, want := crOnlyHits[c.Name]; (len(got) > 0) != want {
+		text := crOnly.Replace(c.Text)
+		segs := SplitSegments([]byte(text))
+		if got := FindCRCuts(segs); len(got) > 0 {
 			t.Errorf("%s（CR だけの改行）: 単独の CR で切れた値 %+v", c.Name, got)
+		}
+		// 改行を直した写しがほんとうに CR だけの改行になっていることも見る。当たらない
+		// 理由が「ファイルで分けたから」でなく「単独の CR が無いから」だと、試験が
+		// 何も確かめていないことになる。
+		if strings.Contains(text, "\r") && !crOnlyLineBreaks(segs) && len(segs.List) > 1 {
+			t.Errorf("%s（CR だけの改行）: CR だけの改行のファイルと見ていない", c.Name)
+		}
+	}
+	// 分けたことで当たらなくなった2件は、ファイルで分ける前の見分け方（次のセグメントが
+	// レコードに見えるか）では当たる形であることを確かめておく。ここが外れると、上の
+	// 確かめは何も守っていない。
+	for _, name := range []string{"soft-hyphen-comment", "ml-header"} {
+		segs := SplitSegments([]byte(crOnly.Replace(fixtureText(t, name))))
+		if !crOnlyLineBreaks(segs) || !nextSegmentNotRecordAfterCR(segs) {
+			t.Errorf("%s（CR だけの改行）: 単独の CR の次にレコードに見えないセグメントが無い", name)
+		}
+	}
+}
+
+// fixtureText は入力の表から name の text を返す。
+func fixtureText(t *testing.T, name string) string {
+	t.Helper()
+	for _, c := range loadFixtureCases(t).Cases {
+		if c.Name == name {
+			return c.Text
+		}
+	}
+	t.Fatalf("入力の表に %s が無い", name)
+	return ""
+}
+
+// nextSegmentNotRecordAfterCR は、単独の CR で終わるフィールドを持つセグメントの
+// 次に、レコードに見えないセグメント（空行・コメント・空のレコード、またはキーの形でも
+// 区切りの数がヘッダーと同じでもないレコード）があるかを返す。
+func nextSegmentNotRecordAfterCR(segs Segments) bool {
+	header, _ := segs.Header()
+	for i, seg := range segs.List {
+		if !seg.HasFields() || seg.Term != TermCR || i+1 >= len(segs.List) {
+			continue
+		}
+		next := segs.List[i+1]
+		if next.Kind != SegmentRecord || (!keyShaped(next.Fields[0]) && len(next.Offsets) != len(header.Offsets)) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCROnlyLineBreaks は、行の区切りがすべて単独の CR のファイルの見分け方を固定する。
+func TestCROnlyLineBreaks(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		want       bool
+	}{
+		{"CR だけ", "key,translation\rk,a\r", true},
+		{"最後の行に改行が無い", "key,translation\rk,a", true},
+		{"LF が1つ混ざる", "key,translation\rk,a\n", false},
+		{"CRLF が1つ混ざる", "key,translation\r\nk,a\r", false},
+		// 引用の中の LF は値の一部で、行の区切りではない。
+		{"引用の中の LF", "key,translation\rk,\"a\nb\"\r", true},
+		{"改行が無い", "key,translation", false},
+		{"空", "", false},
+	} {
+		if got := crOnlyLineBreaks(SplitSegments([]byte(tc.text))); got != tc.want {
+			t.Errorf("%s: crOnlyLineBreaks = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
