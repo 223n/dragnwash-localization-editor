@@ -24,7 +24,7 @@ import (
 // 正当でも当たるものが2件ある。原文の2行目がカンマを多く含む形
 // （ml-continuation-looks-like-row）と、2列の作業コピーで原文が行をまたぐ形
 // （ml-source-translated-2col）である。形だけでは閉じ誤りと見分けられないので、
-// 確かめたうえで通す指定（PR2）で書く。
+// 確かめたうえで通す指定（dwloc publish --accept-multiline）で書く。
 func TestFindSwallowsOnFixture(t *testing.T) {
 	want := map[string][]Swallow{
 		"swallow-3col":                   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},

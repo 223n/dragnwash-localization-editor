@@ -348,12 +348,14 @@ const (
 	// diffIntended は、上流と意図して違える点（docs/port-spec.md「上流と意図して
 	// 違える点」）。直さない。
 	diffIntended diffKind = "意図して違える"
-	// diffGuardOnly は、publish の守り専用の読み手（[ReadPowerShellWhole]）だけの違い。
-	// 主の読み手 [ReadPowerShell] は上流とそろっている。PR2 で publish の守りが主の
-	// 読み手へ移ると、この読み手は使われなくなる。
+	// diffGuardOnly は、PR1 まで publish の守りが使っていた読み手
+	// （[ReadPowerShellWhole]）だけの違い。主の読み手 [ReadPowerShell] は上流と
+	// そろっている。PR2 で publish の守りが主の読み手へ移り、この読み手はどこからも
+	// 使われていない。
 	diffGuardOnly diffKind = "守り専用の読み方"
-	// diffLineBased は、1物理行を1レコードとして読むことから来る違い。publish・diff・
-	// order が全体を解釈する読み手へ移る PR2 で、この読み手は使われなくなる。
+	// diffLineBased は、1物理行を1レコードとして読むことから来る違い。PR2 で
+	// publish・diff・order が全体を解釈する読み手へ移り、この読み手はどこからも
+	// 使われていない。
 	diffLineBased diffKind = "行単位の読み方"
 )
 
@@ -373,16 +375,15 @@ const (
 		"その手前を捨てる（上流の不具合。写さない）"
 	whyLoneCRUnquoted = "引用符で囲まない値の中の単独の CR も、行の区切りにする規則のまま読む。値は CR の手前で切れ" +
 		"（訳が「い」）、続きの「ち」は上流と同じく別のレコードになる。上流は CR の手前を捨ててその行を失い、ゲームは" +
-		"引用の外の CR を捨てて「いち」と読む。読み方の規則は意図して違える。切れた訳を publish はいま止めずに公開するが、" +
-		"PR2 で止める（docs/port-spec.md「上流と意図して違える点」、FindCRCuts、cmd/dwloc の publish の試験）"
+		"引用の外の CR を捨てて「いち」と読む。読み方の規則は意図して違える。切れた訳を公開しないよう、publish は" +
+		"形の確かめで止める（docs/port-spec.md「上流と意図して違える点」、FindCRCuts、cmd/dwloc の publish の試験）"
 	whyCROnly = "CR だけで改行したファイルも読む。上流は Remove-NonRecords が全行を捨て、" +
 		"訳がすべて消える（上流の不具合。写さない）"
 	whyCommaRow = "',' だけの行は空行相当として落とす。上流は空の値のレコードにし、publish の集計で " +
 		"malformed dropped に数える。違うのは集計の数だけ"
 	whyHashHeader = "'#' で始まるヘッダーを飛ばさずにヘッダーとして読む。上流の ConvertFrom-Csv はそのレコードを" +
-		"飛ばし、次のレコード（データ）をヘッダーにする。dwloc は写さない。publish は PR2 から、最初の列名が '#' で" +
-		"始まるヘッダーを形の確かめ (a) で止める。いまの (a) には当たらず、source_en 列から訳を書く" +
-		"（cmd/dwloc の publish の試験）"
+		"飛ばし、次のレコード（データ）をヘッダーにする。dwloc は写さない。publish は、最初の列名が '#' で" +
+		"始まるヘッダーを形の確かめ (a) で止める（cmd/dwloc の publish の試験）"
 	whyBareQuote = "引用の外かどうかを、フィールドの先頭で開いた引用だけで決める。上流の Remove-NonRecords は " +
 		"'\"' の偶奇で決めるので、裸の引用符の後ろのコメント行や見出しをレコードにする" +
 		"（列が多いと公開ファイルに漏れる。上流の不具合。写さない）"
@@ -482,8 +483,10 @@ var mainReaderDiffs = func() map[string]knownDiff {
 
 // lineReaderDiffs は、行単位の読み手（[ReadPowerShellTable]）が上流と違ってよい入力。
 //
-// いまの publish・diff・order はこの読み手で読む。diffLineBased の行は、PR2 で
-// それらが全体を解釈する読み手へ移ると、利用者から見えなくなる違いである。
+// PR1 まで publish・diff・order はこの読み手で読んでいた。PR2 でそれらが全体を
+// 解釈する読み手へ移り、diffLineBased の行は利用者から見えない違いになった。
+// 「どのレコードも1行に収まるファイルでは、全体を解釈する読み方と結果が同じ」ことを
+// 確かめる回帰の表として残す。
 var lineReaderDiffs = map[string]knownDiff{
 	"ml-translation-lf": {diffLineBased, whyLineSplit, []string{
 		`L2 の終わり: 上流 3 / dwloc 2`,
