@@ -301,8 +301,9 @@ func TestExportRefusesUnsafeShapes(t *testing.T) {
 	// 翻訳者が自分の手でリポジトリへ写せてしまう。この形は失われる訳の確かめ
 	// （CheckLoss）では捕まらない。いまの公開ファイルの訳は消えないからである。
 	//
-	// 画面の書き出しには、確かめたうえで通す指定（dwloc publish --accept-multiline）が
-	// 無い。正しい複数行の値で止まったときは、dwloc publish で書く（文面で案内する）。
+	// 画面の書き出しには、確かめたうえで通す指定（dwloc publish --accept-multiline
+	// <ロケール>:<key>）が無い。正しい複数行の値で止まったときは、dwloc publish で
+	// レコードごとに指定して書く（文面で案内する）。
 	for _, tc := range []struct {
 		name string
 		// working はリポジトリの作業コピー。空なら置かない。

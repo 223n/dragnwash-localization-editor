@@ -750,7 +750,7 @@ test.describe("コミット済みの訳が作業コピーに無いとき", () =>
 
 // 読むと訳や原文を取り違える形。publish は書く前に形を見て止め（internal/publish の
 // shape.go）、画面の書き出しも同じ確かめを同じ順で通る（export.go）。画面には、確かめた
-// うえで通す指定（dwloc publish --accept-multiline）を置かない。どのファイルの何行目かは
+// うえで通す指定（dwloc publish --accept-multiline <ロケール>:<key>）を置かない。どのファイルの何行目かは
 // パスを含むので出さず、件数と直し方の案内（dwloc publish）だけを出す。
 const shapeCases = (() => {
   const s = SAMPLE;
@@ -801,8 +801,9 @@ for (const { name, repo } of shapeCases) {
       const text = msg("ja", "error.export_unsafe_shape", { count: 1 });
       await expect(exportState(page)).toHaveText(text);
       await expect(exportState(page)).toHaveClass(BAD);
-      // 画面に通す指定は無い。正しい複数行の値なら dwloc publish の指定で書く、と案内する。
-      expect(text).toContain("dwloc publish --accept-multiline");
+      // 画面に通す指定は無い。正しい複数行の値なら dwloc publish のレコード単位の指定
+      // （<ロケール>:<key>）で書く、と案内する。
+      expect(text).toContain("dwloc publish --accept-multiline <ロケール>:<key>");
       await waitExportSettled(page);
       expect((await pickerLog(page)).calls).toHaveLength(0);
       expect(downloads).toHaveLength(0);

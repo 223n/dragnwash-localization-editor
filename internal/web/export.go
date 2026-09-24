@@ -135,8 +135,9 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 		黙って落ちた行）を画面からは書き出せる。組み立てより前に見るのは、
 		組み立てが読み方の誤り（閉じない引用符）で止まると、形の崩れとして
 		伝えられず、書き出しの失敗（500）になるためである。画面には、確かめた
-		うえで通す指定（dwloc publish --accept-multiline）が無い。正しい複数行の
-		値で止まったときは、文面で dwloc publish を案内する。
+		うえで通す指定（dwloc publish --accept-multiline <ロケール>:<key>）が無い。
+		正しい複数行の値で止まったときは、文面で dwloc publish のレコード単位の
+		指定を案内する。
 	*/
 	hazards, err := publish.CheckTargetShape(*target)
 	if err != nil {
