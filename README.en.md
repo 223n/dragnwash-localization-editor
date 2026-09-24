@@ -665,6 +665,8 @@ Keys never repeat in the game's working copy or in the published files `publish`
 Once a value of this shape is published, the check of the current published file hits it every time.  
 So every run that writes that record needs the same option.  
 A forgotten closing quote that later gets into the working copy is in another record, so that option does not let it through.  
+One that later gets into a value of the same record, though, is let through by the same option.  
+Each time you run it, check the list of lines it lets through.  
 Exporting from the screen has no such option.  
 When it stops on a valid multi-line value, write it with `dwloc publish`.
 
