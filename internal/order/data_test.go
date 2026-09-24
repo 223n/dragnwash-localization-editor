@@ -314,9 +314,15 @@ func TestLoadPowerShellDuplicateColumn(t *testing.T) {
 	}
 }
 
-// TestLoadReadersDifferOnComments は2つの読み方の違いが出る入力を確かめる。
-// 実データにはこの形は無いが、どちらを選んだかで結果が変わることを残しておく。
-func TestLoadReadersDifferOnComments(t *testing.T) {
+// TestLoadReadersDifferOnMultilineFieldLineBasedNow は2つの読み方の違いが出る入力を
+// 確かめる。実データにはこの形は無いが、どちらを選んだかで結果が変わることを残しておく。
+//
+// PowerShell 方式の期待値は、行単位で読むいまの結果（csvfile.ReadPowerShellRows）を
+// 固定したもので、正しいとはしない。全体を解釈する読み手へ移す作業
+// （docs/port-spec.md）の PR2 で、order が全体を解釈する読み方（上流 main と同じ）へ
+// 移ると、引用フィールドの中の改行は値に残り、C# 方式と同じ1件になる。そのコミットで
+// 期待値を直す（決まったことの 13）。
+func TestLoadReadersDifferOnMultilineFieldLineBasedNow(t *testing.T) {
 	// 行頭の '#' はどちらも落とすが、PowerShell 方式は引用の中を見ないので
 	// 引用フィールド内の改行で行が割れる。
 	const orderCSV = "section,phase,node,order,line_id,key,speaker,condition\n" +
@@ -355,5 +361,32 @@ func TestLoadReadersDifferOnComments(t *testing.T) {
 	}
 	if got, want := shell.Entries[1].Key, "aaaaaaaaaaaaaaaa"; got != want {
 		t.Errorf("後半の Key = %q, want %q", got, want)
+	}
+}
+
+// TestLoadPowerShellUnclosedQuoteLineBasedNow は、閉じない引用符のある再生順を、
+// 行単位で読んで何事も無く読み込むいまの振る舞いを固定する。
+//
+// 行単位の読み方は、閉じない引用符をその物理行の終わりで閉じる。全体を解釈すると
+// ファイルの終わりまでが1つの値になるので、全体を解釈する読み手へ移る PR2 では
+// 誤り（csvfile.UnclosedQuoteError）になる。そのコミットで期待値を直す
+// （決まったことの 13）。
+func TestLoadPowerShellUnclosedQuoteLineBasedNow(t *testing.T) {
+	const orderCSV = "section,phase,node,order,line_id,key,speaker,condition\n" +
+		"L01 Ryan,intro,N1,1,line:0001,aaaaaaaaaaaaaaaa,\"Ryan,\n" +
+		"L01 Ryan,intro,N1,2,line:0002,bbbbbbbbbbbbbbbb,Kobold,\n"
+
+	data, err := LoadPowerShell([]byte(orderCSV), nil)
+	if err != nil {
+		t.Fatalf("行単位では誤りにならないはず: %v", err)
+	}
+	if len(data.Entries) != 2 {
+		t.Fatalf("Entries = %d件、行単位では 2", len(data.Entries))
+	}
+	if got, want := data.Entries[0].Speaker, "Ryan,"; got != want {
+		t.Errorf("1件目の Speaker = %q、行単位では %q（引用符が行の終わりで閉じる）", got, want)
+	}
+	if got, want := data.Entries[1].Key, "bbbbbbbbbbbbbbbb"; got != want {
+		t.Errorf("2件目の Key = %q, want %q", got, want)
 	}
 }
