@@ -1160,15 +1160,15 @@ When you run a narrowed set of specs with `npx playwright test -c e2e <spec>`, f
 Aggregate the results afterwards with `npm run test:e2e:report`.  
 If raw data from an earlier run is left behind, the aggregation stops without counting.
 
+Both `npm run test:go` and `npm run test:e2e` fail when coverage falls below `coverageThresholds` in `package.json`.  
+The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
+Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
+When you add tests and the figures go up, raise the thresholds too.
+
 When the E2E tests fail in CI, Playwright's output (`test-results/`) is kept as an artifact for 7 days.  
 It is named `e2e-test-results-<attempt number>`.  
 Each failed test leaves a `trace.zip` and an `error-context.md`.  
 Open the trace with `npx playwright show-trace <trace.zip>` to follow the actions and the screen at that moment.
-
-Both fail when coverage falls below `coverageThresholds` in `package.json`.  
-The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
-Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
-When you add tests and the figures go up, raise the thresholds too.
 
 ### Trying the screen with the sample
 
