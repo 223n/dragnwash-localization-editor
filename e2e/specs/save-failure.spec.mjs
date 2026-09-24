@@ -855,6 +855,7 @@ test.describe("行ごとに断られたとき", () => {
     await typeTranslation(page, hello, "もしもーし？");
     await closeEditor(page);
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
+    await expectUnsent(page, hello, keyFor(SAMPLE.hello.source), "もしもーし？");
     await typeTranslation(page, goodbye, "さようなら。");
     await closeEditor(page);
     await expect.poll(() => posts.length).toBe(2);
@@ -869,6 +870,15 @@ test.describe("行ごとに断られたとき", () => {
     await expect(translationCell(page, goodbye)).toHaveText("さようなら。");
     // 保存できた応答なので、要求の失敗の文は消えている。
     await expect(page.locator("#message")).toHaveText("");
+    // 200 が返ったので待ち受けには届いている。届かないときの「まだファイルに入っていない
+    // 訳」の一覧は閉じる。断られた goodbye の訳は、行に理由と一緒に出ている。1回目が
+    // 届かなかったときの印（app.js の state.stall）を 200 で下ろさないと、断られた訳が
+    // この一覧に並び、待ち受けに届いているのに「写してから起動し直す」訳に見える。
+    //
+    // 1行だけを断らせる形では、ここは見分けられない。1行も書けないと待ち受けは 422 を
+    // 返し、200 でない応答として別の枝で印を下ろす。書けた行と断られた行の両方がある
+    // 200 だけが、この印の下ろし方を通る。
+    await expect(unsent(page)).toBeHidden();
     expectOnlyChanged(before, await server.readRoot(workingRel), {
       [hello]: withTranslation(splitLines(before)[hello - 1], "もしもーし？"),
     });
