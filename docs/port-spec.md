@@ -85,6 +85,8 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 **Goでの注意**: (a) .NET の ReadAllLines(path, Encoding) は detectEncodingFromByteOrderMarks:true なので UTF-8 BOM を自動で取り除く（level_flow.csv は実際にBOM付きで、検証したところ先頭文字は 'f'=102 だった）。Go では手動で \xEF\xBB\xBF を剥がすこと。(b) 空行は ConvertFrom-Csv が読み飛ばす（検証済み：4データ行中1行が空なら3レコード）。(c) '#' 判定は行の生の先頭文字に対する前方一致で、トリムしない。(d) この方式なので、引用フィールド内で改行して次行が '#' で始まる場合は壊れる。
 
+**上流の変更への追従（ヘッダーの選び方）**: 上流の hash-strings.ps1 は 55d2e09（2026-09-16）で、ヘッダーより上の空行とコメント行を落としてからヘッダーを選ぶようになり、c8fda90（同日）でそれを Remove-NonRecords に置き換えた。Remove-NonRecords は、引用の外にある物理行のうち `$body.Trim().Length -eq 0`（空行と空白だけの行）と `$body.StartsWith('#')` を落とす。003ed1e の ConvertFrom-Csv は完全な空行しか読み飛ばさないので、ファイルの先頭に空白だけの行があると、それが列0個のヘッダーになり、全行が malformed として捨てられていた（公開ファイルがヘッダーだけになり、終了コードは0）。移植（csvfile.ReadPowerShellTable）は、ヘッダーを選ぶ前に空行と空白だけの行を飛ばすように合わせた（上流の報告 #8）。空白の判定は .NET の Trim と同じ集合（Go の strings.TrimSpace）で、全角空白だけの行も飛ばす。"," や `""` の行は上流でも Trim で空にならないので、これまでどおりヘッダーになる。1物理行を1レコードとして読む点（f816618 で上流は全文の解釈へ移った）は変えていない。
+
 #### R5. 再生順データは data/script_order.csv、存在しなければ空配列。
 
 `$orderFile = Join-Path $root 'data/script_order.csv'` / `if (Test-Path $orderFile) { $order = @(Read-Csv $orderFile) }`。初期値 `$order = @()`。

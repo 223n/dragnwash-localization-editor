@@ -29,14 +29,18 @@ func (e *DuplicateColumnError) Error() string {
 //	(1) BOM を剥がして物理行に分ける（.NET の File.ReadAllLines 相当）
 //	(2) 行頭が '#' の行を落とす。トリムはしないので " #x" は残る
 //	(3) 残りが2行未満なら0行を返す（エラーにはしない）
-//	(4) 先頭の完全な空行だけを飛ばし、その次の行がヘッダー
+//	(4) 先頭の空行と空白だけの行を飛ばし、その次の行がヘッダー
 //	(5) 以降の行を1物理行=1レコードとしてパースする
+//
+// (4) は上流の 55d2e09 / c8fda90 に合わせてある（[ReadPowerShellTable]）。
+// それ以外は移植の基準 003ed1e の読み方のままである。
 //
 // (5) が効くので、引用フィールド内の改行はサポートされない。値に改行を含む行は
 // 物理行ごとに別レコードへ割れて壊れる。これは '#' で始まるかどうかに関係なく
-// 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。Go の encoding/csv の
-// ように複数行フィールドを正しく解釈すると、同じ入力から別のレコード集合、ひいては
-// 別のハッシュキーが生まれるため、ここでは行単位のまま扱う。
+// 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。上流は f816618 で
+// 全文を1つの文字列として解釈する読み方へ移ったが、ここは行単位のまま据え置いて
+// ある。移すと publish だけでなく、同じ読み方を前提にしている diff・order・edit の
+// 結果まで変わるためである。
 //
 // ヘッダー名の重複だけは [DuplicateColumnError] を返す。それ以外の壊れ方
 // （列数の過不足、閉じない引用符、裸の二重引用符）はエラーにしない。
@@ -68,9 +72,37 @@ type NumberedRow struct {
 //
 // 行番号が要るのは、読んだ結果を人へ示す側だけである（internal/publish が
 // 「どの行の訳が失われるか」を出すときに使う）。読み方そのものは1つでよいので、
-// [ReadPowerShellRows] はこちらへ委ねてある。両方に書くと、'#' の落とし方や
-// ヘッダーの選び方といった規則が2か所に散り、片方だけが直る形になる。
+// [ReadPowerShellRows] はこちらへ、こちらは [ReadPowerShellTable] へ委ねてある。
+// 別々に書くと、'#' の落とし方やヘッダーの選び方といった規則が散り、片方だけが
+// 直る形になる。
 func ReadPowerShellRowsNumbered(data []byte) ([]NumberedRow, error) {
+	table, err := ReadPowerShellTable(data)
+	if err != nil {
+		return nil, err
+	}
+	return table.Rows, nil
+}
+
+// PowerShellTable は [ReadPowerShellTable] が読んだ結果。行に加えて、どの行を
+// ヘッダーに選んだかを持つ。
+type PowerShellTable struct {
+	// Header はヘッダーに選んだ行のフィールド。ヘッダーに選べる行が1つも無ければ nil。
+	Header []string
+	// HeaderLine はヘッダーの1始まりの物理行番号。ヘッダーが無ければ 0。
+	HeaderLine int
+	// Rows はデータ行。[ReadPowerShellRowsNumbered] が返すものと同じ。
+	Rows []NumberedRow
+}
+
+// ReadPowerShellTable は [ReadPowerShellRows] と同じ読み方で読み、どの行を
+// ヘッダーに選んだかも一緒に返す。
+//
+// ヘッダーが要るのは internal/publish の守りである。データ行が0件でも
+// 「key 列や translation 列を引けるヘッダーか」を確かめたいので、Rows が空に
+// なる場合（'#' を除いた残りが1行だけのとき）でも、選べるならヘッダーは埋める。
+// そのときは元実装どおり列名の重複を確かめない（行が無ければ ConvertFrom-Csv も
+// 例外を出さない）。
+func ReadPowerShellTable(data []byte) (PowerShellTable, error) {
 	lines := SplitNetLines(TrimBOMString(string(data)))
 
 	// 落とした行があっても元の行番号を言えるように、行と番号を組で持つ。
@@ -93,41 +125,51 @@ func ReadPowerShellRowsNumbered(data []byte) ([]NumberedRow, error) {
 		}
 		kept = append(kept, numberedLine{text: line, number: i + 1})
 	}
-	// 元実装の `if ($lines.Count -lt 2) { return @() }`。数えるのは空行を落とす前の行数。
-	if len(kept) < 2 {
-		return nil, nil
-	}
 
-	// ヘッダー探索は「レコードになる行を探す」ではない。ConvertFrom-Csv が
-	// 読み飛ばすのは完全な空行だけで、空白だけの行も "," も '""' もヘッダーとして
-	// 採用される（pwsh 7.6.6 で実測）。データ行に適用される空行相当の判定
-	// （[ParsePowerShellRecord] の第2戻り値）をここへ持ち込むと、先頭に空白だけの
-	// 行が1本あるファイルで本物のヘッダーがデータ行へずれ、全行が捨てられる。
+	// ヘッダーの前にある空行と空白だけの行を飛ばす。上流の hash-strings.ps1 は
+	// 55d2e09 と c8fda90（Remove-NonRecords）で、ヘッダーを選ぶ前にこれらを落とす
+	// ようになった。判定は `$body.Trim().Length -eq 0` で、.NET の Trim は
+	// Char.IsWhiteSpace の文字を落とす。Go の strings.TrimSpace が使う
+	// unicode.IsSpace と同じ集合である（全角空白 U+3000 も落ちる）。
+	//
+	// 以前は 003ed1e の ConvertFrom-Csv に合わせて完全な空行だけを飛ばしていた。
+	// その読み方だと、空白だけの行が1本あるだけで列が0個のヘッダーになり、
+	// 本物のヘッダーがデータ行へずれて全行が捨てられる。publish はそれを
+	// 終了コード 0 のまま書き出し、ロケールの訳がまるごと消えていた
+	// （いまの公開ファイルも同じ読み方で読むので、失われる訳の確かめも素通りした）。
+	//
+	// "," や '""' の行は、上流でも Trim で空にならないのでヘッダーになる。ここも
+	// そのまま採る。データ行に使う空行相当の判定（[ParsePowerShellRecord] の
+	// 第2戻り値）は持ち込まない。
 	next := 0
-	for next < len(kept) && kept[next].text == "" {
+	for next < len(kept) && strings.TrimSpace(kept[next].text) == "" {
 		next++
 	}
-	if next >= len(kept) {
-		return nil, nil
+	var table PowerShellTable
+	if next < len(kept) {
+		// 列が0個や、名前の空の列だけのヘッダー（"," など）もそのまま採る。
+		// その場合どの列も引けず、全データ行が「列なし」の [Row] になる。
+		// 元実装も同じで、空の列名には H1 のような既定名が付くが、名前で引く
+		// かぎり結果は変わらない。
+		table.Header = parsePowerShellFields(kept[next].text)
+		table.HeaderLine = kept[next].number
 	}
-	// 列が0個のヘッダー（"   " など）もそのまま採る。その場合どの列も引けず、
-	// 全データ行が「列なし」の [Row] になる。元実装も同じで、空の列名には
-	// H1 のような既定名が付くが、名前で引くかぎり結果は変わらない。
-	header := parsePowerShellFields(kept[next].text)
-	next++
-	if err := checkDuplicateColumns(header); err != nil {
-		return nil, err
+	// 元実装の `if ($lines.Count -lt 2) { return @() }`。数えるのは空行を落とす前の行数。
+	if len(kept) < 2 || next >= len(kept) {
+		return table, nil
+	}
+	if err := checkDuplicateColumns(table.Header); err != nil {
+		return PowerShellTable{}, err
 	}
 
-	var rows []NumberedRow
-	for ; next < len(kept); next++ {
+	for next++; next < len(kept); next++ {
 		fields, ok := ParsePowerShellRecord(kept[next].text)
 		if !ok {
 			continue
 		}
-		rows = append(rows, NumberedRow{Row: NewRow(header, fields), Line: kept[next].number})
+		table.Rows = append(table.Rows, NumberedRow{Row: NewRow(table.Header, fields), Line: kept[next].number})
 	}
-	return rows, nil
+	return table, nil
 }
 
 // checkDuplicateColumns はヘッダーに同名の列（大文字小文字違いを含む）が
