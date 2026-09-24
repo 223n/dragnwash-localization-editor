@@ -313,8 +313,6 @@ const (
 		"飲み込みの確かめ (f) で止まる見込み（確かめたうえで通す指定で書く）"
 	whyPubRowLikeContinuation = "原文の続きの行が、1行だけで読むとヘッダーと同じ7列のレコードに見える。いまは (c) で止める。" +
 		"PR2 でも飲み込みの確かめ (f) で止まる見込み（確かめたうえで通す指定で書く）"
-	whyPubMultilineCount = "訳の空の、行をまたぐレコードを行単位で読み、2件の malformed dropped に数える" +
-		"（出力は上流と同じ。実物の ja 作業コピーと同じ形）。PR2 で上流と同じ集計になる見込み"
 	whyPubMultilineCurrent = "いまの公開ファイルに行をまたぐレコードがあるので、形の確かめ (b) で止める。" +
 		"PR2 で (b) をやめると、上流と同じバイトを書く見込み"
 	whyPubHeaderColumns = "ヘッダーに key 列も source_en 列も無いか、translation 列が無いので、形の確かめ (a) で止める。" +
@@ -341,12 +339,8 @@ const (
 		"PR2 で (a) に「最初の列名が '#' で始まるヘッダー」の判定を足して止める。(a) を「key 列が無い」に広げると、" +
 		"正当な source_en,translation の2列の作業コピーまで止まるので、'#' を見る判定が別に要る。" +
 		"PR2 のあとでこの2件がまだ書くなら、その判定を入れ忘れている"
-	whyPubDupNoData = "データ行の無いファイルで、列名の重複を確かめずに書く。上流は例外で止まる。" +
-		"PR2 の読み手はデータが0件でも誤りにするので、上流と同じく書かない見込み"
 	whyPubBareQuote = "裸の引用符の後ろのコメント行や見出しを、引用の外として落とす。上流はレコードとして読み、" +
 		"列が多ければ公開ファイルに書く（上流の不具合。写さない）"
-	whyPubSpaceOnly = "全角空白や NO-BREAK SPACE だけの行を行単位で読み、malformed dropped に数える。上流は落とす。" +
-		"PR2 で上流と同じ集計になる見込み"
 	whyPubCultureHash = "U+00AD のあとに '#' が続く行をデータとして読み、malformed dropped に数える。" +
 		"上流の StartsWith('#') はカルチャに依存する照合でコメントとして落とす（Go では照合表を持てない）"
 	whyPubEnglishKey = "key 列の英文をハッシュにして公開する上流の #9。追従するかは、全体を解釈する読み手へ移す" +
@@ -366,19 +360,11 @@ var publishDiffs = map[string]knownPublishDiff{
 	"ml-translation-blank-lines": {pubPR2, whyPubMultilineInput, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜5行目 publish_multiline_translated）`,
 	}},
-	"ml-source-real-shape": {pubPR2, whyPubMultilineCount, []string{
-		`converted: 上流 3 / dwloc 2`,
-		`malformed dropped: 上流 0 / dwloc 2`,
-	}},
 	"ml-source-translated": {pubPR2, whyPubMultilineInput, []string{
 		`上流 書く / dwloc 止まる（形: 入力 3〜5行目 publish_multiline_translated）`,
 	}},
 	"ml-source-translated-2col": {pubPR2, whyPubTwoColumnSource, []string{
 		`上流 書く / dwloc 止まる（形: 入力 3〜5行目 publish_multiline_translated）`,
-	}},
-	"ml-source-mixed-lines": {pubPR2, whyPubMultilineCount, []string{
-		`converted: 上流 3 / dwloc 2`,
-		`malformed dropped: 上流 0 / dwloc 2`,
 	}},
 	"ml-translation-only-newline": {pubPR2, whyPubMultilineInput, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
@@ -489,9 +475,6 @@ var publishDiffs = map[string]knownPublishDiff{
 	// ここに無い。上流はそのヘッダーを飛ばさない（読んだ最初の値が '#' で始まらない）。
 	// PR2 で (a) に足す csvfile.PowerShellHeader.CommentLike も読んだ最初の値そのもので
 	// 見るので、PR2 のあとも止まらずに上流と同じに書く。
-	"dup-columns-no-data": {pubPR2, whyPubDupNoData, []string{
-		`上流 変換できない / dwloc 書く`,
-	}},
 	"bare-quote-then-comment": {pubIntended, whyPubBareQuote, []string{
 		`converted: 上流 1 / dwloc 0`,
 		`other: 上流 3 / dwloc 2`,
@@ -504,12 +487,6 @@ var publishDiffs = map[string]knownPublishDiff{
 		`converted: 上流 1 / dwloc 0`,
 		`other: 上流 3 / dwloc 2`,
 		`出力の 5 行目: 上流 "fa515818c52bd108,UI,,,e,TAIL" / dwloc "fedcba9876543210,UI,,,UI,b"`,
-	}},
-	"ideographic-space-line": {pubPR2, whyPubSpaceOnly, []string{
-		`malformed dropped: 上流 0 / dwloc 1`,
-	}},
-	"nbsp-line": {pubPR2, whyPubSpaceOnly, []string{
-		`malformed dropped: 上流 0 / dwloc 1`,
 	}},
 	"soft-hyphen-comment": {pubIntended, whyPubCultureHash, []string{
 		`malformed dropped: 上流 0 / dwloc 1`,

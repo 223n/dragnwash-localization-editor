@@ -182,12 +182,14 @@ type translations struct {
 // readTranslations は公開ファイルから [translations] を作る。
 //
 // 引き当ては [survivors] と同じく [csvfile.FoldASCII] で畳む。訳の入っていない
-// 行は入れない。土台がそろっているかは、訳のある行だけで決まる。
+// 行は入れない。土台がそろっているかは、訳のある行だけで決まる。読み方は publish が
+// 入力を読むときと同じ（全体を解釈する [csvfile.ReadPowerShell]）。
 func readTranslations(data []byte) (translations, error) {
-	rows, err := csvfile.ReadPowerShellRows(data)
+	file, err := csvfile.ReadPowerShell(data)
 	if err != nil {
 		return translations{}, err
 	}
+	rows := file.Rows()
 	out := translations{
 		order: make([]keyedText, 0, len(rows)),
 		at:    make(map[string]keyedText, len(rows)),

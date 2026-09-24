@@ -47,17 +47,20 @@ type Loss struct {
 // current は [BuildTarget] の出力先にいまあるバイト列、next は組み立てた結果。
 // 返りが空なら、訳は1つも失われない。
 //
-// 読み方は publish が入力を読むときと同じ（[csvfile.ReadPowerShellRowsNumbered]）で、
+// 読み方は publish が入力を読むときと同じ（全体を解釈する [csvfile.ReadPowerShell]）で、
 // キーの決め方も同じ（[rowKey]）である。守りが見ているものと publish が書くものが
-// 別の読み方で決まっていると、守りを通ったのに消える、という形になる。
+// 別の読み方で決まっていると、守りを通ったのに消える、という形になる。current も
+// next も同じ読み手で読むので、行をまたぐ訳も1つの訳として突き合わせる。
 //
-// 誤りを返すのは current か next のヘッダー列名が重複しているときだけである。
-// そのときは「失われないこと」を確かめられていないので、呼び出し側は書かないこと。
+// 誤りを返すのは、current か next のヘッダー列名が重複しているときと、閉じない
+// 引用符があるときだけである。そのときは「失われないこと」を確かめられていないので、
+// 呼び出し側は書かないこと。
 func CheckLoss(locale string, current, next []byte) ([]Loss, error) {
-	rows, err := csvfile.ReadPowerShellRowsNumbered(current)
+	file, err := csvfile.ReadPowerShell(current)
 	if err != nil {
 		return nil, err
 	}
+	rows := file.Records
 	if len(rows) == 0 {
 		// まだ何も入っていないファイル。失うものが無い。
 		return nil, nil
@@ -131,10 +134,11 @@ func CheckTargetLoss(t Target, out []byte) ([]Loss, error) {
 // 畳んでも変わらないが、台詞IDは lineTable が大文字小文字を区別せずに引くので、
 // ここだけ区別すると、綴りの大小が違う台詞ID行を「失われた」と誤って報せる。
 func survivors(next []byte) (map[string]string, error) {
-	rows, err := csvfile.ReadPowerShellRows(next)
+	file, err := csvfile.ReadPowerShell(next)
 	if err != nil {
 		return nil, err
 	}
+	rows := file.Rows()
 	out := make(map[string]string, len(rows))
 	for _, row := range rows {
 		k := strings.TrimSpace(row.Get(colKey))

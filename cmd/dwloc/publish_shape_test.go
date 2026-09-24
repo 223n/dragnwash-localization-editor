@@ -183,8 +183,9 @@ func TestPublishPassesTheRealWorkingCopyShape(t *testing.T) {
 	if got != want {
 		t.Errorf("行をまたぐ訳の空のレコードで出力が変わった\n--- あり ---\n%s\n--- なし ---\n%s", got, want)
 	}
-	// 1行ずつ読むとそのレコードは2件の malformed として捨てられる。実物の集計と同じ形。
-	checkContains(t, "標準出力", stdout, []string{"2 malformed dropped"})
+	// 全体を解釈して読むので、そのレコードは訳の空の行になり、捨てられない。
+	// 行単位で読んでいたときは2件の malformed dropped だった（上流 main は 0）。
+	checkContains(t, "標準出力", stdout, []string{"3 converted", "0 malformed dropped"})
 }
 
 // TestPublishShapeReportIsCapped は、形の崩れが多いときの報告を見る。

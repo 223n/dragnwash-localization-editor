@@ -275,10 +275,12 @@ func TestCheckInputShapeKeepsTheRealWorkingCopyShape(t *testing.T) {
 	if string(got) != string(want) {
 		t.Errorf("行をまたぐ訳の空のレコードで出力が変わった\n got %q\nwant %q", got, want)
 	}
-	// 行単位で読むと、そのレコードは1行目（原文のハッシュがキーと合わない）と
-	// 続きの行（キーの形でない）の2件が捨てられる。実物の集計と同じ形。
-	if stats.Dropped != 2 {
-		t.Errorf("捨てた行 = %d、2 を期待（%+v）", stats.Dropped, stats)
+	// 全体を解釈して読むので、そのレコードは原文のハッシュがキーと合う訳の空の行に
+	// なり、捨てられない（converted に数える）。行単位で読んでいたときは、1行目
+	// （原文のハッシュがキーと合わない）と続きの行（キーの形でない）の2件が
+	// malformed dropped だった。上流 main の集計と同じになった。
+	if stats.Dropped != 0 || stats.Converted != 4 {
+		t.Errorf("捨てた行 = %d、変換した行 = %d、0 と 4 を期待（%+v）", stats.Dropped, stats.Converted, stats)
 	}
 }
 

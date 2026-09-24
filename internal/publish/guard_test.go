@@ -1,11 +1,13 @@
 package publish
 
 import (
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -361,6 +363,8 @@ func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
 		working string
 		// wantLost は失われると報せるキー。空なら書き出してよい。
 		wantLost []string
+		// wantUnclosed は、組み立てそのものが閉じない引用符の誤りで止まることを期待するか。
+		wantUnclosed bool
 	}{
 		{
 			name:     "長さ0",
@@ -378,11 +382,14 @@ func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
 			wantLost: []string{keyB, keyC},
 		},
 		{
-			// source_en と translation が1つの列名に融合し、translation 列を
-			// 引けなくなる。全行が「訳が空」と見なされて落ちる。
-			name:     "ヘッダーの引用符が閉じていない",
-			working:  strings.Replace(whole, ",source_en,", `,"source_en,`, 1),
-			wantLost: []string{keyA, keyB, keyC},
+			// 行単位で読んでいたときは、source_en と translation が1つの列名に融合し、
+			// translation 列を引けなくなって、全行が「訳が空」と見なされて落ちていた
+			// （doc.go の実測表）。全体を解釈すると、ヘッダーがファイルの終わりまでを
+			// 飲み込むので、読み手が閉じない引用符の誤りを返し、組み立てそのものが止まる。
+			// cmd/dwloc と画面の書き出しは、その前に形の確かめ（CheckTargetShape）で止める。
+			name:         "ヘッダーの引用符が閉じていない",
+			working:      strings.Replace(whole, ",source_en,", `,"source_en,`, 1),
+			wantUnclosed: true,
 		},
 		{
 			name:     "公開ファイルにある行の訳を1つ空にした",
@@ -410,6 +417,13 @@ func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
 				t.Fatalf("入力が作業コピーになっていない: %+v", targets)
 			}
 			out, _, err := BuildTarget(nil, targets[0])
+			if tt.wantUnclosed {
+				var unclosed *csvfile.UnclosedQuoteError
+				if !errors.As(err, &unclosed) || unclosed.Line != 1 {
+					t.Errorf("組み立てが閉じない引用符で止まらない: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("BuildTarget: %v", err)
 			}
