@@ -35,9 +35,11 @@ on:
         default: ''
 
 # 同じブランチに続けて push したとき、古い実行を止める。
-# 別のランナーで試す実行は、いつもの実行と止め合わないよう、ランナーの名前でも分ける
+# ci.yml と同じく、止めるのは、きっかけ（イベント）とランナーが同じ古い実行だけにする。
+# 組にイベント名を入れないと、週1回の実行（既定ブランチの develop で動く）や手で動かした実行が、
+# 走っている develop の push の走査を止め、その push の結果が Code scanning に届かない
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:

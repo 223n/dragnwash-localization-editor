@@ -36,11 +36,12 @@ on:
         default: ''
 
 # 同じブランチに続けて push したとき、古い実行を止める。
-# 別のランナーで試す実行は、いつもの実行と止め合わないよう、ランナーの名前でも分ける。
-# 分けないと、develop で試した実行が develop の push の CI を止め、リリース（release.yml）が
-# 「止められた CI」を見て止まる
+# 止めるのは、きっかけ（イベント）とランナーが同じ古い実行だけにする。そのため組にイベント名とランナーの名前を入れる。
+# 入れないと、週1回の実行（schedule。既定ブランチの develop で動く）や develop で手で動かした実行が、
+# 走っている develop の push の CI を止める。リリース（release.yml）は push の実行を見るので、
+# 「止められた CI」を見て止まる。手で動かした実行が通っても、止められた push の実行のほうを見るので進めない
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
