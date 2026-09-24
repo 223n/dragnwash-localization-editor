@@ -335,6 +335,39 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 残る隙間: 引用符で囲まない値の中の単独の CR（手で書いた `a\rb` など）は、行単位の読み手が行の区切りとして値を切るが、引用が無いのでどの確かめにも当たらない。ゲームは引用の外の CR を捨てて ab と読む（R8）。書き手（Escape-Csv）は CR を含む値を必ず引用するので、道具が書いたファイルには現れない。
 
+### 上流と意図して違える点
+
+publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4）の土台として、上流 main（dc55c9e）の tools/hash-strings.ps1 と dwloc を、合成した入力の表で突き合わせる試験を置いた。入力は testdata/upstream/cases.json（60件、英文と訳はどれも架空の文）、上流の正解は testdata/upstream/expected.json で、scripts/upstream-fixtures.ps1 が上流の Read-Csv と Remove-NonRecords を AST で取り出して読ませた結果（レコードの値と物理行の範囲）と、上流のスクリプトを通しで走らせた結果（出力のバイトと集計の1行）を持つ。作り方は testdata/upstream/README.md にある。
+
+保存した正解は pwsh 7.4.6（上流の docker の hash 経路と同じ。mcr.microsoft.com/dotnet/sdk:8.0-noble に dotnet tool で入れたもの、Linux、カルチャは不変）で作った。手元の pwsh 7.6.6（Windows、ja-JP）で作り直した結果とは、pwsh の版の記録と例外の文面の言語のほかは同じだった（2026-09-24）。culture に依存する StartsWith('#') も、両方で U+00AD のあとの '#' をコメントと見なした。
+
+違ってよいのは次の表の行だけである。試験（internal/csvfile/upstream_fixture_test.go と cmd/dwloc/publish_upstream_test.go）は、違う入力と違い方を表として固定し、それ以外の違いが出れば落ちる。
+
+| 項目 | 上流 main | dwloc | 試験の入力 |
+| ---- | ---- | ---- | ---- |
+| 単独の CR（引用の中、行末） | Remove-NonRecords が単独の CR を行末と見なさず、その手前を捨てる。その行の訳が消える | 単独の CR も行の区切りにして読む。引用の中の単独の CR は値に残す（publish はいま (c) で止め、PR2 からは単独の CR として止める） | lone-cr-in-quoted-translation、lone-cr-line-end |
+| CR だけの改行のファイル | 全行を捨て、ヘッダーとコメントだけを書く | 読む | cr-only-published、cr-only-working |
+| 引用符で囲まない値の中の単独の CR | その行を失う | 行の区切りとして値を切る（上の「残る隙間」） | lone-cr-unquoted-value |
+| ',' だけの行 | 空の値のレコードにし、malformed dropped に数える | 空行相当として黙って落とす。違うのは集計の数だけ | comma-only-row |
+| '#' で始まるヘッダー（引用符で囲んだもの、空白のあとのもの） | ConvertFrom-Csv がそのレコードを飛ばし、次のレコード（データ）をヘッダーにする。何も書かない | 飛ばさずヘッダーとして読む。いまは source_en 列から訳を書く。PR2 から形の確かめ (a) で止める | hash-header-quoted、hash-header-leading-space |
+| 裸の引用符の後ろのコメント行と見出し | '"' の偶奇で引用の中と見なし、レコードにする。列が多ければ公開ファイルに書く | 引用の外として落とす | bare-quote-then-comment、bare-quote-then-heading、quote-after-closing-quote |
+| 行頭の '#' の判定 | StartsWith('#') はカルチャに依存する照合で、U+00AD のように照合上無視される文字を飛ばす | 序数で比べる。U+00AD で始まる行はデータとして読み、malformed dropped に数える | soft-hyphen-comment |
+| 閉じない引用符（上流の報告 #11） | ファイルの終わりまでを値に飲み込み、英語の原文ごと書く | 形の確かめ (e) で止める（PR2 からは読み手の型付きの誤りを終了コード1にする） | unclosed-to-eof、unclosed-last-line、unclosed-header、unclosed-published-middle |
+| 飲み込み（引用符が別の行で閉じる） | 後ろの行（英語の原文やキー）を訳に取り込んで書く | 止める。いまは (b)(c)、PR2 からは飲み込みの確かめ (f) | swallow-3col、swallow-7col-hash-close、swallow-2col-hash-close、swallow-7col-empty-key-english、swallow-6col-published |
+| ヘッダーに key 列か translation 列が無い | すべての行を捨て、ヘッダーとコメントだけを書く | 形の確かめ (a) で止める | ml-header、hash-header-unquoted |
+| key 列の英文（上流の #9） | ハッシュにして公開する | 捨てる。いまの公開ファイルにある訳が失われるとして止める | english-in-key-column |
+| いまの公開ファイルにだけある行（上流の #10） | 引き継ぐ。集計の1行に kept from the published file として数える | 引き継がない。訳が失われるとして止める。集計の1行にこの項目は無い | published-row-missing-from-working |
+
+読み手の試験（internal/csvfile）では、ほかに次の違いを「PR1 で直す」として表に載せてある。全体を解釈する新しい読み手が入れば、表から消える。
+
+- csvfile.ReadPowerShellWhole は列名の重複を確かめない。上流は、データ行が0件でも ConvertFrom-Csv の例外で止まる（dup-columns-with-data、dup-columns-no-data、dup-columns-blank-after）。
+
+行単位の読み手（csvfile.ReadPowerShellTable）の違い（行をまたぐ値が最初の行で切れる、閉じない引用符が行の終わりで閉じる、全角空白や NO-BREAK SPACE だけの行がレコードになる、データ行の無いファイルで列名の重複を確かめない）は、「行単位の読み方」として同じ表に載せてある。
+
+publish の試験（cmd/dwloc）では、いまの publish の振る舞いのうち PR2 で変わる箇所を「PR2 で変わる」として表に載せてある。行をまたぐ訳の入った入力と、行をまたぐレコードのあるいまの公開ファイルで止まること、訳の空の行をまたぐレコードを2件の malformed dropped に数えること、飲み込みと単独の CR を (b)(c) で止めていること、'#' で始まるヘッダーから書くこと、データ行の無いファイルで列名の重複を見ないこと、全角空白だけの行を malformed dropped に数えること、などである。見込みは表の理由に書いた。たとえば source_en,translation の2列の作業コピーで原文が行をまたぐと、続きの行の区切りの数がヘッダーの列数と同じになるので、PR2 の飲み込みの確かめ (f) で止まる見込みである（確かめたうえで通す指定で書く）。
+
+集計の1行は項目ごとに比べる（converted、already hashed、per-line、malformed dropped、in play order、other）。kept from the published file は dwloc の集計の1行に無いので比べない（上の表の #10 の行）。上流 main の集計の1行は、R28 に書いた 003ed1e の8項目に、この項目を足した9項目である。
+
 ### 未決の点
 
 - 出力の改行コードを CRLF と LF のどちらに固定すべきか。スクリプトは Environment.NewLine 依存（Windows で CRLF）だが、リポジトリの blob は LF（core.autocrlf=input）。Go は環境非依存なので、どちらかに決め打つ必要がある。仕様としてどちらが「正」なのかはコードからは判断できない。
