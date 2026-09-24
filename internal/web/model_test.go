@@ -226,6 +226,42 @@ func TestStatsShowBrokenRowsOnlyWhenThereAreSome(t *testing.T) {
 	}
 }
 
+func TestStatsLeaveOutAnUnreadPublishedFile(t *testing.T) {
+	// 閉じない引用符で読まなかった公開ファイルは、ハッシュ行と台詞ID行を並べない。
+	// 行を1つも使っていないので、「0」と並べると公開ファイルが空だと読まれる。
+	// 読めなかったことは断り書き（note.published_unclosed）が言う。CLI の text 形式も
+	// この場面では件数を書かない（internal/diff の writeTextLocale）。
+	s := newTestServer(t, Options{UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	counted := []string{s.cat.T(ja, "stats.hash_rows"), s.cat.T(ja, "stats.line_rows")}
+	always := []string{s.cat.T(ja, "stats.file_lines"), s.cat.T(ja, "stats.data_lines")}
+
+	for _, tc := range []struct {
+		name     string
+		unclosed int
+	}{
+		{"読めた公開ファイル", 0},
+		{"引用符が閉じない公開ファイル", 2},
+	} {
+		// 数は、読み込みが0件で埋めたときと同じ値にする。
+		stats := s.buildStats(ja, diff.Summary{PublishedUnclosed: tc.unclosed}, 6, 2)
+		has := func(label string) bool {
+			return slices.ContainsFunc(stats, func(v statView) bool { return v.Label == label })
+		}
+		for _, label := range counted {
+			if got, want := has(label), tc.unclosed == 0; got != want {
+				t.Errorf("%s: %q を並べたか = %v、%v を期待: %+v", tc.name, label, got, want, stats)
+			}
+		}
+		// 編集しているファイルの行数は、公開ファイルが読めなくても数えられる。
+		for _, label := range always {
+			if !has(label) {
+				t.Errorf("%s: %q を並べていない: %+v", tc.name, label, stats)
+			}
+		}
+	}
+}
+
 func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 	// 断り書きには、読んだものと読めなかったものを書く。読めなかったことを
 	// 黙ると、翻訳者は「判定していません」の理由を追えない。どれもパスを出すときは

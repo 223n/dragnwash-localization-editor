@@ -486,8 +486,15 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 	stats := []statView{
 		{Label: s.cat.T(cat, "stats.file_lines"), Value: fileLines},
 		{Label: s.cat.T(cat, "stats.data_lines"), Value: dataRows},
-		{Label: s.cat.T(cat, "stats.hash_rows"), Value: sum.HashRows},
-		{Label: s.cat.T(cat, "stats.line_rows"), Value: sum.LineRows},
+	}
+	if sum.PublishedUnclosed == 0 {
+		// 閉じない引用符で読まなかった公開ファイルは、行を1つも使っていない。
+		// 「0」と並べると、公開ファイルが空だと読まれる。読めなかったことは断り書き
+		// （note.published_unclosed）が言う。CLI の text 形式も件数を書かない。
+		stats = append(stats,
+			statView{Label: s.cat.T(cat, "stats.hash_rows"), Value: sum.HashRows},
+			statView{Label: s.cat.T(cat, "stats.line_rows"), Value: sum.LineRows},
+		)
 	}
 	if sum.BrokenRows > 0 {
 		// 0 のときは出さない。実データでは13ロケールとも0件で、毎回「0」と
