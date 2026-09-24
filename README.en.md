@@ -64,12 +64,13 @@ The two "Source code" entries that GitHub adds automatically are the source code
 They contain no binaries.
 
 When you open the archive, it contains a single folder with the same name as the archive.  
-That folder has three things in it.
+That folder has four things in it.
 
 ```text
 dwloc_0.5.0_windows_amd64/
-  dwloc.exe     ← the program itself
+  dwloc.exe                ← the program itself
   LICENSE
+  THIRD_PARTY_NOTICES.md
   README.txt
 ```
 
@@ -77,6 +78,7 @@ dwloc_0.5.0_windows_amd64/
 | ---- | ---- |
 | `dwloc` (`dwloc.exe` on Windows) | The program itself |
 | `LICENSE` | The license (Apache License 2.0) |
+| `THIRD_PARTY_NOTICES.md` | The attribution for the icons on the screen (Font Awesome Free, CC BY 4.0) |
 | `README.txt` | A short summary of how to run it |
 
 There is a folder wrapped around everything so that extracting the archive does not scatter loose files across your machine.
