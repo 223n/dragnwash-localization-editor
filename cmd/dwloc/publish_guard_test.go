@@ -172,6 +172,68 @@ func TestPublishReportsLossOfAMultilineTranslation(t *testing.T) {
 	})
 }
 
+// TestPublishMarksKeysInReports は、報告に出すキーの制御文字を見える印に置き換える
+// ことを見る。失われる訳の報告と、ゲーム側とのずれの見本の両方である。
+//
+// キーを決められない行では、key 列の値がそのまま報告に出る。全体を解釈して読むので、
+// 引用した key 列の値に改行が入りうる。そのまま出すと報告の1件が何行にも割れ、CR なら
+// 行頭へ戻って前の文字を上書きし、別の行の報告と読み違える。見本の key 列の2行目は
+// 列の数がヘッダーと違い、キーの形でもなく、閉じ引用符の後ろに文字も続かないので、
+// 形の確かめには当たらない。
+func TestPublishMarksKeysInReports(t *testing.T) {
+	const oddKey = "\"abc\r\ndef,ghi\""
+	const marked = "abc␍↵def,ghi"
+	noRawKey := func(t *testing.T, stderr string) {
+		t.Helper()
+		if strings.Contains(stderr, "abc\r") || strings.Contains(stderr, "\ndef,ghi") {
+			t.Errorf("キーの改行をそのまま出している:\n%q", stderr)
+		}
+	}
+
+	t.Run("失われる訳", func(t *testing.T) {
+		root := lossRepo(t)
+		published := "key,section,node,order,speaker,translation\n" +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n" +
+			oddKey + ",UI,,,UI,訳\n"
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(jaPublishedPath)), []byte(published), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// 作業コピーの無いロケール（入力と書き出し先が同じ）。キーを決められない行は
+		// 新しい出力に残らないので、失われる訳として止まる。
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game")
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"dwloc:       3〜4行目 " + marked + " 「訳」 この行が新しい出力に無い\n"})
+		noRawKey(t, stderr)
+	})
+
+	t.Run("ゲーム側とのずれ", func(t *testing.T) {
+		root := lossRepo(t)
+		repo := "key,section,node,order,speaker,translation\n" +
+			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n" +
+			oddKey + ",UI,,,UI,新しい訳\n"
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(jaPublishedPath)), []byte(repo), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		game := makeGame(t, map[string]string{
+			"Translations/_discovered/ja.working.csv": workingBoth,
+			jaPublishedPath: "key,section,node,order,speaker,translation\n" +
+				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n" +
+				oddKey + ",UI,,,UI,古い訳\n",
+		})
+		code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{
+			"ゲームに入っている翻訳が古いので",
+			"dwloc:       " + marked + "\n",
+		})
+		noRawKey(t, stderr)
+	})
+}
+
 func TestPublishDryRunStopsTheSameWay(t *testing.T) {
 	// --dry-run でも同じ判定をして、同じ報告を出す。書かないことは変わらないので、
 	// 判定だけ変えると「dry-run では通ったのに本番で止まる」食い違いが生まれる。
