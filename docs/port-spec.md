@@ -356,9 +356,11 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 | ヘッダーに key 列も source_en 列も無いか、translation 列が無い | すべての行を捨て、ヘッダーとコメントだけを書く | 形の確かめ (a) で止める | ml-header、hash-header-unquoted |
 | 集計の1行の kept from the published file | いまの公開ファイルから引き継いだ行の数を、9項目目として出す | この項目を持たない。publish の試験は、この項目を除いた6項目を比べる | （すべての入力） |
 
-読み手の試験（internal/csvfile）では、ほかに次の違いを「PR1 で直す」として表に載せてある。全体を解釈する新しい読み手が入れば、表から消える。
+読み手の試験（internal/csvfile）は、主の読み手（csvfile.ReadPowerShell）、publish の守り専用の csvfile.ReadPowerShellWhole、行単位の読み手の3つを突き合わせる。主の読み手の違いは、上の表の読み手に関わる行（単独の CR、CR だけの改行、',' だけの行、'#' で始まるヘッダー、裸の引用符、行頭の '#'、閉じない引用符）だけである。閉じない引用符では、値を返さずに型付きの誤り（UnclosedQuoteError）を返す。
 
-- csvfile.ReadPowerShellWhole は列名の重複を確かめない。上流は、データ行が0件でも ConvertFrom-Csv の例外で止まる（dup-columns-with-data、dup-columns-no-data、dup-columns-blank-after）。
+PR0 では、次の違いを「PR1 で直す」として表に載せていた。PR1 で主の読み手が入り、主の読み手では上流と一致するようになった。守り専用の読み手の表では「守り専用の読み方」として残す（PR2 で publish の守りが主の読み手へ移ると、この読み手は使われなくなる）。
+
+- csvfile.ReadPowerShellWhole は列名の重複を確かめない（行単位の読み手が先に確かめる）。上流は、データ行が0件でも ConvertFrom-Csv の例外で止まる。主の読み手は、データが0件でも DuplicateColumnError を返す（dup-columns-with-data、dup-columns-no-data、dup-columns-blank-after）。
 
 行単位の読み手（csvfile.ReadPowerShellTable）の違い（行をまたぐ値が最初の行で切れる、閉じない引用符が行の終わりで閉じる、全角空白や NO-BREAK SPACE だけの行がレコードになる、データ行の無いファイルで列名の重複を確かめない）は、「行単位の読み方」として同じ表に載せてある。
 

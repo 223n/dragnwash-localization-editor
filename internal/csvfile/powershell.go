@@ -180,7 +180,11 @@ func ReadPowerShellTable(data []byte) (PowerShellTable, error) {
 // 空の列名は数えない。ConvertFrom-Csv は空の列名に H1, H2 ... の既定名を振って
 // 警告を出すだけで、重複としては止まらない（pwsh 7.6.6 で実測）。
 // "key,translation,,," のように空の列が2つ以上あるファイルを、元実装は公開できる。
-func checkDuplicateColumns(header []string) error {
+//
+// 型を error にしないのは、[ReadPowerShellMarked] が印として持つためである。
+// 呼び出し側は nil かどうかを、この型のまま比べること（error に入れてから比べると、
+// 型付きの nil が nil でなくなる）。
+func checkDuplicateColumns(header []string) *DuplicateColumnError {
 	seen := make(map[string]struct{}, len(header))
 	for _, name := range header {
 		if name == "" {
