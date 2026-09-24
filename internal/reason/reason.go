@@ -256,6 +256,13 @@ const (
 	EditNoNUL = "edit_no_nul"
 	// EditBadUTF8 は訳が正しいUTF-8でないこと。
 	EditBadUTF8 = "edit_bad_utf8"
+	// EditMultiline はその行が、複数の物理行にまたがるレコードに属すること。
+	// 置換は line と end（レコードの最初と最後の物理行）。保存は物理行の単位なので、
+	// レコードの単位で書けるようになるまで（PR3）編集させない。
+	EditMultiline = "edit_multiline"
+	// EditUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
+	// 置換は line（引用符が開いた物理行）。ファイル全体を読み取り専用にする。
+	EditUnclosedQuote = "edit_unclosed_quote"
 )
 
 // 書き出すと訳が失われる理由（internal/publish の guard.go）。
@@ -348,6 +355,7 @@ var all = []string{
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
+	EditMultiline, EditUnclosedQuote,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 

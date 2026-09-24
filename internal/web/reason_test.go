@@ -519,6 +519,15 @@ func editReasons(t *testing.T) []reason.Reason {
 		out = append(out, causeOf(t, err))
 	}
 
+	// 行をまたぐレコードの行と、閉じない引用符のファイル。
+	multi := edit.Parse([]byte("key,translation\nk,\"い\nち\"\n"))
+	if err := multi.SetTranslation(2, "x"); err == nil {
+		t.Error("行をまたぐレコードの行が書けてしまった")
+	} else {
+		out = append(out, causeOf(t, err))
+	}
+	out = append(out, edit.Parse([]byte("key,translation\nk,\"い\n")).ReadOnlyCause())
+
 	return out
 }
 

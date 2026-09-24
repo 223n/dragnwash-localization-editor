@@ -219,6 +219,8 @@
     "reason.edit_no_newline": "A translation cannot contain a line break",
     "reason.edit_no_nul": "A translation cannot contain NUL",
     "reason.edit_bad_utf8": "The translation is not valid UTF-8",
+    "reason.edit_multiline": "This line belongs to a record that spans lines {line} to {end}, which cannot be edited yet",
+    "reason.edit_unclosed_quote": "The quote opened on line {line} is never closed before the end of the file (everything after it becomes one value)",
     "reason.publish_row_gone": "This row is not in the new output",
     "reason.publish_translation_cleared": "The new output leaves this row with an empty translation",
     "reason.publish_base_drift": "The game has {count} different translations for {locale}",

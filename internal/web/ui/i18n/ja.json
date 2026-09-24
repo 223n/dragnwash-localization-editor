@@ -219,6 +219,8 @@
     "reason.edit_no_newline": "訳に改行は入れられない",
     "reason.edit_no_nul": "訳に NUL は入れられない",
     "reason.edit_bad_utf8": "訳が正しいUTF-8ではない",
+    "reason.edit_multiline": "行をまたぐレコード（{line}〜{end}行目）の行なので、まだ編集できない",
+    "reason.edit_unclosed_quote": "{line}行目で開いた引用符がファイルの終わりまで閉じない（そこから後ろがすべて1つの値になる）",
     "reason.publish_row_gone": "この行が新しい出力に無い",
     "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる",
     "reason.publish_base_drift": "ゲームに入っている訳が {locale} で {count} 件ちがう",
