@@ -524,6 +524,13 @@ func TestListIsNotEditableWhileLoading(t *testing.T) {
 	if commit < 0 || fetch < 0 || commit > fetch {
 		t.Error("load が、読みにいく前に開いている入力欄を閉じていない")
 	}
+	// 読めなかったら、読み込みのあいだに焦点を載せた訳の欄を開き直すこと。開き直さないと、
+	// 焦点は欄に載ったまま focusin がもう来ないので、字も Enter も効かない（実際に起きた）。
+	failed := strings.Index(body, ".catch(")
+	reopen := strings.Index(body, "lineOf(document.activeElement)")
+	if failed < 0 || reopen < failed {
+		t.Error("load が、読めなかったときに焦点の載った訳の欄を開き直さない")
+	}
 	// 読み込みの最中であることを一覧に出し、打てそうな印を下ろすこと。出さないと、
 	// 押しても開かない欄が黙って並ぶ。
 	busy := functionBody(t, js, "syncBusy")

@@ -936,17 +936,33 @@ test.describe("読み込みが返るまで", () => {
 
   // 読めなかったら何も変わっていないのが正しい（load の注記）。一覧もまた編集できる。
   // 読み込みのあいだに開かせなかった欄も、押せば開く。
-  test("読み込みに失敗したら、一覧をまた編集できるように戻す", async ({ app }) => {
+  //
+  // 読み込みのあいだに Tab（やマウス）で焦点を載せた欄は、失敗したらそのまま開く。開かないと、
+  // 焦点はその欄に残るのに focusin はもう来ないので、字も Enter も効かない。キーボードだけで
+  // 打つ人は、Tab でいったん出て入り直すまで先へ進めない（nextEditable の注記が避けている
+  // 「開けない行で行き止まる」形）。
+  test("読み込みに失敗したら、一覧をまた編集できるように戻す", async ({ app, server }) => {
     const lines = await holdLines(app, { fail: ["ja"] });
     await app.locator("#reload").click();
     await expect.poll(() => lines.asked).toEqual(["ja"]);
     await expect(app.locator("#list")).toHaveAttribute("aria-busy", "true");
     await translationCell(app, SAMPLE_LINES.hello).click();
     await expect(editor(app)).toHaveCount(0);
+    await app.keyboard.press("Tab");
+    await expect(translationCell(app, SAMPLE_LINES.goodbye)).toBeFocused();
+    await expect(editor(app)).toHaveCount(0);
 
     lines.release("ja");
     await expect(app.locator("#message")).toHaveText(msg("ja", "ui.load_failed"));
     await expect(app.locator("#list")).toHaveAttribute("aria-busy", "false");
+    // 焦点の載っていた欄が開き、そのまま打てる。
+    await expect(rowByLine(app, SAMPLE_LINES.goodbye).locator("textarea.editor")).toBeFocused();
+    await app.keyboard.type(typed);
+    await app.keyboard.press("Escape");
+    await waitForSaved(app);
+    expect(await server.readRootText(workingRel)).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
+
+    // ほかの欄も、押せば開く。
     await typeTranslation(app, SAMPLE_LINES.hello, "もしもし。");
     await editor(app).press("Escape");
     await waitForSaved(app);

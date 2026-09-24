@@ -2907,6 +2907,18 @@
         */
         syncLocale();
         syncBusy();
+        /*
+          読み込みのあいだに焦点を載せた訳の欄は、ここで開き直す。そのときは openEditor
+          が開かなかった（上の注記）ので、焦点は欄に載ったまま入力欄が無い。focusin は
+          もう来ないので、開き直さないと字も Enter も効かず、キーボードだけで打つ人は
+          Tab でいったん出て入り直すまで先へ進めない（実際に起きた。nextEditable の
+          注記が避けている「開けない行で行き止まる」形と同じ）。読めたときは一覧を
+          描き直すので、焦点の載った欄はもう無い。
+        */
+        var focused = lineOf(document.activeElement);
+        if (focused !== null) {
+          openEditor(focused);
+        }
         showMessage(t("ui.load_failed"));
         updateStatus();
       });
