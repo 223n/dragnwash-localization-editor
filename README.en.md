@@ -1246,7 +1246,8 @@ That is so no Release goes out carrying only some of the six.
 
 The archives are unpacked and run before the tag is created.  
 Only the archive for the runner's own target can be run, which is `linux/amd64` on GitHub-hosted runners.  
-On a runner that is not Linux or macOS on amd64 or arm64, there is no archive it can run, so it stops without creating the tag or the GitHub Release.  
+Publishing runs on a Linux or macOS runner on amd64 or arm64.  
+On any other runner, it stops without creating the tag or the GitHub Release.  
 It checks three things.
 
 - `dwloc version` prints the version being released

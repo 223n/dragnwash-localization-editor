@@ -1246,7 +1246,8 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 
 作った書庫は、タグを打つ前に展開して動かします。  
 動かせるのはランナーと同じ対象の書庫だけで、GitHubがホストするランナーでは`linux/amd64`です。  
-LinuxかmacOSの、amd64かarm64のランナーでなければ、動かせる書庫が無いのでタグとGitHub Releaseを作らずに止まります。  
+公開は、LinuxかmacOSの、amd64かarm64のランナーで行います。  
+それ以外のランナーでは、タグとGitHub Releaseを作らずに止まります。  
 確かめるのは次の3つです。
 
 - `dwloc version`が、リリースする版を出すこと
