@@ -2,6 +2,7 @@ package web
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,6 +157,38 @@ func TestCountsNeverGoBelowZero(t *testing.T) {
 		if c.RowsDiffer || c.NoRowHere {
 			t.Errorf("%s が行数と食い違うと言っている: %+v", id, c)
 		}
+	}
+}
+
+// TestCountsFollowTheTextOrder は、件数の欄（と、同じ並びから作る絞り込み）の
+// カテゴリの並びが、CLI の text 形式と同じであることを見る。
+//
+// text 形式は重さごと（要作業 → 要確認 → 参考）に、表示順の表（[diff.Categories]）の
+// 順で並べる（internal/diff の writeTextLocale）。README の表もその順である。
+// Category の値で並べていたころは、後から値を足したカテゴリ（引き継ぎ元の候補）が
+// 画面でだけ「原文とタグが違う行」の後ろに回っていた。値は割り当てにすぎず、
+// 表示順ではない（internal/diff の category.go）。
+//
+// 全カテゴリは、実際の集計の件数から取る（件数には全カテゴリが入る）。
+func TestCountsFollowTheTextOrder(t *testing.T) {
+	s := newTestServer(t, Options{UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	counts := s.buildCounts(ja, "ja", judgedSummary("ja", s.summary("ja").Counts), nil)
+
+	var want []string
+	for _, status := range []diff.Status{diff.StatusTodo, diff.StatusReview, diff.StatusInfo} {
+		for _, c := range diff.Categories() {
+			if c.Status() == status {
+				want = append(want, c.ID())
+			}
+		}
+	}
+	got := make([]string, 0, len(counts))
+	for _, c := range counts {
+		got = append(got, c.Category)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("件数の欄の並びが text 形式と違う\ngot  %v\nwant %v", got, want)
 	}
 }
 

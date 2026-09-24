@@ -45,7 +45,8 @@ func (s Summary) JudgeBlockReason(c Category) reason.Reason {
 //
 // 表示順の表（[categories]）の写しを返すだけで、判定は足さない。csv の警告
 // （cmd/dwloc の warnHeldCategories）が、判定を保留したカテゴリを text 形式の
-// 本文と同じ順に名指しするために開ける。[Summary.Counts] の鍵を Category の値で
+// 本文と同じ順に名指しするために開ける。画面の件数の欄（internal/web の
+// buildCounts）も、この順で並べる。[Summary.Counts] の鍵を Category の値で
 // 並べても表示順にはならない（後から足したカテゴリの値は並びの最後にある）。
 //
 // 写しを返すのは、呼び出し側が並べ替えても表示順の表が動かないようにするため。

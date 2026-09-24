@@ -1,7 +1,6 @@
 package web
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
@@ -418,13 +417,20 @@ func rowsByCategory(lines []edit.Line, badges map[string][]badgeView) map[string
 func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary,
 	rows map[string]int) []countView {
 
-	// [diff.Summary.Counts] には全カテゴリが入っている。並びは Category の値の順が
-	// そのまま internal/diff の表示順なので、値で並べ替えるだけでよい。
+	// 並びは internal/diff の表示順（[diff.Categories]）をそのまま使う。CLI の text 形式も
+	// README の表もこの順である。Category の値で並べてはいけない。値は割り当てに
+	// すぎず、後から足したカテゴリ（引き継ぎ元の候補など）の値は並びの最後にある。
+	// 値で並べていたころは、画面でだけ引き継ぎ元の候補が「原文とタグが違う行」の
+	// 後ろに回っていた。
+	//
+	// [diff.Summary.Counts] には全カテゴリが入っている。入っていないカテゴリは並べない
+	// （Counts に無いものを 0 件と書かないため）。
 	all := make([]diff.Category, 0, len(sum.Counts))
-	for c := range sum.Counts {
-		all = append(all, c)
+	for _, c := range diff.Categories() {
+		if _, ok := sum.Counts[c]; ok {
+			all = append(all, c)
+		}
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
 
 	out := make([]countView, 0, len(all))
 	for _, status := range statusOrder {
