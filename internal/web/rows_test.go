@@ -148,7 +148,7 @@ func save(t *testing.T, s *server, locale, version string, edits ...rowEdit) *ht
 }
 
 func TestSaveChangesOnlyTheTouchedLine(t *testing.T) {
-	// 保存は「触った行の最終フィールドだけを差し替える」。触っていない行が
+	// 保存は「触ったレコードの最終フィールドだけを差し替える」。触っていない行が
 	// 1バイトでも変わると、この道具は publish の出力と食い違い始める。
 	s := newTestServer(t, Options{Root: newEditRoot(t)})
 	path := inputPath(t, s, "ja")
