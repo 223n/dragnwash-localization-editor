@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
@@ -506,6 +507,35 @@ var publishShapeFix = map[string]string{
 	reason.PublishOrderLineBreak: "{column} 列の値から改行（CR と LF）を取り除いてから、もう一度実行してください。",
 }
 
+// publishLoneCRSourceFix は、原文（source_en 列）の中の単独の CR の直し方です。
+//
+// 値の中の単独の CR は LF に直すよう案内しますが、原文だけは直させません。キーは
+// 原文から作る（移植仕様 R14・R15）ので、原文を直すとキーと合わなくなり、その行は
+// malformed dropped に数えられるだけで、止まりも知らせもせずに公開されなくなります。
+// 上流の tools/hash-strings.ps1 もこの行を公開しません（pwsh 7.6.6 で確かめた）。
+// 翻訳者にできるのは、その行の訳を空に戻して、ほかの行を書くことです。
+const publishLoneCRSourceFix = "原文（source_en 列）は直さないでください。キーは原文から作るので、直すとキーと合わなくなり、" +
+	"その行は黙って公開されなくなります（上流の tools/hash-strings.ps1 もこの行を公開しません）。" +
+	"この行の訳を空に戻すと、ほかの行は書けます。"
+
+// publishLoneCRKeyFix は、key 列の中の単独の CR の直し方です。
+//
+// LF に直すと、キーの途中に改行が残り、キーの形でなくなってその行が黙って落ちる
+// ことがあります。取り除く直し方だけを案内します。
+const publishLoneCRKeyFix = "key 列の値から単独の CR を取り除いてから、もう一度実行してください。"
+
+// loneCRFix は、単独の CR の直し方を列で分けます。列名の照合は、publish が列を
+// 引くときと同じく ASCII の大文字小文字を区別しません（csvfile.FoldASCII）。
+func loneCRFix(column string) string {
+	switch csvfile.FoldASCII(column) {
+	case csvfile.FoldASCII("source_en"):
+		return publishLoneCRSourceFix
+	case csvfile.FoldASCII("key"):
+		return publishLoneCRKeyFix
+	}
+	return publishShapeFix[reason.PublishLoneCR]
+}
+
 // publishGameBaseFix は、ゲーム側の公開ファイルで見つけた形の直し方の頭に添える文です。
 //
 // ゲーム側の公開ファイルは、Mod が読み込んでいる訳の土台で、publish はコミット済みと
@@ -534,7 +564,11 @@ func shapeFix(h publish.Hazard) string {
 			column = h.Why.Args[i+1]
 		}
 	}
-	fix := strings.NewReplacer("{line}", line, "{accept}", accept, "{column}", column).Replace(publishShapeFix[h.Why.ID])
+	fix := publishShapeFix[h.Why.ID]
+	if h.Why.ID == reason.PublishLoneCR {
+		fix = loneCRFix(column)
+	}
+	fix = strings.NewReplacer("{line}", line, "{accept}", accept, "{column}", column).Replace(fix)
 	if h.GameBase {
 		fix = publishGameBaseFix + fix
 	}

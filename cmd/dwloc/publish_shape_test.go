@@ -109,6 +109,32 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 			},
 		},
 		{
+			// 原文の単独の CR は直させない。キーは原文から作るので、直すとキーと合わず、
+			// その行は止まりも知らせもせずに公開されなくなる（malformed dropped に
+			// 数えられるだけ）。上流の道具もこの行を公開しない。
+			name: "作業コピーの原文の中の単独の CR",
+			working: "key,source_en,translation\n" +
+				key.For("Hello\rthere") + ",\"Hello\rthere\",もしもし？\n",
+			want: []string{
+				"2〜3行目: source_en 列の値に単独の CR（後ろに LF の続かない CR）がある。",
+				"直し方: 原文（source_en 列）は直さないでください。キーは原文から作るので、直すとキーと合わなくなり、",
+				"この行の訳を空に戻すと、ほかの行は書けます。",
+			},
+			notWant: []string{"LF に直すか取り除いて"},
+		},
+		{
+			// key 列の単独の CR は取り除かせる。LF に直すと、キーの途中の改行でキーの形で
+			// なくなることがある。
+			name: "作業コピーの key 列の中の単独の CR",
+			working: "key,source_en,translation\n" +
+				"\"" + keyHello + "\r\",Hello?,もしもし？\n",
+			want: []string{
+				"2〜3行目: key 列の値に単独の CR（後ろに LF の続かない CR）がある。",
+				"直し方: key 列の値から単独の CR を取り除いてから、もう一度実行してください。",
+			},
+			notWant: []string{"LF に直す", "原文（source_en 列）は直さないでください"},
+		},
+		{
 			// 引用符で囲まない値が単独の CR で切れる。ゲームは「もしもし？」と読むが、
 			// そのまま書くと「もし」だけが公開される。
 			name: "作業コピーの値が単独の CR で切れる",
@@ -745,6 +771,33 @@ func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
 	game := shapeFix(publish.Hazard{Locale: "ja", GameBase: true, Why: reason.New(reason.PublishUnclosedQuote, "")})
 	if !strings.HasPrefix(game, publishGameBaseFix) {
 		t.Errorf("ゲーム側の公開ファイルで写し直す案内を先に出していない: %s", game)
+	}
+}
+
+// TestLoneCRFix は、単独の CR の直し方を列で分けることを見る。列名は publish が列を
+// 引くときと同じく、ASCII の大文字小文字を区別しない。
+func TestLoneCRFix(t *testing.T) {
+	general := publishShapeFix[reason.PublishLoneCR]
+	for _, tc := range []struct {
+		column, want string
+	}{
+		{"source_en", publishLoneCRSourceFix},
+		{"Source_EN", publishLoneCRSourceFix},
+		{"key", publishLoneCRKeyFix},
+		{"KEY", publishLoneCRKeyFix},
+		{"translation", general},
+		{"speaker", general},
+		// ASCII 以外の文字で畳むと source_en になる列名は、publish が source_en 列として
+		// 引かない（csvfile.FoldASCII）ので、原文の直し方にしない。
+		{"ſource_en", general},
+	} {
+		if got := loneCRFix(tc.column); got != tc.want {
+			t.Errorf("loneCRFix(%q) = %q, want %q", tc.column, got, tc.want)
+		}
+		fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(reason.PublishLoneCR, "", "column", tc.column)})
+		if fix != tc.want {
+			t.Errorf("shapeFix（列 %q）= %q, want %q", tc.column, fix, tc.want)
+		}
 	}
 }
 

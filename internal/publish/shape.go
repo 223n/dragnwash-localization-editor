@@ -321,7 +321,9 @@ func swallowHazards(f csvfile.PowerShellFile) []Hazard {
 //
 // 止めるのは訳の入ったレコードだけである。訳の空のレコードはどちらの道具でも
 // 公開されないので、原文に単独の CR があっても失うものが無い（原文は翻訳者には
-// 直せない。直すとキーが変わる）。閉じない引用符のレコードは (e) に任せる。
+// 直せない。直すとキーが変わる）。訳の入ったレコードの原文で止めたときも、原文を
+// 直させず、訳を空に戻すよう案内する（直し方は cmd/dwloc が列で分ける）。閉じない
+// 引用符のレコードは (e) に任せる。
 func loneCRHazards(f csvfile.PowerShellFile) []Hazard {
 	translated := make(map[int]bool, len(f.Records))
 	for _, r := range f.Records {
