@@ -1,0 +1,1886 @@
+{
+  "about": [
+    "上流 tools/hash-strings.ps1 に testdata/upstream/cases.json を読ませた結果。scripts/upstream-fixtures.ps1 が書く。手で直さない。",
+    "read は Read-Csv だけを取り出して読ませた結果。line と end は物理行の範囲（\\r\\n / \\n / \\r で分け、BOM は数えない）。",
+    "run は上流のスクリプトを通しで走らせた結果。output は書き出した strings.csv、summary は集計の1行の値。",
+    "error の message は pwsh の言語で変わる。比べるときは id と type を見る。"
+  ],
+  "upstream": {
+    "commit": "dc55c9eb67d3623d23ef4c272ccd1f4152eaab2f",
+    "script": "tools/hash-strings.ps1",
+    "blob": "36d30b1c4bef25e15c516b8c484ac569e5f1fe2d"
+  },
+  "pwsh": {
+    "version": "7.4.6",
+    "dotnet": ".NET 8.0.31",
+    "os": "linux",
+    "culture": ""
+  },
+  "cases_sha256": "270ed1ef6b6916a24cece3d91340391599a8aad482dc362ef416f2f3e028d765",
+  "cases": [
+    {
+      "name": "plain-working-crlf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["", "UI", "", "", "UI", "Fine weather today.", "今日はいい天気。"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", ""]
+          },
+          {
+            "line": 5,
+            "end": 5,
+            "values": ["line:0a0b0c03", "L01 Ember", "Ember_1_outro", "3", "Ember", "", "せりふ"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 3,
+          "already_hashed": 0,
+          "per_line": 1,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n# --- outro: Ember_1_outro | if $met_moss ---\nline:0a0b0c03,L01 Ember,Ember_1_outro,3,Ember,せりふ\n\n# ===== UI and other text (not part of the dialogue script) =====\nd2f14ef230b1d4ad,UI,,,UI,今日はいい天気。\n"
+      }
+    },
+    {
+      "name": "plain-published-lf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 6,
+            "end": 6,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "いち"]
+          },
+          {
+            "line": 9,
+            "end": 9,
+            "values": ["6d2caf9200536549", "UI", "", "", "UI", "やかんが鳴っている。"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n\n# ===== UI and other text (not part of the dialogue script) =====\n6d2caf9200536549,UI,,,UI,やかんが鳴っている。\n"
+      }
+    },
+    {
+      "name": "ml-translation-lf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち\nに"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\nに\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-translation-crlf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち\r\nに"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\r\nに\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-translation-blank-lines",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 5,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち\n\n  \nさん"]
+          },
+          {
+            "line": 6,
+            "end": 6,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\n\n  \nさん\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-source-real-shape",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 5,
+            "values": ["f2ea4a1f0e4e8626", "UI", "", "", "UI", "para1\n\npara2", ""]
+          },
+          {
+            "line": 6,
+            "end": 6,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 3,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-source-translated",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 5,
+            "values": ["f2ea4a1f0e4e8626", "UI", "", "", "UI", "para1\n\npara2", "段落の訳"]
+          },
+          {
+            "line": 6,
+            "end": 6,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 3,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n\n# ===== UI and other text (not part of the dialogue script) =====\nf2ea4a1f0e4e8626,UI,,,UI,段落の訳\n"
+      }
+    },
+    {
+      "name": "ml-source-translated-2col",
+      "read": {
+        "error": null,
+        "columns": ["source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 5,
+            "values": ["para1\n\npara2", "段落の訳"]
+          },
+          {
+            "line": 6,
+            "end": 6,
+            "values": ["two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 3,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n\n# ===== UI and other text (not part of the dialogue script) =====\nf2ea4a1f0e4e8626,UI,,,UI,段落の訳\n"
+      }
+    },
+    {
+      "name": "ml-source-mixed-lines",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 6,
+            "values": ["8e62b7c1d74c7c46", "UI", "", "", "UI", "Menu:\n\n# not a comment\n,,left, right, up", ""]
+          },
+          {
+            "line": 7,
+            "end": 7,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 3,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-translation-only-newline",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "\n"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"\n\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-published-crlf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "line1\nline2"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"line1\nline2\"\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "ml-hash-line-in-translation",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "一行目\n# 二行目"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"一行目\n# 二行目\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "ml-hash-line-in-published",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "first\n#second"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"first\n#second\"\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "ml-published-translation",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "line1\nline2"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"line1\nline2\"\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "ml-continuation-looks-like-row",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["c791ec1829ae8841", "UI", "", "", "UI", "Step one\n,UI,,,UI,y", "手順の訳"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n\n# ===== UI and other text (not part of the dialogue script) =====\nc791ec1829ae8841,UI,,,UI,手順の訳\n"
+      }
+    },
+    {
+      "name": "ml-line-id-translation",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 4,
+            "values": ["line:0a0b0c02", "L01 Ember", "Ember_1_intro", "2", "Moss", "", "一行目\n二行目"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 0,
+          "per_line": 1,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\nline:0a0b0c02,L01 Ember,Ember_1_intro,2,Moss,\"一行目\n二行目\"\n"
+      }
+    },
+    {
+      "name": "ml-header",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "trans\nlation"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["one", "いち", null]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "ml-source-crlf-key-mismatch",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 4,
+            "values": ["f2ea4a1f0e4e8626", "UI", "", "", "UI", "para1\r\n\r\npara2", "段落の訳"]
+          },
+          {
+            "line": 5,
+            "end": 5,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n"
+      }
+    },
+    {
+      "name": "unclosed-to-eof",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "one", "いち\n3fc4ccfe745870e2,two,に\n"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\n3fc4ccfe745870e2,two,に\n\"\n"
+      }
+    },
+    {
+      "name": "unclosed-last-line",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b\n"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,\"b\n\"\n"
+      }
+    },
+    {
+      "name": "unclosed-header",
+      "read": {
+        "error": null,
+        "columns": [],
+        "records": []
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "unclosed-published-middle",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 5,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a\nfedcba9876543210,UI,,,UI,b\n# note\n6d2caf9200536549,UI,,,UI,c\n"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 1,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"a\nfedcba9876543210,UI,,,UI,b\n# note\n6d2caf9200536549,UI,,,UI,c\n\"\n"
+      }
+    },
+    {
+      "name": "swallow-3col",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["", "one", "いち\n,two,に"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["", "three", "さん"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\n,two,に\"\n# --- outro: Ember_1_outro | if $met_moss ---\n8b5b9db0c13db242,L01 Ember,Ember_1_outro,3,Ember,さん\n"
+      }
+    },
+    {
+      "name": "swallow-7col-hash-close",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 4,
+            "values": ["7692c3ad3540bb80", "UI", "", "", "UI", "one", "いち\r\n3fc4ccfe745870e2,UI,,,UI,two,\r\n# note "]
+          },
+          {
+            "line": 5,
+            "end": 5,
+            "values": ["8b5b9db0c13db242", "UI", "", "", "UI", "three", "さん"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\r\n3fc4ccfe745870e2,UI,,,UI,two,\r\n# note \"\n# --- outro: Ember_1_outro | if $met_moss ---\n8b5b9db0c13db242,L01 Ember,Ember_1_outro,3,Ember,さん\n"
+      }
+    },
+    {
+      "name": "swallow-2col-hash-close",
+      "read": {
+        "error": null,
+        "columns": ["source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 4,
+            "values": ["one", "いち\ntwo,\n# note "]
+          },
+          {
+            "line": 5,
+            "end": 5,
+            "values": ["three", "さん"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\ntwo,\n# note \"\n# --- outro: Ember_1_outro | if $met_moss ---\n8b5b9db0c13db242,L01 Ember,Ember_1_outro,3,Ember,さん\n"
+      }
+    },
+    {
+      "name": "swallow-7col-empty-key-english",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "UI", "", "", "UI", "one", "いち\r\n,UI,,,UI,Secret"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["8b5b9db0c13db242", "UI", "", "", "UI", "three", "さん"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\r\n,UI,,,UI,Secret\"\n# --- outro: Ember_1_outro | if $met_moss ---\n8b5b9db0c13db242,L01 Ember,Ember_1_outro,3,Ember,さん\n"
+      }
+    },
+    {
+      "name": "swallow-6col-published",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "いち\nGood day"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"いち\nGood day\"\nfedcba9876543210,UI,,,UI,に\n"
+      }
+    },
+    {
+      "name": "lone-cr-in-quoted-translation",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["ち\"", null, null, null, null, null, null]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "lone-cr-line-end",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["6d2caf9200536549", "UI", "", "", "UI", "c"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\nfedcba9876543210,UI,,,UI,b\n6d2caf9200536549,UI,,,UI,c\n"
+      }
+    },
+    {
+      "name": "lone-cr-unquoted-value",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["ち", null, null, null, null, null, null]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "cr-only-published",
+      "read": {
+        "error": null,
+        "columns": [],
+        "records": []
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n"
+      }
+    },
+    {
+      "name": "cr-only-working",
+      "read": {
+        "error": null,
+        "columns": [],
+        "records": []
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "bom-working",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "bom-published",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "comma-only-row",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["", "", null]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "commas-row",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["", "", "", "", "", "", ""]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "empty-quoted-row",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "hash-header-unquoted",
+      "read": {
+        "error": null,
+        "columns": ["7692c3ad3540bb80", "one", "いち"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "hash-header-quoted",
+      "read": {
+        "error": null,
+        "columns": ["7692c3ad3540bb80", "one", "いち"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "hash-header-leading-space",
+      "read": {
+        "error": null,
+        "columns": ["7692c3ad3540bb80", "one", "いち"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 1,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n"
+      }
+    },
+    {
+      "name": "lines-above-header",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 6,
+            "end": 6,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n"
+      }
+    },
+    {
+      "name": "dup-columns-with-data",
+      "read": {
+        "error": {
+          "id": "AlreadyPresentPSMemberInfoInternalCollectionAdd,Microsoft.PowerShell.Commands.ConvertFromCsvCommand",
+          "type": "System.Management.Automation.ExtendedTypeSystemException",
+          "message": "The member \"KEY\" is already present."
+        },
+        "columns": [],
+        "records": []
+      },
+      "run": {
+        "error": {
+          "id": "AlreadyPresentPSMemberInfoInternalCollectionAdd,Microsoft.PowerShell.Commands.ConvertFromCsvCommand",
+          "type": "System.Management.Automation.ExtendedTypeSystemException",
+          "message": "The member \"KEY\" is already present."
+        },
+        "summary": null,
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== old heading =====\n"
+      }
+    },
+    {
+      "name": "dup-columns-no-data",
+      "read": {
+        "error": {
+          "id": "AlreadyPresentPSMemberInfoInternalCollectionAdd,Microsoft.PowerShell.Commands.ConvertFromCsvCommand",
+          "type": "System.Management.Automation.ExtendedTypeSystemException",
+          "message": "The member \"Key\" is already present."
+        },
+        "columns": [],
+        "records": []
+      },
+      "run": {
+        "error": {
+          "id": "AlreadyPresentPSMemberInfoInternalCollectionAdd,Microsoft.PowerShell.Commands.ConvertFromCsvCommand",
+          "type": "System.Management.Automation.ExtendedTypeSystemException",
+          "message": "The member \"Key\" is already present."
+        },
+        "summary": null,
+        "output": "key,section,node,order,speaker,translation,Key\n"
+      }
+    },
+    {
+      "name": "dup-columns-blank-after",
+      "read": {
+        "error": {
+          "id": "AlreadyPresentPSMemberInfoInternalCollectionAdd,Microsoft.PowerShell.Commands.ConvertFromCsvCommand",
+          "type": "System.Management.Automation.ExtendedTypeSystemException",
+          "message": "The member \"Key\" is already present."
+        },
+        "columns": [],
+        "records": []
+      },
+      "run": {
+        "error": {
+          "id": "AlreadyPresentPSMemberInfoInternalCollectionAdd,Microsoft.PowerShell.Commands.ConvertFromCsvCommand",
+          "type": "System.Management.Automation.ExtendedTypeSystemException",
+          "message": "The member \"Key\" is already present."
+        },
+        "summary": null,
+        "output": "key,translation,Key\n\n"
+      }
+    },
+    {
+      "name": "empty-column-names",
+      "read": {
+        "error": null,
+        "columns": ["key", "H1", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "x", "a"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 1,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\n"
+      }
+    },
+    {
+      "name": "bare-quote-then-comment",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "5\" screen"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["# note", "b", "c", "d", "e", "COMMENT-TAIL"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 3
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"5\"\" screen\"\nfa515818c52bd108,UI,,,e,COMMENT-TAIL\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "bare-quote-then-heading",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "5\" screen"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["# ===== UI and other text =====", null, null, null, null, null]
+          },
+          {
+            "line": 5,
+            "end": 5,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"5\"\" screen\"\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "quote-after-closing-quote",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "pq\"r"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["# note", "b", "c", "d", "e", "TAIL"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 3
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,\"pq\"\"r\"\nfa515818c52bd108,UI,,,e,TAIL\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "comment-with-quote",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n# note,\"see\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "ideographic-space-line",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "nbsp-line",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "whitespace-line",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "soft-hyphen-comment",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "u2028-in-value",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "い\u2028ち"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,い\u2028ち\n"
+      }
+    },
+    {
+      "name": "no-final-newline",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "b"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b\n"
+      }
+    },
+    {
+      "name": "trailing-spaces",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "訳 "]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["fedcba9876543210", "UI", "", "", "UI", "訳"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,訳 \nfedcba9876543210,UI,,,UI,訳\n"
+      }
+    },
+    {
+      "name": "extra-and-missing-fields",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["3fc4ccfe745870e2", "two", null]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 2,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 1,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n"
+      }
+    },
+    {
+      "name": "duplicate-keys",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", ""]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          },
+          {
+            "line": 4,
+            "end": 4,
+            "values": ["3fc4ccfe745870e2", "two", "に"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 3,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,に\n"
+      }
+    },
+    {
+      "name": "english-in-key-column",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["0123456789abcdef", "UI", "", "", "UI", "a"]
+          },
+          {
+            "line": 3,
+            "end": 3,
+            "values": ["Good day there", "UI", "", "", "UI", "こんにちは"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 1,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 0,
+          "other": 2
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\n5ae2c611ace90aca,UI,,,UI,こんにちは\n"
+      }
+    },
+    {
+      "name": "published-row-missing-from-working",
+      "read": {
+        "error": null,
+        "columns": ["key", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 2,
+            "values": ["7692c3ad3540bb80", "one", "いち"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 1,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 1,
+          "in_play_order": 1,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\n"
+      }
+    }
+  ]
+}
