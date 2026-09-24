@@ -29,10 +29,14 @@ tools/・data/・Translations/ の並びを一時ディレクトリに作り、d
 pubPR2 の行は、publish・diff・order が全体を解釈する読み手へ移る PR2 で振る舞いが
 変わる箇所である。PR2 でそこが変わると、この試験が落ちて教えてくれる。そのときは
 表を直す（上流と同じになったなら行を消し、意図して違えるなら pubIntended へ移す）。
+pubUndecided の行は、上流と違えてよいかをまだ決めていない点で、いまの振る舞いを
+固定するだけである。意図して違える点と混ぜないのは、仕様の上で決まったように
+読まれないためである。
 
 集計の1行のうち「kept from the published file」は比べない。dwloc の集計の1行には
 この項目が無い（上流の #10。いまの公開ファイルにだけある行を引き継ぐ処理は、この
-移植の範囲外で、dwloc は訳が失われる確かめで止まる）。
+移植の範囲外で、追従するかはまだ決めていない。いまの dwloc は訳が失われる確かめで
+止まる）。
 */
 
 // publishFixtureDir は入力の表と正解の置き場。
@@ -284,6 +288,10 @@ const (
 	// pubPR2 は、PR2（publish・diff・order を全体を解釈する読み手へ移す）で
 	// 振る舞いが変わる箇所。
 	pubPR2 publishDiffKind = "PR2 で変わる"
+	// pubUndecided は、上流と違うが、違えてよいかをまだ決めていない点
+	// （docs/port-spec.md「上流と違うが未決の点」）。いまの振る舞いを固定する
+	// だけで、正しいとはしない。決まったら pubIntended へ移すか、直して表から外す。
+	pubUndecided publishDiffKind = "未決"
 )
 
 // knownPublishDiff は、上流と違ってよい入力1つ。
@@ -338,10 +346,10 @@ const (
 		"PR2 で上流と同じ集計になる見込み"
 	whyPubCultureHash = "U+00AD のあとに '#' が続く行をデータとして読み、malformed dropped に数える。" +
 		"上流の StartsWith('#') はカルチャに依存する照合でコメントとして落とす（Go では照合表を持てない）"
-	whyPubEnglishKey = "key 列の英文をハッシュにして公開する上流の #9 は写さない。dwloc はその行を捨てるので、" +
-		"いまの公開ファイルの訳が失われるとして止める"
-	whyPubKeptFromPublished = "いまの公開ファイルにだけある行を引き継ぐ上流の #10 は写さない。dwloc はその訳が" +
-		"失われるとして止める"
+	whyPubEnglishKey = "key 列の英文をハッシュにして公開する上流の #9。追従するかは、全体を解釈する読み手へ移す" +
+		"この作業の範囲外で、まだ決めていない。いまの dwloc はその行を捨てるので、いまの公開ファイルの訳が失われるとして止める"
+	whyPubKeptFromPublished = "いまの公開ファイルにだけある行を引き継ぐ上流の #10。追従するかは、全体を解釈する読み手へ" +
+		"移すこの作業の範囲外で、まだ決めていない。いまの dwloc は引き継がず、その訳が失われるとして止める"
 )
 
 // publishDiffs は、いまの dwloc publish が上流と違う入力。
@@ -490,10 +498,10 @@ var publishDiffs = map[string]knownPublishDiff{
 	"soft-hyphen-comment": {pubIntended, whyPubCultureHash, []string{
 		`malformed dropped: 上流 0 / dwloc 1`,
 	}},
-	"english-in-key-column": {pubIntended, whyPubEnglishKey, []string{
+	"english-in-key-column": {pubUndecided, whyPubEnglishKey, []string{
 		`上流 書く / dwloc 止まる（失われる訳 1 件）`,
 	}},
-	"published-row-missing-from-working": {pubIntended, whyPubKeptFromPublished, []string{
+	"published-row-missing-from-working": {pubUndecided, whyPubKeptFromPublished, []string{
 		`上流 書く / dwloc 止まる（失われる訳 1 件）`,
 	}},
 }

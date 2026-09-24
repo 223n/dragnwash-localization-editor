@@ -341,7 +341,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 
 保存した正解は pwsh 7.4.6（上流の docker の hash 経路と同じ。mcr.microsoft.com/dotnet/sdk:8.0-noble に dotnet tool で入れたもの、Linux、カルチャは不変）で作った。手元の pwsh 7.6.6（Windows、ja-JP）で作り直した結果とは、pwsh の版の記録と例外の文面の言語のほかは同じだった（2026-09-24）。culture に依存する StartsWith('#') も、両方で U+00AD のあとの '#' をコメントと見なした。
 
-違ってよいのは次の表の行だけである。試験（internal/csvfile/upstream_fixture_test.go と cmd/dwloc/publish_upstream_test.go）は、違う入力と違い方を表として固定し、それ以外の違いが出れば落ちる。
+違ってよいのは、次の表と、あとの「上流と違うが未決の点」の表の行だけである。試験（internal/csvfile/upstream_fixture_test.go と cmd/dwloc/publish_upstream_test.go）は、違う入力と違い方を表として固定し、それ以外の違いが出れば落ちる。
 
 | 項目 | 上流 main | dwloc | 試験の入力 |
 | ---- | ---- | ---- | ---- |
@@ -355,8 +355,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 | 閉じない引用符（上流の報告 #11） | ファイルの終わりまでを値に飲み込み、英語の原文ごと書く | 形の確かめ (e) で止める（PR2 からは読み手の型付きの誤りを終了コード1にする） | unclosed-to-eof、unclosed-last-line、unclosed-header、unclosed-published-middle |
 | 飲み込み（引用符が別の行で閉じる） | 後ろの行（英語の原文やキー）を訳に取り込んで書く | 止める。いまは (b)(c)、PR2 からは飲み込みの確かめ (f) | swallow-3col、swallow-7col-hash-close、swallow-2col-hash-close、swallow-7col-empty-key-english、swallow-6col-published |
 | ヘッダーに key 列か translation 列が無い | すべての行を捨て、ヘッダーとコメントだけを書く | 形の確かめ (a) で止める | ml-header、hash-header-unquoted |
-| key 列の英文（上流の #9） | ハッシュにして公開する | 捨てる。いまの公開ファイルにある訳が失われるとして止める | english-in-key-column |
-| いまの公開ファイルにだけある行（上流の #10） | 引き継ぐ。集計の1行に kept from the published file として数える | 引き継がない。訳が失われるとして止める。集計の1行にこの項目は無い | published-row-missing-from-working |
+| 集計の1行の kept from the published file | いまの公開ファイルから引き継いだ行の数を、9項目目として出す | この項目を持たない。publish の試験は、この項目を除いた6項目を比べる | （すべての入力） |
 
 読み手の試験（internal/csvfile）では、ほかに次の違いを「PR1 で直す」として表に載せてある。全体を解釈する新しい読み手が入れば、表から消える。
 
@@ -366,7 +365,16 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 
 publish の試験（cmd/dwloc）では、いまの publish の振る舞いのうち PR2 で変わる箇所を「PR2 で変わる」として表に載せてある。行をまたぐ訳の入った入力と、行をまたぐレコードのあるいまの公開ファイルで止まること、訳の空の行をまたぐレコードを2件の malformed dropped に数えること、飲み込みと単独の CR を (b)(c) で止めていること、'#' で始まるヘッダーから書くこと、データ行の無いファイルで列名の重複を見ないこと、全角空白だけの行を malformed dropped に数えること、などである。見込みは表の理由に書いた。たとえば source_en,translation の2列の作業コピーで原文が行をまたぐと、続きの行の区切りの数がヘッダーの列数と同じになるので、PR2 の飲み込みの確かめ (f) で止まる見込みである（確かめたうえで通す指定で書く）。'#' で始まるヘッダーは、上の表のとおり (a) に専用の判定を足さないと PR2 のあとも書き続ける。表はいまの「書く」を固定しているだけなので、判定を入れ忘れても試験は落ちない。PR2 では、この2件が「止まる」に変わったことを確かめてから表を直す。
 
-集計の1行は項目ごとに比べる（converted、already hashed、per-line、malformed dropped、in play order、other）。kept from the published file は dwloc の集計の1行に無いので比べない（上の表の #10 の行）。上流 main の集計の1行は、R28 に書いた 003ed1e の8項目に、この項目を足した9項目である。
+集計の1行は項目ごとに比べる（converted、already hashed、per-line、malformed dropped、in play order、other）。kept from the published file は dwloc の集計の1行に無いので比べない（上の表の集計の1行の行）。上流 main の集計の1行は、R28 に書いた 003ed1e の8項目に、この項目を足した9項目である。項目を比べないことは決めてあるが、この項目が数える処理（いまの公開ファイルにだけある行の引き継ぎ、上流の #10）に追従するかは、次の「上流と違うが未決の点」に置く。
+
+### 上流と違うが未決の点
+
+次の点は上流と違うが、違えてよいかをまだ決めていない。試験（cmd/dwloc/publish_upstream_test.go）は「未決」として、いまの振る舞いと違い方を固定するだけで、正しいとはしない。「上流と意図して違える点」と分けるのは、仕様の上で決まったように読まれないためである。決まったら「上流と意図して違える点」へ移すか、直して試験の表から外す。
+
+| 項目 | 上流 main | いまの dwloc | 決めること | 試験の入力 |
+| ---- | ---- | ---- | ---- | ---- |
+| key 列の英文（上流の #9） | ハッシュにして公開する | その行を捨てる。いまの公開ファイルにある訳が失われるとして止める | 追従するか。追従するなら、16進らしい打ち間違いのキーをどう扱うか。全体を解釈する読み手へ移す作業（PR0〜PR4）の範囲外で、この作業では変えない | english-in-key-column |
+| いまの公開ファイルにだけある行（上流の #10） | 引き継ぐ。集計の1行に kept from the published file として数える | 引き継がない。訳が失われるとして止める | 追従するか（上流どおり引き継ぐ、作業コピーに無い行だけ引き継いで訳を空にした行では止める、いまのまま、など）。PR0〜PR4 の範囲外で、この作業では変えない | published-row-missing-from-working |
 
 ### 未決の点
 
