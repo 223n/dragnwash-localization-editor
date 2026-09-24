@@ -1081,6 +1081,19 @@ One file per day.
 However many times you run it on the same day, it appends to the same file.  
 When you report something that did not work, please attach that day's file.
 
+The list and CSV from `diff`, and the translation heads and mismatch samples that `publish` shows, are printed on screen only.  
+The log keeps only the counts, keys, line numbers, reasons and headings, plus how many lines were left out.  
+A line such as `dwloc: 原文や訳を含む 23 行は記録しません（画面には出しました）。` in the log marks where lines were left out.  
+It means "23 lines containing source text or translations are not logged (they were shown on screen)".
+
+> [!WARNING]
+> **Do not paste the `diff` output from your screen into a public place such as an issue.**  
+> It contains the source text (the game's script) and translations.  
+> When you report something, attach that day's log file instead of the screen output.
+>
+> **Logs from versions up to `0.10.0` may contain source text and translations.**  
+> Check the contents of the log for any day you ran `diff` or `publish` with such a version before you paste it.
+
 `dwloc edit` records each request on its own line in the file.  
 With `--verbose`, the same thing is printed on screen as well.
 

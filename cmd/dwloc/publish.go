@@ -516,12 +516,15 @@ func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) in
 	}
 
 	fmt.Fprint(stderr, publishBaseDriftText)
+	// 食い違う訳の見本は画面にだけ出します。記録には、ロケールと件数とキーを残します。
+	samples := newUnrecorded(stderr, nil)
+	defer samples.Close()
 	for _, res := range found {
 		fmt.Fprintf(stderr, "dwloc:   %s（%d 件）\n", res.Locale, res.Count)
 		for _, d := range res.Sample {
 			fmt.Fprintf(stderr, "dwloc:       %s\n", d.Key)
-			fmt.Fprintf(stderr, "dwloc:         コミット済み 「%s」\n", d.Repo)
-			fmt.Fprintf(stderr, "dwloc:         ゲーム側     「%s」\n", d.Game)
+			fmt.Fprintf(samples, "dwloc:         コミット済み 「%s」\n", d.Repo)
+			fmt.Fprintf(samples, "dwloc:         ゲーム側     「%s」\n", d.Game)
 		}
 		if res.Count > len(res.Sample) {
 			fmt.Fprintf(stderr, "dwloc:       ほかに %d 件あります。\n", res.Count-len(res.Sample))
@@ -561,6 +564,9 @@ func reportLosses(root string, targets []publish.Target, built [][]byte, stderr 
 	}
 
 	fmt.Fprint(stderr, publishLossText)
+	// 訳の先頭は画面にだけ出します。記録には、行番号とキーと理由を残します。
+	samples := newUnrecorded(stderr, nil)
+	defer samples.Close()
 	shown := 0
 	for i, t := range targets {
 		if len(found[i]) == 0 {
@@ -572,7 +578,8 @@ func reportLosses(root string, targets []publish.Target, built [][]byte, stderr 
 			if shown >= publishLossListMax {
 				break
 			}
-			fmt.Fprintf(stderr, "dwloc:       %d行目 %s 「%s」 %s\n", l.Line, l.Key, l.Head, l.Why)
+			fmt.Fprintf(samples, "dwloc:       %d行目 %s 「%s」 %s\n", l.Line, l.Key, l.Head, l.Why)
+			samples.Record("dwloc:       %d行目 %s %s\n", l.Line, l.Key, l.Why)
 			shown++
 		}
 	}

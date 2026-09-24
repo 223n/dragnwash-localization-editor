@@ -195,14 +195,20 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		warnHeldCategories(report, stderr)
 	}
 
+	// 報告の本文は原文と訳を含むので、記録（logs/dwloc_<日付>.log）へは写しません。
+	// csv は1行も写さず、text は見出しと件数と理由の行だけを写します（record.go）。
 	if *format == diffFormatCSV {
-		if err := report.WriteCSV(stdout); err != nil {
+		body := newUnrecorded(stdout, nil)
+		defer body.Close()
+		if err := report.WriteCSV(body); err != nil {
 			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
 			return exitError
 		}
 	} else {
+		body := newUnrecorded(stdout, diffHeadingLine)
+		defer body.Close()
 		opt := diff.TextOptions{Root: *root, All: *all, Limit: *limit}
-		if err := report.WriteText(stdout, opt); err != nil {
+		if err := report.WriteText(body, opt); err != nil {
 			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
 			return exitError
 		}

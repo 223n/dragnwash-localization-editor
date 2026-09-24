@@ -18,7 +18,9 @@
 //
 // 画面に出したものは logs/dwloc_<日付>.log にも残します（internal/logfile）。
 // 翻訳者にコマンドの出力を貼り直してもらうより、その日のファイルを添えてもらう
-// ほうが確実だからです。原文と訳は書きません。
+// ほうが確実だからです。原文と訳は書きません。diff の本文と publish の訳の断片は
+// 画面にだけ出し、記録には件数・キー・行番号・理由・見出しと、省いた行の数だけを
+// 残します（record.go）。
 package main
 
 import (
@@ -96,6 +98,10 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
   画面に出したものを logs/dwloc_<日付>.log にも残します。1日1ファイルで、
   同じ日の実行は追記します。古いファイルは消しません。不具合を知らせるときは
   その日のファイルを添えてください。原文と訳は書きません。
+  diff の一覧と csv、publish が見せる訳の先頭は画面にだけ出し、記録には
+  件数・キー・行番号・理由と、省いた行の数だけを残します。
+  画面に出た diff の出力は原文と訳を含むので、公開の場へ貼らないでください。
+  0.10.0 までの版の記録には、原文と訳が入っていることがあります。
 
 サブコマンドごとの説明は dwloc <サブコマンド> --help で表示します。
 `
@@ -129,9 +135,9 @@ func mainWithRecord() int {
 	record = w
 	hideFromRecord = w.Hide
 
-	// 画面が先、記録が後。io.MultiWriter は最初の失敗でそこから先をやめるので、
-	// この順なら記録が書けなくなっても画面には出ます。
-	code := run(os.Args[1:], io.MultiWriter(os.Stdout, w), io.MultiWriter(os.Stderr, w))
+	// 画面が先、記録が後。記録が書けなくなっても画面には出ます（teeWriter）。
+	// 原文や訳を含む報告の本文は、サブコマンドが画面にだけ書きます（unrecorded）。
+	code := run(os.Args[1:], &teeWriter{screen: os.Stdout, record: w}, &teeWriter{screen: os.Stderr, record: w})
 
 	if err := w.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "dwloc: 記録を書けませんでした（%v）\n", err)

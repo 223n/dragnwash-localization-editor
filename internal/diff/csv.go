@@ -20,7 +20,8 @@ const CSVHeader = "locale,category,status,key,section,node,order,speaker,source_
 // internal/csvfile のパッケージコメントに書いてある。
 //
 // source_en 列に値が入るのは作業コピーを読んだときだけ。作業コピーはコミット
-// されないので、CI のログへ英語原文が出ることはない。
+// されないので、CI のログへ英語原文が出ることはない。手元の記録
+// （logs/dwloc_<日付>.log）へは、cmd/dwloc がこの出力を写さない。
 //
 // 出力の並びは Report.Findings のまま（ロケール順 → カテゴリ順 → キー順）。
 // 参考のカテゴリも含めて全件書く。--all と --limit は text 形式の指定で、
