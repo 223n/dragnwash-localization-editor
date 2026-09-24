@@ -547,6 +547,16 @@ button {
   border-color: var(--muted);
 }
 
+/*
+  読み込みの最中の引き止めのボタン（app.js の syncBusy が disabled を付ける）。
+  読み終えるまで押しても何も起きないので、押せそうな印（cursor: pointer）を下ろす。
+  一覧の訳の欄（.list[aria-busy="true"]）と同じ考え。読み込んでいることは
+  #message が言う。
+*/
+.conflict .btn:disabled {
+  cursor: progress;
+}
+
 .orphans-list {
   margin: 0;
   padding-inline-start: 18px;

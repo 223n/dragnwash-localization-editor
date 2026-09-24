@@ -172,7 +172,8 @@
     state.loading   最後に始めた読み込みの札（{ locale: 読みにいったロケール }）。
                     読んでいなければ null。応答は、札がこれと同じときだけ描く
                     （load を見よ）。ロケールの欄もこれを見てそろえる（syncLocale）。
-                    立っているあいだは一覧を編集させない（openEditor と syncBusy）。
+                    立っているあいだは一覧を編集させず、競合の引き止めのボタンも
+                    押させない（openEditor、keepMine、takeFile と syncBusy）。
   */
   var state = {
     locale: "",
@@ -2370,6 +2371,20 @@
 
   function keepMine() {
     /*
+      読み込みの最中は何もしない（takeFile も同じ）。ボタンは syncBusy が押せなくして
+      あるが、ここでも止める。
+
+      読み込みの最中に引き止めが出ているのは、競合したまま読み直し（切り替え）を
+      受けたときで、捨てると答えたあとである。以前はここで押せた。押すと
+      「読み込んでいます…」が消え、行と保存の欄は自分の訳を載せ直したように見えたが、
+      捨てると答えたあとなので flush は送らず、読めた時点で load がそれも片付けた。
+      押した訳はファイルにも画面にも残らず、保存の欄は「保存済み」になった（実際に
+      起きた）。読めなければ load が札を下ろし、また押せるようになる。
+    */
+    if (state.loading) {
+      return;
+    }
+    /*
       自分の訳を、読み直した内容の上に載せ直して保存する。
 
       競合した行は選ぶまで編集できないので（openEditor を見よ）、state.mine の
@@ -2391,6 +2406,10 @@
   }
 
   function takeFile() {
+    /* 読み込みの最中は何もしない。理由は keepMine に書いてある。 */
+    if (state.loading) {
+      return;
+    }
     /*
       ファイルの訳を採る。ここで初めて自分の編集を捨てる。人が選んだ結果であって、
       待ち受けも画面も黙って捨ててはいない。
@@ -2910,9 +2929,17 @@
     訳の欄は開かない（openEditor）。何も出さないと、押しても開かない欄が黙って
     並ぶ。app.css がこれを見て、打てそうな印（cursor: text）を下ろす。「読み込んで
     います」の文は、load が #message に出している。
+
+    競合の引き止めの2つのボタンも、読み終えるまで押せなくする（keepMine と
+    takeFile も自分で止める）。押せる形のまま効かないと、押しても開かない欄と同じく
+    黙って何も起きない。disabled にしておけば、Tab の行き先にもならず、支援技術にも
+    押せないことが伝わる。
   */
   function syncBusy() {
-    el.list.setAttribute("aria-busy", state.loading ? "true" : "false");
+    var busy = Boolean(state.loading);
+    el.list.setAttribute("aria-busy", busy ? "true" : "false");
+    el.conflictKeep.disabled = busy;
+    el.conflictTake.disabled = busy;
   }
 
   /*

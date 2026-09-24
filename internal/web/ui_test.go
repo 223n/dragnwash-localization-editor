@@ -504,7 +504,7 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 }
 
 // TestListIsNotEditableWhileLoading は、読み直しと切り替えの読み込みが返るまで、
-// 一覧の訳を開かせないことを見る。
+// 一覧の訳を開かせず、競合の引き止めのボタンも押させないことを見る。
 //
 // 実際に起きた: 読み込みのあいだも前の一覧で打てた。読めた時点で load が抱えている
 // 訳（state.pending）ごと片付けるので、打った訳はファイルにも画面にも残らず、保存の
@@ -526,8 +526,24 @@ func TestListIsNotEditableWhileLoading(t *testing.T) {
 	}
 	// 読み込みの最中であることを一覧に出し、打てそうな印を下ろすこと。出さないと、
 	// 押しても開かない欄が黙って並ぶ。
-	if !strings.Contains(functionBody(t, js, "syncBusy"), `el.list.setAttribute("aria-busy"`) {
+	busy := functionBody(t, js, "syncBusy")
+	if !strings.Contains(busy, `el.list.setAttribute("aria-busy"`) {
 		t.Error("読み込みの最中であることを一覧に出していない")
+	}
+	// 競合の引き止めのボタンも、読み込みの最中は押させないこと。捨てると答えたあとに
+	// 「自分の訳を上に載せる」を押せたころは、押した訳が読めた時点で黙って消えた
+	// （実際に起きた）。ボタンを押せなくするだけでなく、関数の先頭でも止める。
+	for _, button := range []string{"el.conflictKeep.disabled = busy;", "el.conflictTake.disabled = busy;"} {
+		if !strings.Contains(busy, button) {
+			t.Errorf("読み込みの最中に、競合の引き止めのボタンを押せなくしていない（%s が無い）", button)
+		}
+	}
+	for _, name := range []string{"keepMine", "takeFile"} {
+		fn := functionBody(t, js, name)
+		guard := strings.Index(fn, "if (state.loading) {")
+		if guard < 0 || guard > strings.Index(fn, "state.mine") {
+			t.Errorf("%s が、読み込みの最中にも競合を片付ける", name)
+		}
 	}
 	css := uiSource(t, "ui/app.css")
 	if !strings.Contains(css, `.list[aria-busy="true"] .row .translation[tabindex] {`) {

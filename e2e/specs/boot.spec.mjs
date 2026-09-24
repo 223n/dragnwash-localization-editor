@@ -222,6 +222,25 @@ async function failRow(page, n, value) {
   await expect(translationCell(page, n)).toHaveText(value);
 }
 
+// raiseConflict は goodbye の行に typed を打ち、送る前によそがその行の訳を external へ書き換えた
+// 状態で送って、競合の引き止めを出す（conflict.spec.mjs の同じ名前の道具と同じ手順）。待ち受けが
+// 409 を返したことまで確かめ、よそが書いたあとのファイルのバイトを返す。打ってからよそが
+// 書き換えるまでに自動保存の時計が切れると 409 にならないので、時計を止めた頁で使う。
+async function raiseConflict(page, server, external) {
+  const text = await server.readRootText(workingRel);
+  const row = `,${SAMPLE.goodbye.source},${SAMPLE.goodbye.ja}\n`;
+  expect(text).toContain(row);
+  await typeTranslation(page, SAMPLE_LINES.goodbye, typed);
+  await server.writeRoot(workingRel, text.replace(row, `,${SAMPLE.goodbye.source},${external}\n`));
+  const saving = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === "/api/rows" && res.request().method() === "POST",
+  );
+  await editor(page).press("Escape");
+  expect((await saving).status()).toBe(409);
+  await expect(page.locator("#conflict")).toBeVisible();
+  return server.readRoot(workingRel);
+}
+
 test.describe("画面の言語", () => {
   // 目録から入る文言の代表。どれも index.html では空で、app.js の applyCatalog が埋める。
   const texts = [
@@ -837,6 +856,82 @@ test.describe("読み込みが返るまで", () => {
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
     // 読めたら、また開ける。
     await openEditor(app, SAMPLE_LINES.hello);
+  });
+
+  // 競合の引き止めのボタンも、読み終えるまで押させない（app.js の keepMine と takeFile）。以前は
+  // 捨てると答えた読み直しの読み込みのあいだも押せた。「自分の訳を上に載せる」を押すと「読み込んで
+  // います…」が消え、行と保存の欄は自分の訳を載せ直したように見えた。捨てると答えたあとなので
+  // 送らず、読めた時点でそれも片付くので、押した訳はファイルにも画面にも残らず、保存の欄は
+  // 「保存済み」になった。
+  test("捨てると答えた読み直しの読み込みが返るまで、競合の引き止めのボタンを押させず、読めたら引き止めを下ろす", async ({
+    page,
+    server,
+  }) => {
+    await countRowPosts(page);
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await openApp(page, server);
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
+    const external = "またね。";
+    const conflicted = await raiseConflict(page, server, external);
+    const asked = await rowPosts(page);
+    const dialogs = watchDialogs(page, true);
+    const lines = await holdLines(page);
+    const keep = page.locator("#conflict-keep");
+    const take = page.locator("#conflict-take");
+
+    await page.locator("#reload").click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.loading"));
+    await expect(keep).toBeDisabled();
+    await expect(take).toBeDisabled();
+    await expect(keep).toHaveCSS("cursor", "progress");
+    // 押しても何も起きない。「読み込んでいます…」も引き止めも出たまま。
+    await keep.click({ force: true });
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.loading"));
+    await expect(page.locator("#conflict")).toBeVisible();
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_conflict"));
+
+    lines.release("ja");
+    await expect(page.locator("#conflict")).toBeHidden();
+    await expect(page.locator("#message")).toBeEmpty();
+    await expect(translationCell(page, SAMPLE_LINES.goodbye)).toHaveText(external);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
+    await page.clock.runFor(60_000);
+    expect(await rowPosts(page)).toBe(asked);
+    expect((await server.readRoot(workingRel)).equals(conflicted)).toBe(true);
+  });
+
+  // 読めなければ何も捨てていないので、引き止めのボタンはまた押せる。押したとおりに効く。
+  test("競合したまま読み直しに失敗したら、引き止めのボタンをまた押せるように戻す", async ({ page, server }) => {
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await openApp(page, server);
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
+    await raiseConflict(page, server, "またね。");
+    const dialogs = watchDialogs(page, true);
+    const lines = await holdLines(page, { fail: ["ja"] });
+    const keep = page.locator("#conflict-keep");
+    const take = page.locator("#conflict-take");
+
+    await page.locator("#reload").click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    await expect.poll(() => lines.asked).toEqual(["ja"]);
+    await expect(keep).toBeDisabled();
+    await expect(take).toBeDisabled();
+
+    lines.release("ja");
+    await expect(page.locator("#message")).toHaveText(msg("ja", "ui.load_failed"));
+    await expect(page.locator("#conflict")).toBeVisible();
+    await expect(keep).toBeEnabled();
+    await expect(take).toBeEnabled();
+    const saving = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/api/rows" && res.request().method() === "POST",
+    );
+    await keep.click();
+    expect((await saving).status()).toBe(200);
+    await waitForSaved(page);
+    await expect(translationCell(page, SAMPLE_LINES.goodbye)).toHaveText(typed);
+    expect(await server.readRootText(workingRel)).toContain(`,${SAMPLE.goodbye.source},${typed}\n`);
   });
 
   // 読めなかったら何も変わっていないのが正しい（load の注記）。一覧もまた編集できる。

@@ -843,8 +843,9 @@ They are only cleared when the load succeeded.
 When the load fails, the conditions, the search box and the list are all left as they were.
 
 When you reload or switch locale, the translation column does not open until the load has finished.  
+The two buttons of the conflict prompt cannot be pressed either.  
 While it loads, the bar says "Loading...".  
-Anything typed during the load would be dropped unsaved the moment the load succeeded.  
+Anything typed during the load, or kept with "put my translation on top", would be dropped unsaved the moment the load succeeded.  
 When the load fails, the previous list stays and can be edited again.
 
 A row in conflict (the file changed underneath you) cannot be edited until you choose which side to keep.  
