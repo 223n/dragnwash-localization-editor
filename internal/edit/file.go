@@ -146,9 +146,9 @@ type File struct {
 }
 
 // Parse はバイト列を編集モデルにする。壊れた入力でも誤りは返さない。
-// ヘッダーが受理できないファイルと、開いた引用符がファイルの終わりまで閉じない
-// ファイルは、読み取り専用の [File] になる（[File.ReadOnly] と
-// [File.ReadOnlyReason] を見ること）。
+// ヘッダーが受理できないファイル、開いた引用符がファイルの終わりまで閉じない
+// ファイル、行の区切りがすべて単独の CR のファイルは、読み取り専用の [File] になる
+// （[File.ReadOnly] と [File.ReadOnlyReason] を見ること）。
 //
 // 行は、publish と同じ全体を解釈する読み方の区切り（csvfile.SplitSegments）の
 // セグメントを1つずつ並べたものである。引用符で囲んだ値が物理行をまたぐレコードも
@@ -199,8 +199,27 @@ func Parse(data []byte) *File {
 	if header != nil {
 		f.header = header
 		f.lines[headerIndex].Fields = slices.Clone(header)
+		// 形の検出は publish と同じ関数を呼ぶ（csvfile の detect.go）。閉じない引用符の
+		// ファイルは全体を読み取り専用にするので見ない。
+		var swallows map[int]csvfile.Swallow
+		var games map[int]csvfile.Disagreement
+		if segs.UnclosedLine == 0 {
+			swallows = make(map[int]csvfile.Swallow)
+			for _, s := range csvfile.FindSwallows(segs) {
+				if _, seen := swallows[s.ID]; !seen {
+					swallows[s.ID] = s
+				}
+			}
+			games = make(map[int]csvfile.Disagreement)
+			for _, d := range csvfile.CSharpDisagreements(whole) {
+				games[d.ID] = d
+			}
+		}
 		for _, i := range records {
-			f.judge(&f.lines[i])
+			id := f.lines[i].ID
+			sw, swallowed := swallows[id]
+			game, disagrees := games[id]
+			f.judge(&f.lines[i], swallowed, sw, disagrees, game)
 		}
 	}
 
@@ -226,12 +245,24 @@ func Parse(data []byte) *File {
 			number, headerBody),
 			"line", strconv.Itoa(number),
 			"text", fmt.Sprintf("%q", headerBody)))
+	case csvfile.CROnlyLineBreaks(segs):
+		// ゲームの読み方（CsvReader）は引用の外の CR を捨てるので、このファイルを
+		// 1行と読み、どの訳も表示しない。dwloc の publish は CR も行の区切りにして読む
+		// （上流の道具は訳をすべて落とす）ので、画面から書いた訳は公開ファイルには
+		// 入りうるが、翻訳者はホットリロードで確かめられない。どのレコードも値が割れる
+		// （csvfile.CSharpDisagreements）ので、1行ずつ断るより、ファイルの形を直す先と
+		// して1つの理由で言う。
+		f.markReadOnly(reason.New(reason.EditCROnly,
+			"行の区切りが CR だけのファイル（ゲームはこのファイルを1行と読むので、画面からは書かない）"))
 	}
 	return f
 }
 
-// kindOf はセグメントの種類から行の種類を決める。空のレコード（"," や `""` の行）は
-// 空行相当にする。
+// kindOf はセグメントの種類から行の種類を決める。
+//
+// 読むと値がどれも空になるレコードは、空行相当にする。"," や `""` の行（区切りの
+// 関数の空のレコード）に加えて、",,,,,," の行もこれに入る（改善の ui-15）。キーも
+// 原文も空なので publish はこの行を捨て（移植仕様 R17）、ここへ打った訳は黙って落ちる。
 func kindOf(seg csvfile.Segment) Kind {
 	switch seg.Kind {
 	case csvfile.SegmentComment:
@@ -239,15 +270,21 @@ func kindOf(seg csvfile.Segment) Kind {
 	case csvfile.SegmentHeader:
 		return KindHeader
 	case csvfile.SegmentRecord:
-		return KindData
+		if !allEmpty(seg.Fields) {
+			return KindData
+		}
 	}
 	return KindBlank
 }
 
-// emptyRecord は、区切りの関数が読んだ値（末尾の空フィールドを落としたもの）が、
-// 空のレコード（csvfile.SegmentEmpty）の形かを返す。
-func emptyRecord(fields []string) bool {
-	return len(fields) == 0 || len(fields) == 1 && fields[0] == ""
+// allEmpty は値がどれも空かを返す。
+func allEmpty(fields []string) bool {
+	for _, v := range fields {
+		if v != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // padFields は、値を区切りの数まで空文字で埋めた複製を返す。
@@ -283,22 +320,49 @@ func rawKind(body string) Kind {
 }
 
 // judge は、受理したヘッダーのもとで、データのレコード1つの編集可否を決める。
-func (f *File) judge(line *Line) {
-	if line.columns != len(f.header) {
+//
+// swallowed と sw は、そのレコードに飲み込みの疑いがあるか（csvfile.FindSwallows）と
+// その最初の1件、disagrees と game は、ゲームの読み方と値が割れるか
+// （csvfile.CSharpDisagreements）とその1件。理由は、直す先を指す順（列の数、飲み込み、
+// ゲームの読み方との食い違い、訳の改行）に1つだけ付ける。
+func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees bool, game csvfile.Disagreement) {
+	line.Editable = false
+	switch {
+	case line.columns != len(f.header):
 		// 安全弁。列が多い行を最終フィールドの位置で切ると、余った列を巻き込んで
 		// 壊す。列が少ない行は別の列を訳だと思って書き換える。どちらも直せない
 		// 壊し方なので、編集させずに翻訳者へ見せる。
-		line.Editable = false
 		line.setReason(reason.New(reason.EditFieldCount,
 			fmt.Sprintf("フィールド数がヘッダーと合わない（ヘッダーは%d列、この行は%d列）",
 				len(f.header), line.columns),
 			"header", strconv.Itoa(len(f.header)), "row", strconv.Itoa(line.columns)))
-		return
+	case swallowed:
+		// 引用符の閉じ誤りで、後ろの行（英語の原文やキー）を値に飲み込んでいる疑い。
+		// そのまま訳を書くと、飲み込んだ行ごと publish へ渡る。正当な複数行の値でも
+		// 当たるが、画面には確かめたうえで通す指定を置かない（publish の
+		// --accept-multiline はレコードごとに、publish の側で指定する）。
+		line.setReason(reason.New(reason.EditSwallow,
+			fmt.Sprintf("%d行目がこのレコードの値に飲み込まれて見える（引用符の閉じ誤りの疑い）", sw.SwallowedLine),
+			"line", strconv.Itoa(sw.SwallowedLine)))
+	case disagrees && game.Column == "":
+		line.setReason(reason.New(reason.EditGameMissesRecord,
+			"ゲームの読み方（CsvReader）では、このレコードが見つからない"))
+	case disagrees:
+		// フィールドの途中の '"' などで、ゲームの読み方と値が割れる（移植仕様「CSVと
+		// キー生成 R6」）。書くと、翻訳者が見ている値とゲームが表示する値が食い違う。
+		line.setReason(reason.New(reason.EditGameDisagrees,
+			fmt.Sprintf("ゲームの読み方（CsvReader）では %s 列の値が違って読まれる", game.Column),
+			"column", game.Column))
+	default:
+		judgeTranslation(line)
 	}
+}
+
+// judgeTranslation は、ほかの理由に当たらないレコードの編集可否を、訳の値で決める。
+func judgeTranslation(line *Line) {
 	if tr := line.Fields[len(line.Fields)-1]; strings.ContainsAny(tr, "\r\n") {
 		// 訳への改行の入力は PR4 で足す（決まったことの 1）。いまの画面は改行を空白に
 		// 置き換えるので、開いて1字打つと、翻訳者が見ていない改行まで消える。
-		line.Editable = false
 		line.setReason(reason.New(reason.EditMultilineTranslation,
 			"訳に改行がある（改行の入る訳は、まだ画面から書き換えられない）"))
 		return
@@ -442,11 +506,13 @@ func (f *File) SetTranslation(id int, value string) error {
 // 向かうだけなので、そのレコードのバイト列だけを読んでもファイルの中で読むのと
 // 同じ値になる。
 //
-// 訳を消した結果、空のレコードになることがある（キーの空いた2列の行を "," にした
-// とき）。読み直すと空行相当になるので、モデルもそろえる。
+// 訳を消した結果、値がどれも空になることがある（キーの空いた2列の行を "," に
+// したとき）。読み直すと空行相当になるので（[kindOf]）、モデルもそろえる。訳を
+// 消すことは断らない。そのレコードは、キーも原文も空なので publish が捨てる
+// （移植仕様 R17）。消す前の訳も公開されていないので、消して失うものは無い。
 func refresh(line *Line) {
 	seg := csvfile.SplitSegments([]byte(line.Text)).List[0]
-	if emptyRecord(seg.Fields) {
+	if allEmpty(seg.Fields) {
 		line.Kind = KindBlank
 		line.Fields = nil
 		line.Editable = false

@@ -263,6 +263,21 @@ const (
 	// EditUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
 	// 置換は line（引用符が開いた物理行）。ファイル全体を読み取り専用にする。
 	EditUnclosedQuote = "edit_unclosed_quote"
+	// EditCROnly は、ファイルの行の区切りがすべて単独の CR であること。ゲームの
+	// 読み方（CsvReader）は引用の外の CR を捨てるので、このファイルを1行と読む。
+	// ファイル全体を読み取り専用にする。
+	EditCROnly = "edit_cr_only"
+	// EditSwallow は、行をまたぐレコードが後ろの行を値に飲み込んだと見られること
+	// （引用符の閉じ誤りの疑い。csvfile.FindSwallows）。置換は line（飲み込まれたと
+	// 疑う物理行）。
+	EditSwallow = "edit_swallow"
+	// EditGameDisagrees は、ゲームの読み方（CsvReader の移植）で読むと、そのレコードの
+	// 値が違って読まれること（csvfile.CSharpDisagreements）。置換は column（食い違った
+	// 最初の列）。
+	EditGameDisagrees = "edit_game_disagrees"
+	// EditGameMissesRecord は、ゲームの読み方でそのレコードが見つからないこと
+	// （csvfile.CSharpDisagreements の Column が空）。
+	EditGameMissesRecord = "edit_game_misses_record"
 )
 
 // 書き出すと訳が失われる理由（internal/publish の guard.go）。
@@ -358,7 +373,8 @@ var all = []string{
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
-	EditMultilineTranslation, EditUnclosedQuote,
+	EditMultilineTranslation, EditUnclosedQuote, EditCROnly, EditSwallow,
+	EditGameDisagrees, EditGameMissesRecord,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 

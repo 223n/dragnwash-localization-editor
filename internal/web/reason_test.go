@@ -519,14 +519,31 @@ func editReasons(t *testing.T) []reason.Reason {
 		out = append(out, causeOf(t, err))
 	}
 
-	// 行をまたぐレコードの行と、閉じない引用符のファイル。
+	// 訳が行をまたぐレコードと、閉じない引用符のファイルと、行の区切りが CR だけの
+	// ファイル。
 	multi := edit.Parse([]byte("key,translation\nk,\"い\nち\"\n"))
 	if err := multi.SetTranslation(2, "x"); err == nil {
-		t.Error("行をまたぐレコードの行が書けてしまった")
+		t.Error("訳が行をまたぐレコードが書けてしまった")
 	} else {
 		out = append(out, causeOf(t, err))
 	}
 	out = append(out, edit.Parse([]byte("key,translation\nk,\"い\n")).ReadOnlyCause())
+	out = append(out, edit.Parse([]byte("key,translation\rk,い\r")).ReadOnlyCause())
+
+	// 飲み込みの疑いのあるレコードと、ゲームの読み方と値が割れるレコード・ゲームの
+	// 読み方に見つからないレコード（単独の CR で終わる行の次の行）。
+	shapes := edit.Parse([]byte("key,section,node,order,speaker,source_en,translation\n" +
+		"0123456789abcdef,UI,,,UI,\"one\n" +
+		"fedcba9876543210,UI,,,UI,two\",いち\n" +
+		"1111111111111111,UI,,,UI,three,い\r" +
+		"2222222222222222,UI,,,UI,four,ろ\n"))
+	for _, id := range []int{2, 3, 4} {
+		if err := shapes.SetTranslation(id, "x"); err == nil {
+			t.Errorf("ID %d が書けてしまった", id)
+		} else {
+			out = append(out, causeOf(t, err))
+		}
+	}
 
 	return out
 }

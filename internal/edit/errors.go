@@ -9,7 +9,8 @@ import (
 
 // ErrReadOnly はファイル全体が読み取り専用であることを表す。
 // 開いた引用符がファイルの終わりまで閉じないか、ヘッダー行そのものが無いか、
-// ヘッダーが受理される4種のいずれでもない。理由の文言は [File.ReadOnlyReason] で取れる。
+// ヘッダーが受理される4種のいずれでもないか、行の区切りがすべて単独の CR である。
+// 理由の文言は [File.ReadOnlyReason] で取れる。
 var ErrReadOnly = errors.New("このファイルは読み取り専用")
 
 // ErrNoPath は [Parse] で作った（ファイルに紐づいていない）[File] を

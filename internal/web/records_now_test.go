@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 /*
@@ -120,6 +121,65 @@ func TestSaveAddressesRecordsByID(t *testing.T) {
 	}
 	if got := readFile(t, path); !strings.HasSuffix(got, ","+srcBye+","+jaTyped+"\r\n") {
 		t.Errorf("6行目に入っていない: %q", got)
+	}
+}
+
+// TestRowsThatCannotBeWrittenSafelyAreReadOnly は、publish やゲームが別の値に読む
+// レコードを、理由（目録の文面）を付けて編集させず、値がどれも空のレコードを並べない
+// ことを見る。
+//
+//   - 飲み込みの疑い（csvfile.FindSwallows）: 引用符の閉じ誤りで後ろの行を値に
+//     飲み込んでいる疑い。原文の側で飲み込み、訳は1行に収まる形。
+//   - ゲームの読み方との食い違い（csvfile.CSharpDisagreements）: フィールドの途中の '"'。
+//   - ",,,,,," の行（改善の ui-15）: 空行相当として並べない。
+//
+// 行の区切りが CR だけのファイルは、ファイル全体を読み取り専用にする。
+func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	body := "key,section,node,order,speaker,source_en,translation\n" +
+		key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"" + srcHello + "\n" +
+		key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + "\"," + jaHello + "\n" +
+		",,,,,,\n" +
+		key.For("Start") + ",UI,,,UI,Start,は\"じ\"める\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	lines := getLines(t, s, "ja")
+	if len(lines.Lines) != 2 || lines.Rows != 2 {
+		t.Fatalf("並べた行 = %+v、カンマだけの行を除いた2行を期待", lines.Lines)
+	}
+	wants := []struct {
+		id     int
+		reason string
+	}{
+		{2, s.cat.T(ja, "reason."+reason.EditSwallow, "line", "3")},
+		{4, s.cat.T(ja, "reason."+reason.EditGameDisagrees, "column", "translation")},
+	}
+	for i, w := range wants {
+		l := lines.Lines[i]
+		if l.ID != w.id || l.Editable || l.Reason != w.reason || l.Text == "" {
+			t.Errorf("ID %d = %+v、理由 %q を期待", w.id, l, w.reason)
+		}
+	}
+	before := readFile(t, path)
+	for _, id := range []int{2, 3, 4} {
+		if rec := save(t, s, "ja", lines.Version, rowEdit{ID: id, Translation: jaTyped}); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("ID %d: 状態コードが %d、422 を期待", id, rec.Code)
+		}
+	}
+	if readFile(t, path) != before {
+		t.Error("断ったのにファイルが変わった")
+	}
+
+	// 行の区切りが CR だけのファイル。
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(body, "\n", "\r")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := getLines(t, s, "ja").ReadOnlyReason; got != s.cat.T(ja, "reason."+reason.EditCROnly) {
+		t.Errorf("読み取り専用の理由 = %q", got)
 	}
 }
 

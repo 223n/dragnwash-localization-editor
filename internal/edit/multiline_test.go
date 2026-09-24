@@ -204,17 +204,25 @@ func TestParseUnclosedQuote(t *testing.T) {
 // 物理行を1行ずつ見ていたときは、"," の行を空行相当として飛ばし、全角空白だけの行を
 // ヘッダーにしていた。publish（と上流）は "," の行をヘッダーにし（ヘッダーに key 列が
 // 無いので形の確かめ (a) で止まる）、全角空白だけの行を空行として落とす。
+//
+// ゲームの読み方（CsvReader）は、全角空白や NO-BREAK SPACE だけの行を空行と見なさず、
+// その行をヘッダーにする。そのため、このファイルのどのレコードもゲームの読み方では
+// 見つからず、編集させない（reason.EditGameMissesRecord。PR3 でゲームの読み方との
+// 食い違いを見るようにしてから。PR2 では編集できた）。publish はこの行を落として読むので、
+// ヘッダーの選び方は publish にそろえたままにする。
 func TestParseChoosesTheHeaderLikePublish(t *testing.T) {
 	const body = "key,translation\n" + "0123456789abcdef,v\n"
 	tests := []struct {
 		name     string
 		data     string
 		readOnly string
+		// row は、データのレコードが編集できないときの理由。空なら編集できる。
+		row string
 	}{
-		{"ヘッダーの前の \",\" の行はヘッダーになる", ",\n" + body, reason.EditBadHeader},
-		{"ヘッダーの前の全角空白だけの行は空行", "　\n" + body, ""},
-		{"ヘッダーの前の NO-BREAK SPACE だけの行は空行", " \n" + body, ""},
-		{"ヘッダーの後ろの \",\" の行は空行相当", body + ",\n", ""},
+		{"ヘッダーの前の \",\" の行はヘッダーになる", ",\n" + body, reason.EditBadHeader, reason.EditBadHeader},
+		{"ヘッダーの前の全角空白だけの行は空行", "　\n" + body, "", reason.EditGameMissesRecord},
+		{"ヘッダーの前の NO-BREAK SPACE だけの行は空行", " \n" + body, "", reason.EditGameMissesRecord},
+		{"ヘッダーの後ろの \",\" の行は空行相当", body + ",\n", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -223,12 +231,29 @@ func TestParseChoosesTheHeaderLikePublish(t *testing.T) {
 				t.Fatalf("読み取り専用の理由 = %q、%q を期待（%s）", got, tt.readOnly, f.ReadOnlyReason())
 			}
 			if tt.readOnly != "" {
+				// ファイル全体が読み取り専用。データ行はどれもファイルの理由を持つ。
+				for _, l := range f.Lines() {
+					if l.Kind == KindData && (l.Editable || l.Cause.ID != tt.row) {
+						t.Errorf("%d行目 = %+v、理由 %q を期待", l.Number, l, tt.row)
+					}
+				}
 				return
 			}
+			if strings.Join(f.Header(), ",") != "key,translation" {
+				t.Errorf("ヘッダー = %v", f.Header())
+			}
+			data := 0
 			for _, l := range f.Lines() {
-				if l.Kind == KindData && (!l.Editable || l.Translation() != "v") {
-					t.Errorf("%d行目 = %+v、訳 v の編集できる行を期待", l.Number, l)
+				if l.Kind != KindData {
+					continue
 				}
+				data++
+				if l.Key() != "0123456789abcdef" || l.Cause.ID != tt.row || l.Editable != (tt.row == "") {
+					t.Errorf("%d行目 = %+v、理由 %q を期待", l.Number, l, tt.row)
+				}
+			}
+			if data != 1 {
+				t.Errorf("データのレコードが %d 件、1件を期待", data)
 			}
 		})
 	}

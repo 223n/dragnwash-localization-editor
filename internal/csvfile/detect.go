@@ -213,7 +213,7 @@ type CRCut struct {
 // 引用が開いたまま行が終わって区切りが足りず、正当な行末の CR で当たってしまう。
 func FindCRCuts(segs Segments) []CRCut {
 	header, ok := segs.Header()
-	if !ok || crOnlyLineBreaks(segs) {
+	if !ok || CROnlyLineBreaks(segs) {
 		return nil
 	}
 	columns := len(header.Offsets)
@@ -231,12 +231,16 @@ func FindCRCuts(segs Segments) []CRCut {
 	return out
 }
 
-// crOnlyLineBreaks は、引用の外の行の区切りがすべて単独の CR かを返す。行の区切りが
+// CROnlyLineBreaks は、引用の外の行の区切りがすべて単独の CR かを返す。行の区切りが
 // 1つも無いファイル（1行だけで改行の無いもの）は false。
 //
 // 見るのはセグメントの終端（引用の外の改行）だけで、引用の中の改行は見ない。
 // 引用した値の中の LF は、行の区切りではなく値の一部だからである。
-func crOnlyLineBreaks(segs Segments) bool {
+//
+// [FindCRCuts] のほかに、画面の保存（internal/edit）も使う。ゲームの読み方
+// （CsvReader）は引用の外の CR を捨てるので、このファイルを1行と読む。画面は
+// ファイル全体を読み取り専用にする。
+func CROnlyLineBreaks(segs Segments) bool {
 	seen := false
 	for _, seg := range segs.List {
 		switch seg.Term {
@@ -327,7 +331,7 @@ type Disagreement struct {
 // 「CSVとキー生成 R6」）、引用符で囲まない値の前後の空白（ConvertFrom-Csv は削り、
 // ゲームは削らない）、引用の外の単独の CR（ゲームは捨てる）などである。そうした
 // レコードを画面から保存すると、翻訳者が見ている値とゲームが表示する値が食い違う。
-// 保存はこのレコードを編集させない（PR3）。
+// 画面の保存（internal/edit）はこのレコードを編集させない。
 //
 // レコードは、key 列の値（前後の空白を除く）か、key が空なら source_en の値で
 // 突き合わせる。同じ値のレコードが複数あれば、出現順に組にする。どちらも空の
