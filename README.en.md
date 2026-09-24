@@ -253,6 +253,10 @@ On Windows you can start it this way.
 Starting it from the file manager on macOS and Linux has not been verified, so  
 if it does not work, use the commands below.
 
+On macOS and Linux, do not put `dwloc` inside the translation repository; point to it with `--root` instead.  
+The translation repository's `.gitignore` only excludes the Windows `dwloc.exe`, so `dwloc` on those systems can end up in a commit through `git add -A`.  
+When started somewhere that is not a translation repository, `dwloc` on those systems also suggests `--root` rather than moving it.
+
 ### Using it from the command line
 
 Run the `dwloc` you downloaded, pointing it at the root of the translation repository.

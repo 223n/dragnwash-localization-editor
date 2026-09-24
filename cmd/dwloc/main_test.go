@@ -733,6 +733,44 @@ func TestDefaultWaitsForEnterWhenTheEditorFails(t *testing.T) {
 	}
 }
 
+// TestNotARepoAdvisesRootOutsideWindows は、翻訳リポジトリでない場所で起動した
+// ときの案内が、Windows 以外では dwloc を移させずに --root を勧めることを見る。
+//
+// 翻訳リポジトリの .gitignore が外しているのは dwloc.exe と dwloc*.log だけで、
+// macOS と Linux の本体 dwloc は外れない。案内どおりに翻訳リポジトリへ移すと、
+// git add -A で実行ファイルが Pull Request に入る。validate も上流の CI も
+// それを指摘しない。
+func TestNotARepoAdvisesRootOutsideWindows(t *testing.T) {
+	notRepo := t.TempDir()
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--root", notRepo}, &out, &errOut); code != exitError {
+		t.Fatalf("終了コード = %d", code)
+	}
+	moveHint := "Translations フォルダーと同じ場所へ dwloc を移して"
+	if runtime.GOOS == "windows" {
+		checkContains(t, "標準エラー", errOut.String(), []string{moveHint, "dwloc edit --root"})
+		return
+	}
+	if strings.Contains(errOut.String(), moveHint) {
+		t.Errorf("Windows 以外で dwloc を翻訳リポジトリへ移させている:\n%s", errOut.String())
+	}
+	checkContains(t, "標準エラー", errOut.String(), []string{"--root", ".gitignore"})
+}
+
+// TestNotARepoMessage は、案内の文を OS ごとに見る。どの OS で走らせても、
+// 両方の文を確かめられるようにする。
+func TestNotARepoMessage(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		msg := notARepoMessage(goos)
+		if strings.Contains(msg, "dwloc を移して") {
+			t.Errorf("%s: dwloc を翻訳リポジトリへ移させている:\n%s", goos, msg)
+		}
+		checkContains(t, goos+" の案内", msg, []string{"探した場所: %s", "--root", ".gitignore", "dwloc help"})
+	}
+	checkContains(t, "windows の案内", notARepoMessage("windows"),
+		[]string{"探した場所: %s", "dwloc を移して", "--root", "dwloc help"})
+}
+
 // TestLooksLikeRepo は、翻訳リポジトリらしさの見方を確かめる。
 //
 // 見るのは Translations ディレクトリの有無だけである。中身まで確かめないのは、

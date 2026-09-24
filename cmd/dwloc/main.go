@@ -245,7 +245,7 @@ func runDefault(args []string, root, game string, noGame bool, stdout, stderr io
 		if err != nil {
 			where = root
 		}
-		fmt.Fprintf(stderr, notARepoText, where)
+		fmt.Fprintf(stderr, notARepoMessage(runtime.GOOS), where)
 		// ダブルクリックで開いた窓は、終わると同時に閉じる。理由を読む間も無く
 		// 消えるので、引数を1つも受け取っていないときだけ Enter を待つ。
 		// 端末から素の dwloc を打った場合もここを通るが、Enter を1回押すだけで済む。
@@ -273,10 +273,14 @@ func runDefault(args []string, root, game string, noGame bool, stdout, stderr io
 	return code
 }
 
-// notARepoText は、翻訳リポジトリではない場所で起動されたときの案内です。
+// notARepoText は、Windows で翻訳リポジトリではない場所で起動されたときの案内です。
 //
 // 「見つかりません」だけで終わらせず、どこへ置けばよいかを図で示します。
 // ここで詰まると、翻訳者は道具そのものを諦めます。
+//
+// 移させるのは Windows だけです。翻訳リポジトリの .gitignore が dwloc.exe を
+// 外しているので、置いてもコミットに入りません。ほかの OS は [notARepoRootText]
+// です。
 const notARepoText = `dwloc: ここは翻訳リポジトリではないようです。
   探した場所: %s
 
@@ -293,6 +297,41 @@ Translations フォルダーと同じ場所へ dwloc を移してから、もう
 
 ほかの使い方は dwloc help で表示します。
 `
+
+// notARepoRootText は、Windows 以外で翻訳リポジトリではない場所で起動されたときの
+// 案内です。
+//
+// dwloc を翻訳リポジトリへ移させず、--root を勧めます。翻訳リポジトリの
+// .gitignore が外しているのは dwloc.exe と dwloc*.log だけで、macOS と Linux の
+// 本体 dwloc は外れません。移させると、git add -A で約11MBの実行ファイルが
+// Pull Request に入ります。validate も上流の CI もそれを指摘しません。
+// 書庫の README.txt も、macOS と Linux では --root で使うよう案内しています。
+// 上流の .gitignore を直すのは、上流への Pull Request が要るので、ここでは
+// 手当てしません。
+const notARepoRootText = `dwloc: ここは翻訳リポジトリではないようです。
+  探した場所: %s
+
+--root で翻訳リポジトリのフォルダー（Translations フォルダーのある場所）を
+指定して実行してください。
+  ./dwloc edit --root <翻訳リポジトリのパス>
+
+dwloc は翻訳リポジトリの中へ移さないでください。翻訳リポジトリの .gitignore が
+外しているのは Windows の dwloc.exe だけなので、ここの dwloc は
+git add -A でコミットに入ることがあります。
+
+ほかの使い方は dwloc help で表示します。
+`
+
+// notARepoMessage は、翻訳リポジトリではない場所で起動されたときの案内を、
+// OS に合わせて返します。書式の %s には探した場所が入ります。
+//
+// OS を引数で受けるのは、どの OS で試験を走らせても両方の文を確かめるためです。
+func notARepoMessage(goos string) string {
+	if goos == "windows" {
+		return notARepoText
+	}
+	return notARepoRootText
+}
 
 // gameFlagUsage は --game の1行説明。共通の入口とサブコマンドで同じ文を使います。
 // 何か所も言い回しが割れると、同じ指定が別のものに見えます。
