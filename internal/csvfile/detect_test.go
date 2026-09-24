@@ -2,6 +2,7 @@ package csvfile
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -205,6 +206,34 @@ func TestFindCRCuts(t *testing.T) {
 			text: "key,translation\r# ===== L =====\r0123456789abcdef,a\r\rfedcba9876543210,b\r",
 		},
 		{
+			// 空のレコードは読み手が黙って落とす行で、切れた値の後半ではない。
+			name: "CR だけの改行のファイルの ',' と '\"\"' の行",
+			text: "key,source_en,translation\r7692c3ad3540bb80,one,いち\r,\r3fc4ccfe745870e2,two,に\r\"\"\r8b5b9db0c13db242,three,さん\r",
+		},
+		{
+			// 次の物理行だけを単独で読むと、原文の引用が開いたまま終わって区切りが6つになる。
+			// レコード全体では7つで、ヘッダーと同じ。
+			name: "CR だけの改行のファイルでキー列の空いた行の原文が行をまたぐ",
+			text: "key,section,node,order,speaker,source_en,translation\r" +
+				"7692c3ad3540bb80,UI,,,UI,one,いち\r" +
+				",UI,,,UI,\"Alpha line\n\nBeta line\",\r" +
+				"3fc4ccfe745870e2,UI,,,UI,two,に\r",
+		},
+		{
+			name: "次の行が空白だけ",
+			text: "key,translation\nk,a\r  \nk2,b\nk3,c\r\t\nk4,d\n",
+		},
+		{
+			name: "次の行が全角空白だけ",
+			text: "key,translation\nk,a\r　\nk2,b\n",
+		},
+		{
+			// 行をまたぐレコードでも、区切りがヘッダーより少なくキーの形でもなければ当たる。
+			name: "次のレコードが行をまたいでも区切りが足りない",
+			text: "key,section,translation\nk,s,い\rち,\"x\ny\"\nk2,s,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
 			name: "最終行の単独の CR",
 			text: "key,translation\nk,a\r",
 		},
@@ -226,6 +255,30 @@ func TestFindCRCuts(t *testing.T) {
 		got := FindCRCuts(SplitSegments([]byte(c.Text)))
 		if (len(got) > 0) != (c.Name == "lone-cr-unquoted-value") {
 			t.Errorf("%s: 単独の CR で切れた値 %+v", c.Name, got)
+		}
+	}
+
+	// 入力の表の改行をすべて単独の CR に直した写し（CR だけの改行のファイル）でも、
+	// 当たるのは次の入力だけである。CR だけの改行のファイルは意図して読む形なので、
+	// ここで当たる入力が増えると、正当なファイルの publish が塞がる。
+	//
+	// lone-cr-unquoted-value のほかの2件は、切れた値ではないのに当たる（未決）。
+	// どちらも次のレコードが単独ではレコードに見えない形で、単独の CR の後ろでは
+	// 切れた値の後半と見分けられない。PR2 で止める前に扱いを決める。
+	crOnlyHits := map[string]string{
+		// 値が単独の CR で切れている。改行を直しても切れたまま。
+		"lone-cr-unquoted-value": "切れた値",
+		// U+00AD のあとの '#' の行は、読み手が序数で比べてデータのレコードにする（上流と
+		// 意図して違える点）。単独ではレコードに見えないので、その前の CR で当たる。
+		"soft-hyphen-comment": "U+00AD の行",
+		// ヘッダーは3列（最後の列名が行をまたぐ）、データは2列で、キーの形でもない。
+		"ml-header": "列の足りないレコード",
+	}
+	crOnly := strings.NewReplacer("\r\n", "\r", "\n", "\r")
+	for _, c := range loadFixtureCases(t).Cases {
+		got := FindCRCuts(SplitSegments([]byte(crOnly.Replace(c.Text))))
+		if _, want := crOnlyHits[c.Name]; (len(got) > 0) != want {
+			t.Errorf("%s（CR だけの改行）: 単独の CR で切れた値 %+v", c.Name, got)
 		}
 	}
 }

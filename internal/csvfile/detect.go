@@ -179,13 +179,20 @@ type CRCut struct {
 // なる。ゲームの CsvReader は引用の外の CR を捨てて「いち」と読むので、publish が
 // そのまま書くと訳を失う。
 //
-// 返すのは、単独の CR で終わるレコードのうち、次の物理行が単独ではレコードに
-// 見えないもの（[FindSwallows] と同じ見方）である。次の行がレコードに見えれば、
-// 行末の単独の CR で改行しただけ（CR だけの改行のファイルなど）と見て返さない。
-// 次の行が空行・空白だけの行・'#' で始まる行のときも返さない。CR だけの改行の
-// ファイルは、見出しのコメント行や空行の前でも単独の CR で改行するので、そこで
-// 止めると、意図して読んでいる CR だけのファイルが通らなくなる。代わりに、
-// 値が CR の直後の '#' で切れる形は見逃す。
+// 返すのは、単独の CR で終わるレコードのうち、次のセグメントがレコードに見えない
+// ものである。次のセグメントがレコードに見えれば、行末の単独の CR で改行しただけ
+// （CR だけの改行のファイルなど）と見て返さない。次のセグメントは、区切りの関数が
+// 分けたとおりに見る。
+//
+//   - 空行（空白だけの行を含む）・'#' で始まる行・空のレコード（"," や `""`）なら
+//     返さない。CR だけの改行のファイルは、見出しのコメント行や空行、空のレコードの
+//     前でも単独の CR で改行するので、そこで止めると、意図して読んでいる CR だけの
+//     ファイルが通らなくなる。代わりに、値が CR の直後の '#' で切れる形は見逃す。
+//   - レコードなら、最初の値がキーの形か、区切りの数（Offsets の個数）がヘッダーの
+//     列数と同じときに、レコードに見えるとする（[FindSwallows] と同じ見方）。区切りは
+//     レコード全体で数える。次の物理行だけを単独で読むと、キー列の空いた行の原文が
+//     行をまたぐとき、引用が開いたまま行が終わって区切りが足りず、正当な CR だけの
+//     ファイルで当たってしまう。
 func FindCRCuts(segs Segments) []CRCut {
 	header, ok := segs.Header()
 	if !ok {
@@ -193,19 +200,20 @@ func FindCRCuts(segs Segments) []CRCut {
 	}
 	columns := len(header.Offsets)
 	var out []CRCut
-	for _, seg := range segs.List {
-		if !seg.HasFields() || seg.Term != TermCR {
+	for i, seg := range segs.List {
+		if !seg.HasFields() || seg.Term != TermCR || i+1 >= len(segs.List) {
 			continue
 		}
-		next := seg.EndLine + 1
-		line, _ := segs.PhysicalLine(next)
-		if next > segs.Lines || strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+		// ヘッダーは最初のフィールドを持つセグメントなので、次に来るのは空行・コメント・
+		// 空のレコード・レコードのどれかである。
+		next := segs.List[i+1]
+		if next.Kind != SegmentRecord {
 			continue
 		}
-		if _, ok := looksLikeRecord(line, columns); ok {
+		if keyShaped(next.Fields[0]) || len(next.Offsets) == columns {
 			continue
 		}
-		out = append(out, CRCut{ID: seg.ID, Line: seg.Line, EndLine: seg.EndLine, NextLine: next})
+		out = append(out, CRCut{ID: seg.ID, Line: seg.Line, EndLine: seg.EndLine, NextLine: next.Line})
 	}
 	return out
 }
