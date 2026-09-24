@@ -17,7 +17,11 @@ publish と画面は同じ関数を呼ぶ。別々に書くと、片方だけが
 を使う。行単位の読み手を検出のためにパッケージの中に残しているのは、このためである。
 */
 
-// RecordSign は、物理行を単独で読むとレコードに見える理由。
+// RecordSign は、続きの物理行がレコードを飲み込まれたものだと疑う理由。
+//
+// SignKeyShaped と SignSameColumns は、その物理行を単独で読むとレコードに見える
+// ことを表す。SignTextAfterQuote は、単独で読んでもレコードに見えないが、全体を
+// 解釈して読んだときの引用の閉じ方が、飲み込んだときにしか起きない形であることを表す。
 type RecordSign int
 
 const (
@@ -26,6 +30,9 @@ const (
 	// SignSameColumns は、区切りの数（引用の外のカンマの数+1）がヘッダーの列数と
 	// 同じであること。
 	SignSameColumns
+	// SignTextAfterQuote は、行をまたいだ引用がこの物理行で閉じ、閉じ引用符の
+	// すぐ後ろに文字が続くこと（`"いち` の次の行の `"Alpha line` のような形）。
+	SignTextAfterQuote
 )
 
 // String は理由の名前を返す。試験の出力と、呼び出し側の理由の文に使う。
@@ -35,19 +42,25 @@ func (s RecordSign) String() string {
 		return "key-shaped"
 	case SignSameColumns:
 		return "same-columns"
+	case SignTextAfterQuote:
+		return "text-after-quote"
 	}
 	return "unknown"
 }
 
+// keyShaped は、値がキーの形かを返す。
+//
+// publish がキーを決めるときと同じ扱いで見る。前後の空白を除き（移植仕様 R11）、
+// 台詞ID はそのまま、それ以外は小文字にしてから16桁の16進かを見る（R13、R16）。
+func keyShaped(v string) bool {
+	v = strings.TrimSpace(v)
+	return key.LooksLikeLineID(v) || key.LooksLike(strings.ToLower(v))
+}
+
 // looksLikeRecord は、1物理行を単独で読むとレコードに見えるかを返す。columns は
 // ヘッダーの区切りの数（ヘッダーのセグメントの Offsets の個数）。
-//
-// キーの形は、publish がキーを決めるときと同じ扱いで見る。前後の空白を除き
-// （移植仕様 R11）、台詞ID はそのまま、それ以外は小文字にしてから16桁の16進かを
-// 見る（R13、R16）。
 func looksLikeRecord(line string, columns int) (RecordSign, bool) {
-	first := strings.TrimSpace(parsePowerShellField(line, 0, false).value)
-	if key.LooksLikeLineID(first) || key.LooksLike(strings.ToLower(first)) {
+	if keyShaped(parsePowerShellField(line, 0, false).value) {
 		return SignKeyShaped, true
 	}
 	if len(FieldOffsets(line)) == columns {
@@ -56,14 +69,47 @@ func looksLikeRecord(line string, columns int) (RecordSign, bool) {
 	return 0, false
 }
 
+// textAfterQuoteLines は、seg のフィールドのうち、行をまたいだ引用が閉じたすぐ
+// 後ろに文字が続くものについて、その閉じ引用符の物理行を返す。
+//
+// 飲み込まれた行が自分の値を引用符で開く形（`one,"いち` の次に `"Alpha line` が
+// 来るなど）では、その開き引用符が前の行の閉じ忘れた引用を閉じ、後ろの文字は
+// 閉じ引用符の後ろの文字として値に足される（ConvertFrom-Csv の規則。`"a"x` は ax）。
+// 続きの物理行を単独で読むと、引用が開いたまま行が終わるので、区切りの数が
+// ヘッダーより少なくなり、キーの形にも当たらない。単独で読む見方だけでは漏れるので、
+// 全体を解釈したときの閉じ方で見る。
+//
+// 閉じ引用符の後ろに文字を書く書き手は無い（上流の Escape-Csv も、ゲームの
+// WorkingCopy.cs が使う CsvReader.Escape も値全体を引用し、閉じ引用符の後ろは
+// 区切りか改行になる）ので、正当な複数行の値（値が改行で終わるものを含む）では
+// 当たらない。同じ行の中で開いて閉じた引用の
+// 後ろの文字（`"a"x`）は、飲み込みの証拠にならないので見ない。
+func textAfterQuoteLines(segs Segments, seg Segment) map[int]bool {
+	var lines map[int]bool
+	for _, start := range seg.Offsets {
+		f := parsePowerShellField(segs.Text, start, true)
+		if f.tailAt == 0 {
+			continue
+		}
+		if line := segs.lineAt(f.tailAt); line > segs.lineAt(start) {
+			if lines == nil {
+				lines = make(map[int]bool)
+			}
+			lines[line] = true
+		}
+	}
+	return lines
+}
+
 // Swallow は、行をまたぐレコードが飲み込んだと見られる物理行1つ。
 type Swallow struct {
 	// ID・Line・EndLine は、飲み込んだレコード（ヘッダーのこともある）の
 	// セグメントの ID と物理行の範囲。
 	ID, Line, EndLine int
-	// SwallowedLine は、単独で読むとレコードに見える続きの物理行。
+	// SwallowedLine は、飲み込まれたと疑う続きの物理行。
 	SwallowedLine int
-	// Sign はレコードに見える理由。
+	// Sign は疑う理由。1つの物理行に理由が重なれば、単独で読むとレコードに見える
+	// 理由（キーの形、区切りの数の順）を採る。
 	Sign RecordSign
 }
 
@@ -79,6 +125,12 @@ type Swallow struct {
 // 単独で読んでもレコードにならない行（空行・空白だけの行・'#' で始まる行）は
 // 見ない。見ると、原文の段落のあいだの空行や、値の中の '#' の行で止まる。
 //
+// 飲み込まれた行が自分の値を引用符で開く形では、その行を単独で読むと引用が
+// 開いたまま終わり、上の2つに当たらない。そのため、行をまたいだ引用が閉じた
+// すぐ後ろに文字が続く物理行も返す（[SignTextAfterQuote]。見方は
+// [textAfterQuoteLines]）。こちらは行の中身ではなく全体を解釈したときの閉じ方で
+// 見るので、'#' で始まる行でも当たる。
+//
 // 正当な複数行の値でも当たることがある（原文の2行目がカンマを多く含むなど）。
 // そのため、呼び出し側は、確かめたうえで通す指定を用意すること。閉じない引用符の
 // レコードは見ない。そちらは [UnclosedQuoteError] が先に止める。
@@ -93,12 +145,16 @@ func FindSwallows(segs Segments) []Swallow {
 		if !seg.HasFields() || !seg.MultiLine() || seg.Unclosed() {
 			continue
 		}
+		tails := textAfterQuoteLines(segs, seg)
 		for n := seg.Line + 1; n <= seg.EndLine; n++ {
-			line, _ := segs.PhysicalLine(n)
-			if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
-				continue
+			sign, ok := RecordSign(0), false
+			if line, _ := segs.PhysicalLine(n); strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
+				sign, ok = looksLikeRecord(line, columns)
 			}
-			if sign, ok := looksLikeRecord(line, columns); ok {
+			if !ok && tails[n] {
+				sign, ok = SignTextAfterQuote, true
+			}
+			if ok {
 				out = append(out, Swallow{ID: seg.ID, Line: seg.Line, EndLine: seg.EndLine, SwallowedLine: n, Sign: sign})
 			}
 		}

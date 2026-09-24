@@ -8,11 +8,13 @@ import (
 // TestFindSwallowsOnFixture は、上流との突き合わせの入力の表の全件で、飲み込みの
 // 検出が当たる入力とその場所を固定する。表に無い入力は、当たらないことを見る。
 //
-// 上流はどの入力も止めずに書く。飲み込みの5件（swallow-*）は、上流では英語の原文や
+// 上流はどの入力も止めずに書く。飲み込みの8件（swallow-*）は、上流では英語の原文や
 // キーが訳に入って公開される形で、どれも当たらなければならない。訳の空の行を
 // 飲み込む形（swallow-7col-hash-close）はキーの形で、キー列の空いた英文の行
 // （swallow-7col-empty-key-english）と2列の作業コピー（swallow-2col-hash-close）は
-// 区切りの数で当たる（決まったことの 4）。
+// 区切りの数で当たる（決まったことの 4）。飲み込まれた行が自分の値を引用符で開く
+// 3件（swallow-*-own-quote）は、続きの行を単独で読むと引用が開いたまま終わり、
+// キーの形にも区切りの数にも当たらない。閉じ引用符の後ろに文字が続くことで当たる。
 //
 // 実物と同じ形の複数行の原文（ml-source-real-shape）や、複数行の訳（ml-translation-*）、
 // 値の中の '#' の行は当たってはいけない。当たると、正当なファイルの publish が
@@ -31,6 +33,11 @@ func TestFindSwallowsOnFixture(t *testing.T) {
 		"swallow-6col-published":         {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-continuation-looks-like-row": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-source-translated-2col":      {{ID: 3, Line: 3, EndLine: 5, SwallowedLine: 5, Sign: SignSameColumns}},
+		// 次の3件は閉じ引用符の後ろの文字で当たる。上の swallow-7col-empty-key-english と
+		// swallow-6col-published も閉じ引用符の後ろに文字が続くが、区切りの数が先に当たる。
+		"swallow-2col-own-quote":           {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		"swallow-7col-empty-key-own-quote": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		"swallow-6col-published-own-quote": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 	}
 	cases := loadFixtureCases(t).Cases
 	for _, c := range cases {
@@ -90,6 +97,49 @@ func TestFindSwallows(t *testing.T) {
 		{
 			name: "区切りの数が違えば当たらない",
 			text: "key,section,translation\nk,s,\"a\nx,y\nz,w,v,u\"\n",
+		},
+		{
+			// 飲み込まれた行が自分の原文を引用符で開き、その引用符が one の訳の閉じ忘れを
+			// 閉じる。訳は "いち\nAlpha line" になる。続きの行を単独で読むと引用が開いたまま
+			// 終わる（区切りは1つ）ので、キーの形にも区切りの数にも当たらない。
+			name: "2列の作業コピーで飲み込まれた行が引用符を開く",
+			text: "source_en,translation\none,\"いち\n\"Alpha line\nBeta line\",に\ntwo,さん\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// キー列の空いた英文の行の原文が複数行。単独で読むと区切りは6つで、ヘッダーの7つと違う。
+			name: "7列の作業コピーでキー列の空いた行が引用符を開く",
+			text: "key,section,node,order,speaker,source_en,translation\r\n" +
+				"7692c3ad3540bb80,UI,,,UI,one,\"いち\r\n" +
+				",UI,,,UI,\"Alpha line\n\nBeta line\",\r\n" +
+				"8b5b9db0c13db242,UI,,,UI,three,さん\r\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 入力と書き出し先が同じ経路（公開ファイル）。key 列に複数行の英文のある追記の形を飲み込む。
+			name: "公開ファイルで key 列の英文が引用符を開く",
+			text: "key,section,node,order,speaker,translation\n" +
+				"0123456789abcdef,UI,,,UI,\"いち\n" +
+				"\"Alpha line\nBeta line\",UI,,,UI,訳\n" +
+				"fedcba9876543210,UI,,,UI,に\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 閉じ方で見るので、単独ではコメントになる行でも当たる。
+			name: "閉じ引用符の後ろの文字は '#' の行でも見る",
+			text: "key,translation\nk,\"a\n# x\"tail\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 値が改行や空白で終わると、閉じ引用符が行頭に来る。後ろは区切りか改行なので当たらない。
+			name: "値が改行で終わる複数行の値",
+			text: "key,section,translation\nk,s,\"a\n\"\nk2,s,\"b\n  \",\"c\n\"\n",
+		},
+		{
+			// 同じ行の中で開いて閉じた引用の後ろの文字（3行目の "c"d）は、続きの行にあっても
+			// 飲み込みの証拠にならない。
+			name: "同じ行の中で閉じた引用の後ろの文字は見ない",
+			text: "key,translation,note\nk,\"a\nb\",\"c\"d\n",
 		},
 		{
 			// 単独で読むとコメントになる行は、レコードを飲み込んだ証拠にならない。
@@ -290,7 +340,10 @@ func TestCSharpDisagreements(t *testing.T) {
 
 // TestRecordSignString は、理由の名前を固定する。呼び出し側が理由の文に使う。
 func TestRecordSignString(t *testing.T) {
-	want := map[RecordSign]string{SignKeyShaped: "key-shaped", SignSameColumns: "same-columns", RecordSign(0): "unknown"}
+	want := map[RecordSign]string{
+		SignKeyShaped: "key-shaped", SignSameColumns: "same-columns", SignTextAfterQuote: "text-after-quote",
+		RecordSign(0): "unknown",
+	}
 	for sign, name := range want {
 		if got := sign.String(); got != name {
 			t.Errorf("%d.String() = %q, want %q", int(sign), got, name)

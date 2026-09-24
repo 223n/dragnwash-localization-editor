@@ -434,6 +434,15 @@ var publishDiffs = map[string]knownPublishDiff{
 	"swallow-6col-published": {pubPR2, whyPubSwallow, []string{
 		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
 	}},
+	"swallow-2col-own-quote": {pubPR2, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	}},
+	"swallow-7col-empty-key-own-quote": {pubPR2, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
+	}},
+	"swallow-6col-published-own-quote": {pubPR2, whyPubSwallow, []string{
+		`上流 書く / dwloc 止まる（形: 公開ファイル 2〜3行目 publish_multiline_current）`,
+	}},
 	"lone-cr-in-quoted-translation": {pubPR2, whyPubLoneCRQuoted, []string{
 		`上流 書く / dwloc 止まる（形: 入力 2〜3行目 publish_multiline_translated）`,
 	}},

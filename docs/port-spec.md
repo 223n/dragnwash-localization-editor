@@ -357,7 +357,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 形の検出は、読み手が見分けない引用符の閉じ誤りなどを、形を見て見つける。止めるかどうかは呼び出し側が決め、publish と画面は同じ関数を呼ぶ（PR2・PR3）。物理行を単独で読むときは1物理行の読み方（csvfile.ParsePowerShellRecord と csvfile.FieldOffsets の中身）を使う。
 
-- 飲み込み（csvfile.FindSwallows）: 行をまたぐレコードの続きの物理行を単独で読み、最初の値がキーの形（前後の空白を除き、台詞ID か、小文字にして16桁の16進）か、区切りの数（引用の外のカンマの数+1）がヘッダーの列数と同じなら、レコードに見えるとして返す。空行・空白だけの行・'#' の行は見ない。閉じない引用符のレコードも見ない。上流との突き合わせの入力の表では、飲み込みの5件がすべて当たり、実物と同じ形の複数行の原文や複数行の訳は当たらない。正当でも当たるものが2件ある（原文の2行目がカンマを多く含む ml-continuation-looks-like-row と、2列の作業コピーで原文が行をまたぐ ml-source-translated-2col）。これらは確かめたうえで通す指定（PR2）で書く。
+- 飲み込み（csvfile.FindSwallows）: 行をまたぐレコードの続きの物理行を単独で読み、最初の値がキーの形（前後の空白を除き、台詞ID か、小文字にして16桁の16進）か、区切りの数（引用の外のカンマの数+1）がヘッダーの列数と同じなら、レコードに見えるとして返す。空行・空白だけの行・'#' の行は見ない。閉じない引用符のレコードも見ない。飲み込まれた行が自分の値を引用符で開く形（`one,"いち` の次に `"Alpha line` が来るなど）では、その開き引用符が前の行の閉じ忘れを閉じ、後ろの文字は閉じ引用符の後ろの文字として訳に足される。その行を単独で読むと引用が開いたまま終わるので、上の2つに当たらない。そこで、行をまたいだ引用が閉じたすぐ後ろに文字が続く物理行も返す（理由は text-after-quote）。閉じ引用符の後ろに文字を書く書き手は無い（上流の Escape-Csv も、ゲームの WorkingCopy.cs が使う CsvReader.Escape も値全体を引用し、後ろは区切りか改行）ので、値が改行で終わる形を含め、正当な複数行の値では当たらない。こちらは全体を解釈したときの閉じ方で見るので、'#' の行でも当たる。同じ行の中で開いて閉じた引用の後ろの文字は見ない。上流との突き合わせの入力の表では、飲み込みの8件がすべて当たり（自分の値を引用符で開く3件は text-after-quote で当たる）、実物と同じ形の複数行の原文や複数行の訳は当たらない。正当でも当たるものが2件ある（原文の2行目がカンマを多く含む ml-continuation-looks-like-row と、2列の作業コピーで原文が行をまたぐ ml-source-translated-2col）。これらは確かめたうえで通す指定（PR2）で書く。
 - 引用符で囲まない値の中の単独の CR（csvfile.FindCRCuts）: 単独の CR で終わるレコードのうち、次の物理行が単独ではレコードに見えない（上と同じ見方）ものを返す。次の行が空行か '#' の行なら返さない。CR だけの改行のファイルは、見出しのコメント行や空行の前でも単独の CR で改行するので、そこで止めると意図して読んでいる形が通らなくなるためである。その代わり、値が CR の直後の '#' で切れる形は見逃す。
 - 値の中の単独の CR（csvfile.LoneCRValues）と、見出しに使う値の中の改行（csvfile.LineBreakValues）。
 - ゲームの読み方との食い違い（csvfile.CSharpDisagreements）: レコードを key 列（空なら source_en）の値で組にし（同じ値が複数あれば出現順）、ゲームの読み方（csvfile.ReadCSharpRows）で読んだ値と列ごとに比べる。フィールドの途中の '"'、引用符で囲まない値の前後の空白、引用の外の単独の CR で割れる。
@@ -369,7 +369,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 ### 上流と意図して違える点
 
-publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4）の土台として、上流 main（dc55c9e）の tools/hash-strings.ps1 と dwloc を、合成した入力の表で突き合わせる試験を置いた。入力は testdata/upstream/cases.json（60件、英文と訳はどれも架空の文）、上流の正解は testdata/upstream/expected.json で、scripts/upstream-fixtures.ps1 が上流の Read-Csv と Remove-NonRecords を AST で取り出して読ませた結果（レコードの値と物理行の範囲）と、上流のスクリプトを通しで走らせた結果（出力のバイトと集計の1行）を持つ。作り方は testdata/upstream/README.md にある。
+publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4）の土台として、上流 main（dc55c9e）の tools/hash-strings.ps1 と dwloc を、合成した入力の表で突き合わせる試験を置いた。入力は testdata/upstream/cases.json（63件、英文と訳はどれも架空の文）、上流の正解は testdata/upstream/expected.json で、scripts/upstream-fixtures.ps1 が上流の Read-Csv と Remove-NonRecords を AST で取り出して読ませた結果（レコードの値と物理行の範囲）と、上流のスクリプトを通しで走らせた結果（出力のバイトと集計の1行）を持つ。作り方は testdata/upstream/README.md にある。
 
 保存した正解は pwsh 7.4.6（上流の docker の hash 経路と同じ。mcr.microsoft.com/dotnet/sdk:8.0-noble に dotnet tool で入れたもの、Linux、カルチャは不変）で作った。手元の pwsh 7.6.6（Windows、ja-JP）で作り直した結果とは、pwsh の版の記録と例外の文面の言語のほかは同じだった（2026-09-24）。culture に依存する StartsWith('#') も、両方で U+00AD のあとの '#' をコメントと見なした。
 
@@ -385,7 +385,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 | 裸の引用符の後ろのコメント行と見出し | '"' の偶奇で引用の中と見なし、レコードにする。列が多ければ公開ファイルに書く | 引用の外として落とす | bare-quote-then-comment、bare-quote-then-heading、quote-after-closing-quote |
 | 行頭の '#' の判定 | StartsWith('#') はカルチャに依存する照合で、U+00AD のように照合上無視される文字を飛ばす | 序数で比べる。U+00AD で始まる行はデータとして読み、malformed dropped に数える | soft-hyphen-comment |
 | 閉じない引用符（上流の報告 #11） | ファイルの終わりまでを値に飲み込み、英語の原文ごと書く | 形の確かめ (e) で止める（PR2 からは読み手の型付きの誤りを終了コード1にする） | unclosed-to-eof、unclosed-last-line、unclosed-header、unclosed-published-middle |
-| 飲み込み（引用符が別の行で閉じる） | 後ろの行（英語の原文やキー）を訳に取り込んで書く | 止める。いまは (b)(c)、PR2 からは飲み込みの確かめ (f) | swallow-3col、swallow-7col-hash-close、swallow-2col-hash-close、swallow-7col-empty-key-english、swallow-6col-published |
+| 飲み込み（引用符が別の行で閉じる） | 後ろの行（英語の原文やキー）を訳に取り込んで書く | 止める。いまは (b)(c)、PR2 からは飲み込みの確かめ (f) | swallow-3col、swallow-7col-hash-close、swallow-2col-hash-close、swallow-7col-empty-key-english、swallow-6col-published、swallow-2col-own-quote、swallow-7col-empty-key-own-quote、swallow-6col-published-own-quote |
 | ヘッダーに key 列も source_en 列も無いか、translation 列が無い | すべての行を捨て、ヘッダーとコメントだけを書く | 形の確かめ (a) で止める | ml-header、hash-header-unquoted |
 | 集計の1行の kept from the published file | いまの公開ファイルから引き継いだ行の数を、9項目目として出す | この項目を持たない。publish の試験は、この項目を除いた6項目を比べる | （すべての入力） |
 

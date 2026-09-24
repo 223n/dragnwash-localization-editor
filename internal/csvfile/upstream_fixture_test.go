@@ -607,6 +607,21 @@ var lineReaderDiffs = map[string]knownDiff{
 		`L2 translation: 上流 "いち\nGood day" / dwloc "いち"`,
 		`dwloc だけ L3 ["Good day, friend" "UI" "" "" "UI" "こんにちは"]`,
 	}},
+	"swallow-2col-own-quote": {diffLineBased, whyLineSplit, []string{
+		`L2 の終わり: 上流 3 / dwloc 2`,
+		`L2 translation: 上流 "いち\nAlpha line" / dwloc "いち"`,
+		`dwloc だけ L3 ["Alpha line" ""]`,
+	}},
+	"swallow-7col-empty-key-own-quote": {diffLineBased, whyLineSplit, []string{
+		`L2 の終わり: 上流 3 / dwloc 2`,
+		`L2 translation: 上流 "いち\r\n,UI,,,UI,Alpha line" / dwloc "いち"`,
+		`dwloc だけ L3 ["" "UI" "" "" "UI" "Alpha line" ""]`,
+	}},
+	"swallow-6col-published-own-quote": {diffLineBased, whyLineSplit, []string{
+		`L2 の終わり: 上流 3 / dwloc 2`,
+		`L2 translation: 上流 "いち\nAlpha line" / dwloc "いち"`,
+		`dwloc だけ L3 ["Alpha line" "" "" "" "" ""]`,
+	}},
 	"lone-cr-in-quoted-translation": {diffIntended, whyLoneCR, []string{
 		`dwloc だけ L2 ["7692c3ad3540bb80" "L01 Ember" "Ember_1_intro" "1" "Ember" "one" "い"]`,
 	}},

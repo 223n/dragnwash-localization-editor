@@ -280,6 +280,12 @@ type psField struct {
 	// end は終了位置。区切りのカンマの位置で、無ければ文字列の長さ。
 	// wholeText のときは、レコードを終える改行（'\r' か '\n'）の位置のこともある。
 	end int
+	// tailAt は、閉じ引用符の後ろに続いて値に足した文字（`"a"x` の x）の開始位置。
+	// 足していなければ 0。閉じ引用符はどこにあっても位置が0以上なので、その後ろの
+	// 開始位置は必ず1以上になり、0 と取り違えない。
+	//
+	// 正しく書いた CSV には現れない形で、飲み込みの検出（[FindSwallows]）が使う。
+	tailAt int
 }
 
 // unclosed は、引用符で始まったのに閉じないまま終わったかを返す。
@@ -339,6 +345,7 @@ func parsePowerShellField(s string, start int, wholeText bool) psField {
 		}
 		if tail := s[tailStart:i]; strings.TrimRight(tail, " \t") != "" {
 			b.WriteString(tail)
+			f.tailAt = tailStart
 		}
 		f.value = b.String()
 		f.end = i
