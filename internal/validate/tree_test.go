@@ -196,15 +196,10 @@ func TestGitTrackedOutsideRepository(t *testing.T) {
 
 // TestDisplayPath は報告に出すパスの整形を見る。
 func TestDisplayPath(t *testing.T) {
-	// root のリンクを先に解いておく。newDisplay は root のリンクを解くが、下の inside は
-	// まだ無いパスなので、of の側では解けない。TMP が 8.3 形式の短い名前だったり、
-	// リンクを含んでいたり（macOS の /var）すると、解いた root と解けない inside で
-	// 綴りが食い違い、配下なのに外と判定される。製品の呼び出し元はどれも実在する
-	// パスを渡すので、この食い違いは試験の側だけで起きる。
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("一時ディレクトリのリンクを解けない: %v", err)
-	}
+	// root はリンクを解かずに渡す。下の inside はまだ無いパスだが、of は解ける祖先
+	// （root）まで遡って解くので、TMP が 8.3 形式の短い名前だったり、リンクを
+	// 含んでいたり（macOS の /var）しても、配下と判定される。
+	root := t.TempDir()
 	show := newDisplay(root)
 
 	inside := filepath.Join(root, TranslationsDir, "ja", PublishedFile)
@@ -216,6 +211,30 @@ func TestDisplayPath(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(root), "よそ", "f.csv")
 	if got := show.of(outside); got != outside {
 		t.Errorf("of(外) = %q, want %q", got, outside)
+	}
+}
+
+// TestDisplayPathDanglingLinkUnderLinkedRoot は、リンクを含むルートの下にある
+// 行き先の無いリンクを、ルートからの相対で出すことを見る。
+//
+// 行き先の無いリンクは EvalSymlinks で解けない。解ける祖先まで遡らずに絶対パスの
+// まま相対化すると、解いたルートと綴りが食い違い、絶対パスが報告に出る（Windows の
+// ランナーの 8.3 形式の TMP で、TestCheckTreeUnreadableTextures が落ちた形）。
+func TestDisplayPathDanglingLinkUnderLinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "real")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(base, "linked")
+	if err := os.Symlink(target, linked); err != nil {
+		t.Skipf("シンボリックリンクを作れないので飛ばす: %v", err)
+	}
+	dangling := filepath.Join(target, "a.png")
+	danglingLink(t, dangling)
+
+	if got, want := newDisplay(linked).of(filepath.Join(linked, "a.png")), "a.png"; got != want {
+		t.Errorf("of(リンクのルートの下の行き先の無いリンク) = %q, want %q", got, want)
 	}
 }
 

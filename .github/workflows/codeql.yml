@@ -1,29 +1,45 @@
 name: CodeQL
 
-# ワークフローの安全性を CodeQL で走査する（言語: actions）。
+# CodeQL で3つを走査する。
+#   actions                ワークフローの安全性
+#   go                     dwloc の本体（internal/web の待ち受け、パスを受けて読み書きする処理、ブラウザーを起こす処理）
+#   javascript-typescript  画面の app.js と、試験や道具の .mjs
 # 結果は「Security」→「Code scanning」に出る。
-# develop のルール「Require code scanning results」は、この走査の結果で満たされる。
+#
+# 結果は必須のチェックにしていない。main と develop のルールセットに「Require code scanning results」は無い。
+# 指摘は Code scanning の画面で仕分け、直すか、理由を添えて閉じる。
 #
 # 注意: Settings の Code scanning で「Default setup」を有効にしていると、
 # このワークフロー（advanced setup）の結果は受け付けられない。Default setup は使わない。
 #
-# ソースコードを持つリポジトリでは、matrix の language に言語を足す（例: javascript-typescript、python）。
-# 対応する言語は https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning にある。
-# PHP は対応していないため、PHP のリポジトリではワークフローの走査だけになる。
+# 対応する言語と build-mode は https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning にある。
 on:
   push:
     branches: [main, develop]
+  # base を絞らない。積み重ねた PR（base が feature/* の PR）でも走らせるためである。
+  # 下の PR がマージされて base が develop に自動で付け替わっても、その出来事では何も走らない。
+  # base を main と develop に絞ると、積み重ねた PR は一度も走査されないまま develop に入りうる
   pull_request:
-    branches: [main, develop]
   schedule:
     # 毎週月曜の朝（日本時間 9:00）。CodeQL の規則が更新されたときに新しい指摘を拾う
     - cron: '0 0 * * 1'
   # 手で動かすため。pull_request の実行が作られなかったブランチを走査したいときに使う
   workflow_dispatch:
+    inputs:
+      runner:
+        # ci.yml の同じ名前の入力と同じ。ubuntu-latest が次の版へ移る前に、その版で1回だけ試すときに使う。
+        # 例: gh workflow run codeql.yml --ref develop -f runner=ubuntu-26.04
+        description: 'この実行だけで使うランナーのラベル（例: ubuntu-26.04）。空なら変数 RUNS_ON、それも無ければ ubuntu-latest'
+        required: false
+        type: string
+        default: ''
 
-# 同じブランチに続けて push したとき、古い実行を止める
+# 同じブランチに続けて push したとき、古い実行を止める。
+# ci.yml と同じく、止めるのは、きっかけ（イベント）とランナーが同じ古い実行だけにする。
+# 組にイベント名を入れないと、週1回の実行（既定ブランチの develop で動く）や手で動かした実行が、
+# 走っている develop の push の走査を止め、その push の結果が Code scanning に届かない
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
@@ -33,8 +49,9 @@ jobs:
   analyze:
     name: CodeQL（${{ matrix.language }}）
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
-    # 無ければ GitHub がホストする ubuntu-latest で動く
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # 無ければ GitHub がホストする ubuntu-latest で動く。
+    # 手で動かすときだけ、入力 runner がどちらよりも先に効く
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       security-events: write   # 結果を Code scanning に送る
@@ -43,7 +60,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [actions]
+        include:
+          - language: actions
+            build-mode: none
+          # Go はビルドしながら走査する。依存は標準ライブラリだけなので、autobuild で足りる
+          - language: go
+            build-mode: autobuild
+          # ビルドせずにソースを読む。このジョブは npm ci をしないので、node_modules は走査に入らない
+          - language: javascript-typescript
+            build-mode: none
     steps:
       - name: リポジトリを取得
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,11 +76,22 @@ jobs:
           # 走査だけなので、認証情報は残さない
           persist-credentials: false
 
+      - name: Goを用意
+        # go.mod の go 行の版をそのまま入れる。ランナーに入っている Go が古いと、autobuild は
+        # ツールチェーンの自動取得に頼ることになり、何でビルドしたかが実行ごとに変わりうる。
+        # 走査だけで配布物は作らないが、ほかのブランチの実行が書き込めるキャッシュは持ち込まない
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: CodeQLを初期化する
         uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           languages: ${{ matrix.language }}
-          # コンパイルが要る言語（C/C++、Java など）を足したときは build-mode を設定する
+          # autobuild を指定すると、走査の段がビルドも行う。別に autobuild の段を置かない
+          build-mode: ${{ matrix.build-mode }}
 
       - name: 走査する
         uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0

@@ -4,6 +4,9 @@ name: リリース
 #
 #   develop ──▶ release/vX.Y.Z ──(PR)──▶ main ──▶ タグ vX.Y.Z と GitHub Release ──▶ develop へ戻す
 #
+# 切る前に、develop の先端のコミットで CI（ci.yml）が通ったことを確かめる。
+# 走っている途中なら終わるまで待ち（上限30分）、通っていなければ止める。
+#
 # PR を人がマージすると「リリースを公開する」（release-publish.yml）が動き、
 # タグと GitHub Release を作って main を develop に戻す。
 # auto_merge を有効にすると、人手を挟まずにこのワークフローの中で PR をマージし、公開まで進める。
@@ -50,10 +53,12 @@ jobs:
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
     # 無ければ GitHub がホストする ubuntu-latest で動く
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    # develop の CI を待つ上限（30分）に、ブランチを切って PR を開くまでの分を足す
+    timeout-minutes: 45
     permissions:
       contents: write        # release ブランチを押す
       pull-requests: write   # PR を開く
+      actions: read          # develop の CI の実行を読む
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -99,11 +104,101 @@ jobs:
             exit 1
           fi
 
+      - name: developのCIが通ったことを確かめる
+        id: ci
+        # 出すのは develop の先端の木である。その木で CI（ci.yml）の Go のテスト、画面の E2E、lint が
+        # 通ったかを確かめる。このワークフローの中で走らせる検査は npm run lint だけで、GITHUB_TOKEN が開く
+        # リリースの PR の CI は承認待ちのまま動かない。確かめないと、CI が落ちている木や走っている途中の
+        # 木からでも、不変の Release（あとで直せない）が公開される。
+        #
+        # 過去のリリースの4割は、develop の CI が終わる前に起動していた（PR をマージしてすぐ実行するため）。
+        # 走っている途中なら止めずに、終わるまで待つ。上限は CI_WAIT_MINUTES 分で、CI のいちばん長い
+        # ジョブの上限（20分）に、ランナーを待つ時間を足した長さにしてある。
+        #
+        # 見るのは、先端の SHA に対する push の実行である。GITHUB_TOKEN が押したコミットには push の実行が
+        # 作られないので、push の実行が無いときだけ、同じ SHA を develop で手で動かした実行
+        # （workflow_dispatch）を代わりに見る。どちらも無ければ、手で動かすよう案内して止める。
+        # 結論が success 以外なら止める。cancelled（concurrency で止められたもの）も、
+        # 通ったかを確かめていないとして止める
+        env:
+          CI_WORKFLOW: ci.yml
+          # 待つ上限（分）。実行が1つも無いときは、作られるのを CI_APPEAR_MINUTES 分だけ待つ
+          CI_WAIT_MINUTES: '30'
+          CI_APPEAR_MINUTES: '5'
+          CI_POLL_SECONDS: '20'
+        run: |
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${DEVELOP_BRANCH}" --jq '.commit.sha')"
+          if [ -z "${sha}" ]; then
+            echo "::error::${DEVELOP_BRANCH} の先端の SHA を取れなかった"
+            exit 1
+          fi
+          echo "${DEVELOP_BRANCH} の先端: ${sha}"
+
+          runs="repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${sha}&branch=${DEVELOP_BRANCH}&per_page=100"
+          # 新しい順に返る。push の実行を先に並べ、無ければ workflow_dispatch の実行を使う
+          pick='[.workflow_runs[] | select(.event == "push")] + [.workflow_runs[] | select(.event == "workflow_dispatch")]
+            | first | select(. != null) | [.status, (.conclusion // "none"), .html_url, .event] | join(" ")'
+
+          started="$(date +%s)"
+          api_failures=0
+          status=''
+          conclusion=''
+          url=''
+          event=''
+          while :; do
+            elapsed=$(( $(date +%s) - started ))
+            if ! line="$(gh api "${runs}" --jq "${pick}")"; then
+              # 一時的な失敗で、リリースごと止めない。続けて落ちるなら権限などの問題なので止める
+              api_failures=$((api_failures + 1))
+              if [ "${api_failures}" -ge 3 ]; then
+                echo "::error::CI（${CI_WORKFLOW}）の実行を3回続けて引けなかった。Actions の画面で ${DEVELOP_BRANCH} の CI を確かめてから、もう一度実行する"
+                exit 1
+              fi
+              echo "::warning::CI の実行を引けなかった。${CI_POLL_SECONDS}秒後に引き直す"
+            elif [ -z "${line}" ]; then
+              api_failures=0
+              if [ "${elapsed}" -ge $((CI_APPEAR_MINUTES * 60)) ]; then
+                echo "::error::${DEVELOP_BRANCH} の先端 ${sha} に CI（${CI_WORKFLOW}）の実行が無い。Actions の「CI」を ${DEVELOP_BRANCH} で手動実行し（Run workflow）、通ってからもう一度実行する"
+                exit 1
+              fi
+              echo "CI の実行がまだ無い。作られるのを待つ（${elapsed}秒経過）"
+            else
+              api_failures=0
+              read -r status conclusion url event <<<"${line}"
+              if [ "${status}" = 'completed' ]; then
+                break
+              fi
+              echo "CI（${event}）は ${status}。終わるのを待つ（${elapsed}秒経過）: ${url}"
+            fi
+            if [ "${elapsed}" -ge $((CI_WAIT_MINUTES * 60)) ]; then
+              echo "::error::CI が ${CI_WAIT_MINUTES} 分たっても終わらない。実行の画面で様子を確かめ、終わってからもう一度このワークフローを実行する: ${url:-（実行がまだ無い）}"
+              exit 1
+            fi
+            sleep "${CI_POLL_SECONDS}"
+          done
+
+          if [ "${conclusion}" != 'success' ]; then
+            if [ "${conclusion}" = 'cancelled' ]; then
+              reason='止められた（cancelled）ため、通ったかを確かめていない'
+            else
+              reason="通っていない（${conclusion}）"
+            fi
+            echo "::error::${DEVELOP_BRANCH} の先端 ${sha} の CI は${reason}。落ちた原因を直すか、揺れや取り消しなら実行の画面の「Re-run jobs」で入れ直し、通ってからもう一度このワークフローを実行する: ${url}"
+            exit 1
+          fi
+          echo "CI が通ったことを確かめた（${event}）: ${url}"
+          {
+            echo "sha=${sha}"
+            echo "run_url=${url}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: developを取得
         # zizmor: ignore[artipacked] このジョブは release ブランチを push するため、認証情報を残す
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.DEVELOP_BRANCH }}
+          # CI を確かめた SHA そのものを取る。ブランチの名前で取ると、確かめている間に develop が
+          # 進んだとき、CI を確かめていない木からリリースを切ってしまう
+          ref: ${{ steps.ci.outputs.sha }}
           # 最新のタグと main の版と比べるため、履歴とタグをすべて取る
           fetch-depth: 0
 
@@ -262,6 +357,8 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
           BRANCH: ${{ steps.version.outputs.branch }}
+          CI_SHA: ${{ steps.ci.outputs.sha }}
+          CI_RUN_URL: ${{ steps.ci.outputs.run_url }}
         run: |
           {
             echo "\`${DEVELOP_BRANCH}\` の内容を ${TAG} としてリリースします。"
@@ -274,7 +371,8 @@ jobs:
             echo "1. GitHub Release を作ります"
             echo "1. \`${MAIN_BRANCH}\` を \`${DEVELOP_BRANCH}\` に戻します"
             echo
-            echo "検査（\`npm run lint\`）はワークフローの中で済んでいます。"
+            echo "\`${DEVELOP_BRANCH}\` の先端（${CI_SHA}）で CI が通ったことを確かめてから、このブランチを切っています: ${CI_RUN_URL}"
+            echo "版を上げたあとの検査（\`npm run lint\`）もワークフローの中で済んでいます。"
             echo "この PR の CI は「承認待ち」で作られます。結果を PR に出したいときは「Approve workflows to run」を押してください。"
             echo
             echo "## 変更の一覧（下書き）"
@@ -301,6 +399,7 @@ jobs:
             echo
             echo "- PR: ${url}"
             echo "- ブランチ: \`${BRANCH}\`"
+            echo "- ${DEVELOP_BRANCH} の CI: ${CI_RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   merge:

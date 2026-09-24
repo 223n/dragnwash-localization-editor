@@ -56,7 +56,7 @@ That is why they need different tools.
 - `scripts/setup.ps1` assumes PowerShell 7 or later. It does not run on Windows PowerShell 5.1
 - Save `.ps1` as UTF-8 without a BOM, with LF line endings. PowerShell 7 reads it as UTF-8 even without a BOM
 - Decide whether a native command succeeded with `$LASTEXITCODE`. `if (gh ...)` looks at the output, so it is always false for a call made with `--silent`
-- `npm run lint` only checks the Japanese documents. Scripts are not covered
+- `npm run lint` checks the Markdown documents with `markdownlint`, and the Japanese documents with `textlint` as well. Scripts are not covered
 
 ## Commit messages
 

@@ -64,12 +64,13 @@ The two "Source code" entries that GitHub adds automatically are the source code
 They contain no binaries.
 
 When you open the archive, it contains a single folder with the same name as the archive.  
-That folder has three things in it.
+That folder has four things in it.
 
 ```text
 dwloc_0.5.0_windows_amd64/
-  dwloc.exe     ← the program itself
+  dwloc.exe                ← the program itself
   LICENSE
+  THIRD_PARTY_NOTICES.md
   README.txt
 ```
 
@@ -77,7 +78,8 @@ dwloc_0.5.0_windows_amd64/
 | ---- | ---- |
 | `dwloc` (`dwloc.exe` on Windows) | The program itself |
 | `LICENSE` | The license (Apache License 2.0) |
-| `README.txt` | A short summary of how to run it |
+| `THIRD_PARTY_NOTICES.md` | The attribution for the icons on the screen (Font Awesome Free, CC BY 4.0) |
+| `README.txt` | A short summary of how to run it (in Japanese and English) |
 
 There is a folder wrapped around everything so that extracting the archive does not scatter loose files across your machine.
 
@@ -233,7 +235,7 @@ To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 If there is no activity for 30 minutes, the server shuts itself down.  
 That is why translations are not saved when you come back after stepping away.  
 A black window opened by double-click closes at that point.  
-If you started it from the command line, it shows `No activity for 30m0s. Stopping.`.  
+If you started it from the command line, it shows `操作がないまま 30m0s たちました。待ち受けを終えます。` ("No activity for 30m0s. Stopping.").  
 If you type a translation in the old tab, the top bar says it cannot reach the server, and the translations that are not in the file yet are listed.  
 The list shows them as plain text, so you can select and copy them.  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
@@ -295,7 +297,7 @@ When an argument is wrong, it prints one line with the reason and one line such 
 For options that need a unit, such as `--idle-timeout`, it also says how to write the value.
 
 On a PC that has the game installed, the last two can stop the moment you run them.  
-You do not even get the `--dry-run` report; it ends with "the translation in the game is older, so not a single byte was written" (exit code `1`).  
+You do not even get the `--dry-run` report; it ends with `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。` ("The translation in the game is older, so not a single byte was written.", exit code `1`).  
 That is what actually happens on this development machine.  
 Nothing is broken: `publish` is refusing to roll your work back.  
 How to get out of it is in "It stops when the translation in the game is older" below.
@@ -312,7 +314,7 @@ The options you will use most are these.
 | `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
-| `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |
+| `--ui-lang ja` | `edit` | Chooses the language of the screen and of the messages `edit` prints in the black window |
 | `--idle-timeout` | `edit` | How long after the last activity it shuts down (`30m` by default, `0` never) |
 
 `--no-working` and `--no-game` have different jobs.  
@@ -325,6 +327,39 @@ Translations come from the published files, so a translation someone else added 
 Even without bad intent, a line of dialogue starting with `-` turns into `#NAME?` or the like.  
 When you do not want the `'` (when comparing against a machine), add `--raw-csv`.  
 The published files that `publish` writes and the exports from the screen do not get it, because they need the same bytes as the upstream tools.
+
+### What dwloc prints is in Japanese
+
+Everything `dwloc` prints in the terminal is in Japanese: the usage, the error messages, and the reports of `validate`, `diff` and `publish`.  
+There is no option to switch it to English.  
+The screen of `edit` is different: it follows the language of your browser, so it comes out in English unless your browser asks for Japanese.  
+The messages `edit` prints in the black window are in Japanese, unless you start it with `--ui-lang en`.  
+When this README quotes what `dwloc` prints, the English in brackets is a translation, and the screen shows the Japanese.
+
+When it stops, the first line tells you why.  
+The table below gives English translations of the first lines you are most likely to see.  
+`<N>` and `…` stand for a number or a path that `dwloc` fills in.
+
+| First line it prints | In English | Details |
+| ---- | ---- | ---- |
+| `dwloc: ここは翻訳リポジトリではないようです。` | This does not look like a translation repository. It shows where it looked and where to put `dwloc`. | [The simplest way to start](#the-simplest-way-to-start) |
+| `dwloc: ゲームのフォルダーが見つかりません。` | The game folder was not found. | [When nothing is found](#when-nothing-is-found) |
+| `dwloc: ゲームのフォルダーを探しましたが、見つかりませんでした。` | It looked for the game folder and did not find it. It carries on without the game, so the source text column stays empty and "untranslated" is not judged. | [Using the game folder](#using-the-game-folder) |
+| `dwloc: ゲームのフォルダーが<N>個見つかりました。…` | `<N>` game folders were found. Choose one with `--game <folder>`. | [Using the game folder](#using-the-game-folder) |
+| `dwloc: --game と --no-game は一緒に指定できません。` | `--game` and `--no-game` cannot be given together. | [Use --no-game when you need the same answer every time](#use---no-game-when-you-need-the-same-answer-every-time) |
+| `dwloc: 訳が失われるので、1バイトも書きませんでした。` | Translations would be lost, so not a single byte was written. | [publish does not write if even one translation would be lost](#publish-does-not-write-if-even-one-translation-would-be-lost) |
+| `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。` | The translation in the game is older, so not a single byte was written. | [It stops when the translation in the game is older](#it-stops-when-the-translation-in-the-game-is-older) |
+| `dwloc: 読み違える形のファイルがあるので、1バイトも書きませんでした。` | There is a file in a shape it would misread, so not a single byte was written. `publish` stopped on purpose and changed no file. The lines below it say what to fix. | [publish does not write a file with a shape it would misread](#publish-does-not-write-a-file-with-a-shape-it-would-misread) |
+| `dwloc: Translations を読めません: …` | It cannot read `Translations`. Check `--root`. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 対象になるロケールがありません: …` | There is no locale to work on. Check `--locale`. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 検証できません: …` | `validate` cannot check the files, because it cannot read them. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 記録を残せません（…）。このまま続けます。` | It cannot keep a log (…). It carries on without one. | [Logs](#logs) |
+| `操作がないまま 30m0s たちました。待ち受けを終えます。` | No activity for 30m0s. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
+
+The exit code tells you the same thing without reading the text.  
+`0` means it succeeded.  
+`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, or `publish` stopped without writing).  
+`2` means it could not run (a wrong argument, a file it cannot read, and so on).
 
 ### The two buttons inside the game
 
@@ -1402,7 +1437,7 @@ A Windows program called from Git Bash writes to `C:\dev\null` in the same way w
 The name of the bit bucket Go knows about on Windows is `NUL`.  
 Running it with `-o NUL` exits with code 0 and leaves no file behind.
 
-CI's [ci.yml](.github/workflows/ci.yml) runs on `ubuntu-latest`, so there `/dev/null` does throw the result away correctly.  
+CI's [ci.yml](.github/workflows/ci.yml) runs this build on `ubuntu-latest`, so there `/dev/null` does throw the result away correctly.  
 This is the only place where the same line means something different locally and in CI.  
 CI builds all six targets, so writing anything that uses `CGO` will pass locally and fail in CI.
 
@@ -1443,6 +1478,12 @@ The thresholds are the figures measured under the same conditions as CI (Linux, 
 Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
 When you add tests and the figures go up, raise the thresholds too.
 
+CI also runs the Go tests on a Windows runner, in addition to Linux (the `go-windows` job).  
+That is to check the paths that only Windows takes (drive letters, a file system that ignores case, the default Steam location).  
+Only the Linux job checks the coverage thresholds.  
+On the Windows runner the temporary directory has a short (8.3) name, `C:\Users\RUNNER~1\...`, and it is on a different drive from the workspace (`D:\a\...`).  
+Write tests that compare temporary paths so that they pass in that form too.
+
 When the E2E tests fail in CI, Playwright's output (`test-results/`) is kept as an artifact for 7 days.  
 It is named `e2e-test-results-<attempt number>`.  
 Each failed test leaves a `trace.zip` and an `error-context.md`.  
@@ -1477,8 +1518,18 @@ The English documents (`*.en.md`) are checked by `markdownlint` only.
 
 CI runs the same checks on every `push` to `main` and `develop`, and on every pull request.  
 In CI it also checks the workflow syntax with `actionlint` and the safety of the workflows with `zizmor`.  
+The actions used in the workflows are pinned to a full-length commit SHA.  
+`zizmor` in CI reports any action that is not pinned.  
+`scripts/setup.sh` (`scripts/setup.ps1` on Windows) also turns on the repository setting "Require actions to be pinned to a full-length commit SHA".  
+In a repository with that setting on, an action that is not pinned does not run.  
 CI builds all six targets as well.  
 That is to see whether the premise of shipping a single binary still holds.
+
+Known vulnerabilities in the Go standard library are checked with `govulncheck`.  
+It runs on `push` and pull requests, and also every Monday.  
+That is because the list of vulnerabilities grows even when the code does not change.  
+It fails when a function the code calls is affected, so raise the `go` line in `go.mod` by hand to a version with the fix.  
+The only dependency is the standard library, so Dependabot does not raise that line.
 
 ## Things to watch out for
 
@@ -1507,16 +1558,28 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
    However, if `main` has required checks or approval rules, it stops at the merge.  
    CI on the pull request the workflow opened stays "waiting for approval" and never runs, so the required checks cannot be satisfied.  
    When it stops, a person merging the pull request takes it through to publication
-1. The workflow branches `release/vX.Y.Z` from `develop`, brings in the content of `main`,  
+1. The workflow first confirms that CI (`ci.yml`) passed on the latest commit of `develop`.  
+   If CI is still running, it waits up to 30 minutes for it to finish.  
+   If CI failed, was cancelled, or has no run at all, it stops here.  
+   Get CI to pass, then run it again.  
+   A CI run started by hand on `develop` (Run workflow) is used only when there is no `push` run
+1. Next, it branches `release/vX.Y.Z` from the commit it confirmed, brings in the content of `main`,  
    bumps the version in `package.json`, passes the document checks and then opens a pull request against `main`.  
    If `main` and `develop` conflict, it stops here
 1. Review the pull request and merge it with a merge commit (Create a merge commit).  
    If you turned on `auto_merge` and it did not stop, you do not need this step.  
    CI on this pull request is created "waiting for approval" and does not run until `Approve workflows to run` is pressed.  
    That is because it is a pull request opened by GitHub Actions.  
-   The document check (`npm run lint`) has already been done inside the workflow, so merging without pressing it does not skip the check
+   CI on the latest commit of `develop` and the document check after the version bump (`npm run lint`) have already been confirmed inside the workflow.  
+   Merging without pressing it does not skip those two
 1. The "Publish release" workflow runs.  
    It creates the tag `vX.Y.Z`, creates a GitHub Release with the six archives attached, and merges `main` back into `develop`
+
+Before building the binaries, it runs the Go tests (`go test ./cmd/... ./internal/...`) on the `main` tree it is about to ship.  
+CI on the release pull request often stays "waiting for approval" and never runs, and when `auto_merge` merged it, CI on `main` does not run either.  
+If even one test fails, it stops without creating the tag or the GitHub Release.  
+The E2E tests of the screen are not run here.  
+The screen is checked by CI on `develop`.
 
 The binaries are built before the tag is created.  
 If even one build fails, it stops without creating the tag or the GitHub Release.  
@@ -1533,7 +1596,9 @@ It checks three things.
 - On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
 
 It also checks that the checksum list matches the archives.  
-It also checks that the archive holds all four files and that the executable permission is set.  
+For all six archives, it also checks the list of contents.  
+It checks that the folder with the same name as the archive holds exactly the four files, and that the program has the executable permission on every OS other than Windows.  
+That way the five archives it cannot run (including the `zip` files for Windows) are also checked before publication.  
 If any of these fails, it stops without creating the tag or the GitHub Release.  
 Even when the build succeeds, a version left out of the binary or a mistake in how the archive was made only shows up when it is run.  
 The sample is copied first because its working copy is committed to this repository.  
@@ -1605,13 +1670,13 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
-| `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the safety of the workflows with CodeQL |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, every Monday (`govulncheck` only), manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, the syntax and safety of the workflows, and known vulnerabilities in the Go standard library, and sees whether it builds for all six targets |
+| `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually (the `runner` input picks the runner for that run only) | Scans the workflows, the Go code and the JavaScript (the screen's `app.js` and the `.mjs` files for tests and tools) with CodeQL. The results are not a required check |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
-| `release.yml` | Manually | Branches a release branch from `develop`, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
-| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
+| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
+| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Runs the Go tests, builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels
 
