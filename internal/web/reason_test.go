@@ -250,6 +250,21 @@ func diffReasons(t *testing.T) []reason.Reason {
 	stale := newStaleSummary(t, root)
 	out = append(out, stale.JudgeBlockReason(diff.CatCarryover))
 
+	// 閉じない引用符で読めなかったファイルのせいで止めたとき。ファイルごとに理由が
+	// 分かれる。ほかのロケールの公開ファイルでは、置換にロケールの名前が入る。
+	unclosed := []func(*diff.Summary) diff.Category{
+		func(s *diff.Summary) diff.Category { s.OrderUnclosed = 3; return diff.CatVanished },
+		func(s *diff.Summary) diff.Category { s.PublishedUnclosed = 3; return diff.CatVanished },
+		func(s *diff.Summary) diff.Category { s.WorkingUnclosed = 3; return diff.CatUntranslated },
+		func(s *diff.Summary) diff.Category { s.LayoutRisksUnclosed = 3; return diff.CatLayoutRisk },
+		func(s *diff.Summary) diff.Category { s.OthersUnclosed = []string{"de", "fr"}; return diff.CatLocaleGap },
+	}
+	for _, set := range unclosed {
+		sum := ready
+		c := set(&sum)
+		out = append(out, sum.JudgeBlockReason(c))
+	}
+
 	return out
 }
 

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -345,6 +346,47 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 			sum:  base,
 			want: []string{note("note.no_source")},
 		},
+		{
+			// 閉じない引用符で読めなかった作業コピー。「読んでいません」と書くと、
+			// --no-working を外せば直ると読まれる。
+			name: "作業コピーの引用符が閉じない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.WorkingExists, sum.WorkingUnclosed = true, 3
+				return sum
+			},
+			want: []string{note("note.working_unclosed",
+				"path", "Translations/_discovered/ja.working.csv", "line", "3")},
+			notWant: []string{note("note.working_skipped", "path", "Translations/_discovered/ja.working.csv"),
+				note("note.working_none", "path", "Translations/_discovered/ja.working.csv")},
+		},
+		{
+			name: "公開ファイルの引用符が閉じない", hasSource: true,
+			sum:  func() diff.Summary { sum := base(); sum.PublishedUnclosed = 2; return sum },
+			want: []string{note("note.published_unclosed", "path", "Translations/ja/strings.csv", "line", "2")},
+		},
+		{
+			name: "はみ出しの記録の引用符が閉じない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.LayoutRisksExist, sum.LayoutRisksUnclosed, sum.LayoutRisksPath = true, 4, layout
+				return sum
+			},
+			want: []string{note("note.layout_risks_unclosed",
+				"path", "Translations/_discovered/ja.layout_risks.csv", "line", "4")},
+			notWant: []string{note("note.layout_risks_read", "path", "Translations/_discovered/ja.layout_risks.csv")},
+		},
+		{
+			// 再生順を1行も使えない。「読めていません」ではなく、どの行を直すかを言う。
+			name: "再生順の引用符が閉じない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.OrderUnclosed, sum.OrderKeys, sum.OrderLineIDs = 2, false, false
+				return sum
+			},
+			want:    []string{note("note.order_unclosed", "line", "2")},
+			notWant: []string{note("note.order_unreadable"), lineIDsHead, oldHeldHead},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -493,6 +535,42 @@ func TestLineIDCountsGiveTheLineIDReason(t *testing.T) {
 // ので、キーが無ければ norm も無い。そこで「norm 列がありません」と書くと、断り書き
 // （note.order_unreadable）が再生順を丸ごと読めていないと言っているのに、その
 // カテゴリだけ norm 列を直しに行かせることになる。
+// TestStartsWithUnclosedQuote は、閉じない引用符のファイルがあっても待ち受けを始め、
+// そのファイルに依るカテゴリを「判定していません」にして理由を出すことを見る。
+//
+// 全体を解釈する読み手へ移す作業の PR2 の前半では、読み手の誤りがそのまま起動の
+// 誤りになり、dwloc edit が開かなかった。直すための画面まで開けなくなるので、
+// diff と同じく、そのファイルに依る判定だけを止める（決まったことの 3）。
+func TestStartsWithUnclosedQuote(t *testing.T) {
+	root := newTestRoot(t)
+	working := filepath.Join(root, "Translations", "_discovered", "ja.working.csv")
+	if err := os.MkdirAll(filepath.Dir(working), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "key,section,node,order,speaker,source_en,translation\n" +
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello,\"もしもし\n"
+	if err := os.WriteFile(working, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+
+	lines := getLines(t, s, "ja")
+	wantNote := s.cat.T(ja, "note.working_unclosed", "path", "Translations/_discovered/ja.working.csv", "line", "2")
+	if !hasNote(lines.Notes, wantNote) {
+		t.Errorf("断り書きに %q が無い: %q", wantNote, lines.Notes)
+	}
+	wantReason := s.cat.T(ja, "reason."+reason.JudgeWorkingUnclosed, "line", "2")
+	untranslated := mustCount(t, lines.Counts, diff.CatUntranslated.ID())
+	if untranslated.Judged || untranslated.Reason != wantReason {
+		t.Errorf("未翻訳 = judged %v reason %q、%q で止まるはず", untranslated.Judged, untranslated.Reason, wantReason)
+	}
+	// 作業コピーを要らないカテゴリは判定している。
+	if !mustCount(t, lines.Counts, diff.CatVanished.ID()).Judged {
+		t.Error("台本から消えた行を判定していない")
+	}
+}
+
 func TestOrderUnreadableCountsGiveTheOrderReason(t *testing.T) {
 	for _, lang := range []string{"ja", "en"} {
 		t.Run(lang, func(t *testing.T) {

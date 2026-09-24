@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
@@ -53,6 +54,24 @@ type Locale struct {
 	// HasLayoutRisks と分けてあるのは、[Locale.WorkingExists] と同じ理由で、
 	// 「ありません」と「読みませんでした」を区別して伝えるため。
 	LayoutRisksExist bool
+
+	// PublishedUnclosed は、公開ファイルで開いた引用符がファイルの終わりまで
+	// 閉じなかったときの、その引用符の物理行（1始まり）。閉じていれば 0。
+	//
+	// そのときの Published は空である。全体を解釈して読むと、引用符が開いた行から
+	// ファイルの終わりまで（英語の原文を含むこともある）が1つの値に崩れる。値を
+	// 半分だけ使うと、どこまでが正しい行かを決められないので、1行も使わない。
+	// このロケールのカテゴリはどれも判定せず、ほかのロケールでも、ロケールどうしを
+	// 比べるカテゴリを判定しない（[Summary.canJudge]）。読み込みの誤りにしないのは、
+	// 1つのファイルのせいで全ロケールの報告と画面が止まらないようにするためである
+	// （決まったことの 3）。
+	PublishedUnclosed int
+	// WorkingUnclosed は作業コピーについて同じ。そのときは WorkingExists が true、
+	// HasWorking が false になり、作業コピーを要るカテゴリを判定しない。
+	WorkingUnclosed int
+	// LayoutRisksUnclosed ははみ出しの記録について同じ。そのときは LayoutRisksExist が
+	// true、HasLayoutRisks が false になる。
+	LayoutRisksUnclosed int
 }
 
 // Repo は比較に必要なものを読み終えた状態。
@@ -63,6 +82,16 @@ type Repo struct {
 	Order *order.Data
 	// OrderPath は再生順の読み込み元（data/script_order.csv）。
 	OrderPath string
+	// OrderUnclosed は、再生順で開いた引用符がファイルの終わりまで閉じなかったときの、
+	// その引用符の物理行（1始まり）。閉じていれば 0。
+	//
+	// そのときの Order は行が0件になる（[Locale.PublishedUnclosed] と同じ理由）。
+	// 再生順はどのカテゴリの判定にも位置の根拠にも使うので、報告全体を判定しない。
+	//
+	// 見出しの表（data/level_flow.csv）の閉じない引用符はここに入れない。この
+	// パッケージは見出しの文言を使わないので、判定は変わらない。publish と画面の
+	// 書き出しは、形の確かめで止める。
+	OrderUnclosed int
 	// OldOrder は1つ前の版の再生順。取れなかったときは nil。
 	// 使うのは引き継ぎ候補だけで、ほかの8カテゴリはこれを見ない。
 	OldOrder *order.Data
@@ -128,13 +157,19 @@ type Options struct {
 // 重複があるとき、ファイルを読めないとき、公開ファイルか作業コピーのヘッダーに
 // 列名の重複があるとき。公開ファイルが存在しないロケール（作業コピーだけがある
 // 状態）はエラーにせず、公開0行として扱う。
+//
+// 閉じない引用符（開いた引用符がファイルの終わりまで閉じない）もエラーにしない。
+// そのファイルの行は使わず、どの行で開いたかを [Repo.OrderUnclosed] や
+// [Locale.PublishedUnclosed] などに残す。そのファイルに依るカテゴリは
+// 「判定していません」になる（決まったことの 3）。1つのファイルのせいで報告と画面が
+// まるごと止まると、直すための画面まで開けなくなる。
 func Load(root string, useWorking bool) (*Repo, error) {
 	return LoadWith(root, Options{Working: useWorking})
 }
 
 // LoadWith は [Load] と同じことを、指定を変えられる形で行う。
 func LoadWith(root string, opt Options) (*Repo, error) {
-	data, err := publish.LoadOrder(root)
+	data, unclosedOrder, err := publish.LoadOrderMarked(root)
 	if err != nil {
 		return nil, fmt.Errorf("再生順のデータを読めません: %w", err)
 	}
@@ -148,6 +183,13 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		Order:     data,
 		OrderPath: data.Source,
 		Locales:   make([]Locale, 0, len(targets)),
+	}
+	for _, u := range unclosedOrder {
+		// 見出しの表（level_flow.csv）の閉じない引用符は数えない。このパッケージは
+		// 見出しの文言を使わない（[Repo.OrderUnclosed]）。
+		if u.Path == data.Source {
+			repo.OrderUnclosed = u.Line
+		}
 	}
 	// 旧再生順が取れなくてもエラーにはしない。引き継ぎ候補1カテゴリだけが
 	// 判定できなくなる話で、残り8カテゴリは旧版が無くても成り立つ。
@@ -167,11 +209,11 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 			LayoutRisksPath: filepath.Join(filepath.Dir(workingPath), LayoutRisksFile),
 		}
 
-		published, err := readRowsFile(t.Output)
+		published, unclosed, err := readRowsFile(t.Output)
 		if err != nil {
 			return nil, err
 		}
-		loc.Published = published
+		loc.Published, loc.PublishedUnclosed = published, unclosed
 
 		// 作業コピーの有無は走査と同じ根拠で決める。
 		// Input と Output が違えば、そのロケールには作業コピーがある。
@@ -181,12 +223,15 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 			// 将来の変更があっても、表示が嘘にならないようにする。
 			loc.WorkingPath = t.Input
 			if opt.Working {
-				working, err := readRowsFile(t.Input)
+				working, unclosed, err := readRowsFile(t.Input)
 				if err != nil {
 					return nil, err
 				}
-				loc.Working = working
-				loc.HasWorking = true
+				// 閉じない引用符で読めなかった作業コピーは、読まなかったものとして
+				// 扱う（HasWorking は false のまま）。作業コピーを要るカテゴリは
+				// 判定せず、タグの開閉などは --no-working と同じく公開ファイルを見る。
+				loc.Working, loc.WorkingUnclosed = working, unclosed
+				loc.HasWorking = unclosed == 0
 			}
 		}
 		// はみ出しの記録。ゲーム側が書くファイルで、原文が入っているので、
@@ -199,11 +244,12 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		// 中身まで読むと、読まないと言ったファイルが壊れているだけで
 		// 読み込み全体が止まる（作業コピーは --no-working なら読まないのと同じ扱い）。
 		if opt.Working {
-			risks, err := readLayoutRisks(loc.LayoutRisksPath)
+			risks, unclosed, err := readLayoutRisks(loc.LayoutRisksPath)
 			if err != nil {
 				return nil, err
 			}
-			loc.LayoutRisksExist = risks != nil
+			loc.LayoutRisksExist = risks != nil || unclosed > 0
+			loc.LayoutRisksUnclosed = unclosed
 			if risks != nil {
 				loc.LayoutRisks = risks
 				loc.HasLayoutRisks = true
@@ -324,21 +370,40 @@ func emptyLocales(root string, targets []publish.Target) ([]string, error) {
 // readRowsFile はCSVファイルを読んで [Row] に直す。
 // ファイルが無ければ0行を返しエラーにしない（作業コピーだけがあるロケール、
 // あるいはディレクトリだけ作った直後のロケールのため）。
-func readRowsFile(path string) ([]Row, error) {
+//
+// 開いた引用符がファイルの終わりまで閉じなければ、行を返さずに、引用符が開いた
+// 物理行を2つ目の戻り値で返す（誤りにしない。[LoadWith] の説明）。閉じていれば 0。
+func readRowsFile(path string) ([]Row, int, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	rows, err := ReadRows(data)
+	if line, ok := unclosedLine(err); ok {
+		return nil, line, nil
+	}
 	if err != nil {
 		// パスはそのまま返し、相対化は表示側（cmd/dwloc の displayPath）に任せる。
 		// このパッケージは表示の基準になるルートを知らない。
-		return nil, &FileError{Path: path, Err: err}
+		return nil, 0, &FileError{Path: path, Err: err}
 	}
-	return rows, nil
+	return rows, 0, nil
+}
+
+// unclosedLine は、err が閉じない引用符の誤りなら、引用符が開いた物理行を返す。
+//
+// 読み手は、閉じない引用符と列名の重複の両方に当たるときは閉じない引用符を返す
+// （csvfile.PowerShellFile.Err）。列名にファイルの終わりまでが入っていることが
+// あるので、重複より先に直すべきだからである。ここも同じ順になる。
+func unclosedLine(err error) (int, bool) {
+	var unclosed *csvfile.UnclosedQuoteError
+	if errors.As(err, &unclosed) {
+		return unclosed.Line, true
+	}
+	return 0, false
 }
 
 // LayoutRisksFile はゲームがはみ出しの記録を書くファイルの名前。
@@ -352,24 +417,30 @@ const LayoutRisksFile = "layout_risks.csv"
 // 記録が無いことと、記録が空であることは区別する。前者は「測っていない」で、
 // 後者は「測ったがはみ出す行は無かった」である。0 件と書いてよいのは後者だけ
 // なので、呼び出し側は nil かどうかで HasLayoutRisks を決める。
-func readLayoutRisks(path string) ([]LayoutRisk, error) {
+//
+// 開いた引用符がファイルの終わりまで閉じなければ、nil と、引用符が開いた物理行を
+// 返す（[readRowsFile] と同じ）。
+func readLayoutRisks(path string) ([]LayoutRisk, int, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	risks, err := ParseLayoutRisks(data)
+	if line, ok := unclosedLine(err); ok {
+		return nil, line, nil
+	}
 	if err != nil {
-		return nil, &FileError{Path: path, Err: err}
+		return nil, 0, &FileError{Path: path, Err: err}
 	}
 	if risks == nil {
 		// 中身が0行でも「読んだ」ことは伝えたい。nil は「ファイルが無い」の
 		// 意味に使っているので、空の並びへ置き換える。
 		risks = []LayoutRisk{}
 	}
-	return risks, nil
+	return risks, 0, nil
 }
 
 // FileError はどのファイルで失敗したかを持つエラー。

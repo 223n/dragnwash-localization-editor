@@ -182,22 +182,33 @@ func WorkingPath(root, game, locale string) string {
 	return filepath.Join(base, TranslationsDir, DiscoveredDir, locale+WorkingSuffix)
 }
 
+// ScriptOrderPath は root 配下の再生順（data/script_order.csv）のパスを返す。
+// ファイルが無くても値を返す。
+func ScriptOrderPath(root string) string {
+	return filepath.Join(root, dataDir, scriptOrderFile)
+}
+
+// LevelFlowPath は root 配下の見出しの表（data/level_flow.csv）のパスを返す。
+// ファイルが無くても値を返す。
+func LevelFlowPath(root string) string {
+	return filepath.Join(root, dataDir, levelFlowFile)
+}
+
 // LoadOrder は root 配下の data/script_order.csv と data/level_flow.csv を、
 // 公開CSV生成と同じ読み方で読む（移植仕様 R5 / R6）。
 //
 // どちらのファイルも無くてよい。無ければ空として扱い、エラーにしない。
 // script_order.csv が空なら見出しは一切出ず、全ての行が末尾へ回る。
 //
-// エラーを返すのはヘッダーの列名が重複しているときと、読み取りに失敗したとき。
+// エラーを返すのは、ヘッダーの列名が重複しているとき、閉じない引用符があるとき
+// （csvfile.UnclosedQuoteError）、読み取りに失敗したとき。
 func LoadOrder(root string) (*order.Data, error) {
-	orderPath := filepath.Join(root, dataDir, scriptOrderFile)
-	flowPath := filepath.Join(root, dataDir, levelFlowFile)
-
+	orderPath := ScriptOrderPath(root)
 	orderCSV, err := readIfExists(orderPath)
 	if err != nil {
 		return nil, err
 	}
-	flowCSV, err := readIfExists(flowPath)
+	flowCSV, err := readIfExists(LevelFlowPath(root))
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +220,57 @@ func LoadOrder(root string) (*order.Data, error) {
 	// order パッケージは Source を設定しない約束なので、ここで入れる。
 	data.Source = orderPath
 	return data, nil
+}
+
+// UnclosedFile は、開いた引用符がファイルの終わりまで閉じないので読まなかった
+// ファイル1つ。
+type UnclosedFile struct {
+	// Path はそのファイル。
+	Path string
+	// Line は引用符が開いた物理行（1始まり）。
+	Line int
+}
+
+// LoadOrderMarked は [LoadOrder] と同じく読むが、閉じない引用符のあるファイルは
+// 誤りにせず、行の無いファイル（無いときと同じ）として読み、どのファイルの何行目かを
+// 返す。
+//
+// diff のための入口である。diff は閉じない引用符のあるファイルに依る判定だけを
+// 「判定していません」にして報告を続ける（決まったことの 3）。全体を解釈して読むと
+// 引用符が開いた行から後ろが1つの値に崩れるので、そのファイルの行は1つも使わない。
+// 値を半分だけ使うと、どこまでが正しい行かを読み手は決められない。
+//
+// 列名の重複と読み取りの失敗は、[LoadOrder] と同じく誤りにする。
+func LoadOrderMarked(root string) (*order.Data, []UnclosedFile, error) {
+	orderPath := ScriptOrderPath(root)
+	flowPath := LevelFlowPath(root)
+	var unclosed []UnclosedFile
+	read := func(path string) ([]byte, error) {
+		data, err := readIfExists(path)
+		if err != nil {
+			return nil, err
+		}
+		if line := csvfile.SplitSegments(data).UnclosedLine; line > 0 {
+			unclosed = append(unclosed, UnclosedFile{Path: path, Line: line})
+			return nil, nil
+		}
+		return data, nil
+	}
+	orderCSV, err := read(orderPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	flowCSV, err := read(flowPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	data, err := order.LoadPowerShell(orderCSV, flowCSV)
+	if err != nil {
+		return nil, nil, err
+	}
+	data.Source = orderPath
+	return data, unclosed, nil
 }
 
 // BuildTarget は1ターゲット分の入出力ファイルを読み、公開CSVのバイト列を組み立てる。

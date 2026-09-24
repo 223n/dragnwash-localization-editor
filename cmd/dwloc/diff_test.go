@@ -376,6 +376,92 @@ func TestRunDiffFileErrorIsRelative(t *testing.T) {
 	}
 }
 
+// TestRunDiffUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないファイルが
+// あっても止まらずに報告し、そのファイルと行を標準エラーへ書いて、終了コードを1に
+// することを見る（決まったことの 3 とそのほか 6）。
+//
+// 全体を解釈する読み手へ移す作業の PR2 の前半では、読み手の誤りがそのまま読み込みの
+// 誤り（終了コード2）になっていた。要確認が1件も無くても 1 にするのは、そのファイルに
+// 依るカテゴリを判定していないのに「要確認なし」と言えないからである。
+func TestRunDiffUnclosedQuote(t *testing.T) {
+	unclosedWorking := "key,source_en,translation\n" + diffHelloKey + ",Hello,\"こんにちは\n"
+	tests := []struct {
+		name  string
+		files map[string]string
+		args  []string
+		// warn は標準エラーの警告に出るファイル（ルートからの相対）と行。
+		warn string
+		// held は本文の「判定していません（…）」の理由。
+		held string
+		// noWarn は標準エラーに出てはいけない文。
+		noWarn []string
+	}{
+		{
+			name: "作業コピー",
+			files: map[string]string{
+				"Translations/ja/strings.csv":             diffCleanJA,
+				"Translations/_discovered/ja.working.csv": unclosedWorking,
+			},
+			warn: "Translations/_discovered/ja.working.csv の 2行目",
+			held: "判定していません（作業コピーの2行目の引用符が閉じません）",
+		},
+		{
+			// 報告しないロケールの公開ファイルでも、ja の「他のロケールにあって無い行」を
+			// 止めるので、どのファイルかを書く。本文には de の見出しが出ない。
+			name: "報告しないロケールの公開ファイル",
+			files: map[string]string{
+				"Translations/ja/strings.csv": diffCleanJA,
+				"Translations/de/strings.csv": publish.HeaderLine + "\n" + diffHelloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\n",
+			},
+			args: []string{"--locale", "ja"},
+			warn: "Translations/de/strings.csv の 2行目",
+			held: "判定していません（ほかのロケール（de）の公開ファイルの引用符が閉じません）",
+		},
+		{
+			// 再生順は報告全体を止める。「再生順を読めません」の警告と重ねない。
+			name: "再生順",
+			files: map[string]string{
+				"data/script_order.csv":       "section,key\n\"L01," + diffHelloKey + "\n",
+				"Translations/ja/strings.csv": diffCleanJA,
+			},
+			warn:   "data/script_order.csv の 2行目",
+			held:   "判定していません（再生順の2行目の引用符が閉じません）",
+			noWarn: []string{"から再生順を読めません"},
+		},
+	}
+	for _, tt := range tests {
+		for _, format := range []string{diffFormatText, diffFormatCSV} {
+			t.Run(tt.name+"/"+format, func(t *testing.T) {
+				root := diffTree(t, tt.files)
+				args := append([]string{"diff", "--root", root, "--format", format}, tt.args...)
+				code, stdout, stderr := runCLI(args...)
+				if code != exitProblems {
+					t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+				}
+				checkContains(t, "stderr", stderr, []string{
+					"dwloc: 警告: " + tt.warn + "で開いた引用符がファイルの終わりまで閉じないので、読みませんでした。",
+					"値の中の \" は \"\" と2つ重ねて書きます。",
+				})
+				for _, bad := range tt.noWarn {
+					if strings.Contains(stderr, bad) {
+						t.Errorf("標準エラーに %q が出ている:\n%s", bad, stderr)
+					}
+				}
+				if strings.Contains(stderr, filepath.ToSlash(root)) || strings.Contains(stderr, root) {
+					t.Errorf("絶対パスが出ている:\n%s", stderr)
+				}
+				if format == diffFormatText {
+					checkContains(t, "stdout", stdout, []string{tt.held})
+				} else {
+					// csv の本体には書く場所が無いので、保留の行が標準エラーに出る。
+					_, why, _ := strings.Cut(tt.held, "判定していません")
+					checkContains(t, "stderr", stderr, []string{"は判定しません" + why + "。"})
+				}
+			})
+		}
+	}
+}
+
 // failWriter は書き込みを必ず断る io.Writer。閉じたパイプへ書いたときの代わり。
 type failWriter struct{}
 
@@ -701,6 +787,31 @@ func TestRunDiffCSVWarnsForEveryHeldCategory(t *testing.T) {
 				"vanished", "carryover", "carry_from", "stray_line_id", "not_published", "script_gap", "unknown_origin",
 			}},
 		},
+		{
+			// 閉じない引用符で読めなかった作業コピー。止まるのは作業コピーを要る
+			// カテゴリだけで、理由は「作業コピーがありません」ではなく何行目かを言う。
+			name: "作業コピーの引用符が閉じない",
+			files: map[string]string{
+				"Translations/ja/strings.csv":             diffCleanJA,
+				"Translations/_discovered/ja.working.csv": "key,source_en,translation\n" + diffHelloKey + ",Hello,\"こんにちは\n",
+			},
+			mustHold: map[string][]string{"ja": {"untranslated", "dropped", "tag_mismatch"}},
+			judged:   map[string][]string{"ja": {"vanished", "locale_gap"}},
+		},
+		{
+			// ほかのロケールの公開ファイルを読めないと、ロケールどうしを比べる
+			// カテゴリだけが止まる。読めなかったロケールは、すべてのカテゴリが止まる。
+			name: "ほかのロケールの公開ファイルの引用符が閉じない",
+			files: map[string]string{
+				"Translations/ja/strings.csv": diffCleanJA,
+				"Translations/de/strings.csv": publish.HeaderLine + "\n" + diffHelloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\n",
+			},
+			mustHold: map[string][]string{
+				"ja": {"locale_gap", "not_published"},
+				"de": {"locale_gap", "vanished", "stray_line_id"},
+			},
+			judged: map[string][]string{"ja": {"vanished", "stray_line_id"}},
+		},
 	}
 	idOf := make(map[string]string)
 	for c := range diffAllCounts(t) {
@@ -849,8 +960,11 @@ func localesInText(stdout string) []string {
 
 // localeHeading は、text 形式の本文のロケールの見出し
 // （「ja  Translations/ja/strings.csv   ハッシュ 1 行 / …」）からロケール名を取る。
+// 公開ファイルを閉じない引用符で読めなかったロケールの見出しは、件数の代わりに
+// 「N行目で開いた引用符が…」と書く。
 func localeHeading(line string) (string, bool) {
-	if strings.HasPrefix(line, " ") || !strings.Contains(line, "   ハッシュ ") {
+	if strings.HasPrefix(line, " ") ||
+		!strings.Contains(line, "   ハッシュ ") && !strings.Contains(line, "行目で開いた引用符がファイルの終わりまで閉じない") {
 		return "", false
 	}
 	name, _, ok := strings.Cut(line, "  ")

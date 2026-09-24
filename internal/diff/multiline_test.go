@@ -1,11 +1,9 @@
 package diff
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
-	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 )
 
@@ -20,7 +18,9 @@ import (
 
   - ReadRows: 5行 → 3行（行をまたぐレコードが1行になる）
   - 実物と同じ形の作業コピー: 捨てられる行 2 → 0、未翻訳 1 → 2
-  - 閉じない引用符: 行の終わりで閉じて読む → 読み込みの誤り
+  - 閉じない引用符: 行の終わりで閉じて読む → 読み込みの誤り（読み手を切り替えたコミット）
+    → そのファイルに依る判定だけを「判定していません」にして続ける（後半のコミット。
+    試験は unclosed_test.go）
   - layout_risks: 3件 → 2件（原文が行をまたいでも1件）
   - CSV の読み戻し: 4行 → 2行（報告の件数と同じ）
 
@@ -93,31 +93,6 @@ func TestCompareMultilineWorkingCopyCounts(t *testing.T) {
 	}
 	if got[CatUntranslated] != 2 {
 		t.Errorf("未翻訳 = %d、2 を期待（行をまたぐレコードも数える）", got[CatUntranslated])
-	}
-}
-
-// TestLoadUnclosedQuoteIsAnErrorForNow は、閉じない引用符のある公開ファイルを読むと、
-// いまは読み込み全体が誤りになることを固定する。
-//
-// 全体を解釈する読み手は、閉じない引用符を型付きの誤り（csvfile.UnclosedQuoteError）に
-// する。行単位で読んでいたときは、その物理行の終わりで閉じたものとして何事も無く
-// 読んでいた。決まったことの 3 では、diff はそのファイルに依る判定を「判定して
-// いません（N行目の引用符が閉じない）」にして続け、終了コードを1にする
-// （そのほか 6）。それを入れるまでの途中の振る舞いで、入れたらこの試験を直す。
-func TestLoadUnclosedQuoteIsAnErrorForNow(t *testing.T) {
-	_, err := LoadWith(writeTree(t, map[string]string{
-		"data/script_order.csv": orderTwo,
-		"Translations/ja/strings.csv": publishedHeader +
-			keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"こんにちは\n" +
-			keyBye + ",L01 Ryan,Ryan_1_intro,2,Kobold,さようなら\n",
-	}), Options{Working: true})
-	var unclosed *csvfile.UnclosedQuoteError
-	var fileErr *FileError
-	if !errors.As(err, &unclosed) || unclosed.Line != 2 || !errors.As(err, &fileErr) {
-		t.Fatalf("閉じない引用符の誤りをファイルつきで返していない: %v", err)
-	}
-	if !strings.HasSuffix(fileErr.Path, "strings.csv") {
-		t.Errorf("どのファイルかが違う: %s", fileErr.Path)
 	}
 }
 

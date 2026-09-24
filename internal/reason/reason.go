@@ -98,6 +98,25 @@ const (
 	JudgeNoLayoutRisks = "judge_no_layout_risks"
 	// JudgeLayoutRisksNotRead はその記録があるのに読まなかったこと（--no-working）。
 	JudgeLayoutRisksNotRead = "judge_layout_risks_not_read"
+	// JudgeOrderUnclosed は、再生順（data/script_order.csv）で開いた引用符が
+	// ファイルの終わりまで閉じないこと。置換は line（引用符が開いた物理行）。
+	//
+	// 全体を解釈して読むと、その行から後ろがすべて1つの値に崩れる。再生順は
+	// どのカテゴリの判定にも位置の根拠にも使うので、報告全体を判定しない。
+	JudgeOrderUnclosed = "judge_order_unclosed"
+	// JudgePublishedUnclosed は、そのロケールの公開ファイルで開いた引用符が
+	// 閉じないこと。置換は line。そのロケールはどのカテゴリも判定しない。
+	JudgePublishedUnclosed = "judge_published_unclosed"
+	// JudgeWorkingUnclosed は、作業コピーで開いた引用符が閉じないこと。
+	// 置換は line。作業コピーを要るカテゴリを判定しない。
+	JudgeWorkingUnclosed = "judge_working_unclosed"
+	// JudgeLayoutRisksUnclosed は、はみ出しの記録で開いた引用符が閉じないこと。
+	// 置換は line。
+	JudgeLayoutRisksUnclosed = "judge_layout_risks_unclosed"
+	// JudgeOtherPublishedUnclosed は、ほかのロケールの公開ファイルで開いた引用符が
+	// 閉じないこと。置換は locales（そのロケールの名前を ", " でつないだもの）。
+	// 他のロケールと比べるカテゴリを判定しない。
+	JudgeOtherPublishedUnclosed = "judge_other_published_unclosed"
 )
 
 // 1つ前の版の再生順を取り出せない理由（internal/diff の oldorder.go と load.go）。
@@ -295,6 +314,8 @@ const (
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOrderNoLineIDs,
 	JudgeOldOrderUnreadable, JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
+	JudgeOrderUnclosed, JudgePublishedUnclosed, JudgeWorkingUnclosed, JudgeLayoutRisksUnclosed,
+	JudgeOtherPublishedUnclosed,
 
 	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderNotCommitted,
 	OldOrderOnlyOneVersion, OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs,
