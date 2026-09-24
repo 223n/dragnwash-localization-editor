@@ -362,6 +362,15 @@ func TestCSharpDisagreements(t *testing.T) {
 			want: []Disagreement{{ID: 2, Line: 2, EndLine: 2, Column: "translation"}},
 		},
 		{
+			// key の前の空白は、主の読み手は削り（k1）、ゲームは残す（" k1"）。組にする鍵は
+			// 前後の空白を除いて作るので、同じレコードとして組になり、key 列が割れる。
+			// 除かずに組にすると、ゲームの読み方にそのレコードが無いことになり、どの列が
+			// 割れたかを言えなくなる。
+			name: "key の前の空白は除いて組にする",
+			text: "key,translation\n k1,x\nk2,y\n",
+			want: []Disagreement{{ID: 2, Line: 2, EndLine: 2, Column: "key"}},
+		},
+		{
 			// ゲームは引用の外の CR を捨てて続きまで読む。切れた後半はゲームの読み方に無い。
 			name: "引用の外の単独の CR",
 			text: "key,translation\nk1,い\rち\nk2,b\n",
