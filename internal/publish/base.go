@@ -28,9 +28,10 @@ type BaseDrift struct {
 	// 畳んだ形（[csvfile.FoldASCII]）では返さない。人はこの値をファイルから
 	// 探すので、綴りが変わっていると引き当てられない。
 	Key string
-	// Repo はコミット済みの訳の先頭だけ（[lossHeadRunes] 文字）。
+	// Repo はコミット済みの訳の先頭だけ（[lossHeadRunes] 文字）。制御文字は見える
+	// 印に置き換えてある（[Visible]）。
 	Repo string
-	// Game はゲームに入っている訳の先頭だけ。
+	// Game はゲームに入っている訳の先頭だけ。Repo と同じく印に置き換えてある。
 	Game string
 }
 
@@ -163,7 +164,9 @@ func window(runes []rune, start int) string {
 	if cut {
 		runes = runes[:end]
 	}
-	out := string(runes[start:])
+	// 制御文字（値の中の改行など）は見える印に置き換える（[Visible]）。改行が入ったまま
+	// 並べると、コミット済みとゲーム側の2行の見本が何行にも割れて読めない。
+	out := Visible(string(runes[start:]))
 	if start > 0 {
 		out = lossHeadEllipsis + out
 	}

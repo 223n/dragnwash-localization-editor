@@ -151,6 +151,27 @@ func TestPublishStopsWhenTranslationsWouldBeLost(t *testing.T) {
 	}
 }
 
+// TestPublishReportsLossOfAMultilineTranslation は、行をまたぐ訳が失われるときの
+// 報告を見る。行番号は開始行を主に範囲で出し（決まったことのそのほか 3）、訳の
+// 先頭の改行は見える印に置き換える。改行をそのまま出すと、報告の1件が2行に割れる。
+func TestPublishReportsLossOfAMultilineTranslation(t *testing.T) {
+	root := lossRepo(t)
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(jaPublishedPath)), []byte(
+		"key,section,node,order,speaker,translation\n"+
+			keyHello+",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\nもしもし？\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	game := makeGame(t, map[string]string{"Translations/_discovered/ja.working.csv": workingPartial})
+
+	code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{
+		"2〜3行目 " + keyHello + " 「もしもし↵もしもし？」 この行が新しい出力に無い",
+	})
+}
+
 func TestPublishDryRunStopsTheSameWay(t *testing.T) {
 	// --dry-run でも同じ判定をして、同じ報告を出す。書かないことは変わらないので、
 	// 判定だけ変えると「dry-run では通ったのに本番で止まる」食い違いが生まれる。

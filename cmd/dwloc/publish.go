@@ -678,7 +678,7 @@ func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) in
 	for _, res := range found {
 		fmt.Fprintf(stderr, "dwloc:   %s（%d 件）\n", res.Locale, res.Count)
 		for _, d := range res.Sample {
-			fmt.Fprintf(stderr, "dwloc:       %s\n", d.Key)
+			fmt.Fprintf(stderr, "dwloc:       %s\n", publish.Visible(d.Key))
 			fmt.Fprintf(stderr, "dwloc:         コミット済み 「%s」\n", d.Repo)
 			fmt.Fprintf(stderr, "dwloc:         ゲーム側     「%s」\n", d.Game)
 		}
@@ -722,7 +722,8 @@ func reportSourceLineEnds(root string, targets []publish.Target, stderr io.Write
 				fmt.Fprintf(stderr, "dwloc:       ほかに %d 件あります。\n", len(hints)-i)
 				break
 			}
-			fmt.Fprintf(stderr, "dwloc:       %s %s: 原文の CRLF を LF にするとキーが一致します\n", lineRange(h.Line, h.EndLine), h.Key)
+			fmt.Fprintf(stderr, "dwloc:       %s %s: 原文の CRLF を LF にするとキーが一致します\n",
+				lineRange(h.Line, h.EndLine), publish.Visible(h.Key))
 		}
 	}
 	return exitOK
@@ -770,7 +771,10 @@ func reportLosses(root string, targets []publish.Target, built [][]byte, stderr 
 			if shown >= publishLossListMax {
 				break
 			}
-			fmt.Fprintf(stderr, "dwloc:       %d行目 %s 「%s」 %s\n", l.Line, l.Key, l.Head, l.Why)
+			// 行は開始行を主に範囲で出す（決まったことのそのほか 3）。キーは、キーを
+			// 決められなかった行では key 列の値そのままなので、制御文字を印に置き換える。
+			fmt.Fprintf(stderr, "dwloc:       %s %s 「%s」 %s\n",
+				lineRange(l.Line, l.EndLine), publish.Visible(l.Key), l.Head, l.Why)
 			shown++
 		}
 	}

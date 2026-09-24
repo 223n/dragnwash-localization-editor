@@ -552,6 +552,38 @@ func TestWindow(t *testing.T) {
 	}
 }
 
+// TestDriftHeadsMarksLineBreaks は、食い違いの見本の中の改行を見える印に置き換える
+// ことを見る。改行が入ったまま並べると、コミット済みとゲーム側の2行が何行にも割れる。
+func TestDriftHeadsMarksLineBreaks(t *testing.T) {
+	repo, game := driftHeads("いち\nに", "いち\rに")
+	if repo != "いち↵に" || game != "いち␍に" {
+		t.Errorf("driftHeads = %q, %q", repo, game)
+	}
+}
+
+// TestVisible は、報告に出す値の制御文字の置き換えを固定する。1文字を1文字に
+// 置き換えるので、先頭の文字数で切ったあとに通しても長さは変わらない。
+func TestVisible(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"ふつうの訳", "ふつうの訳"},
+		{"a\nb", "a↵b"},
+		{"a\r\nb", "a␍↵b"},
+		{"a\rb", "a␍b"},
+		{"a\tb", "a␉b"},
+		{"a\x00b\x1bc", "a␀b␛c"},
+		{"a\x7fb", "a␡b"},
+		{"a\u0085b c d", "a␤b␤c␤d"},
+	} {
+		got := Visible(tc.in)
+		if got != tc.want {
+			t.Errorf("Visible(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if len([]rune(got)) != len([]rune(tc.in)) {
+			t.Errorf("Visible(%q) で文字数が変わった", tc.in)
+		}
+	}
+}
+
 // distinctRunes は互いに違う文字を n 個並べる。切り出した位置が1文字ずれた
 // だけでも結果が変わるよう、同じ文字を繰り返さない。
 func distinctRunes(n int) []rune {

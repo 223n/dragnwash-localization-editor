@@ -48,8 +48,27 @@ func TestCheckLoss(t *testing.T) {
 			t.Errorf("理由が %q", got[0].Why.ID)
 		}
 		// 行番号はいまの公開ファイルのもの。ヘッダーが1行目なので2行目。
-		if got[0].Line != 2 {
-			t.Errorf("行番号が %d", got[0].Line)
+		if got[0].Line != 2 || got[0].EndLine != 2 {
+			t.Errorf("行番号が %d〜%d", got[0].Line, got[0].EndLine)
+		}
+	})
+
+	t.Run("行をまたぐ訳は範囲と印で出す", func(t *testing.T) {
+		// 全体を解釈して読むので、行をまたぐ訳も1つの行として突き合わせる。行番号は
+		// 開始行を主に範囲で持ち（決まったことのそのほか 3）、訳の先頭の改行は
+		// 見える印に置き換える。
+		current := HeaderLine + "\n" + keyA + ",UI,,,UI,\"いち\r\nに\"\n" + keyB + ",UI,,,UI,b\n"
+		next := publishedCSV([2]string{keyB, "b"})
+
+		got, err := CheckLoss("ja", []byte(current), []byte(next))
+		if err != nil {
+			t.Fatalf("CheckLoss: %v", err)
+		}
+		if len(got) != 1 || got[0].Key != keyA || got[0].Line != 2 || got[0].EndLine != 3 {
+			t.Fatalf("範囲が違う: %+v", got)
+		}
+		if got[0].Head != "いち␍↵に" {
+			t.Errorf("訳の先頭 = %q、改行を印にしていない", got[0].Head)
 		}
 	})
 
