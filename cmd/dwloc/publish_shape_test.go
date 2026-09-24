@@ -36,10 +36,15 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 			name: "いまの公開ファイルの訳が行をまたぐ",
 			published: "key,section,node,order,speaker,translation\n" +
 				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\nもしもし？\"\n",
+			// 直し方は、訳を壊さない抜け方を先に出す。複数行の訳は上流では正しい訳で、
+			// 改行を取り除かせるとほかの翻訳者の訳を壊す。
 			want: []string{
 				"ja: " + jaPublishedPath + "（いまの公開ファイル）",
 				"2〜3行目: 引用符で囲んだ値が行をまたいでいる",
-				"直し方: その値の改行を取り除いて",
+				"直し方: このロケールは、いまの dwloc publish では書けません。",
+				"ほかのロケールは、このロケール以外を --locale に並べれば publish できます。",
+				"このロケールは、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。",
+				"誤って入った改行なら、取り除いて",
 			},
 		},
 		{
@@ -47,10 +52,15 @@ func TestPublishStopsOnUnsafeShapes(t *testing.T) {
 			working: "key,section,node,order,speaker,source_en,translation\r\n" +
 				keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello?,もしもし？\r\n" +
 				key.For(multiSource) + ",UI,,,UI,\"" + multiSource + "\",訳\r\n",
+			// 訳は翻訳者が入れた正しい訳でありうるので、空に戻すのは条件付きの案内に
+			// 留め、訳を保ったまま抜ける道を先に出す。
 			want: []string{
 				"ja.working.csv（入力）",
 				"3〜5行目: 引用符で囲んだ値が行をまたぎ、この行には訳が入っている",
-				"直し方: その行の訳を空に戻すと",
+				"直し方: この行に訳があるうちは、このロケールをいまの dwloc publish では書けません。",
+				"このロケール以外を --locale に並べれば",
+				"tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。",
+				"この訳をまだ公開しなくてよいなら、訳を空に戻すと、このロケールのほかの行は",
 			},
 		},
 		{
@@ -203,9 +213,64 @@ func TestPublishShapeWithPathHasNoLocale(t *testing.T) {
 	if code != exitProblems {
 		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
 	}
-	checkContains(t, "標準エラー", stderr, []string{"dwloc:   " + jaPublishedPath + "（いまの公開ファイル）"})
+	checkContains(t, "標準エラー", stderr, []string{
+		"dwloc:   " + jaPublishedPath + "（いまの公開ファイル）",
+		// --path と --locale は同時に使えないので、外し方は --path で案内する。
+		"直し方: このファイルは、いまの dwloc publish では書けません。",
+		"ほかのファイルは、このファイルを --path から外せば publish できます。",
+	})
 	if strings.Contains(stderr, "ja: ") {
 		t.Errorf("--path なのにロケールを付けている:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "--locale") || strings.Contains(stderr, "このロケール") {
+		t.Errorf("--path なのにロケールで外すよう案内している:\n%s", stderr)
+	}
+}
+
+// TestPublishShapeEscapeWithLocale は、行をまたぐ値で止まったときの直し方が
+// 案内する抜け方で、実際にほかのロケールを書けることを見る。
+//
+// 複数行の訳は上流では正しい訳なので、いまの公開ファイルにあると、そのロケールは
+// 全体を解釈する読み手が入るまで止まり続ける。--locale を付けずに走らせると
+// どのロケールも書かない。案内どおり --locale でほかのロケールだけを選べば書け、
+// 止まったロケールの公開ファイルには触れない。
+func TestPublishShapeEscapeWithLocale(t *testing.T) {
+	dePublished := "key,section,node,order,speaker,translation\n" +
+		helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\nWelt\"\n"
+	jaPublished := "key,section,node,order,speaker,translation\n" +
+		helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし\n"
+	root := makeTree(t, map[string]string{
+		"data/script_order.csv":       scriptOrderCSV,
+		"Translations/de/strings.csv": dePublished,
+		"Translations/ja/strings.csv": jaPublished,
+	})
+	// 案内どおりに抜けたときと比べるため、ja だけを書いたときの中身を先に作る。
+	want := makeTree(t, map[string]string{
+		"data/script_order.csv":       scriptOrderCSV,
+		"Translations/ja/strings.csv": jaPublished,
+	})
+	if code, _, stderr := runCLI("publish", "--root", want, "--no-game"); code != exitOK {
+		t.Fatalf("下ごしらえの publish の終了コード = %d\n%s", code, stderr)
+	}
+
+	code, _, stderr := runCLI("publish", "--root", root, "--no-game")
+	if code != exitProblems {
+		t.Fatalf("--locale なしの終了コード = %d、1 を期待\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"de: Translations/de/strings.csv（いまの公開ファイル）"})
+	if got := readFile(t, root, "Translations/ja/strings.csv"); got != jaPublished {
+		t.Errorf("止めたのに ja を書いている:\n%s", got)
+	}
+
+	code, _, stderr = runCLI("publish", "--root", root, "--no-game", "--locale", "ja")
+	if code != exitOK {
+		t.Fatalf("--locale ja の終了コード = %d、0 を期待\n%s", code, stderr)
+	}
+	if got, w := readFile(t, root, "Translations/ja/strings.csv"), readFile(t, want, "Translations/ja/strings.csv"); got != w {
+		t.Errorf("ja の中身が違う\n got %q\nwant %q", got, w)
+	}
+	if got := readFile(t, root, "Translations/de/strings.csv"); got != dePublished {
+		t.Errorf("外した de を書き換えている:\n%s", got)
 	}
 }
 
@@ -227,7 +292,40 @@ func TestPublishShapeFixCoversEveryReason(t *testing.T) {
 			if !has || publishShapeFix[id] == "" {
 				t.Errorf("%s の直し方が無い", id)
 			}
+			// 埋め残しがあると、報告に {this} がそのまま出る。
+			for _, locale := range []string{"ja", ""} {
+				fix := shapeFix(publish.Hazard{Locale: locale, Why: reason.New(id, "")})
+				if strings.ContainsAny(fix, "{}") {
+					t.Errorf("%s（ロケール %q）の直し方に埋め残しがある: %s", id, locale, fix)
+				}
+			}
 		}
+	}
+}
+
+// TestShapeFixNamesTheWayOut は、行をまたぐ値の直し方が、ロケールを決めて
+// 走らせたか --path で走らせたかに合わせて抜け方を変えることを固定する。
+func TestShapeFixNamesTheWayOut(t *testing.T) {
+	for _, id := range []string{
+		reason.PublishMultilineCurrent, reason.PublishMultilineTranslated, reason.PublishMultilineDiverges,
+	} {
+		byLocale := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(id, "")})
+		byPath := shapeFix(publish.Hazard{Why: reason.New(id, "")})
+		if !strings.Contains(byLocale, "--locale") || strings.Contains(byLocale, "--path") {
+			t.Errorf("%s: ロケールで走らせたのに --locale で案内していない: %s", id, byLocale)
+		}
+		if !strings.Contains(byPath, "--path") || strings.Contains(byPath, "--locale") {
+			t.Errorf("%s: --path で走らせたのに --path で案内していない: %s", id, byPath)
+		}
+		for _, fix := range []string{byLocale, byPath} {
+			if !strings.Contains(fix, "tools/hash-strings.ps1") {
+				t.Errorf("%s: 上流の道具を案内していない: %s", id, fix)
+			}
+		}
+	}
+	// 形が壊れているだけのものは、ほかのロケールの話をしない。
+	if fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(reason.PublishUnclosedQuote, "")}); strings.Contains(fix, "--locale") {
+		t.Errorf("閉じない引用符の直し方に --locale が出ている: %s", fix)
 	}
 }
 

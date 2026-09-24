@@ -330,22 +330,54 @@ dwloc:       書き出すと訳が切り詰められたり、黙って落ちた�
 
 // publishShapeFix は、形ごとの直し方です。キーは reason の識別子です。
 //
-// 行をまたぐ値のうち、原文（source_en）がまたいでいるものは翻訳者には直せません。
-// 原文を変えるとキー（原文のハッシュ）が変わるからです。そこで、公開できる別の
-// 道具と、訳を空に戻せばほかの行は publish できることを書いておきます。
+// 行をまたぐ値は、壊れた形とは限りません。上流の tools/hash-strings.ps1 は
+// ファイル全体を解釈するので、複数行の訳を正しい訳として読み書きします。
+// いまの公開ファイルにある複数行の訳は、ほかの翻訳者がコミットした正しい訳で
+// ありえます。改行を取り除くよう案内すると、その訳を壊させることになります。
+// 原文（source_en）がまたいでいるものは、そもそも翻訳者には直せません。原文を
+// 変えるとキー（原文のハッシュ）が変わるからです。
+//
+// そこで行をまたぐ値では、止めることは保ったまま、訳を壊さない抜け方を先に
+// 書きます。ほかのロケールは --locale で書けること、止まったロケールは上流の
+// 道具で書けること、の2つです。改行を取り除く、訳を空に戻す、は条件付きの
+// 案内に留めます。
+//
+// 文面の {this} と {others} は、[shapeFix] が報告するときに埋めます。ロケールを
+// 決めて走らせたときと --path で走らせたときで、外し方が違うためです。
 var publishShapeFix = map[string]string{
 	reason.PublishNoKeyColumn: "ヘッダーの行を key,section,node,order,speaker,translation などの形に直してください。" +
 		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
 	reason.PublishNoTranslationColumn: "ヘッダーの行に translation 列を入れてください。" +
 		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
-	reason.PublishMultilineCurrent: "その値の改行を取り除いて1行にまとめてから、もう一度実行してください。",
-	reason.PublishMultilineTranslated: "その行の訳を空に戻すと、ほかの行は publish できます（その訳は公開されません）。" +
-		"行をまたぐ値のある行を公開するには、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。",
+	reason.PublishMultilineCurrent: "{this}は、いまの dwloc publish では書けません。dwloc publish は行をまたぐ値を読めないためです。" +
+		"{others}" +
+		"{this}は、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。" +
+		"誤って入った改行なら、取り除いてからもう一度実行してください。",
+	reason.PublishMultilineTranslated: "この行に訳があるうちは、{this}をいまの dwloc publish では書けません。dwloc publish は行をまたぐ値を読めないためです。" +
+		"{others}" +
+		"{this}は、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。" +
+		"訳に誤って入った改行なら、取り除いてからもう一度実行してください。" +
+		"この訳をまだ公開しなくてよいなら、訳を空に戻すと、{this}のほかの行は dwloc publish で書けます。",
 	reason.PublishMultilineDiverges: "訳の入っていない行なら、作業コピーからその範囲の行を消しても公開される中身は変わりません。" +
-		"消せないときは、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。",
+		"消せないときは、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。" +
+		"{others}",
 	reason.PublishRowsUnread: "改行を LF か CRLF にして保存し直してから、もう一度実行してください。",
 	reason.PublishUnclosedQuote: "引用符を閉じるか取り除いてから、もう一度実行してください。" +
 		"値の中の \" は \"\" と2つ重ねて書きます。",
+}
+
+// shapeFix は、h の直し方を報告に出す形にします。
+//
+// 1つのロケールで止まると、どのロケールも書きません。そのロケールだけを外して
+// ほかを書く道は、ロケールを決めて走らせたなら --locale、--path で走らせたなら
+// --path です（2つは同時に使えません）。--path ではロケール名が決まらないので、
+// 「このロケール」ではなく「このファイル」と呼びます。
+func shapeFix(h publish.Hazard) string {
+	this, others := "このロケール", "ほかのロケールは、このロケール以外を --locale に並べれば publish できます。"
+	if h.Locale == "" {
+		this, others = "このファイル", "ほかのファイルは、このファイルを --path から外せば publish できます。"
+	}
+	return strings.NewReplacer("{this}", this, "{others}", others).Replace(publishShapeFix[h.Why.ID])
 }
 
 // publishShapeListMax は、形の崩れを何件まで並べるかです。publishLossListMax と
@@ -393,7 +425,7 @@ func reportShape(root string, targets []publish.Target, stderr io.Writer) int {
 			lastFile = file
 		}
 		fmt.Fprintf(stderr, "dwloc:       %s: %s\n", lineRange(h.Line, h.EndLine), h.Why)
-		fmt.Fprintf(stderr, "dwloc:         直し方: %s\n", publishShapeFix[h.Why.ID])
+		fmt.Fprintf(stderr, "dwloc:         直し方: %s\n", shapeFix(h))
 	}
 	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(found))
 	return exitProblems

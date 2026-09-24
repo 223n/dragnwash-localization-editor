@@ -598,15 +598,29 @@ When it stops, it prints each case with the file, the line number, what would ha
 It does not print the translations.  
 A working copy with only the two columns `source_en,translation` is valid input and passes.
 
+A value that spans lines is not necessarily a broken shape.  
+The upstream `tools/hash-strings.ps1` reads the whole file, so it treats a multi-line translation as a valid translation.  
+A multi-line translation in the current published file may be a valid translation that another translator committed.  
+`dwloc publish` still stops.  
+Until a way of reading the whole file comes to `dwloc`, it keeps stopping on that locale.  
+Run without `--locale`, it does not write the other locales either.  
+Removing the line breaks to get through would break that valid translation.  
+When it stops, get out of it like this.
+
+- The other locales can be published by listing every locale except the stopped one in `--locale`
+- The stopped locale can be written with `tools/hash-strings.ps1` or the in-game `Hash for commit`
+- If the line break got in by mistake, remove it and run again
+
 A value in the input that spans lines does not stop it when that row's translation is empty.  
 The working copy on the game side has a row whose source text (`source_en`) spans lines and whose translation is empty.  
 Changing the source text changes the key, so a translator cannot fix it.  
 That row is not published by either way of reading, so the output does not change.
 
 Translating a row whose source text spans lines makes it stop.  
-The current `dwloc publish` cannot publish that row.  
-Emptying that translation again lets `publish` go through for the other rows.  
-To publish that row, use `tools/hash-strings.ps1` or the in-game `Hash for commit`.
+While that translation is there, the current `dwloc publish` cannot write that locale.  
+The way out is the same as for the current published file.  
+Write the other locales with `--locale`, and write that locale with `tools/hash-strings.ps1` or `Hash for commit`.  
+If that translation does not need to be published yet, emptying it again lets `publish` go through for the other rows of that locale too.
 
 A file whose line breaks are `CR` only does not stop it.  
 `dwloc` also splits lines at a lone `CR`, so it reads the file correctly (it writes `LF` back).  
