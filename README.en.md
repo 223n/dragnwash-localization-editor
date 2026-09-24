@@ -638,6 +638,9 @@ The option applies to the record with that `key` in any of the input, the curren
 The lines it lets through, and the option that let each of them through, are printed on standard error.  
 To let through several records, give the option once for each.  
 When you run it with `--path`, write the file you passed to `--path` instead of a locale (`<file>:<key>`).  
+When the path has spaces, parentheses, or the like (such as `Program Files (x86)` or `Drag'n Wash`), the fix puts the option in double quotes.  
+You can then paste it as it is into PowerShell, the Command Prompt, or bash.  
+When it has a character that some shells still read specially inside double quotes, such as `$`, the fix adds that you should rewrite it for your shell.  
 A locale alone (a file alone with `--path`) is not accepted.  
 Given one, it stops and asks you to name a record (exit code `2`).  
 An option that matches no line it can let through stops it with exit code `2` too.

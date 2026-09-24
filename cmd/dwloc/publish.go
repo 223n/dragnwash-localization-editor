@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
@@ -100,7 +101,10 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
         標準エラーに出します。通すレコードごとに1つずつ、複数回指定します
         （ファイル名にカンマを入れられるので、カンマでは分けません）。
         --path で走らせたときは、ロケールの代わりに --path に渡したファイルを
-        書きます（<ファイル>:<key>）。ロケールやファイルだけの指定はできません。
+        書きます（<ファイル>:<key>）。パスに空白や括弧などがあれば、直し方には
+        二重引用符で囲んで出します。$ のように、二重引用符の中でもシェルに
+        よっては読み替える文字があるときは、使うシェルに合わせて書き直すよう
+        添えます。ロケールやファイルだけの指定はできません。
         指定は、そのロケールの入力・いまの公開ファイル・ゲーム側の公開ファイルの
         どれでも、その key のレコードに効きます。同じロケールのほかのレコードは
         通しません。閉じない引用符、閉じ引用符の後ろに文字が続く形、単独の CR、
@@ -595,8 +599,9 @@ const publishSwallowFix = "引用符の閉じ位置を確かめてください�
 // 続きの行がレコードに見えるだけの飲み込みの直し方の後ろに添える文です。正しい
 // 複数行の値でも当たる（原文の2行目がカンマを多く含むなど）ので、確かめたうえで
 // 通す指定を案内します。指定はレコード単位で、{accept} は --accept-multiline に
-// 渡す値（<ロケール>:<key>）です。そのレコードを key で1つに名指せないときは、
-// 指定を案内せず、なぜ通せないかを書きます（[publish.Hazard.Acceptable]）。
+// 渡す値（<ロケール>:<key>。[shellWord] でシェルに貼れる形にしたもの）です。
+// そのレコードを key で1つに名指せないときは、指定を案内せず、なぜ通せないかを
+// 書きます（[publish.Hazard.Acceptable]）。
 const (
 	publishSwallowAcceptFix = "{line}行目が値の一部として正しい（正しい複数行の値）なら、確かめたうえで --accept-multiline {accept} を付けると書けます。"
 	publishSwallowNoKeyFix  = "{line}行目が値の一部として正しくても、このレコードには指定に使える key が無いので、--accept-multiline では通せません" +
@@ -721,10 +726,52 @@ func acceptValue(h publish.Hazard) string {
 	return target + ":" + h.Key
 }
 
+// shellWord は、--accept-multiline に渡す値 v を、案内に出す形にします。
+//
+// 案内の指定は、そのままシェルに貼って使われます（決まったことの 16）。--path に
+// 渡したファイルのパスには、空白や括弧や ' が入ることがあります（Steam の既定の
+// C:\Program Files (x86)\... や、ゲームのフォルダー名の Drag'n Wash）。引用符で
+// 囲まずに出すと、貼ったときにシェルが語に割ったり、括弧を式として読んだりして、
+// 使い方の誤り（終了コード 2）になります。
+//
+// そこで、どのシェルでも引用符なしで1語のまま届く文字（ASCII の英数字と
+// . _ - : /）だけの値はそのまま出し、それ以外は二重引用符で囲みます。二重引用符は、
+// PowerShell・cmd・bash のどれでも、空白・括弧・'・&・; などをそのまま渡します。
+// バックスラッシュも囲みます。bash は引用符の外のバックスラッシュを取り除くためです。
+// 値は key で終わる（key は [publish.NameableKey] の文字だけ）ので、閉じる引用符の
+// 直前がバックスラッシュになる（Windows の引数の規則で \" と読まれる）ことはありません。
+//
+// 二重引用符の中でも読み替えるシェルのある文字を含むときは、第2戻り値を false に
+// します。$ と `（bash と PowerShell）、!（bash）、%（cmd）、続けて書いた \\（bash）、
+// PowerShell が引用符として読む “ ” „、引用符そのもの、制御文字です。囲んだ形のまま
+// 出し、使うシェルに合わせて書き直すよう添えます（[publishAcceptShellNote]）。
+func shellWord(v string) (word string, exact bool) {
+	plain, exact := v != "", !strings.Contains(v, `\\`)
+	for _, r := range v {
+		switch {
+		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z', '0' <= r && r <= '9', strings.ContainsRune("._-:/", r):
+		case strings.ContainsRune("$`!%\"\u201c\u201d\u201e", r), unicode.IsControl(r):
+			plain, exact = false, false
+		default:
+			plain = false
+		}
+	}
+	if plain {
+		return v, true
+	}
+	return `"` + v + `"`, exact
+}
+
+// publishAcceptShellNote は、通す指定の値に、二重引用符の中でもシェルによっては読み替える
+// 文字があるときに、案内の後ろに添える文です（[shellWord]）。
+const publishAcceptShellNote = "この値には、二重引用符の中でもシェルによっては読み替える文字（$ など）があるので、" +
+	"使うシェルに合わせて書き直してから付けてください。"
+
 // shapeFix は、h の直し方を報告に出す形にします。
 //
 // 続きの行がレコードに見える飲み込みでは、そのレコードを key で1つに名指せるときだけ
-// 通す指定（[acceptValue]）を案内します。名指せないときは、なぜ通せないかを書きます。
+// 通す指定（[acceptValue]）を、シェルに貼れる形（[shellWord]）で案内します。
+// 名指せないときは、なぜ通せないかを書きます。
 func shapeFix(h publish.Hazard) string {
 	line, column, keyKind := "", "", ""
 	for i := 0; i+1 < len(h.Why.Args); i += 2 {
@@ -746,7 +793,11 @@ func shapeFix(h publish.Hazard) string {
 	case h.AcceptableShape() && h.KeyRecords > 1:
 		fix = publishSwallowFix + publishSwallowDupKeyFix
 	}
-	fix = strings.NewReplacer("{line}", line, "{accept}", acceptValue(h), "{column}", column,
+	accept, exact := shellWord(acceptValue(h))
+	if !exact && strings.Contains(fix, "{accept}") {
+		fix += publishAcceptShellNote
+	}
+	fix = strings.NewReplacer("{line}", line, "{accept}", accept, "{column}", column,
 		"{key}", h.Key, "{count}", strconv.Itoa(h.KeyRecords)).Replace(fix)
 	if h.GameBase {
 		fix = publishGameBaseFix + fix
@@ -813,7 +864,9 @@ func reportShape(root string, targets []publish.Target, accept acceptSet, stderr
 	if len(passed) > 0 {
 		fmt.Fprint(stderr, publishAcceptText)
 		writeHazards(root, passed, stderr, func(i int, _ publish.Hazard) string {
-			return "指定: --accept-multiline " + passedBy[i]
+			// 次に書くときも同じ指定が要るので、案内と同じく貼れる形で出す。
+			word, _ := shellWord(passedBy[i])
+			return "指定: --accept-multiline " + word
 		})
 	}
 	code := exitOK

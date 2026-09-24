@@ -520,15 +520,65 @@ func TestPublishAgainstUpstream(t *testing.T) {
 // [TestPublishAcceptMultilineMatchesUpstream] で固定する。
 var acceptableFixtures = []string{"ml-continuation-looks-like-row", "ml-source-translated-2col"}
 
-// acceptGuide は、止めたときの直し方が案内する、通すための指定を取り出す。
-var acceptGuide = regexp.MustCompile(`--accept-multiline (\S+) を付けると書けます。`)
+// acceptGuide は、止めたときの直し方が案内する、通すための指定を取り出す。値は、
+// シェルに貼れるよう二重引用符で囲んで出ることがある（shellWord）。
+var acceptGuide = regexp.MustCompile(`--accept-multiline ("[^"]*"|\S+) を付けると書けます。`)
+
+// pasteWords は、1行をシェルに貼ったときと同じく語に分ける。空白で分け、二重引用符の
+// 中の空白では分けず、二重引用符は取り除く。PowerShell・cmd・bash に共通する読み方
+// だけをまねる（$ などの読み替えはしない。そうした文字のある値は、案内が書き直すよう
+// 添える）。
+func pasteWords(line string) []string {
+	var words []string
+	var cur strings.Builder
+	inWord, quoted := false, false
+	for _, r := range line {
+		switch {
+		case r == '"':
+			quoted, inWord = !quoted, true
+		case (r == ' ' || r == '\t') && !quoted:
+			if inWord {
+				words = append(words, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(r)
+			inWord = true
+		}
+	}
+	if inWord {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+// guidedAccepts は、止めたときの直し方が案内した指定を、案内のとおりにシェルへ貼った
+// ときの引数（--accept-multiline と値の組）にして返す。同じ指定は1組にまとめる。
+// 貼ると1語にならない案内は、試験を落とす。
+func guidedAccepts(t *testing.T, stderr string) []string {
+	t.Helper()
+	var args []string
+	for _, m := range acceptGuide.FindAllStringSubmatch(stderr, -1) {
+		words := pasteWords("--accept-multiline " + m[1])
+		if len(words) != 2 {
+			t.Errorf("案内した指定が、貼ると1語にならない: %s → %q", m[1], words)
+			continue
+		}
+		if !slices.Contains(args, words[1]) {
+			args = append(args, words...)
+		}
+	}
+	return args
+}
 
 // TestPublishAcceptMultilineMatchesUpstream は、正しい複数行の値なのに飲み込みの確かめで
 // 止まる入力が、確かめたうえで通す指定（--accept-multiline）を付けると、上流と同じ
 // バイトと集計で書けることを見る（決まったことの 4 と 16）。
 //
-// 指定は、止めたときの直し方に出たものをそのまま写す。指定はレコード単位
-// （<ロケール>:<key>）で、直し方が写せる形で出すことも、ここで確かめる。
+// 指定は、止めたときの直し方に出たものを、シェルに貼ったときと同じく語に分けて
+// そのまま渡す（guidedAccepts）。指定はレコード単位（<ロケール>:<key>）で、直し方が
+// 写せる形で出すことも、ここで確かめる。
 func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
 	cases, exp := loadPublishFixture(t)
 	for _, name := range acceptableFixtures {
@@ -543,13 +593,10 @@ func TestPublishAcceptMultilineMatchesUpstream(t *testing.T) {
 		if code != exitProblems {
 			t.Fatalf("%s: 指定が無いときの終了コード = %d、1 を期待\n%s", name, code, stderr)
 		}
-		var extra []string
-		for _, m := range acceptGuide.FindAllStringSubmatch(stderr, -1) {
-			if !strings.HasPrefix(m[1], publishFixtureLocale+":") {
-				t.Errorf("%s: 案内した指定がレコード単位（%s:<key>）でない: %s", name, publishFixtureLocale, m[1])
-			}
-			if !slices.Contains(extra, m[1]) {
-				extra = append(extra, "--accept-multiline", m[1])
+		extra := guidedAccepts(t, stderr)
+		for i := 1; i < len(extra); i += 2 {
+			if !strings.HasPrefix(extra[i], publishFixtureLocale+":") {
+				t.Errorf("%s: 案内した指定がレコード単位（%s:<key>）でない: %s", name, publishFixtureLocale, extra[i])
 			}
 		}
 		if len(extra) == 0 {

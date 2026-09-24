@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -486,38 +487,40 @@ func TestPublishShapeWithPathHasNoLocale(t *testing.T) {
 	if err := os.WriteFile(path, []byte("key,translation\n"+keyHello+",\"a\n"+keyHiThere+",b\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code, _, stderr := runCLI("publish", "--root", root, "--path", path)
+	code, _, stopped := runCLI("publish", "--root", root, "--path", path)
 	if code != exitProblems {
-		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+		t.Fatalf("終了コード = %d、1 を期待\n%s", code, stopped)
 	}
 	spec := path + ":" + keyHello
-	checkContains(t, "標準エラー", stderr, []string{
+	// Windows のパスはバックスラッシュを含むので、二重引用符で囲んで案内する（shellWord）。
+	guided, _ := shellWord(spec)
+	checkContains(t, "標準エラー", stopped, []string{
 		"dwloc:   " + jaPublishedPath + "（いまの公開ファイル）",
-		"--accept-multiline " + spec + " を付けると書けます。",
+		"--accept-multiline " + guided + " を付けると書けます。",
 	})
-	if strings.Contains(stderr, "ja: ") || strings.Contains(stderr, "ja:"+keyHello) {
-		t.Errorf("--path なのにロケールを付けている:\n%s", stderr)
+	if strings.Contains(stopped, "ja: ") || strings.Contains(stopped, "ja:"+keyHello) {
+		t.Errorf("--path なのにロケールを付けている:\n%s", stopped)
 	}
-	if strings.Contains(stderr, "--locale") || strings.Contains(stderr, "このロケール") {
-		t.Errorf("--path なのにロケールで案内している:\n%s", stderr)
+	if strings.Contains(stopped, "--locale") || strings.Contains(stopped, "このロケール") {
+		t.Errorf("--path なのにロケールで案内している:\n%s", stopped)
 	}
 
 	// ファイルだけの指定（ロケール単位にあたる古い形）は、レコード単位で指定するよう
 	// 案内して止める。
-	code, _, stderr = runCLI("publish", "--root", root, "--path", path, "--accept-multiline", path)
+	code, _, stderr := runCLI("publish", "--root", root, "--path", path, "--accept-multiline", path)
 	if code != exitError {
 		t.Fatalf("ファイルだけの指定の終了コード = %d、2 を期待\n%s", code, stderr)
 	}
 	checkContains(t, "標準エラー", stderr, []string{"--accept-multiline はレコード単位で指定してください: " + path + "（"})
 
-	// 案内どおりに写すと書ける。
-	code, _, stderr = runCLI("publish", "--root", root, "--path", path, "--accept-multiline", spec)
+	// 案内をシェルに貼ったとおりに渡すと書ける。
+	code, _, stderr = runCLI(append([]string{"publish", "--root", root, "--path", path}, guidedAccepts(t, stopped)...)...)
 	if code != exitOK {
 		t.Fatalf("--accept-multiline を付けた終了コード = %d\n%s", code, stderr)
 	}
 	checkContains(t, "標準エラー", stderr, []string{
 		"--accept-multiline の指定で、次の行を正しい複数行の値として通します。",
-		"指定: --accept-multiline " + spec,
+		"指定: --accept-multiline " + guided,
 	})
 }
 
@@ -963,9 +966,10 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		}
 		labelA := "dwloc:   a/strings.csv（いまの公開ファイル）"
 		labelB := "dwloc:   b/strings.csv（いまの公開ファイル）"
+		guidedB, _ := shellWord(b + ":" + helloKey)
 		checkContains(t, "通した行", passed, []string{publishAcceptText, labelA})
 		checkContains(t, "止めた行", stopped, []string{
-			labelB, "--accept-multiline " + b + ":" + helloKey + " を付けると書けます。", "読み違える形が 1 か所あります。",
+			labelB, "--accept-multiline " + guidedB + " を付けると書けます。", "読み違える形が 1 か所あります。",
 		})
 		if strings.Contains(passed, labelB) || strings.Contains(stopped, labelA) {
 			t.Errorf("指定していない b を通したか、指定した a を止めている:\n%s", stderr)
@@ -987,10 +991,10 @@ func TestPublishAcceptMultiline(t *testing.T) {
 			"line:aaaaaaaa,L01 Ryan,Ryan_1_intro,1,Ryan,\"Hallo\n,,,,,Welt\"\n"
 		root := makeTree(t, map[string]string{"data/script_order.csv": scriptOrderCSV, "a/strings.csv": published})
 		a := filepath.Join(root, "a", "strings.csv")
-		_, _, stderr := runCLI("publish", "--root", root, "--path", a)
-		spec := a + ":line:aaaaaaaa"
-		checkContains(t, "標準エラー", stderr, []string{"--accept-multiline " + spec + " を付けると書けます。"})
-		code, _, stderr := runCLI("publish", "--root", root, "--path", a, "--accept-multiline", spec)
+		_, _, stopped := runCLI("publish", "--root", root, "--path", a)
+		guided, _ := shellWord(a + ":line:aaaaaaaa")
+		checkContains(t, "標準エラー", stopped, []string{"--accept-multiline " + guided + " を付けると書けます。"})
+		code, _, stderr := runCLI(append([]string{"publish", "--root", root, "--path", a}, guidedAccepts(t, stopped)...)...)
 		if code != exitOK {
 			t.Fatalf("終了コード = %d\n%s", code, stderr)
 		}
@@ -999,6 +1003,37 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		if code != exitError {
 			t.Fatalf("綴りの違う台詞ID: 終了コード = %d、2 を期待\n%s", code, stderr)
 		}
+	})
+
+	t.Run("パスに空白や括弧があれば二重引用符で囲んで案内し、貼るとそのまま通る", func(t *testing.T) {
+		// Steam の既定の場所（Program Files (x86)）と、ゲームのフォルダー名（Drag'n Wash）の
+		// 形。引用符で囲まずに案内すると、貼ったときにシェルが空白で語に割り、使い方の誤り
+		// （終了コード2）になる（検証の指摘）。
+		root := makeTree(t, map[string]string{
+			"data/script_order.csv":                       scriptOrderCSV,
+			"Program Files (x86)/Drag'n Wash/strings.csv": dePublished,
+		})
+		p := filepath.Join(root, "Program Files (x86)", "Drag'n Wash", "strings.csv")
+		code, _, stopped := runCLI("publish", "--root", root, "--path", p)
+		if code != exitProblems {
+			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stopped)
+		}
+		quoted := `"` + p + ":" + helloKey + `"`
+		checkContains(t, "標準エラー", stopped, []string{"--accept-multiline " + quoted + " を付けると書けます。"})
+		if strings.Contains(stopped, publishAcceptShellNote) {
+			t.Errorf("囲めば貼れる値に、書き直す案内を添えている:\n%s", stopped)
+		}
+		args := guidedAccepts(t, stopped)
+		if want := []string{"--accept-multiline", p + ":" + helloKey}; !slices.Equal(args, want) {
+			t.Fatalf("案内を貼ったときの引数 = %q、%q を期待", args, want)
+		}
+		code, stdout, stderr := runCLI(append([]string{"publish", "--root", root, "--path", p}, args...)...)
+		if code != exitOK {
+			t.Fatalf("案内を貼った終了コード = %d\n%s", code, stderr)
+		}
+		// 通した行の指定も、次に書くときに貼れる形で出す。
+		checkContains(t, "標準エラー", stderr, []string{"指定: --accept-multiline " + quoted})
+		checkContains(t, "標準出力", stdout, []string{"1 件を書き出しました。"})
 	})
 
 	t.Run("--path に無いファイルの指定は誤りにする", func(t *testing.T) {
@@ -1105,6 +1140,21 @@ func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
 		if !strings.Contains(byPath, "--accept-multiline some/file.csv:"+keyHello+" を付けると書けます。") {
 			t.Errorf("%s: --path で走らせたときの案内が違う: %s", id, byPath)
 		}
+		if strings.Contains(byLocale+byPath, publishAcceptShellNote) {
+			t.Errorf("%s: そのまま貼れる値に、書き直す案内を添えている: %s / %s", id, byLocale, byPath)
+		}
+		// パスに空白や括弧があれば、二重引用符で囲んで案内する。
+		spaced := shapeFix(publish.Hazard{Path: `C:\Program Files (x86)\Steam\strings.csv`, Why: why, Key: keyHello, KeyRecords: 1})
+		if !strings.Contains(spaced, `--accept-multiline "C:\Program Files (x86)\Steam\strings.csv:`+keyHello+`" を付けると書けます。`) ||
+			strings.Contains(spaced, publishAcceptShellNote) {
+			t.Errorf("%s: 空白のあるパスの案内が違う: %s", id, spaced)
+		}
+		// 二重引用符の中でもシェルによっては読み替える文字（$ など）があれば、囲んだうえで、
+		// 使うシェルに合わせて書き直すよう添える。
+		dollar := shapeFix(publish.Hazard{Path: `C:\$work\strings.csv`, Why: why, Key: keyHello, KeyRecords: 1})
+		if !strings.Contains(dollar, `--accept-multiline "C:\$work\strings.csv:`+keyHello+`" を付けると書けます。`+publishAcceptShellNote) {
+			t.Errorf("%s: $ のあるパスの案内が違う: %s", id, dollar)
+		}
 
 		// key が無いか、指定に使えない文字を含むなら、key を出さずに通せないと書く。
 		// 印に置き換えた key（publish.Visible）を写しても当たらないので、出さない。
@@ -1134,6 +1184,53 @@ func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
 	game := shapeFix(publish.Hazard{Locale: "ja", GameBase: true, Why: reason.New(reason.PublishUnclosedQuote, "")})
 	if !strings.HasPrefix(game, publishGameBaseFix) {
 		t.Errorf("ゲーム側の公開ファイルで写し直す案内を先に出していない: %s", game)
+	}
+}
+
+// TestShellWord は、通す指定の値をシェルに貼れる形にする規則を見る。どのシェルでも
+// 引用符なしで1語のまま届く文字だけの値はそのまま、それ以外は二重引用符で囲む。
+// 二重引用符の中でも読み替えるシェルのある文字があれば、そのまま貼れないと返す。
+func TestShellWord(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		exact    bool
+	}{
+		{"ja:" + keyHello, "ja:" + keyHello, true},
+		{"ja:line:0a0b0c01", "ja:line:0a0b0c01", true},
+		{"zh-Hans_x.y:" + keyHello, "zh-Hans_x.y:" + keyHello, true},
+		{"some/file.csv:" + keyHello, "some/file.csv:" + keyHello, true},
+		// 空白・括弧・'・バックスラッシュ（bash は引用符の外で取り除く）。
+		{`C:\Program Files (x86)\Steam\steamapps\common\Drag'n Wash\strings.csv:k`,
+			`"C:\Program Files (x86)\Steam\steamapps\common\Drag'n Wash\strings.csv:k"`, true},
+		{`C:\a\strings.csv:k`, `"C:\a\strings.csv:k"`, true},
+		{"ja (old):k", `"ja (old):k"`, true},
+		{"a&b;c|d<e>f^g:k", `"a&b;c|d<e>f^g:k"`, true},
+		// PowerShell はカンマで配列にし、bash は ~ を展開し、# から後ろをコメントにする。
+		{"a,b.csv:k", `"a,b.csv:k"`, true},
+		{"~/a.csv:k", `"~/a.csv:k"`, true},
+		{"#a.csv:k", `"#a.csv:k"`, true},
+		// ASCII のほかの文字（PowerShell は全角の空白で語を分ける）。
+		{"C:/ユーザー/a.csv:k", `"C:/ユーザー/a.csv:k"`, true},
+		{"a\u3000b.csv:k", "\"a\u3000b.csv:k\"", true},
+		// 二重引用符の中でも読み替えるシェルのある文字。
+		{`C:\$work\a.csv:k`, `"C:\$work\a.csv:k"`, false},
+		{"a`b.csv:k", "\"a`b.csv:k\"", false},
+		{"a!b.csv:k", `"a!b.csv:k"`, false},
+		{"a%TEMP%b.csv:k", `"a%TEMP%b.csv:k"`, false},
+		{`\\server\share\a.csv:k`, `"\\server\share\a.csv:k"`, false},
+		{"a\u201cb.csv:k", "\"a\u201cb.csv:k\"", false},
+		{"a\nb.csv:k", "\"a\nb.csv:k\"", false},
+	} {
+		got, exact := shellWord(tc.in)
+		if got != tc.want || exact != tc.exact {
+			t.Errorf("shellWord(%q) = %q, %v、%q, %v を期待", tc.in, got, exact, tc.want, tc.exact)
+		}
+		// 囲んだ値は、貼ったときに1語のまま、元の値に戻る。
+		if tc.exact {
+			if words := pasteWords("--accept-multiline " + got); len(words) != 2 || words[1] != tc.in {
+				t.Errorf("shellWord(%q) を貼ると %q", tc.in, words)
+			}
+		}
 	}
 }
 
