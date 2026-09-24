@@ -295,6 +295,107 @@ func TestExportChecksTheBaseBeforeTheLosses(t *testing.T) {
 	}
 }
 
+func TestExportRefusesUnsafeShapes(t *testing.T) {
+	// publish は、1行ずつ読むと訳を失う形のファイルを書く前に止める。画面の
+	// 書き出しも同じところで止めないと、切り詰めた訳や黙って落ちた行を、翻訳者が
+	// 自分の手でリポジトリへ写せてしまう。この形は失われる訳の確かめ（CheckLoss）
+	// では捕まらない。いまの公開ファイルも同じ読み方で読むからである。
+	const multiline = "ながい\nやく"
+	for _, tc := range []struct {
+		name string
+		// working はリポジトリの作業コピー。空なら置かない。
+		working string
+		// published は置き換える公開ファイル。空なら newTestRoot のまま。
+		published string
+	}{
+		{
+			name: "作業コピーの訳が行をまたぐ",
+			working: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！",
+				keyVanished + ",L01 Ryan,Ryan_1_intro,3,Ryan," + jaVanished,
+				keyUI + ",UI,,,UI,\"" + multiline + "\"",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "いまの公開ファイルの訳が行をまたぐ",
+			published: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"" + multiline + "\"",
+				"",
+			}, "\n"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newTestRoot(t)
+			for rel, body := range map[string]string{
+				filepath.Join("Translations", "_discovered", "ja.working.csv"): tc.working,
+				filepath.Join("Translations", "ja", "strings.csv"):             tc.published,
+			} {
+				if body == "" {
+					continue
+				}
+				path := filepath.Join(root, rel)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := newTestServer(t, Options{Root: root, UILang: "ja"})
+
+			rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("状態コードが %d、409 を期待:\n%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if want := s.cat.T(s.cat.lookup("ja"), "error.export_unsafe_shape", "count", "1"); !strings.Contains(body, want) {
+				t.Errorf("形の文面になっていない: %q", body)
+			}
+			// どのファイルの何行目かはパスを含むので出さない。訳の中身も出さない。
+			for _, leak := range []string{root, filepath.ToSlash(root), ".csv", "ながい"} {
+				if strings.Contains(body, leak) {
+					t.Errorf("誤りの文面に %q が出ている: %q", leak, body)
+				}
+			}
+			// 編集中のファイルはそのまま出せる。止めるのは publish の形だけである。
+			rec = do(t, s, http.MethodGet, "/api/export?locale=ja&form=working", true, nil)
+			if rec.Code != http.StatusOK {
+				t.Errorf("編集中のファイルの書き出しまで止めている: %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestExportChecksTheShapeBeforeTheBase(t *testing.T) {
+	// 守りの順番は publish と同じ（形 → 土台の食い違い → 失われる訳）。
+	// 形の崩れたファイルは、あとの2つの確かめも読み違えるので、先に止める。
+	base := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		// 土台はコミット済みより古い訳を持つ（repo は「もしもし？」）。
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+		"",
+	}, "\n")
+	working := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\n？\"",
+		"",
+	}, "\n")
+	game := newGameWithBase(t, base, working)
+	s := newTestServer(t, Options{Game: game, UILang: "ja"})
+
+	rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("状態コードが %d、409 を期待:\n%s", rec.Code, rec.Body.String())
+	}
+	if want := s.cat.T(s.cat.lookup("ja"), "error.export_unsafe_shape", "count", "1"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("土台の食い違いより先に形を見ていない: %q", rec.Body.String())
+	}
+}
+
 // TestExportPublishedWritesTheFirstFileOfANewLocaleFromTheGame は、公開ファイルが
 // まだ無いロケールでも、ゲーム側の作業コピーから公開の形を書き出せることを見る。
 //

@@ -30,7 +30,8 @@ Content-Disposition: attachment を付けるだけで、どこへ書くかは知
 
 	published   dwloc publish が作るのと同じCSV。キーがハッシュになり、行の
 	            並びが台本の順になる。そのままリポジトリへ入れられる形。
-	            publish が書く前に見る守りを、同じ順で同じだけ通る。
+	            publish が書く前に見る守り（形、土台の食い違い、失われる訳）を、
+	            同じ順で同じだけ通る。
 	working     いま書き込んでいるファイルをそのまま写したもの。作業コピーが
 	            あればそれ、無ければ公開ファイル自身になる。
 */
@@ -114,6 +115,28 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 	}
 
 	/*
+		入力といまの公開ファイルが、1行ずつ読むと訳を失う形になっていないかを
+		最初に見る。publish と同じ順（cmd/dwloc の runPublish は、組み立て →
+		形 → 土台の食い違い → 失われる訳、の順で見る）。
+
+		この形のファイルは、下の2つの確かめも同じ読み方で読むので、読み違えた
+		まま「そろっている」「失われない」と判断してしまう。ここを通さないと、
+		publish が止める中身（切り詰めた訳や、黙って落ちた行）を画面からは
+		書き出せる。
+	*/
+	hazards, err := publish.CheckTargetShape(*target)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(hazards) > 0 {
+		// 件数だけを返す。どのファイルの何行目かはパスを含むので画面へ出さない。
+		// 内訳と直し方は dwloc publish が出す。
+		http.Error(w, s.cat.T(cat, "error.export_unsafe_shape",
+			"count", strconv.Itoa(len(hazards))), http.StatusConflict)
+		return nil, "", nil
+	}
+
+	/*
 		ゲーム側の作業コピーを入力にしたときは、その作業コピーが建っている土台が
 		コミット済みとそろっているかを先に見る。
 
@@ -121,7 +144,7 @@ func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *pu
 		これを捕まえられない。訳は消えておらず、書き換わっただけだからである。
 
 		順番も publish と同じにする（cmd/dwloc の runPublish は、組み立て →
-		土台の食い違い → 失われる訳、の順で見る）。順番が違うと、同じ状態に
+		形 → 土台の食い違い → 失われる訳、の順で見る）。順番が違うと、同じ状態に
 		対して画面と publish が別の理由を出す。
 
 		コミット済みの公開ファイルがまだ無いロケール（新しい言語の最初の書き出し）は

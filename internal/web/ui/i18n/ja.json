@@ -40,6 +40,7 @@
     "error.unknown_form": "書き出す形が違います。",
     "error.export_failed": "書き出せませんでした。ファイルは1つも作っていません。",
     "error.export_would_lose": "この形で書き出すと、いまコミットされている訳が {count} 件、新しい出力に残りません。1バイトも書き出していません。コミット済みの行が作業コピーに無いときに起きます（画面の「publish で捨てられる行」は作業コピーの側を数えるので、0 のままでもこうなります）。作業コピーに並ぶのは、ゲームがその文字を1度でも読み込んだ行だけです。足りないのが Mod や設定の画面の文字なら、その画面をゲーム内で一度開いてから、F1（既定）→ Translation → Export working copy で作業コピーを作り直してください。どの行かは dwloc publish が出します。",
+    "error.export_unsafe_shape": "1行ずつ読むと訳を失う形のファイルなので、書き出しませんでした（{count} か所）。引用符で囲んだ値が行をまたいでいる、引用符が閉じていない、ヘッダーに key 列か translation 列が無い、のどれかです。どのファイルの何行目か、どう直すかは dwloc publish が出します。",
     "error.export_would_roll_back": "ゲームに入っている翻訳が古いので、書き出しませんでした。ゲーム側とコミット済みで {count} 件の訳が食い違っています。作業コピーも古い訳を持つので、この形で書き出すと新しいコミットが巻き戻ります。ゲームへ最新の翻訳を入れ直してから、作業コピーを作り直してください。",
 
     "warn.value_normalized": "保存した値が入力と違います。ファイルにある値を出しています。",
@@ -210,6 +211,13 @@
     "reason.edit_bad_utf8": "訳が正しいUTF-8ではない",
     "reason.publish_row_gone": "この行が新しい出力に無い",
     "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる",
-    "reason.publish_base_drift": "ゲームに入っている訳が {locale} で {count} 件ちがう"
+    "reason.publish_base_drift": "ゲームに入っている訳が {locale} で {count} 件ちがう",
+    "reason.publish_no_key_column": "ヘッダーに key 列も source_en 列も無いので、どの行もキーを決められず、すべて捨てられる",
+    "reason.publish_no_translation_column": "ヘッダーに translation 列が無いので、すべての行が訳の無い行として読まれる",
+    "reason.publish_multiline_current": "引用符で囲んだ値が行をまたいでいる。1行ずつ読むと、値が最初の行で切れて訳が切り詰められる",
+    "reason.publish_multiline_translated": "引用符で囲んだ値が行をまたぎ、この行には訳が入っている。1行ずつ読むと、この訳は切り詰められるか、行ごと捨てられる",
+    "reason.publish_multiline_diverges": "引用符で囲んだ値が行をまたぎ、1行ずつ読むと続きの行が別の訳として読まれる",
+    "reason.publish_rows_unread": "空でない行があるのに、1行ずつ読むと1行も読めない。行の区切りが LF・CRLF・CR 以外になっている",
+    "reason.publish_unclosed_quote": "開いた引用符がファイルの終わりまで閉じない。全体として読むと、ここから後ろがすべて1つの値になる"
   }
 }

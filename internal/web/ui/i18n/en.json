@@ -40,6 +40,7 @@
     "error.unknown_form": "That is not a form this can write out.",
     "error.export_failed": "Could not write it out. No file was made.",
     "error.export_would_lose": "Writing this form out would leave {count} translations from the committed file out of the new output. Not a byte was written. This happens when committed rows are missing from the working copy (the \"dropped by publish\" count on screen looks at the working copy instead, so it can stay at 0). A working copy lists only the rows whose text the game has loaded at least once. If the missing rows are mod or settings screens, open those screens in the game once, then press F1 (the default) then Translation then Export working copy to make the working copy again. Run dwloc publish to see which rows.",
+    "error.export_unsafe_shape": "Nothing was written out: the file has a shape that loses translations when it is read one line at a time ({count} places). A quoted value spans lines, a quote is never closed, or the header lacks a key or translation column. dwloc publish shows which file and line, and how to fix it.",
     "error.export_would_roll_back": "The translations installed in the game are older, so nothing was written out. {count} translations differ between the game and the committed file. The working copy carries those older translations, so writing this form out would roll back newer commits. Put the latest translations into the game, then make the working copy again.",
 
     "warn.value_normalized": "The saved value differs from what you typed. The value in the file is shown.",
@@ -210,6 +211,13 @@
     "reason.edit_bad_utf8": "The translation is not valid UTF-8",
     "reason.publish_row_gone": "This row is not in the new output",
     "reason.publish_translation_cleared": "The new output leaves this row with an empty translation",
-    "reason.publish_base_drift": "The game has {count} different translations for {locale}"
+    "reason.publish_base_drift": "The game has {count} different translations for {locale}",
+    "reason.publish_no_key_column": "The header has neither a key column nor a source_en column, so no row can get a key and every row is dropped",
+    "reason.publish_no_translation_column": "The header has no translation column, so every row is read as untranslated",
+    "reason.publish_multiline_current": "A quoted value spans lines. Read one line at a time, the value stops at its first line and the translation is cut short",
+    "reason.publish_multiline_translated": "A quoted value spans lines and this row has a translation. Read one line at a time, the translation is cut short or the whole row is dropped",
+    "reason.publish_multiline_diverges": "A quoted value spans lines, and read one line at a time its continuation lines are read as other translations",
+    "reason.publish_rows_unread": "The file has non-empty lines, yet reading it one line at a time finds no rows. Its lines are separated by something other than LF, CRLF or CR",
+    "reason.publish_unclosed_quote": "A quote is opened and never closed before the end of the file. Read as a whole, everything after it becomes one value"
   }
 }

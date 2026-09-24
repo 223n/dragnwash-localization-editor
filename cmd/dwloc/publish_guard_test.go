@@ -112,12 +112,14 @@ func TestPublishWithGameCarriesNewTranslations(t *testing.T) {
 
 func TestPublishStopsWhenTranslationsWouldBeLost(t *testing.T) {
 	// 守りが効くこと。どの壊れ方でも、公開ファイルは1バイトも変わらない。
+	//
+	// ヘッダーの引用符が閉じていない作業コピー（workingBadHeader）は、この確認より
+	// 前の「1行ずつ読むと訳を失う形」の確認で止まる（TestPublishStopsOnUnsafeShapes）。
 	for _, tc := range []struct {
 		name    string
 		working string
 	}{
 		{"作業コピーが途中まで", workingPartial},
-		{"ヘッダーの引用符が閉じていない", workingBadHeader},
 		{"公開ファイルにある行の訳を空にした", workingCleared},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

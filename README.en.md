@@ -557,7 +557,8 @@ The original `Translations/ja/strings.csv` was 191,650 bytes with 1,721 data row
 
 In the second row, `source_en` and `translation` fuse into a single column name, so the `translation` column can no longer be looked up.  
 Every row is then taken as "translation empty" and dropped.  
-Before this check existed, that passed with exit code 0 and left the published file with nothing but a header line.
+Before this check existed, that passed with exit code 0 and left the published file with nothing but a header line.  
+Now that input is stopped earlier by the check in "publish does not write a file whose shape loses translations when read one line at a time" below (the exit code is the same `1`).
 
 In the last row, `ja/strings.csv` went from 191,650 bytes to 191,653 bytes.  
 The added translation row itself is 63 bytes.  
@@ -571,6 +572,49 @@ What it protects is the translations only.
 Even with a healthy working copy, the `speaker` column changes on 17 rows (`Ryan` and `Conrad` become `UI`) and 10 `UI` rows swap places.  
 That is because the working copy does not carry the `speaker` of rows that are not in the playback order.  
 No translation is lost, so it does not stop here.
+
+#### publish does not write a file whose shape loses translations when read one line at a time
+
+`publish` reads its input one physical line at a time, one line per record.  
+The upstream `tools/hash-strings.ps1` has moved to reading the whole file at once, but `dwloc` still reads line by line.  
+Read line by line, some files quietly lose translations.  
+And the check above reads the current published file the same way, so it cannot notice the loss.
+
+So before writing, it checks the shape of the input and of the current published file.  
+If any of the following applies, it stops without writing any locale (exit code `1`).  
+The checks run in this order: this shape check, the check of the translation in the game, and the check for lost translations.  
+`--dry-run` makes the same judgement.
+
+| Shape | File checked | Written as it is |
+| ---- | ---- | ---- |
+| The header has neither a `key` nor a `source_en` column, or no `translation` column | The input and the current published file | Every row is dropped |
+| A quoted value spans lines | The current published file | The translation is cut short at its first line |
+| A quoted value spans lines and that row has a translation | The input | The translation is cut short, or the whole row is dropped |
+| A quoted value spans lines and its continuation lines are read as other translations | The input | Translations nobody entered are published |
+| A quote is opened and never closed before the end of the file | The input and the current published file | Everything after it can be read as one value |
+| The file has non-empty lines, yet not a single row can be read | The input and the current published file | Every row is dropped |
+
+When it stops, it prints each case with the file, the line number, what would happen, and how to fix it.  
+It does not print the translations.  
+A working copy with only the two columns `source_en,translation` is valid input and passes.
+
+A value in the input that spans lines does not stop it when that row's translation is empty.  
+The working copy on the game side has a row whose source text (`source_en`) spans lines and whose translation is empty.  
+Changing the source text changes the key, so a translator cannot fix it.  
+That row is not published by either way of reading, so the output does not change.
+
+Translating a row whose source text spans lines makes it stop.  
+The current `dwloc publish` cannot publish that row.  
+Emptying that translation again lets `publish` go through for the other rows.  
+To publish that row, use `tools/hash-strings.ps1` or the in-game `Hash for commit`.
+
+A file whose line breaks are `CR` only does not stop it.  
+`dwloc` also splits lines at a lone `CR`, so it reads the file correctly (it writes `LF` back).  
+The upstream `tools/hash-strings.ps1` drops every translation in such a file.
+
+Blank lines, whitespace-only lines and comment lines above the header are skipped before the header is chosen.  
+This is how the upstream `tools/hash-strings.ps1` reads it too.  
+Before, a whitespace-only line became the header and every translation of that locale was lost.
 
 #### It stops when the translation in the game is older
 
@@ -767,21 +811,22 @@ There are two forms you can export.
 | The file being edited, as it is | Copies the file it is currently writing to, as it is. The working copy if there is one, otherwise the published file itself |
 
 "The form of the published file" goes through the same guards `publish` applies before it writes, in the same order and to the same extent.  
-If either one trips, it refuses without writing a single byte.  
+If any one trips, it refuses without writing a single byte.  
 Which rows are involved is printed by `dwloc publish`.
 
 | Reason for refusing | When it happens | How to fix it |
 | ---- | ---- | ---- |
+| A file whose shape loses translations when read one line at a time | A quoted value spans lines, a quote is never closed, or the header lacks a `key` or `translation` column | Run `dwloc publish` and fix the rows it reports, as it describes |
 | The translation in the game is older | The published file on the game side has different translations from what is committed. The working copy carries those old translations too, so exporting would roll a new commit back | Put the latest translations back into the game |
 | A committed translation would not survive in the new output | A row that exists in the committed file is missing from the working copy | Open the screen containing the missing rows once inside the game, then rebuild the working copy with `F1 → Translation → Export working copy` |
 
 Only rows whose text the game has loaded at least once appear in the working copy.  
 Text on the mod and settings screens is not loaded until you open that screen, so exporting without opening it leaves those rows out of the working copy.  
-If the committed file has a translation for them, the second case above applies.
+If the committed file has a translation for them, the third case above applies.
 
 "Rows dropped by publish" on the screen counts something different.  
 That one counts rows in the working copy whose key is broken and which `publish` therefore drops.  
-"Rows present in the committed file but missing from the working copy" are not counted, so the two cases above can apply even while it still reads 0 rows.
+"Rows present in the committed file but missing from the working copy" are not counted, so the second and third cases above can apply even while it still reads 0 rows.
 
 The "Save as" dialog only appears in browsers that support it.  
 In browsers that do not, it goes to your usual download folder.
@@ -936,6 +981,7 @@ It does not rewrite translations, so check the content before you move anything.
 `publish` assembles everything it targets before writing anything out.  
 If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  
+If a file has a shape that loses translations when read one line at a time, it also stops without writing.  
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
@@ -950,15 +996,16 @@ With `--path` it stops scanning `Translations` and converts only the file you na
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these four cases.
+1 comes back in these five cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
 - When `publish` judges that writing would lose translations and stops
+- When `publish` judges that a file has a shape that loses translations when read one line at a time and stops
 - When `publish` judges that the translation in the game is older and stops
 
-The last two are separate checks.  
-The difference and the way out are in "It stops when the translation in the game is older" above.
+The last three are separate checks.  
+The difference and the way out are in "publish does not write a file whose shape loses translations when read one line at a time" and "It stops when the translation in the game is older" above.
 
 #### Committing and opening a pull request
 

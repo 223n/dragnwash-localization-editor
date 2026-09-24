@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // publishUsage は publish の説明。
@@ -29,6 +30,16 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
 書き出す前に、いまの公開ファイルに入っている訳が新しい出力に残るかを確かめます。
 1つでも失われるなら、どのロケールも書かずに止まり、何が失われるかを表示します
 （終了コード 1）。--dry-run でも同じ判定をします。この確認は外せません。
+
+その前に、入力といまの公開ファイルの形も確かめます。publish は1物理行を
+1レコードとして読むので、次の形のファイルでは訳を黙って失います。見つけたら
+同じように止まり、どのファイルの何行目か、どう直せばよいかを表示します
+（終了コード 1）。
+  - ヘッダーに key 列も source_en 列も無い、または translation 列が無い
+  - 引用符で囲んだ値が行をまたいでいる。いまの公開ファイルなら必ず止まり、
+    入力なら、その行に訳が入っているか、1行ずつ読むと訳が変わるときに止まる
+  - 閉じない引用符がファイルの終わりまで続く
+  - 空でない行があるのに、行の区切りを読み違えて1行も読めない
 
 ゲーム側の作業コピーを入力にしたときは、その前にもう1つ確かめます。ゲームに
 入っている翻訳がコミット済みと食い違っていたら、同じように止まります。Mod は
@@ -69,8 +80,8 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
 
 終了コード:
   0   成功
-  1   書くと訳が失われる、またはゲームに入っている翻訳が古いので止めた
-      （どちらも1バイトも書いていません）
+  1   書くと訳が失われる、1行ずつ読むと訳を失う形のファイルがある、または
+      ゲームに入っている翻訳が古いので止めた（どれも1バイトも書いていません）
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、など）
 `
 
@@ -255,6 +266,13 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		built[i], stats[i] = out, st
 	}
 
+	// 入力といまの公開ファイルが、1行ずつ読むと訳を失う形になっていないかを
+	// 最初に見ます。この形のファイルは、下の2つの確認も同じ読み方で読むので、
+	// 読み違えたまま「そろっている」「失われない」と判断してしまいます。
+	if code := reportShape(*root, targets, stderr); code != exitOK {
+		return code
+	}
+
 	// ゲーム側の作業コピーを入力にしたロケールでは、その作業コピーが建っている
 	// 土台がコミット済みとそろっているかを先に見ます。ずれていると、訳は消えない
 	// まま古い版へ巻き戻るので、次の reportLosses では捕まりません。
@@ -298,6 +316,108 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	}
 	fmt.Fprintf(stdout, "%d 件を書き出しました。\n", len(targets))
 	return exitOK
+}
+
+// publishShapeText は、1行ずつ読むと訳を失う形のファイルを見つけたときの見出しです。
+//
+// 「訳が失われる」（publishLossText）と文面を分けてあるのは、直す先が違うからです。
+// あちらは入力が途中までか壊れていることを疑いますが、こちらはファイルの形その
+// ものを直します。どの行をどう直すかは、1件ずつ下に添えます。
+const publishShapeText = `dwloc: 1行ずつ読むと訳を失う形のファイルがあるので、1バイトも書きませんでした。
+dwloc:       publish は1物理行を1レコードとして読みます。下の行はこの読み方では読み違え、
+dwloc:       書き出すと訳が切り詰められたり、黙って落ちたりします。
+`
+
+// publishShapeFix は、形ごとの直し方です。キーは reason の識別子です。
+//
+// 行をまたぐ値のうち、原文（source_en）がまたいでいるものは翻訳者には直せません。
+// 原文を変えるとキー（原文のハッシュ）が変わるからです。そこで、公開できる別の
+// 道具と、訳を空に戻せばほかの行は publish できることを書いておきます。
+var publishShapeFix = map[string]string{
+	reason.PublishNoKeyColumn: "ヘッダーの行を key,section,node,order,speaker,translation などの形に直してください。" +
+		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
+	reason.PublishNoTranslationColumn: "ヘッダーの行に translation 列を入れてください。" +
+		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
+	reason.PublishMultilineCurrent: "その値の改行を取り除いて1行にまとめてから、もう一度実行してください。",
+	reason.PublishMultilineTranslated: "その行の訳を空に戻すと、ほかの行は publish できます（その訳は公開されません）。" +
+		"行をまたぐ値のある行を公開するには、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。",
+	reason.PublishMultilineDiverges: "訳の入っていない行なら、作業コピーからその範囲の行を消しても公開される中身は変わりません。" +
+		"消せないときは、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。",
+	reason.PublishRowsUnread: "改行を LF か CRLF にして保存し直してから、もう一度実行してください。",
+	reason.PublishUnclosedQuote: "引用符を閉じるか取り除いてから、もう一度実行してください。" +
+		"値の中の \" は \"\" と2つ重ねて書きます。",
+}
+
+// publishShapeListMax は、形の崩れを何件まで並べるかです。publishLossListMax と
+// 同じ理由で切ります。
+const publishShapeListMax = 20
+
+// reportShape は、1行ずつ読むと訳を失う形のファイルを報告します。
+// 1件も無ければ exitOK を返します。
+//
+// 1件でもあれば exitProblems（1）で、どのロケールも書きません。reportLosses と
+// 同じく、読んだうえで「書けば訳を失う」と分かったので 1 です。読めなくて
+// 確かめられなかったときだけが 2 で、そのときの文面は reportLosses と同じにします。
+// どちらの確認でも、読めないファイルに対してすることは同じだからです。
+func reportShape(root string, targets []publish.Target, stderr io.Writer) int {
+	var found []publish.Hazard
+	for _, t := range targets {
+		hazards, err := publish.CheckTargetShape(t)
+		if err != nil {
+			path := t.Output
+			var shapeErr *publish.ShapeError
+			if errors.As(err, &shapeErr) {
+				path, err = shapeErr.Path, shapeErr.Err
+			}
+			fmt.Fprintf(stderr,
+				"dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
+				displayPath(root, path), err)
+			return exitError
+		}
+		found = append(found, hazards...)
+	}
+	if len(found) == 0 {
+		return exitOK
+	}
+
+	fmt.Fprint(stderr, publishShapeText)
+	lastFile := ""
+	for i, h := range found {
+		if i >= publishShapeListMax {
+			fmt.Fprintf(stderr, "dwloc:       ほかに %d か所あります。\n", len(found)-i)
+			break
+		}
+		file := fileLabel(root, h)
+		if file != lastFile {
+			fmt.Fprintf(stderr, "dwloc:   %s\n", file)
+			lastFile = file
+		}
+		fmt.Fprintf(stderr, "dwloc:       %s: %s\n", lineRange(h.Line, h.EndLine), h.Why)
+		fmt.Fprintf(stderr, "dwloc:         直し方: %s\n", publishShapeFix[h.Why.ID])
+	}
+	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(found))
+	return exitProblems
+}
+
+// fileLabel は、報告に出すファイルの見出しです。ロケールと、入力か書き出し先かを添えます。
+func fileLabel(root string, h publish.Hazard) string {
+	role := "入力"
+	if h.Current {
+		role = "いまの公開ファイル"
+	}
+	return fmt.Sprintf("%s%s（%s）", localePrefix(h.Locale), displayPath(root, h.Path), role)
+}
+
+// lineRange は物理行の範囲を「N行目」「N〜M行目」「ファイル全体」の形にします。
+func lineRange(line, end int) string {
+	switch {
+	case line == 0:
+		return "ファイル全体"
+	case end <= line:
+		return fmt.Sprintf("%d行目", line)
+	default:
+		return fmt.Sprintf("%d〜%d行目", line, end)
+	}
 }
 
 // publishBaseDriftText は、ゲームに入っている訳がコミット済みと食い違って
