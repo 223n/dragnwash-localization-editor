@@ -140,7 +140,9 @@ func Parse(data []byte) *File {
 		switch {
 		case strings.HasPrefix(body, "#"):
 			// 生の先頭1文字だけを見る前方一致。トリムしないので " #x" はデータ行。
-			// csvfile.KeepContentLines と同じ判定にそろえてある。
+			// validate（csvfile.ReadPythonRecords）は引用符の偶奇も持ち回るので、
+			// 奇数個の '"' を含む行のあとでは判定が割れうる。この編集モデルは
+			// 複数行のレコードを扱わないので、偶奇は持ち回らない。
 			line.Kind = KindComment
 		case !isRecord(body):
 			line.Kind = KindBlank

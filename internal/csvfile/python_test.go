@@ -1,7 +1,9 @@
 package csvfile
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -54,28 +56,61 @@ func TestSplitPythonLines(t *testing.T) {
 	}
 }
 
-func TestKeepContentLines(t *testing.T) {
-	text := "key,translation\n" + // 1
-		"\n" + // 2
-		"# 見出し\n" + // 3
-		"   \n" + // 4
-		" # 先頭に空白があるのでコメントではない\n" + // 5
-		"\r\n" + // 6
-		"a,b\n" + // 7
-		"\x1c\n" + // 8 Python の str.isspace() は U+001C を空白とみなす
-		"c,d" // 9
-
-	kept := KeepContentLines(SplitPythonLines([]byte(text)))
-	wantNumbers := []int{1, 5, 7, 9}
-	var gotNumbers []int
-	for _, line := range kept {
-		gotNumbers = append(gotNumbers, line.Number)
+// TestPythonCommentLines は、上流 c8fda90 の comment_lines と同じ行をコメントと
+// 見なすことを確かめる。
+func TestPythonCommentLines(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		// want はコメントと見なす行の番号（1始まり）。
+		want []int
+	}{
+		{
+			name: "行頭の'#'だけがコメント",
+			text: "key,translation\n# 見出し\n #先頭に空白\na,b\n",
+			want: []int{2},
+		},
+		{
+			name: "引用値の途中の'#'行はコメントではない",
+			text: "key,translation\na,\"ひとつ\n#ふたつ\"\n# 見出し\n",
+			want: []int{4},
+		},
+		{
+			// 偶奇は裸の '"' も数える。後ろの '#' 行はコメントに見えなくなる。
+			name: "裸の引用符のあとは'#'行もデータ",
+			text: "key,translation\na,5\" 画面\n\n# 見出し\nb,c\n",
+			want: nil,
+		},
+		{
+			// コメント行の引用符は数えない。数えると後ろの見出しを見失う。
+			name: "コメント行の引用符は偶奇に入らない",
+			text: "# メモ,\"開いたまま\na,b\n# 見出し\n",
+			want: []int{1, 3},
+		},
+		{
+			name: "空行と空白だけの行はコメントではない",
+			text: "\n   \n#\n",
+			want: []int{3},
+		},
+		{
+			name: "CRLFとCRでも行ごとに決まる",
+			text: "# ひとつ\r\na,\"ふた\r\n#つ\"\r# みっつ\r",
+			want: []int{1, 4},
+		},
 	}
-	if !slices.Equal(gotNumbers, wantNumbers) {
-		t.Errorf("残った行番号 = %v, want %v", gotNumbers, wantNumbers)
-	}
-	if len(kept) > 0 && kept[0].Text != "key,translation\n" {
-		t.Errorf("行の本文 = %q。終端の改行を落としてはいけない", kept[0].Text)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := SplitPythonLines([]byte(tt.text))
+			var got []int
+			for i, isComment := range pythonCommentLines(lines) {
+				if isComment {
+					got = append(got, lines[i].Number)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("コメントの行 = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -189,7 +224,10 @@ func TestParsePythonRecords(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			records := ParsePythonRecords(numberedLines(tt.lines))
+			records, err := ParsePythonRecords(numberedLines(tt.lines))
+			if err != nil {
+				t.Fatalf("ParsePythonRecords が失敗した: %v", err)
+			}
 			got := make([][]string, 0, len(records))
 			for _, r := range records {
 				got = append(got, r.Fields)
@@ -204,7 +242,7 @@ func TestParsePythonRecords(t *testing.T) {
 // TestParsePythonRecordsLineNumbers は、報告用の行番号の対応付け（移植仕様 R15）を
 // 確かめる。期待値は仕様に載っている元実装での実測値と同じ組み合わせ。
 func TestParsePythonRecordsLineNumbers(t *testing.T) {
-	// コメント行と空行を落としたあとの kept を模した入力。
+	// 途中の行を落とした並びを模した入力。行番号は飛んでいてよい。
 	kept := []Line{
 		{Number: 1, Text: "key,translation\n"},
 		{Number: 4, Text: "abc,\"multi\n"},
@@ -212,7 +250,10 @@ func TestParsePythonRecordsLineNumbers(t *testing.T) {
 		{Number: 6, Text: "def,x\n"},
 	}
 
-	records := ParsePythonRecords(kept)
+	records, err := ParsePythonRecords(kept)
+	if err != nil {
+		t.Fatalf("ParsePythonRecords が失敗した: %v", err)
+	}
 	if len(records) != 3 {
 		t.Fatalf("レコード数 = %d, want 3", len(records))
 	}
@@ -244,26 +285,166 @@ func TestParsePythonRecordsLineNumbers(t *testing.T) {
 	}
 }
 
-// TestReadPythonLines は、読み込みから行の取捨までを通しで確かめる。
-func TestReadPythonLines(t *testing.T) {
-	text := bom + "key,translation\n# 見出し\n\n0123456789abcdef,訳\n"
-	kept := ReadPythonLines([]byte(text))
-	if len(kept) != 2 {
-		t.Fatalf("残った行数 = %d, want 2", len(kept))
+// TestReadPythonRecords は、公開ファイルの読み込みから、コメントと空行を捨てる
+// ところまでを通しで確かめる。
+func TestReadPythonRecords(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []struct {
+			number int
+			fields []string
+		}
+	}{
+		{
+			name: "BOMとコメントと空行",
+			text: bom + "key,translation\n# 見出し\n\n0123456789abcdef,訳\n",
+			want: []struct {
+				number int
+				fields []string
+			}{
+				{1, []string{"key", "translation"}},
+				{4, []string{"0123456789abcdef", "訳"}},
+			},
+		},
+		{
+			// 上流 f816618 から、空白だけの行は1フィールドのレコードとして残る。
+			name: "空白だけの行は残る",
+			text: "key,translation\n   \n\t\n",
+			want: []struct {
+				number int
+				fields []string
+			}{
+				{1, []string{"key", "translation"}},
+				{2, []string{"   "}},
+				{3, []string{"\t"}},
+			},
+		},
+		{
+			// 上流 c8fda90 から、引用値の途中の '#' 行と空行は値の一部になる。
+			name: "引用値の途中の'#'行と空行は値に残る",
+			text: "key,translation\na,\"ひと\n\n#つ\"\nb,c\n",
+			want: []struct {
+				number int
+				fields []string
+			}{
+				{1, []string{"key", "translation"}},
+				{2, []string{"a", "ひと\n\n#つ"}},
+				{5, []string{"b", "c"}},
+			},
+		},
+		{
+			// 上流はコメント行も csv.reader に通すので、開いたままの引用符が後ろの
+			// 行を飲み込む。ゲームと同じくコメント行はパーサーに渡さない。
+			name: "コメント行の引用符はレコードを開かない",
+			text: "key,translation\n# メモ,\"開いたまま\na,\nb,c\n",
+			want: []struct {
+				number int
+				fields []string
+			}{
+				{1, []string{"key", "translation"}},
+				{3, []string{"a", ""}},
+				{4, []string{"b", "c"}},
+			},
+		},
+		{
+			// 偶奇の上ではコメントでも、パーサーが前のレコードの引用値を読んでいる
+			// 最中なら値の一部として渡す。上流も同じ行を値に入れる。
+			name: "引用値の途中に来た偶奇上のコメント行は値に入る",
+			text: "key,a,b\nk,x\"y,\"c\n#z\"\nd,e,f\n",
+			want: []struct {
+				number int
+				fields []string
+			}{
+				{1, []string{"key", "a", "b"}},
+				{2, []string{"k", `x"y`, "c\n#z"}},
+				{4, []string{"d", "e", "f"}},
+			},
+		},
 	}
-	if kept[1].Number != 4 {
-		t.Errorf("2行目の物理行番号 = %d, want 4", kept[1].Number)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			records, err := ReadPythonRecords([]byte(tt.text))
+			if err != nil {
+				t.Fatalf("ReadPythonRecords が失敗した: %v", err)
+			}
+			if len(records) != len(tt.want) {
+				t.Fatalf("レコード数 = %d, want %d（%+v）", len(records), len(tt.want), records)
+			}
+			for i, w := range tt.want {
+				if records[i].Number != w.number {
+					t.Errorf("records[%d].Number = %d, want %d", i, records[i].Number, w.number)
+				}
+				if !slices.Equal(records[i].Fields, w.fields) {
+					t.Errorf("records[%d].Fields = %q, want %q", i, records[i].Fields, w.fields)
+				}
+			}
+		})
 	}
+}
 
-	records := ParsePythonRecords(kept)
-	if len(records) != 2 {
-		t.Fatalf("レコード数 = %d, want 2", len(records))
+// TestPythonFieldLimit は、フィールドの長さの上限を Python と同じところに置くことを
+// 確かめる。上限は文字数で、131072文字は通り、131073文字で csv.Error になる。
+func TestPythonFieldLimit(t *testing.T) {
+	long := func(s string, n int) string { return strings.Repeat(s, n) }
+
+	tests := []struct {
+		name string
+		text string
+		// wantLine は 0 なら成功。それ以外はエラーの行番号。
+		wantLine int
+	}{
+		{name: "ちょうど上限", text: "a," + long("x", PythonFieldLimit) + "\n"},
+		{name: "上限を1文字超える", text: "k\na," + long("x", PythonFieldLimit+1) + "\n", wantLine: 2},
+		{
+			// バイト数では上限の3倍でも、文字数で数えるので通る。
+			name: "多バイト文字でちょうど上限",
+			text: "a," + long("あ", PythonFieldLimit) + "\n",
+		},
+		{name: "多バイト文字で1文字超える", text: "a," + long("あ", PythonFieldLimit+1) + "\n", wantLine: 1},
+		{
+			// 引用値の中の改行も1文字に数える。エラーの行はレコードの先頭行ではなく、
+			// 超えた文字のある行（Python の reader.line_num）。
+			name:     "複数行の引用値は超えた行を指す",
+			text:     "k\na,\"b\n" + long("x", PythonFieldLimit-1) + "\nc\"\n",
+			wantLine: 3,
+		},
+		{
+			name:     "引用値の中の二重引用符も1文字",
+			text:     "a,\"" + long(`""`, PythonFieldLimit+1) + "\"\n",
+			wantLine: 1,
+		},
+		{
+			// 上流はコメント行も csv.reader に通すので、長すぎるコメント行でもエラーになる。
+			name:     "長すぎるコメント行",
+			text:     "k\n# " + long("x", PythonFieldLimit) + "\na\n",
+			wantLine: 2,
+		},
+		{
+			name: "カンマで区切られたコメント行は各フィールドが短ければ通る",
+			text: "k\n# " + long("x", PythonFieldLimit-2) + "," + long("y", PythonFieldLimit) + "\n",
+		},
 	}
-	if got, want := records[0].Fields, []string{"key", "translation"}; !slices.Equal(got, want) {
-		t.Errorf("ヘッダー = %q, want %q。BOM が剥がれていない可能性がある", got, want)
-	}
-	if records[1].Number != 4 {
-		t.Errorf("データ行の報告用行番号 = %d, want 4", records[1].Number)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ReadPythonRecords([]byte(tt.text))
+			if tt.wantLine == 0 {
+				if err != nil {
+					t.Fatalf("エラーになった: %v", err)
+				}
+				return
+			}
+			var perr *PythonParseError
+			if !errors.As(err, &perr) {
+				t.Fatalf("PythonParseError にならなかった: %v", err)
+			}
+			if perr.Line != tt.wantLine {
+				t.Errorf("行 = %d, want %d", perr.Line, tt.wantLine)
+			}
+			if want := "field larger than field limit (131072)"; perr.Message != want {
+				t.Errorf("文面 = %q, want %q", perr.Message, want)
+			}
+		})
 	}
 }
 

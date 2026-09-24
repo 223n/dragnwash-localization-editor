@@ -329,6 +329,8 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 ## 形式検証
 
+この節の R1〜R24 と境界条件は、003ed1e の`tools/check-translations.py`から抽出したものである。その後の上流の変更（f816618、c8fda90、cc01bfc、912f519）で読み方が変わり、検査が増えた。dwloc は上流の dev に合わせてある。変わった点はこの節の最後の「上流 dev への追従」にまとめた。食い違う箇所は、そちらが正しい。
+
 ### データ構造
 
 #### KeptLine
@@ -493,6 +495,8 @@ kept = [(i, line) for i, line in enumerate(f, start=1) if line.strip() and not l
 
 **Goでの注意**: 実装は素直に写せる。`strings.TrimSpace` は Unicode 空白を落とすが、Python の `str.strip()` も引数なしで Unicode 空白を落とすのでほぼ一致する（完全一致ではない。差異は openQuestions 参照）。
 
+**上流 dev での変更**: f816618 と c8fda90 で、この物理行の除去は無くなった。空白だけの行は1フィールドのレコードとして残り、コメントは引用符の偶奇で決める。下の「上流 dev への追従」を参照。
+
 #### R10. origin は kept の物理行番号だけを取り出した0始まり配列で、報告用行番号の復元に使う。
 
 `origin = [i for i, _ in kept]`、`reader = csv.reader(line for _, line in kept)`。csv.reader には物理行番号を持たない行テキストだけを渡すので、行番号の対応付けは origin が担う。
@@ -510,6 +514,8 @@ except StopIteration:
 メッセージに行番号は付かない（`{name}: empty file`）。ファイルサイズ0だけでなく、全行がコメント・空行の場合もここに来る。
 
 **Goでの注意**: —
+
+**上流 dev での変更**: f816618 以降、ここに来るのは「コメントと完全な空行だけ」のファイルである。空白だけの行が1本でもあれば、それがヘッダーとして比べられて R13 になる。その前に、CSV として読めなければ「could not be parsed as CSV」の1件を返す。
 
 #### R12. ヘッダーは3種類のみを受理する。リストの完全一致（順序・大文字小文字・空白すべて厳密）。
 
@@ -560,6 +566,8 @@ for row in reader:
 `reader.line_num` は「基になるイテレータから引いた行数（1始まりの累計）」。origin は0始まりなので、直前の line_num をそのまま添字にすると「次の行の先頭」を指す。実験で確認済み: kept=[(1,header),(4,'abc,"multi'),(5,'line"'),(6,'def,x')] のとき、`['abc','multi\nline']` は n=4、`['def','x']` は n=6 と報告される。ヘッダー自体が複数行にまたがっていても（line_num=2 等）正しく追随する。行を1つ返すには最低1行消費するため、`origin[consumed]` が範囲外になることは通常発生しない。
 
 **Goでの注意**: Go の `encoding/csv` は `Reader.FieldPos(0)` で行番号を取れるが、それは「パーサに渡した入力内の行番号」なので同じ復元処理が必要。より簡単なのは kept 構築時に各論理行の先頭物理行番号を自前で追跡する実装。忠実移植するなら「直前までの消費行数を保持し、それを origin の添字にする」ロジックをそのまま写すのが安全。
+
+**上流 dev での変更**: f816618 以降は origin を持たず、ファイル全体を csv.reader に通して「直前のレコードの `reader.line_num` + 1」をそのレコードの行番号にする。報告される番号は、いまも各レコードの先頭の物理行である。
 
 #### R16. フィールド数が width と異なる行は「expected N fields, got M」を報告し、その行の他の検証はすべてスキップする（continue）。
 
@@ -673,12 +681,12 @@ return 0
 
 - BOM: utf-8-sig はファイル先頭の EF BB BF のみ除去する。行途中や2個目のBOMは普通の文字として残り、ヘッダー完全一致に失敗して R13 のヘッダーエラーになる。
 - 改行コード: newline="" により \r\n は行文字列に保持される。行分割は \n / \r / \r\n すべてを終端として認識するため、旧Mac形式の単独 \r もそれぞれ別の物理行として数えられる。実ファイル ja/he は LF のみ。
-- 空白のみの行: `line.strip()` が偽になるので空行と同様に除去される。物理行番号の欠番になるだけで問題としては報告されない。
+- 空白のみの行: `line.strip()` が偽になるので空行と同様に除去される。物理行番号の欠番になるだけで問題としては報告されない。（f816618 以降は1フィールドのレコードとして残り、「expected N fields, got 1」かヘッダー不正になる）
 - コメント判定は先頭1文字のみ: `line.startswith("#")`。先頭に空白がある ` # foo` はコメントとみなされず、CSV行として解釈されてフィールド数不一致などになる。
-- 引用フィールドが複数行にまたがるケースで、その途中の行が空行または '#' 始まりだと、R9 の前処理がその物理行を丸ごと落としてしまい、CSVの構造が壊れる。実測でこの前処理はCSV構文を見ずに物理行単位で動く。現行の ja/he には複数行引用フィールドは存在しない（引用は8件すべて1行内、`""` エスケープ付き）が、翻訳者が改行入り翻訳を書くと発生しうる。
+- 引用フィールドが複数行にまたがるケースで、その途中の行が空行または '#' 始まりだと、R9 の前処理がその物理行を丸ごと落としてしまい、CSVの構造が壊れる。実測でこの前処理はCSV構文を見ずに物理行単位で動く。現行の ja/he には複数行引用フィールドは存在しない（引用は8件すべて1行内、`""` エスケープ付き）が、翻訳者が改行入り翻訳を書くと発生しうる。（c8fda90 以降は、引用の途中の空行と '#' 行は値の一部として残る）
 - 複数行にまたがる引用フィールドを含む行の報告行番号は「その行の先頭物理行」を指す。実測で kept=[(1,header),(4,'abc,"multi'),(5,'line"'),(6,'def,x')] のとき n=4 と n=6 になる。
 - ヘッダー自体が複数行にまたがっていても `consumed = reader.line_num` の初期化で正しく追随する。
-- 全行がコメントまたは空行のファイルは「empty file」（サイズ0と同じ扱い）。
+- 全行がコメントまたは空行のファイルは「empty file」（サイズ0と同じ扱い）。（f816618 以降、空白だけの行はここに含まれない）
 - 空の section / node は IDENT の `[A-Za-z0-9_]*` にマッチするので合法。実ファイル he の末尾に `e2b9759e2326caba,UI,,,UI,...` が存在し、node と order が空。
 - order 列と speaker 列は一切検証されない。speaker に英語原文が入っていても検出されない。
 - docstring の「contain no English source text (a source_en column is the tell)」に対応する専用コードは存在しない。source_en 列は R12 のヘッダー完全一致判定に落ちることで間接的に弾かれるだけで、他の列に英文が入っていても検出されない。
@@ -735,6 +743,7 @@ return 0
 
 - 根拠: `csv.field_size_limit()` の既定は 131072 文字で、これを超えるフィールドは `_csv.Error: field larger than field limit` を送出する（未捕捉）。また行に NUL が含まれると `_csv.Error: line contains NUL` になる。いずれも line 48/68 の経路で発生し、元実装はトレースバック終了する。Go の `encoding/csv` にはどちらの制限も無く、正常にパースして検証を続ける。
 - 直し方: edgeCases に2項目追加し、「Go 側では制限を再現しない（＝元実装より寛容になる）」ことを意図的な決定として記録する。CI での見え方（クラッシュ vs 正常終了）が変わる点も添える。
+- その後: 上流の f816618 が csv.Error を捕まえて1件の問題にするようになったため、dwloc もフィールド長の上限を再現した（下の「上流 dev への追従」）。NUL は Python 3.11 以降エラーにならず、上流の CI（3.12）でも dwloc でもただの文字として読む。
 
 ### 抽出が取りこぼしていた規則
 
@@ -760,9 +769,71 @@ return 0
 - `git ls-files` に渡すパスが絶対パスであること（`str(path)`）。Windows では `C:\...` 形式になるが git は受け付ける。Go で `filepath.Rel` した相対パスに変えると挙動が変わりうる（変わらない可能性が高いが未検証）。
 - ROOT の決定方法。Python はスクリプト位置から導くが、Go バイナリでは同じ方法が使えない。CLI 引数、カレントディレクトリからの `.git` 探索、ビルド時埋め込みのいずれを採るかは移植側の設計判断であり、元コードからは決まらない。
 - Translations ディレクトリ不在時や不正UTF-8時の未捕捉例外を、Go で「パニック相当」にするか「問題1件として報告して exit 1」にするか。元コードは前者だが、CI での見え方は大きく異なる。
-- 引用フィールド内の空行・'#' 始まり行が前処理で落ちる件が既知のバグなのか許容された制約なのかが不明。現行データでは表面化していないが、Go 側で先にCSVをパースしてからコメント除去する設計に変えると、この（意図せざる）挙動が消える。
+- 引用フィールド内の空行・'#' 始まり行が前処理で落ちる件が既知のバグなのか許容された制約なのかが不明。現行データでは表面化していないが、Go 側で先にCSVをパースしてからコメント除去する設計に変えると、この（意図せざる）挙動が消える。（決着: 上流が f816618 と c8fda90 で不具合として直した。dwloc も合わせた）
 - Go の `encoding/csv` は既定で `LazyQuotes=false` のため、非引用フィールド内の裸の `"` でエラーになる。Python の csv はこれを黙って受け入れる。互換性のため `LazyQuotes=true` にすべきかは要判断（true にすると別の解析差が生じる）。
 - Go の `encoding/csv` は引用フィールド内の `\r\n` を `\n` に正規化する。Python の csv（newline=""）は `\r\n` のまま保持する。翻訳文に CRLF を含む値があった場合に R20 の空判定や出力に差が出うるが、現行データでは未確認。
+
+### 上流 dev への追従
+
+この節だけは抽出結果ではない。003ed1e のあとに上流の`tools/check-translations.py`へ入った変更を、上流の dev（upstream/dev 9249232。origin/dev 63816a0 と`tools/`は同じ）で読み、Python 3.12.3（上流の CI と同じ Ubuntu 24.04）と 3.14.6 で実測して反映した。上の R1〜R24 や境界条件と食い違う場合は、こちらが正しい。
+
+基準は main ではなく dev に置いた。上流はこれまで dev をまとめて main へマージしてきた（56420df、#44）ので、dev の版は次のリリースでも main に入る見込みであり、その版に先に合わせておくためである。上流の現行の文書に、そう約束する記載があるわけではない。翻訳者の Pull Request は、これまでどおりフォークから main へ出す（上流 130d57e、2026-09-23。dev はメンテナーの作業をためる場所）。そのため Pull Request の CI は main の版で走る。main と dev の`tools/check-translations.py`の差は 912f519（credits.txt の状態語）だけで、ほかの変更は main にも入っている。
+
+したがって dwloc は、版の差の分（credits.txt の状態語）だけ main の CI より厳しい。ほかに、下の「写さなかった上流の不具合」にあたる入力（コメント行の引用符など）でも、dwloc だけが問題を報告する。main の CI が通す credits.txt を、dwloc は問題として報告することがある。いまの影響は小さい。upstream/main 56420df には credits.txt が1件も無く（upstream/dev は16件）、上流 dev の CONTRIBUTING は credits.txt をメンテナーが更新するものとしている。
+
+判定が割れる入力は、`internal/validate/upstream_test.go`に表として固定した。環境変数`DWLOC_UPSTREAM_CHECKER`に上流のスクリプトを渡すと、上流を実際に走らせて突き合わせる。
+
+#### 読み方の変更（f816618、c8fda90）
+
+| 項目 | 003ed1e まで | いま（上流 dev と dwloc） |
+| ---- | ---- | ---- |
+| 空白だけの行 | 物理行ごと落とす（R9） | 1フィールドのレコードとして残る。ヘッダーより上にあればヘッダー不正（R13）、下にあれば「expected N fields, got 1」 |
+| 完全な空行 | 物理行ごと落とす（R9） | 0フィールドのレコードとして捨てる。行番号は消費する |
+| コメント | 行頭が '#' の物理行を落とす（R9） | 引用符の偶奇を行をまたいで持ち回り、引用の外で行頭が '#' の行をコメントとする。複数行の引用値の途中にある '#' 行と空行は、値の一部として残る |
+| 偶奇の数え方 | なし | 引用符で囲まないフィールド中の裸の '"' も数える。`5" 画面`のあとでは偶奇が反転したままになり、続く '#' 行はデータとして読まれる。コメント行の引用符は数えない |
+| CSV として読めない | トレースバックで異常終了 | `{表示パス}:{行番号}: could not be parsed as CSV ({例外の文面})`の1件だけを返し、そのファイルのほかの検査はしない |
+| 行番号 | origin 配列（R10、R15） | 直前のレコードの`reader.line_num`+1。報告はいまも各レコードの先頭の物理行 |
+
+CSV として読めないのは、既定の dialect では「フィールドが`csv.field_size_limit()`の既定値 131072 文字を超えたとき」だけ。文面は`field larger than field limit (131072)`になる。数えるのはバイトではなく文字で、引用値の中の改行も1文字に数える。行番号は、超えた文字のある物理行（`reader.line_num`）で、レコードの先頭行とは限らない。コメント行も csv.reader に通すので、長すぎるコメント行でもこの1件になる。NUL は Python 3.11 以降エラーにならない。
+
+#### 写さなかった上流の不具合
+
+- コメント行の引用符が複数行の引用を開く。上流の`comment_lines`は「コメントの引用符はレコードを開かない」前提で偶奇を数えるが、csv.reader はコメント行もレコードとして読む。`# メモ,"開いたまま`のような行があると、閉じるまでの後ろの行がコメントのレコードに飲み込まれて捨てられ、空の訳や重複を見逃す。dwloc はゲーム（CsvReader.cs）と同じく、レコードの境目に来たコメント行をパーサーに渡さずに落とす。引用値の途中（パーサーがまだ前のレコードを読んでいる最中）に来た行は、偶奇の上でコメントでも値として渡す。上流もそこは値として読むので、この場合は一致する
+- `comment_lines`の行の数え方。上流は`text.splitlines()`で行番号を振るので、U+2028、U+2029、U+0085、`\v`、`\f`、`\x1c`〜`\x1e`でも行が割れ、csv.reader の行番号（`\r`と`\n`だけで割る）とずれる。コメント行がデータとして検査されたり（誤報）、データ行が検査から漏れたり（見逃し）する。dwloc は`\r\n` / `\n` / `\r`だけで割る
+- 00e927e の GitHub Actions の注釈（`::error file=...`）。dwloc は上流の CI で動かないので写さない。標準出力と終了コードは変わらない。なお、環境変数`GITHUB_ACTIONS=true`を立てて上流を走らせると、注釈のパスの先頭に`Translations/`が二重に付く（事前の調査で確認。上流の CI の中で注釈が出ているかは確かめていない）
+
+#### credits.txt（912f519、dev のみ）
+
+`Translations/<ロケール>/credits.txt`があれば、`strings.csv`の次に検査する。`strings.csv`が無いロケールでも見る。
+
+- 文字コードは utf-8-sig、行は Python のテキストモードと同じく`\r\n` / `\n` / `\r`で分ける
+- 各行の前後の空白を`str.strip()`と同じく落とし、空の行と '#' で始まる行を飛ばす。前に空白のある ` # x` もコメントになる（strings.csv と違う）
+- 残らなければ`{表示パス}: empty; the first line is the status (supervised, proofread, converted, provisional, fun)`
+- 最初に残った行を小文字にして、`supervised`、`proofread`、`converted`、`provisional`、`fun`のどれでもなければ`{表示パス}:{行番号}: "{値}" is not a status; use one of supervised, proofread, converted, provisional, fun`。値は repr ではなく、そのまま二重引用符で囲む
+- 問題は多くても1件。2行目より後（確かめた人の名前）は見ない
+- 小文字にするのは ASCII だけでよい。Python の`lower()`で ASCII になる非 ASCII の文字はケルビン記号（U+212A → k）だけで、状態語に k は無い。Go の`strings.ToLower`は 'İ'（U+0130）を 'i' にして`provİsional`を通してしまうが、Python は2文字の`i̇`にするので通さない
+
+#### textures/（cc01bfc）
+
+`Translations/<ロケール>/textures/`がフォルダーなら、credits.txt の次に検査する。同じ名前のファイルは見ない。
+
+1. 中身を名前順に1つずつ見る。フォルダーなら`{表示パス}: no folders inside textures/`。拡張子（`PurePath.suffix`）を小文字にして`.png`なら絵として覚える。`fallback.txt`ならその場で中身を見る。`credits.csv`でもなければ`{表示パス}: only .png files, credits.csv and fallback.txt belong in textures/`。`.png`という名前だけのファイルは拡張子が空なので、絵ではなくこちらになる
+2. 覚えた絵を名前順に見る。拡張子が小文字の`.png`でなければ`use a lowercase .png extension`。8MB（8388608 バイト）を超えれば`{KB} KB, more than 8 MB`（KB はバイト数を 1024 で割って切り捨て）。先頭24バイトが PNG のシグネチャと IHDR でなければ`not a PNG file`で、その絵の残りは見ない。幅か高さが 4096 を超えれば`{幅}x{高さ}, larger than 4096x4096`。大きさの問題と「PNG でない」は同じ絵で両方出ることがある
+3. `credits.csv`が無ければ、絵が1枚でもあるときだけ`{textures の表示パス}: credits.csv is missing (file,author,note - one row per picture)`を出して終える
+4. `credits.csv`を csv.reader でそのまま読む（コメントは扱わない）。最初のレコードの各フィールドの前後の空白を落として`file,author,note`でなければ`{表示パス}:1: the header must be file,author,note`を出して終える。空のファイルや1行目が空行でもこれになる
+5. 2つめ以降のレコードを見る。空か、全フィールドをつないで空白だけなら飛ばす。3列でなければ`expected 3 columns (file,author,note), found {列数}`。3列なら各値の前後の空白を落とし、同じ file が2回目なら`{file} is listed twice`、その名前の絵が無ければ`{file} is not in textures/`、author が空なら`who made {file}? (author is empty)`、note が空なら`say what was done for {file} (note is empty), for example: drawn from scratch, or game texture repainted`
+6. 最後に、credits.csv に行の無い絵を名前順に`{表示パス}: no row in credits.csv`
+
+credits.csv の報告の行番号は物理行ではなく「何番目のレコードか」になる。上流が`enumerate(rows[1:], start=2)`で数えるためで、引用値が複数行にまたがるレコードのあとでは物理行とずれる。CI と同じ番号を出すことを優先して写した。
+
+`fallback.txt`は utf-8-sig で読み、`str.splitlines()`で行に分ける（U+2028 や`\v`でも割れる。strings.csv と違い数え方が1通りなので、ずれは生まれない）。各行の前後の空白を落とし、空の行と '#' で始まる行を飛ばす。自分のロケール名なら`{表示パス}:{行番号}: {名前} is this language itself`。'_' で始まる、'/' か '\\' を含む、`Translations/{名前}/strings.csv`が通常のファイルでない、のどれかなら`{表示パス}:{行番号}: {名前} is not a language in Translations/`。
+
+#### 残る差
+
+- 不正な UTF-8。上流は UnicodeDecodeError で異常終了し、dwloc は検査を続ける（従来どおり）
+- 読めないファイルと、CSV として読めない`textures/credits.csv`。上流は例外を捕まえずに異常終了（終了コード1、トレースバック）し、dwloc は「検証できません」で終了コード2になる。どちらも失敗として扱われる
+- Windows の Python の`sorted()`は大文字小文字を無視して並べる。dwloc はバイト順で、上流の CI（Linux）と同じ。大文字で始まる名前が混ざると、手元の Windows で走らせた上流とは出る順だけが変わる
+- `PurePath.suffix`の切り出し方が Python 3.14 で変わった。3.14 は先頭に続く '.' を飛ばしてから最後の '.' を探すので、`..png`と`...png`は空（3.12 は`.png`）、`..PNG`も空（3.12 は`.PNG`）になる。そのため`..png`のような名前では判定が割れる。`..png`という絵に credits.csv の行を付けた木は、上流の CI（3.12）と dwloc では問題なしになる。手元の 3.14 で上流を走らせると`..png: only .png files, credits.csv and fallback.txt belong in textures/`と`credits.csv:2: ..png is not in textures/`の2件になる。dwloc は CI の 3.12 に合わせた。`.a.png`はどちらも`.png`になる。`a.`は 3.14 だけ`"."`になるが、`.png`ではないので判定は変わらない
 
 ## CSVとキー生成
 

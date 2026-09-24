@@ -19,7 +19,7 @@ import (
 //
 //	ゲーム内Mod   csvfile.ParseCSharpRecords（CsvReader.cs の移植）
 //	publish       csvfile.ParsePowerShellRecord（ConvertFrom-Csv の移植）
-//	validate      csvfile.ParsePythonRecords（Python の csv.reader の移植）
+//	validate      csvfile.ReadPythonRecords（Python の csv.reader の移植）
 func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 	values := []string{
 		"ふつうの訳",
@@ -72,7 +72,10 @@ func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 			}
 
 			// validate の読み方。
-			recs := csvfile.ParsePythonRecords(csvfile.ReadPythonLines(out))
+			recs, err := csvfile.ReadPythonRecords(out)
+			if err != nil {
+				t.Fatalf("validate の読みが失敗した: %v", err)
+			}
 			if len(recs) >= 2 {
 				got := recs[1].Fields[len(recs[1].Fields)-1]
 				if got != want {
