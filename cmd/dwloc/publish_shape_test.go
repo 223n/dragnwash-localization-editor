@@ -653,6 +653,23 @@ func TestReportLossesStillRefusesWhatItCannotRead(t *testing.T) {
 	checkContains(t, "標準エラー", stderr.String(), []string{"訳が失われないことを確かめられません"})
 }
 
+// TestPublishShapeRefusesWhatItCannotRead は、形を確かめるためにファイルを読めない
+// とき、終了コード2で止まることを見る。形の確かめは組み立てより前に走るので、
+// 読めない入力はここで止まる。「確かめられなかった」を「形に問題が無い」と同じ
+// 扱いにすると、そこだけ素通りする。
+func TestPublishShapeRefusesWhatItCannotRead(t *testing.T) {
+	root := lossRepo(t)
+	dir := filepath.Join(root, "Translations", "ja")
+	code, stdout, stderr := runCLI("publish", "--root", root, "--path", dir)
+	if code != exitError {
+		t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"を読めないので、訳が失われないことを確かめられません"})
+	if stdout != "" {
+		t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+	}
+}
+
 // TestPublishShapeReportsWholeFile は、行の区切りを読み違えたファイルで
 // 「ファイル全体」を指して止まることを見る。
 func TestPublishShapeReportsWholeFile(t *testing.T) {
