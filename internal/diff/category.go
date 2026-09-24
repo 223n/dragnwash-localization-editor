@@ -151,6 +151,8 @@ const (
 	noteUnknownOrigin   = "再生順にありませんが、UI 文言かもしれません"
 	noteDroppedBroken   = "key が16桁hexでも line: でもありません"
 	noteDroppedMismatch = "source_en のハッシュが key と一致しません"
+	// noteDroppedSourceCRLF は、原文の CRLF のせいで key と合わないときの注記。
+	noteDroppedSourceCRLF = "source_en の改行が CRLF です。LF に戻すと key と一致します"
 )
 
 // categoryTable はカテゴリの定義表。Category の値を添字にする。

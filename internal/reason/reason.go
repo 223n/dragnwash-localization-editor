@@ -165,6 +165,10 @@ const (
 	NoteDroppedBroken = "note_dropped_broken"
 	// NoteDroppedMismatch は source_en のハッシュが key と合わないこと。
 	NoteDroppedMismatch = "note_dropped_mismatch"
+	// NoteDroppedSourceCRLF は source_en のハッシュが key と合わないが、原文の中の
+	// CRLF を LF にすると合うこと。表計算ソフトなどで作業コピーを保存し直すと起きる
+	// （決まったことのそのほか 7）。
+	NoteDroppedSourceCRLF = "note_dropped_source_crlf"
 )
 
 // 引き継ぎ候補の注記（internal/diff の carryTarget.note）。
@@ -324,7 +328,7 @@ var all = []string{
 	NoteUntranslated, NoteVanished, NoteStrayLineID, NoteNotPublished,
 	NoteScriptGap, NoteUnknownOrigin,
 
-	NoteDroppedBroken, NoteDroppedMismatch,
+	NoteDroppedBroken, NoteDroppedMismatch, NoteDroppedSourceCRLF,
 
 	NoteCarryMoved, NoteCarryCopied, NoteCarryCopiedUnknown,
 

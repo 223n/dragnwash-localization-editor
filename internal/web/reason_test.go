@@ -250,6 +250,9 @@ func diffReasons(t *testing.T) []reason.Reason {
 	stale := newStaleSummary(t, root)
 	out = append(out, stale.JudgeBlockReason(diff.CatCarryover))
 
+	// 原文の改行が CRLF になって key と合わない行。表計算ソフトなどで保存し直すと起きる。
+	out = append(out, droppedSourceCRLFReasons(t)...)
+
 	// 閉じない引用符で読めなかったファイルのせいで止めたとき。ファイルごとに理由が
 	// 分かれる。ほかのロケールの公開ファイルでは、置換にロケールの名前が入る。
 	unclosed := []func(*diff.Summary) diff.Category{
@@ -342,6 +345,48 @@ func carryFromReasons(t *testing.T) []reason.Reason {
 	}
 	if len(out) != 2 {
 		t.Fatalf("引き継ぎ元の候補が %d 件。2件（文字の一致と指紋）を期待", len(out))
+	}
+	return out
+}
+
+// droppedSourceCRLFReasons は、原文の CRLF のせいで publish に捨てられる行の理由を、
+// 判定を走らせて集める。
+//
+// [newReasonRoot] の作業コピーへ足さないのは、あの一式の件数を見ている試験が
+// ほかにあるためである。
+func droppedSourceCRLFReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	const source = "The gate opens.\nThe crest is clean."
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("data/script_order.csv", "section,phase,node,order,line_id,key,speaker,condition\n")
+	write("Translations/ja/strings.csv", "key,section,node,order,speaker,translation\n")
+	write("Translations/_discovered/ja.working.csv",
+		"key,section,node,order,speaker,source_en,translation\r\n"+
+			key.For(source)+",UI,,,UI,\""+strings.ReplaceAll(source, "\n", "\r\n")+"\",ゲートが開きます\r\n")
+
+	repo, err := diff.LoadWith(root, diff.Options{Working: true})
+	if err != nil {
+		t.Fatalf("LoadWith: %v", err)
+	}
+	var out []reason.Reason
+	for _, f := range diff.Compare(repo, nil).Findings {
+		if f.Category == diff.CatDropped {
+			out = append(out, f.NoteReason)
+		}
+	}
+	if len(out) != 1 || out[0].ID != reason.NoteDroppedSourceCRLF {
+		t.Fatalf("捨てられる行の理由 = %+v、原文の CRLF の理由1件を期待", out)
 	}
 	return out
 }

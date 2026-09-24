@@ -196,6 +196,7 @@
     "reason.note_unknown_origin": "Not in the play order, but it may be UI text",
     "reason.note_dropped_broken": "key is neither 16 hex digits nor a line: value",
     "reason.note_dropped_mismatch": "The hash of source_en does not match key",
+    "reason.note_dropped_source_crlf": "The line breaks in source_en are CRLF. Turned back into LF, it matches key",
     "reason.note_carry_moved": "Carry over to {target} (moved: the old key has left the play order)",
     "reason.note_carry_copied": "Carry over to {target} (copied: the old key is still live at {live}, so keep the translation on this row)",
     "reason.note_carry_from_same": "Carry over from {source} (the source text differs only in formatting and punctuation)",

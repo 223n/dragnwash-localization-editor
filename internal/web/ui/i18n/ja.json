@@ -196,6 +196,7 @@
     "reason.note_unknown_origin": "再生順にありませんが、UI 文言かもしれません",
     "reason.note_dropped_broken": "key が16桁hexでも line: でもありません",
     "reason.note_dropped_mismatch": "source_en のハッシュが key と一致しません",
+    "reason.note_dropped_source_crlf": "source_en の改行が CRLF です。LF に戻すと key と一致します",
     "reason.note_carry_moved": "引き継ぎ先 {target}（移動。旧キーはもう再生順にありません）",
     "reason.note_carry_copied": "引き継ぎ先 {target}（複製。旧キーは {live} で生きているので、この行の訳は残してください）",
     "reason.note_carry_from_same": "引き継ぎ元 {source}（原文は書式と記号だけが違います）",

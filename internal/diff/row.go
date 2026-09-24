@@ -152,9 +152,29 @@ func droppedCause(r Row) (reason.Reason, bool) {
 		return reason.Reason{}, false
 	}
 	if r.SourceEn != "" {
+		if strings.Contains(r.SourceEn, "\r\n") && key.For(lfLineEnds(r.SourceEn)) == r.Key {
+			// 原文の中の改行が CRLF に変わっただけで、LF に戻せば key と合う。
+			// 表計算ソフトなどで作業コピーを保存し直すと起きる。キーは Mod が LF の
+			// 原文から計算したものである。publish はこの行を捨て（上流と同じ）、
+			// 止めずにヒントを出す（決まったことのそのほか 7）。ここでも「原文を
+			// 書き換えた」と読ませず、直し方の分かる理由を書く。
+			return reason.New(reason.NoteDroppedSourceCRLF, noteDroppedSourceCRLF), true
+		}
 		// key と source_en のハッシュが食い違う。source_en を書き換えたのに
 		// 古い key が残っている行で、publish はこれを黙って捨てる。
 		return reason.New(reason.NoteDroppedMismatch, noteDroppedMismatch), true
 	}
 	return reason.New(reason.NoteDroppedBroken, noteDroppedBroken), true
+}
+
+// lfLineEnds は値の中の CRLF を LF にそろえる。単独の CR はそろえない。
+//
+// 比べるときだけに使い、報告に出す値は書き換えない（決まったことのそのほか 1）。
+// 翻訳リポジトリの .gitattributes は `*.csv text eol=lf` なので、コミットで値の中の
+// CRLF も LF になる。一方、ゲームが書くファイルや表計算で保存し直したファイルは
+// CRLF のことがあり、改行コードだけの違いで別の値と見なすと、同じ訳を結び付けられ
+// ない。単独の CR は git も変えず、publish が止める形なので、同じ値とは見なさない。
+// publish の土台の確かめ（CheckBase）も同じ規則で比べる。
+func lfLineEnds(v string) string {
+	return strings.ReplaceAll(v, "\r\n", "\n")
 }
