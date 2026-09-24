@@ -1,0 +1,378 @@
+{
+  "about": [
+    "上流 tools/hash-strings.ps1 と dwloc の読み方・publish を突き合わせる入力の表。",
+    "英文と訳はどれも架空の文で、ゲームの台本は含まない。",
+    "text は as に応じて置く: working は Translations/_discovered/xx.working.csv、published は Translations/xx/strings.csv（入力と書き出し先が同じ）。",
+    "as が working で published の無いものは、published_default を Translations/xx/strings.csv に置く。",
+    "data の2つは data/script_order.csv と data/level_flow.csv に置く（すべての入力で共通）。",
+    "正解は scripts/upstream-fixtures.ps1 で作る（testdata/upstream/README.md）。"
+  ],
+  "published_default": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== old heading =====\n",
+  "data": {
+    "script_order": "section,phase,node,order,line_id,key,speaker,condition\nL01 Ember,intro,Ember_1_intro,1,line:0a0b0c01,7692c3ad3540bb80,Ember,\nL01 Ember,intro,Ember_1_intro,2,line:0a0b0c02,3fc4ccfe745870e2,Moss,\nL01 Ember,outro,Ember_1_outro,3,line:0a0b0c03,8b5b9db0c13db242,Ember,$met_moss\n",
+    "level_flow": "level,dragon,weather,set_flags,end_flags\n0,Ember,Rainy,,\n"
+  },
+  "cases": [
+    {
+      "name": "plain-working-crlf",
+      "note": "基本の形。ゲームが書く作業コピーと同じ7列で、区切りは CRLF。キーのある行、キーが空で原文から作る行、訳の空の行、台詞IDの行を含む。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n,UI,,,UI,Fine weather today.,今日はいい天気。\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,\r\nline:0a0b0c03,L01 Ember,Ember_1_outro,3,Ember,,せりふ\r\n"
+    },
+    {
+      "name": "plain-published-lf",
+      "note": "基本の形。公開ファイル（6列、LF）を入力と書き出し先の両方にする。見出しとコメントは読むときに落ちる。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n# Language: Testish\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n\n# ===== UI and other text (not part of the dialogue script) =====\n6d2caf9200536549,UI,,,UI,やかんが鳴っている。\n"
+    },
+    {
+      "name": "ml-translation-lf",
+      "note": "訳が行をまたぐ（値の中は LF、レコードの区切りは CRLF）。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"いち\nに\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-translation-crlf",
+      "note": "訳が行をまたぐ（値の中も CRLF）。上流は値の中の CRLF をそのまま書く。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"いち\r\nに\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-translation-blank-lines",
+      "note": "訳の中に空行と空白だけの行がある。引用の中なので、どちらも値の一部。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"いち\n\n  \nさん\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-source-real-shape",
+      "note": "ゲーム側の作業コピーの実物と同じ形。原文が行をまたいで空行を挟み（値の中は LF、区切りは CRLF）、訳は空。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\nf2ea4a1f0e4e8626,UI,,,UI,\"para1\n\npara2\",\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-source-translated",
+      "note": "原文が行をまたぎ、訳が入っている。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\nf2ea4a1f0e4e8626,UI,,,UI,\"para1\n\npara2\",段落の訳\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-source-translated-2col",
+      "note": "source_en,translation の2列の作業コピーで、原文が行をまたぎ、訳が入っている。",
+      "as": "working",
+      "text": "source_en,translation\none,いち\n\"para1\n\npara2\",段落の訳\ntwo,に\n"
+    },
+    {
+      "name": "ml-source-mixed-lines",
+      "note": "原文の続きの行に、空行・'#' で始まる行・カンマの多い行がある。訳は空。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n8e62b7c1d74c7c46,UI,,,UI,\"Menu:\n\n# not a comment\n,,left, right, up\",\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-translation-only-newline",
+      "note": "訳が改行1つだけ（引用符で囲む）。空に見えるが、値は空ではない。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"\n\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-published-crlf",
+      "note": "いまの公開ファイルの区切りが CRLF（.gitattributes の効かない写し）で、訳が行をまたぐ（値の中は LF）。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\r\n0123456789abcdef,UI,,,UI,\"line1\nline2\"\r\nfedcba9876543210,UI,,,UI,b\r\n"
+    },
+    {
+      "name": "ml-hash-line-in-translation",
+      "note": "訳の2行目が '#' で始まる。引用の中なので値の一部で、コメントではない。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"一行目\n# 二行目\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-hash-line-in-published",
+      "note": "いまの公開ファイルの訳が行をまたぎ、2行目が '#' で始まる。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"first\n#second\"\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "ml-published-translation",
+      "note": "いまの公開ファイルの訳が行をまたぐ。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"line1\nline2\"\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "ml-continuation-looks-like-row",
+      "note": "原文の続きの行を1行だけで読むと、列の数がちょうど7になり、キーの空の行に見える。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\nc791ec1829ae8841,UI,,,UI,\"Step one\n,UI,,,UI,y\",手順の訳\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "ml-line-id-translation",
+      "note": "台詞IDの行の訳が行をまたぐ。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\nline:0a0b0c02,L01 Ember,Ember_1_intro,2,Moss,,\"一行目\n二行目\"\r\n"
+    },
+    {
+      "name": "ml-header",
+      "note": "ヘッダーの列名が行をまたぐ。translation という名の列が無くなる。",
+      "as": "working",
+      "text": "key,source_en,\"trans\nlation\"\none,いち\n"
+    },
+    {
+      "name": "ml-source-crlf-key-mismatch",
+      "note": "表計算ソフトで保存し直した形。原文の中の LF が CRLF になり、キー（LF のままの原文のハッシュ）と合わない。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\nf2ea4a1f0e4e8626,UI,,,UI,\"para1\r\n\r\npara2\",段落の訳\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n"
+    },
+    {
+      "name": "unclosed-to-eof",
+      "note": "訳の引用符が閉じず、ファイルの終わりまで続く（上流の報告 #11）。上流は後ろの行（英語の原文を含む）を訳に飲み込む。",
+      "as": "working",
+      "text": "key,source_en,translation\n7692c3ad3540bb80,one,\"いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "unclosed-last-line",
+      "note": "最終行で開いた引用符が閉じない。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,\"b\n"
+    },
+    {
+      "name": "unclosed-header",
+      "note": "ヘッダーの引用符が閉じない。",
+      "as": "working",
+      "text": "key,\"source_en,translation\n7692c3ad3540bb80,one,いち\n"
+    },
+    {
+      "name": "unclosed-published-middle",
+      "note": "いまの公開ファイルの途中で引用符が閉じない。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"a\nfedcba9876543210,UI,,,UI,b\n# note\n6d2caf9200536549,UI,,,UI,c\n"
+    },
+    {
+      "name": "swallow-3col",
+      "note": "開いた引用符が次の行の終わりで閉じ、次の行を飲み込む（3列、キーは空）。上流は one の訳に英語の two を入れる。",
+      "as": "working",
+      "text": "key,source_en,translation\n,one,\"いち\n,two,に\"\n,three,さん\n"
+    },
+    {
+      "name": "swallow-7col-hash-close",
+      "note": "7列の作業コピー。one の訳の引用符が閉じず、訳の空の two の行を飲み込み、'#' 行の中の引用符で閉じる。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,UI,,,UI,one,\"いち\r\n3fc4ccfe745870e2,UI,,,UI,two,\r\n# note \"\r\n8b5b9db0c13db242,UI,,,UI,three,さん\r\n"
+    },
+    {
+      "name": "swallow-2col-hash-close",
+      "note": "2列の作業コピーで、swallow-7col-hash-close と同じ形。",
+      "as": "working",
+      "text": "source_en,translation\none,\"いち\ntwo,\n# note \"\nthree,さん\n"
+    },
+    {
+      "name": "swallow-7col-empty-key-english",
+      "note": "7列、区切りは CRLF。次の行はキーが空で英文だけの行（訳は空）で、その行の引用符で閉じる。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,UI,,,UI,one,\"いち\r\n,UI,,,UI,\"Secret, English\",\r\n8b5b9db0c13db242,UI,,,UI,three,さん\r\n"
+    },
+    {
+      "name": "swallow-6col-published",
+      "note": "6列の公開ファイル（入力と書き出し先が同じ）。次の行は key 列に英文を書いた追記の形で、その行の引用符で閉じる。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"いち\n\"Good day, friend\",UI,,,UI,こんにちは\nfedcba9876543210,UI,,,UI,に\n"
+    },
+    {
+      "name": "lone-cr-in-quoted-translation",
+      "note": "引用した訳の中に単独の CR がある。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"い\rち\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "lone-cr-line-end",
+      "note": "途中の1行だけが単独の CR で終わる（LF と混在）。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,a\rfedcba9876543210,UI,,,UI,b\n6d2caf9200536549,UI,,,UI,c\n"
+    },
+    {
+      "name": "lone-cr-unquoted-value",
+      "note": "引用符で囲まない訳の中に単独の CR がある（手で書いた形）。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,い\rち\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "cr-only-published",
+      "note": "公開ファイル全体が単独の CR で改行している。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\r0123456789abcdef,UI,,,UI,a\rfedcba9876543210,UI,,,UI,b\r"
+    },
+    {
+      "name": "cr-only-working",
+      "note": "作業コピー全体が単独の CR で改行している。",
+      "as": "working",
+      "text": "key,source_en,translation\r0123456789abcdef,,a2\r2cf24dba5fb0a30e,hello,x\r"
+    },
+    {
+      "name": "bom-working",
+      "note": "BOM 付きの作業コピー（区切りは CRLF）。",
+      "as": "working",
+      "text": "\ufeffkey,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "bom-published",
+      "note": "BOM 付きの公開ファイル。",
+      "as": "published",
+      "text": "\ufeffkey,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "comma-only-row",
+      "note": "',' だけの行。全文の ConvertFrom-Csv は空の値2つのレコードとして返す。",
+      "as": "working",
+      "text": "key,source_en,translation\n7692c3ad3540bb80,one,いち\n,\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "commas-row",
+      "note": "カンマだけの行（7列ぶん）。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n,,,,,,\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "empty-quoted-row",
+      "note": "'\"\"' だけの行。",
+      "as": "working",
+      "text": "key,source_en,translation\n7692c3ad3540bb80,one,いち\n\"\"\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "hash-header-unquoted",
+      "note": "ヘッダーが '#' で始まる（引用符なし）。上流はコメントとして落とし、次の行をヘッダーにする。",
+      "as": "working",
+      "text": "#key,source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "hash-header-quoted",
+      "note": "ヘッダーの最初の値が引用符で囲んだ '#' 始まり。上流の ConvertFrom-Csv はそのレコードを飛ばし、次のレコードをヘッダーにする。",
+      "as": "working",
+      "text": "\"#key\",source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "hash-header-leading-space",
+      "note": "ヘッダーが空白1つのあとの '#' で始まる。",
+      "as": "working",
+      "text": " #key,source_en,translation\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "lines-above-header",
+      "note": "ヘッダーの上に空行・コメント行・空白だけの行・全角空白だけの行がある。",
+      "as": "working",
+      "text": "\r\n# note\r\n \t\r\n\u3000\r\nkey,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n"
+    },
+    {
+      "name": "dup-columns-with-data",
+      "note": "列名が重複している（大文字小文字だけが違う）。データ行がある。",
+      "as": "working",
+      "text": "key,source_en,translation,KEY\n7692c3ad3540bb80,one,いち,x\n"
+    },
+    {
+      "name": "dup-columns-no-data",
+      "note": "列名が重複していて、データ行が無い。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation,Key\n"
+    },
+    {
+      "name": "dup-columns-blank-after",
+      "note": "列名が重複していて、ヘッダーの後ろに空行だけがある。",
+      "as": "published",
+      "text": "key,translation,Key\n\n"
+    },
+    {
+      "name": "empty-column-names",
+      "note": "名前の空の列がある。上流は H1 のような既定の名前を振る。",
+      "as": "published",
+      "text": "key,,translation,\n0123456789abcdef,x,a,y\n"
+    },
+    {
+      "name": "bare-quote-then-comment",
+      "note": "引用符なしの値の途中に '\"' があり、後ろに列の多いコメント行がある。上流は偶奇で引用の中と見て、コメント行をレコードとして読む。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,5\" screen\n# note,b,c,d,e,COMMENT-TAIL\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "bare-quote-then-heading",
+      "note": "引用符なしの値の途中に '\"' があり、後ろに空行と見出しがある。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,5\" screen\n\n# ===== UI and other text =====\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "quote-after-closing-quote",
+      "note": "閉じ引用符の後ろに '\"' が続き、後ろにコメント行がある。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,\"p\"q\"r\n# note,b,c,d,e,TAIL\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "comment-with-quote",
+      "note": "コメント行の中に閉じない引用符がある。コメントの中の引用符はレコードを開かない。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n# note,\"see\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "ideographic-space-line",
+      "note": "全角空白だけの行。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n\u3000\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "nbsp-line",
+      "note": "NO-BREAK SPACE（U+00A0）だけの行。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n\u00a0\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "whitespace-line",
+      "note": "半角空白とタブだけの行。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,いち\r\n \t \r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "soft-hyphen-comment",
+      "note": "SOFT HYPHEN（U+00AD）のあとに '#' が続く行。上流の StartsWith('#') はカルチャに依存する照合で、照合上無視される文字を飛ばす。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,a\n\u00ad# note\nfedcba9876543210,UI,,,UI,b\n"
+    },
+    {
+      "name": "u2028-in-value",
+      "note": "訳の中に U+2028（LINE SEPARATOR）がある。どちらの読み方でも行の区切りではない。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,い\u2028ち\r\n"
+    },
+    {
+      "name": "no-final-newline",
+      "note": "最後の行に改行が無い。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,a\nfedcba9876543210,UI,,,UI,b"
+    },
+    {
+      "name": "trailing-spaces",
+      "note": "値の末尾に空白がある（引用符なしと引用符あり）。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,訳  \nfedcba9876543210,UI,,,UI,\"訳\"  \n"
+    },
+    {
+      "name": "extra-and-missing-fields",
+      "note": "フィールドがヘッダーより多い行と少ない行。",
+      "as": "working",
+      "text": "key,source_en,translation\n7692c3ad3540bb80,one,いち,余り\n3fc4ccfe745870e2,two\n"
+    },
+    {
+      "name": "duplicate-keys",
+      "note": "同じキーの行が2つ。先の行は訳が空、後の行に訳がある。",
+      "as": "working",
+      "text": "key,source_en,translation\n7692c3ad3540bb80,one,\n7692c3ad3540bb80,one,いち\n3fc4ccfe745870e2,two,に\n"
+    },
+    {
+      "name": "english-in-key-column",
+      "note": "公開ファイルの key 列に英文を書いた追記（上流の報告 #9 の形）。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n0123456789abcdef,UI,,,UI,a\nGood day there,UI,,,UI,こんにちは\n"
+    },
+    {
+      "name": "published-row-missing-from-working",
+      "note": "いまの公開ファイルにあって作業コピーに無い行がある（上流の #10、kept from the published file）。",
+      "as": "working",
+      "text": "key,source_en,translation\n7692c3ad3540bb80,one,いち\n",
+      "published": "key,section,node,order,speaker,translation\n# Language: Testish\n0123456789abcdef,UI,,,UI,a\n"
+    }
+  ]
+}
