@@ -611,6 +611,13 @@ When it stops, get out of it like this.
 - The stopped locale can be written with `tools/hash-strings.ps1` or the in-game `Hash for commit`
 - If the line break got in by mistake, remove it and run again
 
+When you write with the upstream tools, note that neither of them carries the game-side working copy straight into the published file.  
+`tools/hash-strings.ps1` reads the working copy in the repository's `Translations/_discovered`.  
+If you are using the working copy on the game side, copy it there first.  
+`Hash for commit` writes the published file on the game side.  
+After it writes, copy that file to the repository's `Translations/<locale>/strings.csv`.  
+If you forget to copy, it can end with exit code 0 and still leave the translations out.
+
 A value in the input that spans lines does not stop it when that row's translation is empty.  
 The working copy on the game side has a row whose source text (`source_en`) spans lines and whose translation is empty.  
 Changing the source text changes the key, so a translator cannot fix it.  

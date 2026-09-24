@@ -350,6 +350,12 @@ func TestShapeFixNamesTheWayOut(t *testing.T) {
 			if !strings.Contains(fix, "tools/hash-strings.ps1") {
 				t.Errorf("%s: 上流の道具を案内していない: %s", id, fix)
 			}
+			// 上流の道具は、どちらもゲーム側の作業コピーをそのまま公開ファイルへ
+			// 届けない。前提を添えないと、案内どおりに走らせて終了コード0で
+			// 終わっても訳が入っていない。
+			if !strings.Contains(fix, publishToolNote) {
+				t.Errorf("%s: 上流の道具で書くときの前提（写す先）を添えていない: %s", id, fix)
+			}
 		}
 	}
 	// 形が壊れているだけのものは、ほかのロケールの話をしない。

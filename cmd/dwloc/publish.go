@@ -344,6 +344,13 @@ dwloc:       書き出すと訳が切り詰められたり、黙って落ちた�
 //
 // 文面の {this} と {others} は、[shapeFix] が報告するときに埋めます。ロケールを
 // 決めて走らせたときと --path で走らせたときで、外し方が違うためです。
+// publishToolNote は、上流の道具で書くときの前提。どちらの道具も、dwloc が入力に
+// したゲーム側の作業コピーを、そのままリポジトリの公開ファイルへ届けるわけでは
+// ない。案内どおりに走らせて終了コード0で終わっても、訳が入っていないことがある。
+const publishToolNote = "tools/hash-strings.ps1 はリポジトリの Translations/_discovered にある作業コピーを読みます。" +
+	"ゲーム側の作業コピーを使っているなら、先にそこへ写してください。" +
+	"Hash for commit はゲーム側の公開ファイルを書くので、書いたあとでリポジトリの Translations/<ロケール>/strings.csv へ写してください。"
+
 var publishShapeFix = map[string]string{
 	reason.PublishNoKeyColumn: "ヘッダーの行を key,section,node,order,speaker,translation などの形に直してください。" +
 		"作業コピーなら、ゲーム内で F1 → Translation → Export working copy を押すと作り直せます。",
@@ -352,14 +359,17 @@ var publishShapeFix = map[string]string{
 	reason.PublishMultilineCurrent: "{this}は、いまの dwloc publish では書けません。dwloc publish は行をまたぐ値を読めないためです。" +
 		"{others}" +
 		"{this}は、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。" +
+		publishToolNote +
 		"誤って入った改行なら、取り除いてからもう一度実行してください。",
 	reason.PublishMultilineTranslated: "この行に訳があるうちは、{this}をいまの dwloc publish では書けません。dwloc publish は行をまたぐ値を読めないためです。" +
 		"{others}" +
 		"{this}は、tools/hash-strings.ps1 かゲーム内の Hash for commit で書けます。" +
+		publishToolNote +
 		"訳に誤って入った改行なら、取り除いてからもう一度実行してください。" +
 		"この訳をまだ公開しなくてよいなら、訳を空に戻すと、{this}のほかの行は dwloc publish で書けます。",
 	reason.PublishMultilineDiverges: "訳の入っていない行なら、作業コピーからその範囲の行を消しても公開される中身は変わりません。" +
 		"消せないときは、tools/hash-strings.ps1 かゲーム内の Hash for commit を使ってください。" +
+		publishToolNote +
 		"{others}",
 	reason.PublishRowsUnread: "改行を LF か CRLF にして保存し直してから、もう一度実行してください。",
 	reason.PublishUnclosedQuote: "引用符を閉じるか取り除いてから、もう一度実行してください。" +
