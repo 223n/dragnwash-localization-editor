@@ -38,11 +38,19 @@ func (e *DuplicateColumnError) Error() string {
 // (5) が効くので、引用フィールド内の改行はサポートされない。値に改行を含む行は
 // 物理行ごとに別レコードへ割れて壊れる。これは '#' で始まるかどうかに関係なく
 // 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。上流は f816618 で
-// 全文を1つの文字列として解釈する読み方へ移ったが、ここは行単位のまま据え置いて
-// ある。移すと publish だけでなく、同じ読み方を前提にしている diff・order・edit の
-// 結果まで変わるためである。代わりに、行単位では読み違える形のファイルを
+// 全文を1つの文字列として解釈する読み方へ移った。この移植の全体を解釈する読み手は
+// [ReadPowerShell] で、いまの publish・diff・order・edit はまだこの関数で読む。
+// 使い手を1つずつ移すと「edit が書く先を publish が同じ読み方で読む」という前提が
+// 崩れる期間ができるので、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
+// PR2 でまとめて切り替える。それまでは、行単位では読み違える形のファイルを
 // [ReadPowerShellWhole] の結果と突き合わせて見つけ、publish が書く前に止める
 // （internal/publish の守り）。
+//
+// 切り替えたあとは、この関数（と [ReadPowerShellRowsNumbered]・[ReadPowerShellTable]）は、
+// 「どのレコードも1行に収まるファイルでは、全体を解釈する読み方と結果が同じ」ことを
+// 確かめる回帰試験のためにだけ残す。形の検出（[FindSwallows] など）が物理行を
+// 単独で読むのに使うのは、1物理行の読み方（[ParsePowerShellRecord] と [FieldOffsets]
+// の中身）で、この関数ではない。
 //
 // ヘッダー名の重複だけは [DuplicateColumnError] を返す。それ以外の壊れ方
 // （列数の過不足、閉じない引用符、裸の二重引用符）はエラーにしない。
@@ -215,10 +223,16 @@ func checkDuplicateColumns(header []string) *DuplicateColumnError {
 //	`"`     閉じていない引用符だけ
 //
 // 一方 ",," や `,""` はレコードになる。フィールドが0個または空1個になった行だけが
-// 空行として落ちる、という規則で実測値すべてを説明できる。
+// 空行として落ちる、という規則で実測値すべてを説明できる。全体を解釈する読み方でも
+// 同じ規則で、[SplitSegments] はこうしたレコードを [SegmentEmpty] に分ける。
 //
 // なお、この判定が当てはまるのはデータ行だけで、ヘッダー行には当てはまらない
 // （[ReadPowerShellRows] を参照）。
+//
+// この関数が読むのは1物理行である。改行を含む値のレコードは読めないので、
+// レコードを読むには全体を解釈する [ReadPowerShell] を使う。この関数を使うのは、
+// 1物理行を単独で読みたいところ（行単位の読み手、internal/edit のいまの保存、
+// publish の形の確かめ (d) の数え方、形の検出が続きの物理行を読むところ）だけである。
 func ParsePowerShellRecord(line string) ([]string, bool) {
 	fields := parsePowerShellFields(line)
 	if len(fields) == 0 || (len(fields) == 1 && fields[0] == "") {
@@ -277,7 +291,7 @@ func (f psField) unclosed() bool { return f.quoted && !f.closed }
 // 読み方（[ParsePowerShellRecord]）はこちらだけを使う。
 //
 // wholeText が true のときは、s はファイル全体で、引用の外の '\r' と '\n' も
-// フィールドを終わらせる（[ReadPowerShellWhole]）。引用の中の改行は値に入る。
+// フィールドを終わらせる（[SplitSegments]）。引用の中の改行は値に入る。
 // 上流が ConvertFrom-Csv に全文を1つの文字列で渡したときの読み方で、
 // pwsh 7.6.6 で次を実測してある。引用の中の LF・CRLF・単独の CR はそのまま値に
 // 残る。フィールドの途中の '"' と、閉じ引用符の後ろに続く '"' はただの文字で、
