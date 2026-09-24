@@ -286,13 +286,21 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		s.logf("open failed locale=%s", target.Locale)
 		return saveOutcome{status: http.StatusInternalServerError, errKey: "error.read_failed"}
 	}
-	if file.ReadOnly() {
-		// ヘッダーが受理できないファイル。理由は internal/edit の文面をそのまま出す。
-		return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
-	}
 	if file.Version() != req.BaseVersion {
 		// 手前でファイルが変わっている。1バイトも書かずに、いまの中身を返す。
+		//
+		// 読み取り専用の判定より先に見る（決まったことのそのほか 5）。画面を開いている
+		// あいだに、ゲームや表計算ソフトがファイルを書き換えて読み取り専用の形（閉じない
+		// 引用符など）になると、先に読み取り専用で断っていたころは、画面が行ごとの理由を
+		// 持てずに送り直しを続け、載せ直しも行き先の無い訳への移動も走らなかった。
+		// 409 なら、いまの行一覧（読み取り専用の理由つき）を描き直し、載せ直せない訳を
+		// 行き先の無い訳として出し続けられる。
 		return saveOutcome{file: file, conflict: true}
+	}
+	if file.ReadOnly() {
+		// 読んだときから読み取り専用のファイル（ヘッダーが受理できない、など）。
+		// 画面は読み取り専用のファイルでは入力欄を開かないので、ふつうはここへ来ない。
+		return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 	}
 
 	results := make([]rowResult, 0, len(req.Edits))
