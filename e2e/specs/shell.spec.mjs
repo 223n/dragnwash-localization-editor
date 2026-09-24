@@ -430,9 +430,11 @@ test.describe("狭い画面の引き出し", () => {
     await menu(app).click();
     await expectDrawerOpen(app);
 
-    // 幕のうち、引き出しに隠れていない右側を押す。
+    // 幕のうち、引き出しに隠れていない右側を押す。閉じたら、焦点は開いたボタンへ戻る
+    // （閉じるボタンと Escape と同じ）。以前は幕で閉じたときだけ戻さず、body へ落ちた。
     await backdrop(app).click({ position: { x: NARROW.width - 10, y: NARROW.height / 2 } });
     await expectDrawerClosed(app);
+    await expect(menu(app)).toBeFocused();
   });
 
   test("閉じるボタンで引き出しを閉じ、焦点を #menu へ戻す", async ({ app }) => {
@@ -482,16 +484,20 @@ test.describe("狭い画面の引き出し", () => {
     await expect(sidebar(app)).toHaveAttribute("inert", "");
     await editor(app).press("Escape");
 
-    // 開けば入れる。#menu から #locale、#reload、#export-open と進み、その次が引き出しの
-    // 閉じるボタン。
+    // 開けば入れる。開いたら焦点は引き出しの閉じるボタンへ移り（#menu は帯ごと inert になる）、
+    // Tab で検索の欄へ進む。以前は焦点が #menu に残り、Tab で #locale・#reload・#export-open
+    // （幕の向こうの帯）を通ってから引き出しへ入った。
     await menu(app).click();
     await expectDrawerOpen(app);
     await expect(sidebar(app)).not.toHaveAttribute("inert");
-    await menu(app).focus();
-    for (const id of ["#locale", "#reload", "#export-open"]) {
-      await app.keyboard.press("Tab");
-      await expect(app.locator(id)).toBeFocused();
-    }
+    await expect(app.locator("#sidebar-close")).toBeFocused();
+    await app.keyboard.press("Tab");
+    await expect(search(app)).toBeFocused();
+    // 引き出しの手前へ戻っても、帯（#export-open など）には入らない。
+    await app.keyboard.press("Shift+Tab");
+    await expect(app.locator("#sidebar-close")).toBeFocused();
+    await app.keyboard.press("Shift+Tab");
+    expect(await app.evaluate(() => document.querySelector(".top").contains(document.activeElement))).toBe(false);
     await app.keyboard.press("Tab");
     await expect(app.locator("#sidebar-close")).toBeFocused();
     await app.keyboard.press("Tab");
@@ -518,6 +524,66 @@ test.describe("狭い画面の引き出し", () => {
     await waitForDiskChange(server, before);
     await waitForSaved(page);
     await expectOnlyTranslation(server, before, L.goodbye, typed);
+  });
+});
+
+// 狭い画面の引き出しは一覧の上に被さる。開いているあいだに焦点が帯や一覧へ抜けると、
+// 引き出しに覆われて見えない訳の欄に入力欄が開き、打った字がその行の訳に足されて自動で
+// 保存される（375x700 で Tab を25回押すと、一覧の1行目の訳の欄に入った。elementFromPoint は
+// #sidebar を返し、打った字はその行の訳の後ろに付いてファイルに入った）。開いているあいだは
+// 帯（.top）と一覧（main）を inert にし、焦点を引き出しの中に閉じ込める（app.js の syncInert）。
+test.describe("狭い画面で引き出しを開いているあいだ", () => {
+  test.use({ viewport: { width: 375, height: 700 } });
+
+  test("Tab を進めても焦点は引き出しの外へ出ず、隠れた行の訳を書き換えない", async ({ page, server }) => {
+    await openPaused(page, server);
+    const before = await server.readRoot(workingRel);
+    await menu(page).click();
+    await expectDrawerOpen(page);
+
+    const escaped = [];
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press("Tab");
+      const where = await page.evaluate(() => {
+        const active = document.activeElement;
+        if (!active || active === document.body || document.querySelector("#sidebar").contains(active)) {
+          return null;
+        }
+        return active.id || active.className || active.tagName;
+      });
+      if (where !== null) {
+        escaped.push(`${i + 1}回目: ${where}`);
+      }
+    }
+    expect(escaped).toEqual([]);
+    await expect(editor(page)).toHaveCount(0);
+
+    // 焦点の先がどこであれ、打った字は一覧の訳に入らない。自動保存の時計を切らせても送らない。
+    await page.keyboard.type("hidden typing");
+    await page.clock.runFor(5_000);
+    await expect(editor(page)).toHaveCount(0);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+  });
+
+  // 開いているあいだ、帯と一覧は読み上げの木からも外れる（inert）。閉じれば戻る。
+  test("開いているあいだは帯と一覧を inert にし、閉じれば戻す", async ({ app }) => {
+    const top = app.locator(".top");
+    const main = app.locator("main.content");
+    await expect(top).not.toHaveAttribute("inert");
+    await expect(main).not.toHaveAttribute("inert");
+
+    await menu(app).click();
+    await expectDrawerOpen(app);
+    await expect(top).toHaveAttribute("inert", "");
+    await expect(main).toHaveAttribute("inert", "");
+    await expect(sidebar(app)).not.toHaveAttribute("inert");
+
+    await app.keyboard.press("Escape");
+    await expectDrawerClosed(app);
+    await expect(top).not.toHaveAttribute("inert");
+    await expect(main).not.toHaveAttribute("inert");
+    await expect(menu(app)).toBeFocused();
   });
 });
 

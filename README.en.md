@@ -884,6 +884,12 @@ On a wide screen the column sticks under the top bar, and on a narrow screen (90
 They are not put in the top bar.  
 Putting them there would push the buttons for deciding a conflict out of the bar, where they could no longer be clicked.
 
+While the drawer is open on a narrow screen, the top bar and the list cannot be touched.  
+`Tab` only moves inside the drawer.  
+If the focus slipped out to a row hidden behind the drawer, what you type would go into a translation cell you cannot see, and be saved.  
+To close it, press the close button, press the dark area outside the drawer, or press `Escape`.  
+When it closes, the focus goes back to the three-line button in the top bar.
+
 How many rows are currently listed appears in the top bar as the "showing" count.  
 When no row matches the conditions or the search, the list area says so.  
 When there is text in the search box, it first tells you to clear the search box.

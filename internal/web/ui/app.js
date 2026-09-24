@@ -110,6 +110,11 @@
     conflictTakeLabel: document.getElementById("conflict-take-label"),
     /* 貼り付く帯そのもの。高さを測って余白へ渡すために持つ（watchTopHeight）。 */
     top: document.querySelector(".top"),
+    /*
+      一覧の一帯（main）。狭い画面で引き出しを開いているあいだ、帯と一緒に inert に
+      するために持つ（syncInert）。
+    */
+    content: document.querySelector("main.content"),
     /* 絞り込みの一帯そのもの。スラッシュの近道が画面へ送るために持つ。 */
     finder: document.querySelector(".finder"),
     filterLabel: document.getElementById("filter-label"),
@@ -3157,18 +3162,40 @@
   }
 
   /*
-    狭い画面で引き出しが閉じているあいだは、列の中身に焦点を入れさせない（inert）。
+    引き出しを閉じ、焦点を開くボタン（#menu）へ戻す。閉じるボタン・幕・Escape の
+    どれで閉じても同じにする。落とすと body へ飛び、キーボードだけで操作している人は
+    どこにいるか分からなくなる。幕を押して閉じていたころは焦点を戻していなかった。
+  */
+  function closeDrawer() {
+    setDrawer(false);
+    el.menu.focus();
+  }
 
-    閉じた引き出しは transform で画面の外へ出してあるだけで、中身はタブ順に残る。
-    入れさせていたころは、#reload から Tab で進むと、画面の外にある閉じるボタン・
-    検索の欄・条件のチップに焦点が入った。見えない検索の欄に字を打つと、一覧だけが
-    黙って絞られる。開けば入れる。広い画面では列は画面に出ているので、入れさせる。
+  /*
+    狭い画面では、引き出しの開き具合に合わせて、焦点を入れさせる場所を決める（inert）。
 
-    閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした
-    要素からは焦点が外れ、body へ落ちる。
+    閉じているあいだは、列の中身に焦点を入れさせない。閉じた引き出しは transform で
+    画面の外へ出してあるだけで、中身はタブ順に残る。入れさせていたころは、#reload から
+    Tab で進むと、画面の外にある閉じるボタン・検索の欄・条件のチップに焦点が入った。
+    見えない検索の欄に字を打つと、一覧だけが黙って絞られる。
+
+    開いているあいだは、逆に帯（.top）と一覧（main）に焦点を入れさせない。引き出しは
+    一覧の上に被さる模態として扱う。入れさせていたころは、開いたまま Tab で進むと、
+    焦点は引き出しの最後の欄を越えて一覧の1行目の訳の欄に入った。入力欄が開くが
+    引き出しに覆われて見えず、打った字はその行の訳の後ろに付いて自動で保存された
+    （375x700 で実際に起きた）。幕（#backdrop）は帯と一覧の外にあるので、押せば閉じる。
+
+    広い画面では列は画面に出ていて、何にも被さらないので、どこにも付けない。
+
+    閉じる瞬間に焦点が列の中にあれば、開くボタン（#menu）へ戻す。inert にした要素から
+    は焦点が外れ、body へ落ちる。帯の inert を先に外してから移す。#menu は帯の中にある。
   */
   function syncInert() {
-    var shut = narrow.matches && !sidebarOpen();
+    var open = sidebarOpen();
+    var shut = narrow.matches && !open;
+    var modal = narrow.matches && open;
+    el.top.inert = modal;
+    el.content.inert = modal;
     if (shut && el.sidebar.contains(document.activeElement)) {
       el.menu.focus();
     }
@@ -3177,7 +3204,18 @@
 
   function toggleSidebar() {
     if (narrow.matches) {
-      setDrawer(!sidebarOpen());
+      /*
+        狭い画面では開くだけである。開いているあいだは帯ごと #menu が inert になり
+        （syncInert）、引き出しにも覆われるので、ここへ来るのは閉じているときだけ。
+
+        開いたら焦点を引き出しの閉じるボタンへ移す。#menu に残すと、#menu は inert に
+        なった帯の中なので焦点は body へ落ち、Tab の行き先が分からなくなる。検索の欄では
+        なく閉じるボタンにするのは、狭い画面は電話のことが多く、入力欄へ移すと画面の
+        キーボードが開いて引き出しの半分を覆うためである。検索したいときは、スラッシュで
+        開けば検索の欄へ移る。
+      */
+      setDrawer(true);
+      el.sidebarClose.focus();
       return;
     }
     document.body.classList.toggle("sidebar-collapsed");
@@ -3185,14 +3223,8 @@
   }
 
   el.menu.addEventListener("click", toggleSidebar);
-  el.sidebarClose.addEventListener("click", function () {
-    setDrawer(false);
-    /* 閉じたら焦点を開いたボタンへ戻す。落とすと body へ飛ぶ。 */
-    el.menu.focus();
-  });
-  el.backdrop.addEventListener("click", function () {
-    setDrawer(false);
-  });
+  el.sidebarClose.addEventListener("click", closeDrawer);
+  el.backdrop.addEventListener("click", closeDrawer);
   narrow.addEventListener("change", function () {
     setDrawer(false);
   });
@@ -3220,8 +3252,7 @@
     */
     if (e.key === "Escape" && sidebarOpen()) {
       e.preventDefault();
-      setDrawer(false);
-      el.menu.focus();
+      closeDrawer();
       return;
     }
     if (isTyping(e.target)) {
