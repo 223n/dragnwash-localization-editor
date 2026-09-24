@@ -572,37 +572,66 @@ func TestMainWithRecordHidesTheToken(t *testing.T) {
 // ホームのパスには利用者名が入る。記録は不具合の報告に添えて手元の外へ出るので、
 // そのまま書くと利用者名も一緒に出ていく。画面には全文を出す。書けないファイルの
 // 案内などは、権限の話が読めないと直し方に手が届かないためである。
+//
+// パスが出る場所は、見出しの引数、OS の誤り文、引数の誤りの文（打ち間違えた値）の
+// 3つがある。引数の誤りの文では、値を %q で囲むと Windows の \ が \\ に化けて、
+// ホームのパスとの照合に当たらなかった。
 func TestMainWithRecordShortensTheHome(t *testing.T) {
-	resetRecord(t)
-	home := t.TempDir()
-	// os.UserHomeDir が見る変数は OS で違う（Windows は USERPROFILE、ほかは HOME）。
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	notRepo := filepath.Join(home, "somewhere")
-	if err := os.MkdirAll(notRepo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	t.Chdir(dir)
-	setArgs(t, "--root", notRepo)
+	// ホームの最後の名前は、ほかに現れない綴りにしておく。記録にこの名前が1つでも
+	// 残っていれば、どんな書き方（\ を重ねた形など）でもホームのパスが漏れている。
+	const homeName = "dwloc-home-of-someone"
 
-	read := captureStd(t)
-	code := mainWithRecord()
-	_, stderr := read()
-	if code != exitError {
-		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	tests := []struct {
+		name string
+		// args は、ホームの下のパス（somewhere）を受け取って引数を返す。
+		args func(somewhere string) []string
+	}{
+		{
+			// 見出しの引数と、「翻訳リポジトリではありません」の案内に出る。
+			name: "--root",
+			args: func(somewhere string) []string { return []string{"--root", somewhere} },
+		},
+		{
+			// 見出しの引数と、「--limit の値…を読めません」の1行に出る。
+			name: "引数の誤りの値",
+			args: func(somewhere string) []string { return []string{"diff", "--limit", somewhere} },
+		},
 	}
-	// 画面には全文が出ている。出ていなければ、この試験は何も確かめていない。
-	checkContains(t, "標準エラー", stderr, []string{notRepo})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetRecord(t)
+			home := filepath.Join(t.TempDir(), homeName)
+			// os.UserHomeDir が見る変数は OS で違う（Windows は USERPROFILE、ほかは HOME）。
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			somewhere := filepath.Join(home, "somewhere")
+			if err := os.MkdirAll(somewhere, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			t.Chdir(dir)
+			setArgs(t, tt.args(somewhere)...)
 
-	_, log := readLogs(t, dir)
-	if strings.Contains(log, home) {
-		t.Errorf("記録にホームのパスが残っている:\n%s", log)
-	}
-	// 見出し（引数）と、画面に出した案内の両方で置き換わっている。
-	short := "~" + string(filepath.Separator) + "somewhere"
-	if got := strings.Count(log, short); got < 2 {
-		t.Errorf("記録に %q が %d 回、2 回以上を期待:\n%s", short, got, log)
+			read := captureStd(t)
+			code := mainWithRecord()
+			_, stderr := read()
+			if code != exitError {
+				t.Fatalf("終了コード = %d\n%s", code, stderr)
+			}
+			// 画面には打ったままの全文が出ている。出ていなければ、この試験は何も
+			// 確かめていない。
+			checkContains(t, "標準エラー", stderr, []string{somewhere})
+
+			_, log := readLogs(t, dir)
+			if strings.Contains(log, homeName) {
+				t.Errorf("記録にホームのパスが残っている:\n%s", log)
+			}
+			// 見出し（引数）と、画面に出した文の両方で置き換わっている。
+			short := "~" + string(filepath.Separator) + "somewhere"
+			if got := strings.Count(log, short); got < 2 {
+				t.Errorf("記録に %q が %d 回、2 回以上を期待:\n%s", short, got, log)
+			}
+		})
 	}
 }
 

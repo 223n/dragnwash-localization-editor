@@ -33,7 +33,20 @@ func TestArgumentErrorsAreOneLineInJapanese(t *testing.T) {
 		{
 			name: "整数でない値",
 			args: []string{"diff", "--limit", "abc"},
-			want: []string{`dwloc: --limit の値 "abc" を読めません（整数で書きます）`, "使い方は dwloc diff --help で表示します。"},
+			want: []string{`dwloc: --limit の値「abc」を読めません（整数で書きます）`, "使い方は dwloc diff --help で表示します。"},
+		},
+		{
+			// Windows のパスを打ち間違えても、\ を \\ に化けさせずに打ったまま出す。
+			// 化けると、記録でホームのパスを ~ に置き換える照合にも当たらない。
+			name: "パスの形の値",
+			args: []string{"edit", "--port", `C:\Users\someone\x`},
+			want: []string{`dwloc: --port の値「C:\Users\someone\x」を読めません（整数で書きます）`},
+		},
+		{
+			// 制御文字だけは %q と同じ形で書く。1つの誤りを1行に収める。
+			name: "改行を含む値",
+			args: []string{"diff", "--limit", "1\n2"},
+			want: []string{`dwloc: --limit の値「1\n2」を読めません（整数で書きます）`},
 		},
 		{
 			name: "大きすぎる値",
@@ -43,7 +56,7 @@ func TestArgumentErrorsAreOneLineInJapanese(t *testing.T) {
 		{
 			name: "単位の無い時間",
 			args: []string{"edit", "--idle-timeout", "30"},
-			want: []string{`dwloc: --idle-timeout の値 "30" を読めません`, "30s や 1h30m", "使い方は dwloc edit --help で表示します。"},
+			want: []string{`dwloc: --idle-timeout の値「30」を読めません`, "30s や 1h30m", "使い方は dwloc edit --help で表示します。"},
 		},
 		{
 			name: "値の無いオプション",
@@ -54,12 +67,12 @@ func TestArgumentErrorsAreOneLineInJapanese(t *testing.T) {
 			// 独自の値の型は、自分の言葉で理由を返す。それをそのまま添える。
 			name: "空のロケール名",
 			args: []string{"publish", "--locale", ""},
-			want: []string{`dwloc: --locale の値 "" を読めません（ロケール名が空です）`},
+			want: []string{`dwloc: --locale の値「」を読めません（ロケール名が空です）`},
 		},
 		{
 			name: "真偽値でない値",
 			args: []string{"diff", "--all=maybe"},
-			want: []string{`dwloc: --all には値を付けないか、true か false を書きます: "maybe"`},
+			want: []string{`dwloc: --all の値「maybe」を読めません（値を付けないか、true か false を書きます）`},
 		},
 		{
 			name: "オプションの書き方の誤り",
@@ -122,9 +135,9 @@ func TestFlagErrorTextFallsBack(t *testing.T) {
 		{
 			// 定義されていない名前と、整数でも時間でもない型は、flag の理由をそのまま添える。
 			name: "知らない名前", msg: `invalid value "abc" for flag -other: bad`,
-			want: `--other の値 "abc" を読めません（bad）`,
+			want: `--other の値「abc」を読めません（bad）`,
 		},
-		{name: "文字列の型", msg: `invalid value "abc" for flag -name: bad`, want: `--name の値 "abc" を読めません（bad）`},
+		{name: "文字列の型", msg: `invalid value "abc" for flag -name: bad`, want: `--name の値「abc」を読めません（bad）`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,6 +145,31 @@ func TestFlagErrorTextFallsBack(t *testing.T) {
 				t.Errorf("flagErrorText = %q, 期待 %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestQuoteValue は、誤りの文に出す値の囲み方を見る。
+//
+// 打った値のまま見せる（\ を \\ にしない）。見えない文字と、文字として読めない
+// バイトだけを %q と同じ形で書く。
+func TestQuoteValue(t *testing.T) {
+	tests := []struct {
+		value string
+		want  string
+	}{
+		{value: "abc", want: "「abc」"},
+		{value: "", want: "「」"},
+		{value: `C:\Users\someone\x`, want: `「C:\Users\someone\x」`},
+		{value: "/home/someone/x", want: "「/home/someone/x」"},
+		{value: `"引用" と空白`, want: `「"引用" と空白」`},
+		{value: "1\n2\r3\t4", want: `「1\n2\r3\t4」`},
+		{value: "a\u3000b", want: `「a\u3000b」`},
+		{value: "a\xffb", want: `「a\xffb」`},
+	}
+	for _, tt := range tests {
+		if got := quoteValue(tt.value); got != tt.want {
+			t.Errorf("quoteValue(%q) = %q, 期待 %q", tt.value, got, tt.want)
+		}
 	}
 }
 

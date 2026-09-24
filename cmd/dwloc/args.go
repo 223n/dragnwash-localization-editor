@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // flag パッケージが返す誤りの文の頭。flag は誤りの種類を型で返さないので、
@@ -29,6 +31,7 @@ const (
 //
 // 値を読めなかったときは、どう書けばよいかを添えます。とくに --idle-timeout は
 // 単位が要り（30 ではなく 30s）、使い方の中の説明は全文に埋もれて読まれません。
+// 値は打ったままの形で出します（[quoteValue]）。
 func flagErrorText(fs *flag.FlagSet, err error) string {
 	msg := err.Error()
 	switch {
@@ -41,15 +44,47 @@ func flagErrorText(fs *flag.FlagSet, err error) string {
 	case strings.HasPrefix(msg, flagInvalidBool):
 		// invalid boolean value "<値>" for -<名前>: <理由>
 		if value, name, _, ok := splitInvalid(msg, flagInvalidBool, " for -"); ok {
-			return fmt.Sprintf("--%s には値を付けないか、true か false を書きます: %q", name, value)
+			return fmt.Sprintf("--%s の値%sを読めません（値を付けないか、true か false を書きます）", name, quoteValue(value))
 		}
 	case strings.HasPrefix(msg, flagInvalidValue):
 		// invalid value "<値>" for flag -<名前>: <理由>
 		if value, name, cause, ok := splitInvalid(msg, flagInvalidValue, " for flag -"); ok {
-			return fmt.Sprintf("--%s の値 %q を読めません（%s）", name, value, valueHint(fs, name, cause))
+			return fmt.Sprintf("--%s の値%sを読めません（%s）", name, quoteValue(value), valueHint(fs, name, cause))
 		}
 	}
 	return msg
+}
+
+// quoteValue は、誤りの文に出すために、打たれた値を「」で囲んで返します。
+//
+// %q で囲まないのは、Windows のパスの \ が \\ に化けるためです。打った値と違う
+// 形で画面に出るうえ、記録でホームのパスを ~ に置き換える照合（logfile の
+// ShortenPath）にも当たらず、利用者名入りのパスが記録に残ります。パスを整数や
+// 時間の指定に打ち間違えることは、ふつうに起きます。
+//
+// 改行やタブなどの見えない文字と、文字として読めないバイトだけは、%q と同じ形
+// （\n や \xff など）で書きます。1つの誤りを1行に収め、値に何が入って
+// いたかを見えるようにするためです。\ はそのまま書くので、打った \n の2文字と
+// 改行は同じに見えます。見分けやすさより、打ったままに見えることを採ります。
+func quoteValue(value string) string {
+	var b strings.Builder
+	b.WriteString("「")
+	for i := 0; i < len(value); {
+		r, size := utf8.DecodeRuneInString(value[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, value[i])
+		case unicode.IsPrint(r):
+			b.WriteRune(r)
+		default:
+			// QuoteRune は '\n' のように ' で囲んで返すので、囲みを外します。
+			quoted := strconv.QuoteRune(r)
+			b.WriteString(quoted[1 : len(quoted)-1])
+		}
+		i += size
+	}
+	b.WriteString("」")
+	return b.String()
 }
 
 // splitInvalid は、<prefix>"<値>"<sep><名前>: <理由> の形の文を分けます。
