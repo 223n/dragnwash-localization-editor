@@ -16,10 +16,21 @@ on:
   # GITHUB_TOKEN が開いた PR（リリースの PR など）では、pull_request の実行は「承認待ち」で作られ、
   # 書き込み権限のある人が「Approve workflows to run」を押すまで動かない
   workflow_dispatch:
+    inputs:
+      runner:
+        # ubuntu-latest が次の版へ移る前に、その版の本物のランナーで1回だけ試すときに使う。
+        # 変数 RUNS_ON はリリースを含むすべてのワークフローが見るので、試すだけならこちらを使う。
+        # 例: gh workflow run ci.yml --ref develop -f runner=ubuntu-26.04
+        description: 'この実行だけで使うランナーのラベル（例: ubuntu-26.04）。空なら変数 RUNS_ON、それも無ければ ubuntu-latest'
+        required: false
+        type: string
+        default: ''
 
-# 同じブランチに続けて push したとき、古い実行を止める
+# 同じブランチに続けて push したとき、古い実行を止める。
+# 別のランナーで試す実行は、いつもの実行と止め合わないよう、ランナーの名前でも分ける。
+# 分けないと、develop で試した実行が develop の push の CI を止めてしまう
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
@@ -29,8 +40,9 @@ jobs:
   lint-ja:
     name: 日本語Lint
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
-    # 無ければ GitHub がホストする ubuntu-latest で動く
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # 無ければ GitHub がホストする ubuntu-latest で動く。
+    # 手で動かすときだけ、入力 runner がどちらよりも先に効く
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     # 固まったまま枠を占め続けないようにする
     timeout-minutes: 10
     steps:
@@ -58,7 +70,7 @@ jobs:
 
   go:
     name: Go
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: リポジトリを取得
@@ -116,7 +128,7 @@ jobs:
 
   e2e:
     name: 画面のE2E
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: リポジトリを取得
@@ -152,8 +164,9 @@ jobs:
         # この段と npm run test:e2e が通ることを確かめた（2026年9月）。
         # 同じコンテナで lint-ja と go の手順も通った。そのため runs-on は ubuntu-latest のままにする。
         #
-        # 移る前に GitHub のランナーで試すときは、リポジトリの変数 RUNS_ON を ubuntu-26.04 にして、
-        # この CI を手で動かす。リリースを含むほかのワークフローも同じ変数を見るので、試したら消す。
+        # 移る前に GitHub のランナーで試すときは、この CI を入力 runner に ubuntu-26.04 を渡して手で動かす
+        # （gh workflow run ci.yml --ref develop -f runner=ubuntu-26.04）。
+        # 変数 RUNS_ON は使わない。リリースを含むほかのワークフローも同じ変数を見るためである。
         # 移ったあとにこの段で落ちたら、e2e の runs-on の既定だけを ubuntu-24.04 にして、
         # Playwright を上げて通るのを確かめてから戻す
         run: npx playwright install --with-deps chromium
@@ -185,7 +198,7 @@ jobs:
 
   lint-workflows:
     name: ワークフローの構文検査
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: リポジトリを取得
@@ -211,7 +224,7 @@ jobs:
 
   zizmor:
     name: ワークフローの安全性検査
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

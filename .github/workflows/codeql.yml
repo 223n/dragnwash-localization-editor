@@ -25,10 +25,19 @@ on:
     - cron: '0 0 * * 1'
   # 手で動かすため。pull_request の実行が作られなかったブランチを走査したいときに使う
   workflow_dispatch:
+    inputs:
+      runner:
+        # ci.yml の同じ名前の入力と同じ。ubuntu-latest が次の版へ移る前に、その版で1回だけ試すときに使う。
+        # 例: gh workflow run codeql.yml --ref develop -f runner=ubuntu-26.04
+        description: 'この実行だけで使うランナーのラベル（例: ubuntu-26.04）。空なら変数 RUNS_ON、それも無ければ ubuntu-latest'
+        required: false
+        type: string
+        default: ''
 
-# 同じブランチに続けて push したとき、古い実行を止める
+# 同じブランチに続けて push したとき、古い実行を止める。
+# 別のランナーで試す実行は、いつもの実行と止め合わないよう、ランナーの名前でも分ける
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
@@ -38,8 +47,9 @@ jobs:
   analyze:
     name: CodeQL（${{ matrix.language }}）
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
-    # 無ければ GitHub がホストする ubuntu-latest で動く
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # 無ければ GitHub がホストする ubuntu-latest で動く。
+    # 手で動かすときだけ、入力 runner がどちらよりも先に効く
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       security-events: write   # 結果を Code scanning に送る
