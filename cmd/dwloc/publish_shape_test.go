@@ -953,6 +953,13 @@ func TestParsePathAccept(t *testing.T) {
 	if err != nil || got.path != "a" || got.key != shapeKeyUnrelated {
 		t.Errorf("分け方が違う: %+v, %v", got, err)
 	}
+	// ファイルのあとの key が空なら、ファイルだけの指定と同じく、レコード単位で指定する
+	// よう案内する。
+	for _, v := range []string{"a:", "a: "} {
+		if _, err := parsePathAccept(targets[:1], v); err == nil || !strings.Contains(err.Error(), "レコード単位で指定してください") {
+			t.Errorf("%q: key の無い指定を受けた: %v", v, err)
+		}
+	}
 }
 
 // TestAcceptListString は flag.Value としての表示を確かめる。
