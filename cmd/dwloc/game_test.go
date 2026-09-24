@@ -683,9 +683,9 @@ func TestNoGameAppearsInEveryUsage(t *testing.T) {
 		checkContains(t, strings.Join(args, " ")+" の説明", stdout, []string{"--no-game"})
 	}
 
-	// validate は --game を受け取るが使わない。打ち消す相手が無いので置かない。
+	// validate は --game と --no-game を受け取るが使わない。受けることと使わない
+	// ことの両方を説明に出す。以前は打ち消す相手が無いとして置かなかったが、
+	// 指定を付けて回るスクリプトで validate だけが落ちていた。
 	_, stdout, _ := runCLI("validate", "--help")
-	if strings.Contains(stdout, "--no-game") {
-		t.Errorf("validate --help に --no-game が出ている。あちらには無い指定である\n%s", stdout)
-	}
+	checkContains(t, "validate --help の説明", stdout, []string{"--no-game", "validate では使いません"})
 }

@@ -242,7 +242,7 @@ If you put it in the wrong place, it tells you where it should go and exits.
 
 On a PC that has the game installed, a `dwloc` started by double-click also looks for the game folder.  
 If it finds one, it saves to the working copy there.  
-If you want it to stay inside the folder you put it in, add `--no-game` from the command line.  
+If you want it to stay inside the folder you put it in, add `--no-game` from the command line (`dwloc --no-game`).  
 For details, see "Using the game folder" below.
 
 On Windows you can start it this way.  
@@ -403,6 +403,9 @@ They read and write only inside `--root`.
 ./dwloc edit    --root ../dragnwash-localization --no-game
 ```
 
+Like `--root`, you can also put it before the subcommand.  
+It then also applies to `edit` when you leave the subcommand out (`dwloc --no-game`).
+
 Use it in situations like these.
 
 - When matching up `diff` output with another PC or machine
@@ -422,8 +425,8 @@ Use it in situations like these.
 Giving `--game` and `--no-game` together stops without doing anything (exit code `2`).  
 There is no way for the tool to decide which of the two you mistyped.
 
-`validate` accepts `--game` but does not use it.  
-There is no `--no-game` for it either, because there is nothing to cancel.
+`validate` and `version` accept `--game` and `--no-game` but do not use them.  
+This is so that options you add to every subcommand do not make `validate` alone fail.
 
 #### It always tells you where it searched
 

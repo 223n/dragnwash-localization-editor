@@ -85,7 +85,9 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
         ゲームのフォルダーを探しも読みもしません（publish / diff / edit）。
         同じ答えが要るとき（機械との突き合わせ、コミットする中身を固定したい
         とき）に使います。--game と同時には指定できません。
-        validate は --game を受け取りますが使いません。
+        サブコマンドの前に置くと、省いたときの edit にも効きます
+        （dwloc --no-game）。
+        validate と version は --game と --no-game を受け取りますが使いません。
 
 終了コード:
   0   成功
@@ -177,6 +179,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	global := newFlagSet("dwloc", stderr)
 	root := global.String("root", ".", "翻訳リポジトリのルート")
 	game := global.String("game", "", gameFlagUsage)
+	noGame := global.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 
 	if code, ok := parseFlags(global, args, usageText, stdout, stderr); !ok {
 		return code
@@ -184,18 +187,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	rest := global.Args()
 	if len(rest) == 0 {
-		return runDefault(args, *root, *game, stdout, stderr)
+		return runDefault(args, *root, *game, *noGame, stdout, stderr)
+	}
+
+	// 共通の入口で受けた --no-game は、サブコマンドの引数の頭に足して渡します。
+	// publish / diff / edit はもともと --no-game を受けるので、受け口を2つに
+	// 増やさずに済みます。サブコマンドの後ろにもう1度書かれても、同じ指定が
+	// 2度効くだけです。validate と version へは渡しません（受けて使わない指定です）。
+	subArgs := rest[1:]
+	if *noGame {
+		subArgs = append([]string{"--no-game"}, subArgs...)
 	}
 
 	switch name := rest[0]; name {
 	case "validate":
 		return runValidate(rest[1:], *root, stdout, stderr)
 	case "publish":
-		return runPublish(rest[1:], *root, *game, stdout, stderr)
+		return runPublish(subArgs, *root, *game, stdout, stderr)
 	case "diff":
-		return runDiff(rest[1:], *root, *game, stdout, stderr)
+		return runDiff(subArgs, *root, *game, stdout, stderr)
 	case "edit":
-		return runEdit(rest[1:], *root, *game, stdout, stderr)
+		return runEdit(subArgs, *root, *game, stdout, stderr)
 	case "version":
 		return runVersion(rest[1:], stdout, stderr)
 	case "help":
@@ -224,7 +236,10 @@ var startEdit = runEdit
 //
 // 使い方の表示をここから外したのは、翻訳者にとって最初の1回がいちばん脱落しやすい
 // ためです。使い方は dwloc help と dwloc --help で今までどおり出ます。
-func runDefault(args []string, root, game string, stdout, stderr io.Writer) int {
+//
+// noGame は共通の入口で受けた --no-game です。ダブルクリックと同じ画面を、
+// ゲームを見ずに開くための指定なので、edit へそのまま渡します。
+func runDefault(args []string, root, game string, noGame bool, stdout, stderr io.Writer) int {
 	if !looksLikeRepo(root) {
 		where, err := filepath.Abs(root)
 		if err != nil {
@@ -242,7 +257,11 @@ func runDefault(args []string, root, game string, stdout, stderr io.Writer) int 
 	// 画面を始める前に、ほかのこともできると伝える。使い方を出さなくなったぶん、
 	// ここが唯一の手掛かりになる。
 	fmt.Fprintln(stdout, "サブコマンドを指定すると、検証や公開もできます（dwloc help）。")
-	return startEdit(nil, root, game, stdout, stderr)
+	var editArgs []string
+	if noGame {
+		editArgs = []string{"--no-game"}
+	}
+	return startEdit(editArgs, root, game, stdout, stderr)
 }
 
 // notARepoText は、翻訳リポジトリではない場所で起動されたときの案内です。
@@ -569,10 +588,11 @@ dwloc の版を1行で表示します。ビルド時に版を埋め込んでい�
 // runVersion は版を表示します。
 func runVersion(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("dwloc version", stderr)
-	// --root と --game は使わないが、共通オプションのつもりで打たれても止まらない
-	// ように受ける。版の表示に根拠となるフォルダーは要らないので、値は読まない。
+	// --root と --game と --no-game は使わないが、共通オプションのつもりで打たれても
+	// 止まらないように受ける。版の表示に根拠となるフォルダーは要らないので、値は読まない。
 	fs.String("root", "", "（version では使いません）")
 	fs.String("game", "", "（version では使いません）")
+	fs.Bool("no-game", false, "（version では使いません）")
 	if code, ok := parseFlags(fs, args, versionUsage, stdout, stderr); !ok {
 		return code
 	}
