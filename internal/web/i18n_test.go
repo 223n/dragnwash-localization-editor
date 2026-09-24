@@ -3,6 +3,7 @@ package web
 import (
 	"io/fs"
 	"net/http"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -135,20 +136,75 @@ func TestSaveFailedDetailDoesNotAdviseReloading(t *testing.T) {
 		"ja": {"読み直してください"},
 		"en": {"or reload"},
 	}
+	// 待ち受けに届かないとき（ui.unreachable）と受け付けないとき（ui.save_refused）の案内も
+	// 同じ。どちらも読み直しでは直らず、読み直せば送れていない訳が消える。
+	keys := []string{"ui.save_failed_detail", "ui.unreachable", "ui.save_refused"}
 	for lang, bad := range advice {
 		cat := c.byLang[lang]
 		if cat == nil {
 			t.Fatalf("%s の目録が無い", lang)
 		}
-		text := cat.Messages["ui.save_failed_detail"]
-		if text == "" {
-			t.Fatalf("%s.json に ui.save_failed_detail が無い", lang)
-		}
-		for _, phrase := range bad {
-			if strings.Contains(text, phrase) {
-				t.Errorf("%s の ui.save_failed_detail が読み直しを勧めている（%q）: %q", lang, phrase, text)
+		for _, key := range keys {
+			text := cat.Messages[key]
+			if text == "" {
+				t.Fatalf("%s.json に %s が無い", lang, key)
+			}
+			for _, phrase := range bad {
+				if strings.Contains(text, phrase) {
+					t.Errorf("%s の %s が読み直しを勧めている（%q）: %q", lang, key, phrase, text)
+				}
 			}
 		}
+	}
+}
+
+// TestUIKeysAreUsed は、目録の ui.* の鍵が、どれも画面（app.js）か待ち受けの Go から
+// 引かれていることを見る。
+//
+// 使われなくなった鍵は、目録に残っていても画面に出ない。残したままだと、訳す人は
+// 出ない文を訳し、直す人は出ない文を直す（ui.orphan_lost と ui.notes がそうだった）。
+//
+// 数えるのは、鍵を引用符で囲んだ字面（"ui.…"）である。t("…") の形だけを数えると、
+// askDiscard("ui.discard_confirm") のように関数へ字面で渡している鍵を使われていないと
+// 取り違える。対象を ui.* に絞るのは、category.・status.・reason. などが Go で接頭辞と
+// 識別子をつないで組み立てる鍵で、字面には出てこないからである。ui.* の鍵を組み立てて
+// 引くようにするなら、その鍵をここで許すようにすること。
+func TestUIKeysAreUsed(t *testing.T) {
+	c, err := loadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var src strings.Builder
+	src.WriteString(uiSource(t, "ui/app.js"))
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src.Write(body)
+	}
+	all := src.String()
+
+	var unused []string
+	for key := range c.origin().Messages {
+		if !strings.HasPrefix(key, "ui.") {
+			continue
+		}
+		if !strings.Contains(all, `"`+key+`"`) {
+			unused = append(unused, key)
+		}
+	}
+	sort.Strings(unused)
+	if len(unused) > 0 {
+		t.Errorf("目録にあるのに画面からも待ち受けからも引かれていない鍵: %v", unused)
 	}
 }
 

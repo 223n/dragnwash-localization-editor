@@ -146,14 +146,24 @@ func TestGitTracked(t *testing.T) {
 	writeFile(t, tracked, "ひとつ\n")
 	writeFile(t, untracked, "ふたつ\n")
 
+	// core.longpaths をリポジトリの設定に書くのは、internal/diff の試験の
+	// initGitRepo（oldorder_test.go）と同じ理由。Git for Windows は既定では
+	// 260 字を超えるパスを扱えず、TMP が深いと add が失敗する。GitTracked が
+	// 起動する git にも効かせるため、-c ではなくリポジトリに書く。init にだけは
+	// -c でも渡す。init は設定を書く前に .git/hooks の見本などを書くので、TMP が
+	// 深いとそこで落ちる。
+	//
+	// git が PATH にあるのに失敗したら、飛ばさずに落とす。環境の不具合を
+	// SKIP に変えると、go test は -v なしでは何も出さず、誰も気付けない。
 	for _, args := range [][]string{
-		{"init"},
+		{"-c", "core.longpaths=true", "init"},
+		{"config", "core.longpaths", "true"},
 		{"add", "tracked.txt"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+			t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
 		}
 	}
 
@@ -186,7 +196,15 @@ func TestGitTrackedOutsideRepository(t *testing.T) {
 
 // TestDisplayPath は報告に出すパスの整形を見る。
 func TestDisplayPath(t *testing.T) {
-	root := t.TempDir()
+	// root のリンクを先に解いておく。newDisplay は root のリンクを解くが、下の inside は
+	// まだ無いパスなので、of の側では解けない。TMP が 8.3 形式の短い名前だったり、
+	// リンクを含んでいたり（macOS の /var）すると、解いた root と解けない inside で
+	// 綴りが食い違い、配下なのに外と判定される。製品の呼び出し元はどれも実在する
+	// パスを渡すので、この食い違いは試験の側だけで起きる。
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("一時ディレクトリのリンクを解けない: %v", err)
+	}
 	show := newDisplay(root)
 
 	inside := filepath.Join(root, TranslationsDir, "ja", PublishedFile)

@@ -559,10 +559,10 @@ func TestRunDiffCSVWarnsWhenOldOrderLooksStale(t *testing.T) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+			t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
 		}
 	}
-	gitRun("init")
+	initGitRepo(t, root)
 	gitRun("add", ".")
 	gitRun(append(gitTestOpts(), "commit", "-m", "first")...)
 	// 話者の列だけを変えてコミットする。再生順は変わったが、台詞IDとキーの対応は
@@ -1548,15 +1548,15 @@ func diffCarryTree(t *testing.T) string {
 		"data/script_order.csv":       diffCarryOldOrderCSV,
 		"Translations/ja/strings.csv": diffCarryPublishedJA,
 	})
+	initGitRepo(t, root)
 	for _, args := range [][]string{
-		{"init"},
 		{"add", "."},
 		append(gitTestOpts(), "commit", "-m", "before the game update"),
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+			t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
 		}
 	}
 
@@ -1777,7 +1777,7 @@ func writeCarryTree(t *testing.T, root, newOrder, oldOrder, published string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+			t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
 		}
 	}
 	if err := os.WriteFile(orderPath, []byte(newOrder), 0o644); err != nil {

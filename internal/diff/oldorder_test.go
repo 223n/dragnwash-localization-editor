@@ -13,15 +13,32 @@ import (
 )
 
 // gitRepo は git リポジトリを1つ作り、そのルートを返す。
-// git が無い環境や git が失敗する環境では、呼んだテストごと飛ばす。
+// git が PATH に無い環境では、呼んだテストごと飛ばす。
 func gitRepo(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git が無いので飛ばす")
 	}
 	root := t.TempDir()
-	runGit(t, root, "init")
+	initGitRepo(t, root)
 	return root
+}
+
+// initGitRepo は root を git リポジトリにする。
+//
+// core.longpaths を、リポジトリの設定として書く。Git for Windows は既定では
+// 260 字を超えるパスを扱えず、TMP が深いと add や show が「Filename too long」で
+// 失敗する（長さの目安は longRootLen にある）。-c はここで走らせる git にしか
+// 効かず、試験の対象（GitOldOrder）が起動する git には届かない。リポジトリの
+// 設定なら、どちらの git も読む。Windows 以外の git はこの設定を使わないので、
+// 書いても害は無い。
+//
+// init にだけは -c でも渡す。init はリポジトリの設定を書く前に .git/hooks の
+// 見本などを書くので、ルートが約 220 字を超えると、そこで 260 字を超えて落ちる。
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	runGit(t, root, "-c", "core.longpaths=true", "init")
+	runGit(t, root, "config", "core.longpaths", "true")
 }
 
 // gitTestOpts は、テストで動かす git に与える設定を返す。
@@ -46,15 +63,20 @@ func gitTestOpts() []string {
 	}
 }
 
-// runGit は root で git を走らせる。失敗したらテストを飛ばす。
+// runGit は root で git を走らせる。失敗したらテストを落とす。
 // 設定は gitTestOpts が与える。
+//
+// 飛ばさずに落とすのは、git が PATH にあるのに失敗するのは環境の不具合だからである。
+// 飛ばすと、旧再生順を取り出す中心の試験が黙って走らなくなる。go test は -v を
+// 付けないと SKIP を出さないので、飛んだことに誰も気付けない（TMP の深い Windows で
+// 実際に起きた）。git が無い環境は、gitRepo が先に LookPath で見分けて飛ばす。
 func runGit(t *testing.T, root string, args ...string) {
 	t.Helper()
 	full := append(gitTestOpts(), args...)
 	cmd := exec.Command("git", full...)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+		t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
 	}
 }
 
@@ -125,6 +147,65 @@ func TestGitOldOrderUsesPreviousCommitWhenClean(t *testing.T) {
 	}
 	if strings.Contains(string(got), keyB2) {
 		t.Errorf("いまの版を返している:\n%s", got)
+	}
+}
+
+// longRootLen は TestGitOldOrderUnderLongRoot がルートを伸ばす長さ。
+//
+// Windows の git は、既定では 260 字（MAX_PATH）を超えるパスを扱えない。
+// core.longpaths が無いと、ルートの長さに応じて次の所で落ちる。
+//   - 約 194 字を超えると、製品が渡す `git show <rev>^:./data/script_order.csv` が、
+//     引数がファイル名でないかを確かめる stat で落ちる
+//   - 約 204 字を超えると、git add がオブジェクト（.git/objects/xx/<38桁>）を書けない
+//   - 約 220 字を超えると、git init が .git/hooks の見本（ルート＋37字）を書けない
+//
+// どれも超える長さにする。initGitRepo の設定が、init を含むどの段にも効いていることを
+// 確かめるためである。
+//
+// core.longpaths を入れても、上限は残る。ルートが約 240 字を超えると、git は
+// .git/config のようなルート直下の短いパスさえ扱えず、リポジトリを作る段で落ちる。
+// その上限には届かない長さにする。
+const longRootLen = 230
+
+// TestGitOldOrderUnderLongRoot は、ルートの深いリポジトリでも1つ前の再生順を
+// 取り出せることを確かめる。
+//
+// 試験のリポジトリは initGitRepo が core.longpaths を入れるので、上の3つの壁を
+// どれも越えるはず。TMP の長さに頼ると、乱数の桁数しだいで通ったり落ちたり
+// するので、ルートを longRootLen まで伸ばしてから確かめる。
+func TestGitOldOrderUnderLongRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git が無いので飛ばす")
+	}
+	// 長さは git が見る形で数える。Git for Windows は作業ディレクトリを 8.3 形式の
+	// 短い名前から長い名前に戻すので、TMP が短い形だと、字面で数えた長さより
+	// 実際は長くなり、init の時点で 260 字を超えてしまう。
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("一時ディレクトリのリンクを解けない: %v", err)
+	}
+	if pad := longRootLen - len(root) - 1; pad > 0 {
+		root = filepath.Join(root, strings.Repeat("d", pad))
+		if err := os.Mkdir(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initGitRepo(t, root)
+
+	// 1つ前へ遡る流れ（コミット済み）を通す。HEAD の版を読む流れより引数が長い。
+	path := writeOrder(t, root, orderFile(introRow("1", "line:0001", keyB)))
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "before")
+	writeOrder(t, root, orderFile(introRow("1", "line:0001", keyB2)))
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "after")
+
+	got, err := GitOldOrder(root, path)
+	if err != nil {
+		t.Fatalf("ルートが %d 字のリポジトリから旧再生順を取り出せない: %v", len(root), err)
+	}
+	if !strings.Contains(string(got), keyB) || strings.Contains(string(got), keyB2) {
+		t.Errorf("1つ前の版になっていない:\n%s", got)
 	}
 }
 
