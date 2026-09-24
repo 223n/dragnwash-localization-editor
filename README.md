@@ -1167,10 +1167,15 @@ npm test                          # 両方
 走らせたあとの集計は、`npm run test:e2e:report`で行います。  
 前の実行の生データが残っていると、集計は数えずに止まります。
 
-どちらも、カバレッジが`package.json`の`coverageThresholds`を下回ると失敗します。  
+`npm run test:go`と`npm run test:e2e`は、どちらもカバレッジが`package.json`の`coverageThresholds`を下回ると失敗します。  
 閾値は、CIと同じ条件（Linux、元リポジトリ無し）で測った値から少し余裕を引いたものです。  
 手元では元リポジトリを読むテストも走るので、Goの数字はCIより少し高く出ます。  
 テストを足して数字が上がったら、閾値も上げてください。
+
+CIでE2Eが落ちたときは、Playwrightの出力（`test-results/`）を成果物として7日間残します。  
+名前は`e2e-test-results-<試行の番号>`です。  
+落ちた試験ごとに`trace.zip`と`error-context.md`が入ります。  
+`npx playwright show-trace <trace.zip>`で開くと、そのときの操作と画面を追えます。
 
 ### 見本で画面を試す
 
@@ -1246,6 +1251,24 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 1つでもビルドに失敗した場合は、タグとGitHub Releaseを作らずに止まります。  
 6種類のうち一部だけが載ったReleaseを出さないためです。
 
+作った書庫は、タグを打つ前に展開して動かします。  
+動かせるのはランナーと同じ対象の書庫だけで、GitHubがホストするランナーでは`linux/amd64`です。  
+公開は、LinuxかmacOSの、amd64かarm64のランナーで行います。  
+それ以外のランナーでは、タグとGitHub Releaseを作らずに止まります。  
+確かめるのは次の3つです。
+
+- `dwloc version`が、リリースする版を出すこと
+- 見本（`samples/harbor`）の写しで、`dwloc validate`が終了コード0で終わること
+- 同じ写しで、`dwloc publish --no-game --dry-run`が変更なしで終わること
+
+あわせて、チェックサムの一覧が書庫と合うことも見ます。  
+書庫に4つのファイルがそろい、実行権限が付いていることも見ます。  
+1つでも満たさない場合は、タグとGitHub Releaseを作らずに止まります。  
+ビルドが通っても、版の埋め込み漏れや書庫の作り方の誤りは、動かすまで分からないためです。  
+見本を写してから確かめるのは、見本の作業コピーをこのリポジトリにコミットしてあるためです。  
+その場で`validate`を掛けると、コミットしてはいけない作業コピーとして問題になります。  
+見本がこの確認を通る形を保っているかは、Goのテスト（`cmd/dwloc/samples_test.go`）がPull Requestのうちに見ます。
+
 添付するのは、6つの書庫と`dwloc_<版>_checksums.txt`の7ファイルです。  
 Releaseは下書きとして作り、そのときに7ファイルを一緒に載せます。  
 載った数を数えて7でなければ公開せずに止まり、揃ってはじめて下書きを公開します。  
@@ -1317,7 +1340,7 @@ git push
 | `labeler.yml`         | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | 変えたファイルとブランチ名からラベルを付けます                                                                                                    |
 | `branch-guard.yml`    | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | headブランチが`main`か`develop`なら失敗します。マージは止めません                                                                                 |
 | `release.yml`         | 手動                                                                                                                                    | `develop`からリリースブランチを切り、版を上げ、`main`へのPull Requestを開きます。`auto_merge`を指定したときは、そのままマージして公開まで進めます |
-| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます | 6種類のバイナリを作り、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                                                |
+| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます | 6種類のバイナリを作り、書庫を展開して動かしてから、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                    |
 
 ## ラベル
 
