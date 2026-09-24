@@ -2,6 +2,7 @@ package publish
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -254,22 +255,54 @@ func WriteTarget(data *order.Data, t Target) (Stats, error) {
 //
 // 一時ファイルは出力先と同じディレクトリに作る。os.Rename は別ボリュームへ
 // またげないため、システムの一時ディレクトリを使うと失敗しうる。
+//
+// 出力先がリンクのときは、リンクを残したままリンク先へ書く（元実装の
+// WriteAllText と同じ結果）。リンクをそのまま rename で置き換えると、リンクが
+// 普通のファイルに変わり、訳がリンク先（ゲームのフォルダーなど）へ届かない。
+//
+//   - シンボリックリンクは、たどった先の実体を出力先にする（[resolveLink]）。
+//     一時ファイルも実体のフォルダーに作る。
+//   - ハードリンク（名前が2つ以上あるファイル）は、rename では片方の名前しか
+//     新しくならないので、その場で書き直す（[overwrite]）。書く前に同じ
+//     フォルダーの一時ファイルへ全部を書き切っておき、置き場に同じ大きさを
+//     書けることを確かめてから書く。
+//
+// 権限は、いまあるファイルの値を引き継ぐ。新しいファイルは 0644 で作る。
 func WriteBytes(path string, out []byte) error {
-	dir := filepath.Dir(path)
+	target, err := resolveLink(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	// os.CreateTemp は 0600 で作る。新しいファイルは共有する前提なので、元実装が
+	// 作るファイルと同じ 0644 相当にする。既にあるファイルは、その値を引き継ぐ。
+	// 0600 や 0640 に絞ったファイルを書くたびに広げると、絞った意図が黙って消える
+	// （Windows では無視される）。
+	perm := fs.FileMode(0o644)
+	links := uint64(1)
+	if info, err := os.Stat(target); err == nil {
+		perm = info.Mode().Perm()
+		links = linkCount(target, info)
+	}
+
+	tmp, err := os.CreateTemp(dir, filepath.Base(target)+".tmp*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
 	// 失敗して抜けるときに一時ファイルを残さない。成功時は rename 済みで
-	// 消す相手がいないため、Remove の失敗は無視してよい。
+	// 消す相手がいないため、Remove の失敗は無視してよい。ハードリンクの書き直しが
+	// 途中で失敗したときだけは、書くはずだった中身として残す。
+	keep := false
 	defer func() {
 		tmp.Close()
-		os.Remove(tmpName)
+		if !keep {
+			os.Remove(tmpName)
+		}
 	}()
 
 	if _, err := tmp.Write(out); err != nil {
@@ -283,12 +316,19 @@ func WriteBytes(path string, out []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// os.CreateTemp は 0600 で作る。出力先は共有する前提のファイルなので、
-	// 元実装が作るファイルと同じ 0644 相当にそろえる（Windows では無視される）。
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if links > 1 {
+		touched, err := overwrite(target, out)
+		if err != nil && touched {
+			keep = true
+			return fmt.Errorf("%s を書き直す途中で失敗しました。書くはずだった中身は %s に残しました: %w",
+				target, tmpName, err)
+		}
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, target)
 }
 
 // readIfExists はファイルを読む。存在しなければ nil を返しエラーにしない。
