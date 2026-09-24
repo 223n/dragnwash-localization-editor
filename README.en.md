@@ -966,6 +966,10 @@ Once `publish` goes through, `Translations/<locale>/strings.csv` in the reposito
 From there on it is not `dwloc`'s job but the procedure of the translation repository.
 
 `dwloc validate` is a replacement for `tools/check-translations.py`, which runs on pull requests.  
+It runs the same checks as the version on the `dev` branch of the translation repository.  
+Besides the shape of `strings.csv`, it checks the status word in `credits.txt` (the first line that is not a comment or blank) and the pictures in `textures/`.  
+Pictures must be lowercase `.png` files of at most 8 MB and at most 4096 pixels on each side.  
+`textures/credits.csv` needs one row per picture (`file,author,note`).  
 Running it locally before you send anything lets you fix things before the automated check stops you.
 
 | What to do | Where it is written |

@@ -966,6 +966,10 @@ Modは「いま読み込んでいる訳」を作業コピーへ書き出すの�
 ここから先は`dwloc`の仕事ではなく、翻訳リポジトリの手順です。
 
 `dwloc validate`は、Pull Requestで走る`tools/check-translations.py`を置き換えたものです。  
+翻訳リポジトリの`dev`ブランチにある版と同じ検査をします。  
+`strings.csv`の形に加えて、`credits.txt`の状態語（コメントと空行を除いた最初の行）と、`textures/`の絵も見ます。  
+絵は小文字の`.png`で、8MB以下、縦横とも4096ピクセル以下にします。  
+`textures/credits.csv`には、絵1枚につき1行の出典（`file,author,note`）が要ります。  
 送る前に手元で通しておくと、自動チェックで止められる前に直せます。
 
 | やること                             | 書いてある場所                                                                                                                                               |
