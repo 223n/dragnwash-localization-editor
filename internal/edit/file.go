@@ -17,16 +17,22 @@ import (
 // Kind は物理行の種類。
 type Kind int
 
+// 種類は、publish と同じ区切りの関数（csvfile.SplitSegments）が分けたセグメントから
+// 決める。レコードの境目にない物理行（行をまたぐレコードの続きの行と、閉じない
+// 引用符から後ろの行）は、レコードとして解釈しない生の行として、空白だけなら
+// [KindBlank]、ほかは [KindData] にする。どちらも編集させない。
 const (
-	// KindComment は生の先頭1文字が '#' の行。作業コピーと公開ファイルの
-	// `# ===== ... =====` / `# --- ... ---` の見出しがこれ。
+	// KindComment はレコードの境目にある、生の先頭1文字が '#' の行。作業コピーと
+	// 公開ファイルの `# ===== ... =====` / `# --- ... ---` の見出しがこれ。
 	KindComment Kind = iota
-	// KindBlank は空行相当の行。csvfile.ParsePowerShellRecord の
-	// 第2戻り値が false になる行（"", " ", ",", `""`, `"`）。
+	// KindBlank は空行相当の行。レコードの境目にある空行・空白だけの行（全角空白や
+	// NO-BREAK SPACE だけの行も）と、ヘッダーより後ろの "," や `""` の行（空のレコード）。
 	KindBlank
-	// KindHeader は最初に現れた「コメントでも空行相当でもない行」。
+	// KindHeader は最初のレコード（区切りの関数のヘッダー）の最初の物理行。
+	// "," の行でもヘッダーになる（受理はされない）。
 	KindHeader
-	// KindData はヘッダーより後ろの、コメントでも空行相当でもない行。
+	// KindData はヘッダーより後ろのレコードの物理行と、レコードとして解釈しない
+	// 生の行。
 	KindData
 )
 
@@ -118,8 +124,15 @@ type File struct {
 }
 
 // Parse はバイト列を編集モデルにする。壊れた入力でも誤りは返さない。
-// ヘッダーが受理できないファイルは読み取り専用の [File] になる
-// （[File.ReadOnly] と [File.ReadOnlyReason] を見ること）。
+// ヘッダーが受理できないファイルと、開いた引用符がファイルの終わりまで閉じない
+// ファイルは、読み取り専用の [File] になる（[File.ReadOnly] と
+// [File.ReadOnlyReason] を見ること）。
+//
+// 行の種類は、publish と同じ全体を解釈する読み方の区切り（csvfile.SplitSegments）で
+// 決める。物理行を1行ずつ見て決めると、引用符で囲んだ値の中の '#' の行を見出しと、
+// 空行を区切りと取り違え、publish が1つのレコードとして読むものの一部だけを書き
+// 換えることになる。保存の単位は物理行のまま（PR3 でレコードへ移す）なので、
+// 複数の物理行にまたがるレコードは、どの物理行も理由を付けて編集させない。
 //
 // 保存したいなら [Open] を使う。Parse で作った File は保存先を持たない。
 func Parse(data []byte) *File {
@@ -130,40 +143,83 @@ func Parse(data []byte) *File {
 	if trimmed := csvfile.TrimBOM(data); len(trimmed) != len(data) {
 		f.bom = string(data[:len(data)-len(trimmed)])
 	}
-
-	// 1周目: 行の種類を決める。ヘッダーは「最初に現れたコメントでも
-	// 空行相当でもない行」なので、これが決まるまで列数が分からない。
-	headerIndex := -1
 	for _, pl := range csvfile.SplitPythonLines(data) {
-		body, _ := splitTerminator(pl.Text)
-		line := Line{Number: pl.Number, Text: pl.Text}
-		switch {
-		case strings.HasPrefix(body, "#"):
-			// 生の先頭1文字だけを見る前方一致。トリムしないので " #x" はデータ行。
-			// validate（csvfile.ReadPythonRecords）は引用符の偶奇も持ち回るので、
-			// 奇数個の '"' を含む行のあとでは判定が割れうる。この編集モデルは
-			// 複数行のレコードを扱わないので、偶奇は持ち回らない。
-			line.Kind = KindComment
-		case !isRecord(body):
-			line.Kind = KindBlank
-		case headerIndex < 0:
-			line.Kind = KindHeader
-			headerIndex = len(f.lines)
-		default:
-			line.Kind = KindData
-		}
-		f.lines = append(f.lines, line)
+		// 種類の既定は空行相当にしておく。どのセグメントにも入らない物理行は無い
+		// （区切りの関数も同じ3種の改行で分ける）が、あれば画面に並べない。
+		f.lines = append(f.lines, Line{Number: pl.Number, Kind: KindBlank, Text: pl.Text})
 	}
 
-	if headerIndex < 0 {
+	segs := csvfile.SplitSegments(data)
+	// tail は、閉じない引用符が開いたレコードの最初の物理行の添字。無ければ -1。
+	// そこから後ろはレコードとして解釈せず、物理行のまま並べる（決まったことの 3）。
+	tail := -1
+	headerIndex := -1
+	var headerBody string
+	// records は、1物理行に収まるデータのレコードの添字。フィールドと編集可否は、
+	// ヘッダーが決まってから物理行の読み方で求める（[File.refresh]）。
+	var records []int
+	for _, seg := range segs.List {
+		if seg.Line < 1 || seg.EndLine > len(f.lines) {
+			continue
+		}
+		first := seg.Line - 1
+		if seg.Unclosed() {
+			tail = first
+			break
+		}
+		switch seg.Kind {
+		case csvfile.SegmentComment:
+			f.lines[first].Kind = KindComment
+		case csvfile.SegmentHeader:
+			f.markLines(seg, KindHeader)
+			headerIndex, headerBody = first, segs.Body(seg)
+		case csvfile.SegmentRecord:
+			f.markLines(seg, KindData)
+			if seg.MultiLine() {
+				f.markMultiline(seg)
+			} else {
+				records = append(records, first)
+			}
+		default:
+			// 空行と、"," や `""` の行（空のレコード）。いままでどおり空行相当。
+			f.markLines(seg, KindBlank)
+		}
+	}
+	if tail >= 0 {
+		for i := tail; i < len(f.lines); i++ {
+			f.lines[i].Kind = rawKind(f.lines[i].Text)
+		}
+		if headerIndex >= tail {
+			headerIndex = -1
+		}
+	}
+
+	// ヘッダーの受理は、いままでどおり生テキストの完全一致で見る（[matchHeader]）。
+	// どの行をヘッダーにするかだけを区切りの関数にそろえた（決まったことのそのほか 8）。
+	var header []string
+	if headerIndex >= 0 {
+		header = matchHeader(headerBody)
+	}
+	if header != nil {
+		f.header = header
+		f.lines[headerIndex].Fields = slices.Clone(header)
+		for _, i := range records {
+			f.refresh(i)
+		}
+	}
+
+	switch {
+	case tail >= 0:
+		// 閉じない引用符は、ヘッダーの形より先に言う。ヘッダーの中で開いたときは、
+		// ヘッダーにファイルの終わりまでが入っているので、受理されない理由より
+		// 引用符のほうが直す先を指す（publish の形の確かめも (e) だけを出す）。
+		f.markReadOnly(reason.New(reason.EditUnclosedQuote,
+			fmt.Sprintf("%d行目で開いた引用符がファイルの終わりまで閉じない（そこから後ろがすべて1つの値になる）", segs.UnclosedLine),
+			"line", strconv.Itoa(segs.UnclosedLine)))
+	case headerIndex < 0:
 		f.markReadOnly(reason.New(reason.EditNoHeader,
 			"ヘッダー行が無い（空のファイルか、コメントと空行だけのファイル）"))
-		return f
-	}
-
-	headerBody, _ := splitTerminator(f.lines[headerIndex].Text)
-	header := matchHeader(headerBody)
-	if header == nil {
+	case header == nil:
 		// ヘッダー行そのものは %q で引用してから渡す。引用を目録の側にやらせると、
 		// 言語ごとに引用符が変わり、同じファイルの同じ行が別の綴りで出る。
 		f.markReadOnly(reason.New(reason.EditBadHeader, fmt.Sprintf(
@@ -173,18 +229,55 @@ func Parse(data []byte) *File {
 			f.lines[headerIndex].Number, headerBody),
 			"line", strconv.Itoa(f.lines[headerIndex].Number),
 			"text", fmt.Sprintf("%q", headerBody)))
-		return f
-	}
-	f.header = header
-	f.lines[headerIndex].Fields = slices.Clone(header)
-
-	// 2周目: データ行のフィールドと編集可否を決める。
-	for i := range f.lines {
-		if f.lines[i].Kind == KindData {
-			f.refresh(i)
-		}
 	}
 	return f
+}
+
+// markLines は、seg の最初の物理行の種類を kind にする。行をまたぐセグメントの
+// 続きの行は、生の行として並べる（[rawKind]）。
+func (f *File) markLines(seg csvfile.Segment, kind Kind) {
+	f.lines[seg.Line-1].Kind = kind
+	for n := seg.Line + 1; n <= seg.EndLine; n++ {
+		f.lines[n-1].Kind = rawKind(f.lines[n-1].Text)
+	}
+}
+
+// markMultiline は、複数の物理行にまたがるレコードのどの物理行も、理由を付けて
+// 編集させない。
+//
+// 保存は物理行の単位で最終フィールドを差し替えるので、行をまたぐレコードの1行目へ
+// 書くと、続きの行が残って publish の読み方では壊れたレコードになる（行単位で
+// 読んでいたときは、訳が行をまたぐレコードの1行目が、訳の切れた編集できる行に
+// 見えていた）。レコードの単位で書けるようになるまで（PR3）、どの物理行も書かせない。
+//
+// 1行目には全体を解釈して読んだ値を持たせる。キーでバッジを結び付け、原文の欄に
+// 原文の全体を出すためである。訳は出さない（[Line.Translation] は編集できない行では
+// 空を返す）。画面は編集できない行の生の行を出す。
+func (f *File) markMultiline(seg csvfile.Segment) {
+	why := reason.New(reason.EditMultiline,
+		fmt.Sprintf("行をまたぐレコード（%d〜%d行目）の行なので、まだ編集できない", seg.Line, seg.EndLine),
+		"line", strconv.Itoa(seg.Line), "end", strconv.Itoa(seg.EndLine))
+	fields := slices.Clone(seg.Fields)
+	for len(fields) < len(seg.Offsets) {
+		fields = append(fields, "")
+	}
+	f.lines[seg.Line-1].Fields = fields
+	for n := seg.Line; n <= seg.EndLine; n++ {
+		f.lines[n-1].Editable = false
+		f.lines[n-1].setReason(why)
+	}
+}
+
+// rawKind は、レコードとして解釈しない物理行（行をまたぐセグメントの続きの行と、
+// 閉じない引用符から後ろの行）の種類を返す。空白だけの行は空行相当、ほかは生の行を
+// 見せるためにデータ行にする。'#' で始まっていても見出しにはしない。引用符で囲んだ
+// 値の中の行で、publish はコメントとして落とさない。
+func rawKind(text string) Kind {
+	body, _ := splitTerminator(text)
+	if strings.TrimSpace(body) == "" {
+		return KindBlank
+	}
+	return KindData
 }
 
 // Open はファイルを読んで編集モデルにする。読み取りに失敗したときだけ誤りを返す。
@@ -255,12 +348,15 @@ func (f *File) Line(number int) (Line, bool) {
 // 誤りを返す場合:
 //
 //   - ファイル全体が読み取り専用: [ErrReadOnly]
-//   - 行が無い / データ行でない / 列数がヘッダーと合わない: [NotEditableError]
+//   - 行が無い / データ行でない / 列数がヘッダーと合わない / 行をまたぐレコードの行:
+//     [NotEditableError]
 //   - value に CR か LF が入っている: [InvalidValueError]
 //
-// value の CR / LF を拒むのは、公開ファイルの読み手（ConvertFrom-Csv の移植である
-// csvfile.ReadPowerShellRows）が1物理行=1レコードで読むためである。引用符で
-// 囲っても改行をまたぐ値は別レコードへ割れて壊れる。書けない値は書かせない。
+// value の CR / LF を拒むのは、保存が物理行の単位だからである。公開ファイルの読み手
+// （csvfile.ReadPowerShell）は全体を解釈するので、引用した値の中の改行は読めるが、
+// 改行を入れると、この行が行をまたぐレコードになり、物理行の編集モデルと食い違う。
+// レコードの単位で保存するようになるまで（PR3）、書けない値は書かせない。
+// 訳への改行の入力は PR4 で足す（決まったことの 1）。
 func (f *File) SetTranslation(number int, value string) error {
 	if f.readOnly {
 		return fmt.Errorf("%w: %s", ErrReadOnly, f.readOnlyReason)
@@ -417,28 +513,32 @@ func (f *File) indexOf(number int) (int, bool) {
 }
 
 // markReadOnly はファイル全体を読み取り専用にする。
-// データ行の Editable は false のまま、理由だけ入れておく。
+// データ行はどれも編集させず、理由を入れておく。
+//
+// 閉じない引用符のファイルでは、引用符が開いたレコードより前の行は読めていて
+// （[File.refresh] が編集できると決めていることがある）、そこからも編集可否を
+// 倒す。行をまたぐレコードの理由も、ファイル全体の理由で上書きする。ファイル全体が
+// 書けない以上、直す先はファイル全体の理由のほうである。
 func (f *File) markReadOnly(why reason.Reason) {
 	f.readOnly = true
 	f.readOnlyReason = why.Text
 	f.readOnlyCause = why
 	for i := range f.lines {
 		if f.lines[i].Kind == KindData {
+			f.lines[i].Editable = false
 			f.lines[i].setReason(why)
 		}
 	}
 }
 
-// isRecord は行本体（改行を除いたもの）がレコードになるかを返す。
-// 空行相当の判定は csvfile.ParsePowerShellRecord の第2戻り値をそのまま使う。
+// isRecord は、1物理行に収まるレコードの本体（改行を除いたもの）が、書き換えたあとも
+// レコードとして読まれるかを返す。空行相当の判定は csvfile.ParsePowerShellRecord の
+// 第2戻り値をそのまま使う（"," や `""` の行は空行相当になる。区切りの関数の空の
+// レコードと同じ）。
 //
-// csvfile.ReadPowerShellRows はヘッダーを探すときだけ別の判定を使う。飛ばすのは
-// 空行と空白だけの行（.NET の Trim で空になる行）で、"," や '""' はヘッダーとして
-// 採る（上流の hash-strings.ps1 の Remove-NonRecords に合わせたもの）。ここでは
-// ヘッダーの前後で判定を変えず、一貫してこちらを使う。差が出るのはヘッダーの前に
-// "," や '""' の行があるファイルと、全角空白だけの行があるファイルだけである。
-// 前者ではこちらが次の行をヘッダーとして探しにいき、後者ではこちらが全角空白の行を
-// ヘッダーにして読み取り専用で開く。どちらも実データには無い形。
+// 行の種類を最初に決めるのは区切りの関数（[Parse]）で、ここは訳を書き換えた行を
+// 読み直すとき（[File.refresh]）に使う。2列の作業コピーでキーの空いた行の訳を消すと、
+// その行は "," になって空行相当に変わる。
 func isRecord(body string) bool {
 	_, ok := csvfile.ParsePowerShellRecord(body)
 	return ok

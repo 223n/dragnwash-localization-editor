@@ -11,11 +11,14 @@ import (
 //
 // 上流はどの入力も止めずに書く。飲み込みの8件（swallow-*）は、上流では英語の原文や
 // キーが訳に入って公開される形で、どれも当たらなければならない。訳の空の行を
-// 飲み込む形（swallow-7col-hash-close）はキーの形で、キー列の空いた英文の行
-// （swallow-7col-empty-key-english）と2列の作業コピー（swallow-2col-hash-close）は
-// 区切りの数で当たる（決まったことの 4）。飲み込まれた行が自分の値を引用符で開く
-// 3件（swallow-*-own-quote）は、続きの行を単独で読むと引用が開いたまま終わり、
-// キーの形にも区切りの数にも当たらない。閉じ引用符の後ろに文字が続くことで当たる。
+// 飲み込む形（swallow-7col-hash-close）はキーの形で、2列の作業コピー
+// （swallow-3col、swallow-2col-hash-close）は区切りの数で当たる（決まったことの 4）。
+// 飲み込まれた行が自分の値を引用符で開く3件（swallow-*-own-quote）は、続きの行を
+// 単独で読むと引用が開いたまま終わり、キーの形にも区切りの数にも当たらない。
+// 閉じ引用符の後ろに文字が続くことで当たる。キー列の空いた英文の行
+// （swallow-7col-empty-key-english）と key 列の英文の行（swallow-6col-published）は、
+// 区切りの数にも当たるが、閉じ引用符の後ろに文字が続くので、その理由で返す。
+// 区切りの数の理由は、確かめたうえで通す指定で通せるからである。
 //
 // 実物と同じ形の複数行の原文（ml-source-real-shape）や、複数行の訳（ml-translation-*）、
 // 値の中の '#' の行は当たってはいけない。当たると、正当なファイルの publish が
@@ -24,18 +27,22 @@ import (
 // 正当でも当たるものが2件ある。原文の2行目がカンマを多く含む形
 // （ml-continuation-looks-like-row）と、2列の作業コピーで原文が行をまたぐ形
 // （ml-source-translated-2col）である。形だけでは閉じ誤りと見分けられないので、
-// 確かめたうえで通す指定（PR2）で書く。
+// 確かめたうえでレコード単位で通す指定（dwloc publish --accept-multiline
+// <ロケール>:<key>）で書く。2列の作業コピーの原文に単独の CR がある形
+// （lone-cr-source-2col）も、単独の CR で物理行が分かれ、続きの行が2列に見えるので
+// 同じ理由で当たる。こちらは単独の CR の確かめも止めるので、指定しても書かない。
 func TestFindSwallowsOnFixture(t *testing.T) {
 	want := map[string][]Swallow{
 		"swallow-3col":                   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"swallow-7col-hash-close":        {{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 3, Sign: SignKeyShaped}},
 		"swallow-2col-hash-close":        {{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 3, Sign: SignSameColumns}},
-		"swallow-7col-empty-key-english": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
-		"swallow-6col-published":         {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-continuation-looks-like-row": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
 		"ml-source-translated-2col":      {{ID: 3, Line: 3, EndLine: 5, SwallowedLine: 5, Sign: SignSameColumns}},
-		// 次の3件は閉じ引用符の後ろの文字で当たる。上の swallow-7col-empty-key-english と
-		// swallow-6col-published も閉じ引用符の後ろに文字が続くが、区切りの数が先に当たる。
+		"lone-cr-source-2col":            {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
+		// 次の5件は閉じ引用符の後ろの文字で当たる。最初の2件は区切りの数にも当たるが、
+		// 閉じ引用符の後ろの文字を先に採る。
+		"swallow-7col-empty-key-english":   {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		"swallow-6col-published":           {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 		"swallow-2col-own-quote":           {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 		"swallow-7col-empty-key-own-quote": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
 		"swallow-6col-published-own-quote": {{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
@@ -65,13 +72,41 @@ func TestFindSwallows(t *testing.T) {
 	}{
 		{
 			// 上流 main の hash-strings.ps1 が認める「key 列に英文」の追記の形を、いまの
-			// 公開ファイルが飲み込む（批評の high、S1）。キーの形ではないが区切りの数で当たる。
+			// 公開ファイルが飲み込む（批評の high、S1）。キーの形ではないが区切りの数に当たる。
+			// 英文を開く引用符が「いち」を閉じ、後ろに Hello が続くので、理由は閉じ方にする。
 			name: "公開ファイルが key 列に英文のある行を飲み込む",
 			text: "key,section,node,order,speaker,translation\n" +
 				"0123456789abcdef,UI,,,UI,\"いち\n" +
 				"\"Hello, there\",UI,,,UI,こんにちは\n" +
 				"fedcba9876543210,UI,,,UI,に\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 区切りの数だけに当たる形。引用符は行の終わりで閉じ、後ろに文字は続かない。
+			name: "公開ファイルがヘッダーと同じ列の数の行を飲み込む",
+			text: "key,section,node,order,speaker,translation\n" +
+				"0123456789abcdef,UI,,,UI,\"いち\n" +
+				",UI,,,UI,こんにちは\"\n" +
+				"fedcba9876543210,UI,,,UI,に\n",
 			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignSameColumns}},
+		},
+		{
+			// キーの形の行でも、閉じ引用符の後ろに文字が続けば閉じ方の理由にする。キーの形の
+			// 理由は確かめたうえで通す指定で通せるので、それで返すと、正当な値ではありえない
+			// 飲み込みが通る（fedcba… の行が「いち」の訳に入って公開される）。
+			name: "キーの形の行で閉じ引用符の後ろに文字が続く",
+			text: "key,section,node,order,speaker,translation\n" +
+				"0123456789abcdef,UI,,,UI,\"いち\n" +
+				"fedcba9876543210,UI,,,UI,\"に\"さん\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 3, SwallowedLine: 3, Sign: SignTextAfterQuote}},
+		},
+		{
+			// 閉じ引用符の後ろに文字が続く行（4行目）があるレコードは、その行だけを返す。
+			// 3行目は単独で読むと区切りの数がヘッダーと同じだが、そのレコードは正当な値では
+			// ありえないので、通す指定で通せる理由として返さない。
+			name: "閉じ引用符の後ろに文字が続くレコードはその行だけを返す",
+			text: "key,source_en,translation\nk,s,\"a\nx,y,z\n\"tail,c\n",
+			want: []Swallow{{ID: 2, Line: 2, EndLine: 4, SwallowedLine: 4, Sign: SignTextAfterQuote}},
 		},
 		{
 			name: "台詞ID で始まる行を飲み込む",
@@ -220,12 +255,38 @@ func TestFindCRCuts(t *testing.T) {
 				"3fc4ccfe745870e2,UI,,,UI,two,に\r",
 		},
 		{
+			// LF で改行したファイルでは、単独の CR の次が空行でも切れた値と見る
+			// （決まったことの 14）。空白だけの行も空行である。
 			name: "次の行が空白だけ",
 			text: "key,translation\nk,a\r  \nk2,b\nk3,c\r\t\nk4,d\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}, {ID: 5, Line: 5, EndLine: 5, NextLine: 6}},
 		},
 		{
 			name: "次の行が全角空白だけ",
 			text: "key,translation\nk,a\r　\nk2,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			name: "次の行が空行",
+			text: "key,translation\r\nk,a\r\r\nk2,b\r\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			// 値が CR の直後の '#' で切れる形（い\r# ち）。後半はコメントとして落ちる。
+			name: "次の行が '#' で始まる",
+			text: "key,translation\nk,い\r# ち\nk2,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			name: "次の行が空のレコード",
+			text: "key,translation\nk,い\r,\nk2,b\n",
+			want: []CRCut{{ID: 2, Line: 2, EndLine: 2, NextLine: 3}},
+		},
+		{
+			// CRLF で改行したファイルの行末に、単独の CR が1つだけ紛れ込んだ形。次の行が
+			// レコードに見えるので、改行しただけと見る。
+			name: "改行の混ざったファイルで次がレコード",
+			text: "key,translation\r\n0123456789abcdef,a\rfedcba9876543210,b\r\n",
 		},
 		{
 			// 行をまたぐレコードでも、区切りがヘッダーより少なくキーの形でもなければ当たる。
@@ -258,27 +319,89 @@ func TestFindCRCuts(t *testing.T) {
 		}
 	}
 
-	// 入力の表の改行をすべて単独の CR に直した写し（CR だけの改行のファイル）でも、
-	// 当たるのは次の入力だけである。CR だけの改行のファイルは意図して読む形なので、
-	// ここで当たる入力が増えると、正当なファイルの publish が塞がる。
+	// 入力の表の改行をすべて単独の CR に直した写し（CR だけの改行のファイル）では、
+	// どの入力にも当たらない（決まったことの 14）。CR だけの改行のファイルは意図して
+	// 読む形で、単独の CR は行の区切りと見分けられないためである。ファイルで分ける前は、
+	// 次の2件が切れた値ではないのに当たっていた。
 	//
-	// lone-cr-unquoted-value のほかの2件は、切れた値ではないのに当たる（未決）。
-	// どちらも次のレコードが単独ではレコードに見えない形で、単独の CR の後ろでは
-	// 切れた値の後半と見分けられない。PR2 で止める前に扱いを決める。
-	crOnlyHits := map[string]string{
-		// 値が単独の CR で切れている。改行を直しても切れたまま。
-		"lone-cr-unquoted-value": "切れた値",
-		// U+00AD のあとの '#' の行は、読み手が序数で比べてデータのレコードにする（上流と
-		// 意図して違える点）。単独ではレコードに見えないので、その前の CR で当たる。
-		"soft-hyphen-comment": "U+00AD の行",
-		// ヘッダーは3列（最後の列名が行をまたぐ）、データは2列で、キーの形でもない。
-		"ml-header": "列の足りないレコード",
-	}
+	//   - soft-hyphen-comment: U+00AD のあとの '#' の行は、読み手が序数で比べて
+	//     データのレコードにする（上流と意図して違える点）。単独ではレコードに見えない
+	//   - ml-header: ヘッダーは3列（最後の列名が行をまたぐ）、データは2列で、キーの
+	//     形でもない
+	//
+	// lone-cr-unquoted-value も、改行を単独の CR に直すと、値の中の CR と行の区切りを
+	// 見分けられなくなり、当たらない。
 	crOnly := strings.NewReplacer("\r\n", "\r", "\n", "\r")
 	for _, c := range loadFixtureCases(t).Cases {
-		got := FindCRCuts(SplitSegments([]byte(crOnly.Replace(c.Text))))
-		if _, want := crOnlyHits[c.Name]; (len(got) > 0) != want {
+		text := crOnly.Replace(c.Text)
+		segs := SplitSegments([]byte(text))
+		if got := FindCRCuts(segs); len(got) > 0 {
 			t.Errorf("%s（CR だけの改行）: 単独の CR で切れた値 %+v", c.Name, got)
+		}
+		// 改行を直した写しがほんとうに CR だけの改行になっていることも見る。当たらない
+		// 理由が「ファイルで分けたから」でなく「単独の CR が無いから」だと、試験が
+		// 何も確かめていないことになる。
+		if strings.Contains(text, "\r") && !crOnlyLineBreaks(segs) && len(segs.List) > 1 {
+			t.Errorf("%s（CR だけの改行）: CR だけの改行のファイルと見ていない", c.Name)
+		}
+	}
+	// 分けたことで当たらなくなった2件は、ファイルで分ける前の見分け方（次のセグメントが
+	// レコードに見えるか）では当たる形であることを確かめておく。ここが外れると、上の
+	// 確かめは何も守っていない。
+	for _, name := range []string{"soft-hyphen-comment", "ml-header"} {
+		segs := SplitSegments([]byte(crOnly.Replace(fixtureText(t, name))))
+		if !crOnlyLineBreaks(segs) || !nextSegmentNotRecordAfterCR(segs) {
+			t.Errorf("%s（CR だけの改行）: 単独の CR の次にレコードに見えないセグメントが無い", name)
+		}
+	}
+}
+
+// fixtureText は入力の表から name の text を返す。
+func fixtureText(t *testing.T, name string) string {
+	t.Helper()
+	for _, c := range loadFixtureCases(t).Cases {
+		if c.Name == name {
+			return c.Text
+		}
+	}
+	t.Fatalf("入力の表に %s が無い", name)
+	return ""
+}
+
+// nextSegmentNotRecordAfterCR は、単独の CR で終わるフィールドを持つセグメントの
+// 次に、レコードに見えないセグメント（空行・コメント・空のレコード、またはキーの形でも
+// 区切りの数がヘッダーと同じでもないレコード）があるかを返す。
+func nextSegmentNotRecordAfterCR(segs Segments) bool {
+	header, _ := segs.Header()
+	for i, seg := range segs.List {
+		if !seg.HasFields() || seg.Term != TermCR || i+1 >= len(segs.List) {
+			continue
+		}
+		next := segs.List[i+1]
+		if next.Kind != SegmentRecord || (!keyShaped(next.Fields[0]) && len(next.Offsets) != len(header.Offsets)) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCROnlyLineBreaks は、行の区切りがすべて単独の CR のファイルの見分け方を固定する。
+func TestCROnlyLineBreaks(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		want       bool
+	}{
+		{"CR だけ", "key,translation\rk,a\r", true},
+		{"最後の行に改行が無い", "key,translation\rk,a", true},
+		{"LF が1つ混ざる", "key,translation\rk,a\n", false},
+		{"CRLF が1つ混ざる", "key,translation\r\nk,a\r", false},
+		// 引用の中の LF は値の一部で、行の区切りではない。
+		{"引用の中の LF", "key,translation\rk,\"a\nb\"\r", true},
+		{"改行が無い", "key,translation", false},
+		{"空", "", false},
+	} {
+		if got := crOnlyLineBreaks(SplitSegments([]byte(tc.text))); got != tc.want {
+			t.Errorf("%s: crOnlyLineBreaks = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
@@ -296,6 +419,12 @@ func TestLoneCRValues(t *testing.T) {
 		switch c.Name {
 		case "lone-cr-in-quoted-translation":
 			if want := []ValueSpot{{ID: 2, Line: 2, EndLine: 3, Column: "translation"}}; !slices.Equal(got, want) {
+				t.Errorf("%s: got %+v, want %+v", c.Name, got, want)
+			}
+		case "lone-cr-source-key", "lone-cr-source-line-id", "lone-cr-source-2col":
+			// 原文の中の単独の CR。キーの決まり方（key 列、台詞ID、2列）で直し方が変わる
+			// （internal/publish の LoneCRKeyKind）が、見つけ方は同じ。
+			if want := []ValueSpot{{ID: 2, Line: 2, EndLine: 3, Column: "source_en"}}; !slices.Equal(got, want) {
 				t.Errorf("%s: got %+v, want %+v", c.Name, got, want)
 			}
 		default:

@@ -125,6 +125,23 @@ type Summary struct {
 	// Finding にはせず件数だけ持つ。
 	SourceMissing int
 
+	// OrderUnclosed は [Repo.OrderUnclosed]。再生順で開いた引用符が閉じなかった
+	// 物理行で、閉じていれば 0。0 でなければどのカテゴリも判定しない。
+	OrderUnclosed int
+	// PublishedUnclosed は [Locale.PublishedUnclosed]。0 でなければ、このロケールは
+	// どのカテゴリも判定しない。
+	PublishedUnclosed int
+	// WorkingUnclosed は [Locale.WorkingUnclosed]。0 でなければ、作業コピーを要る
+	// カテゴリを判定しない。
+	WorkingUnclosed int
+	// LayoutRisksUnclosed は [Locale.LayoutRisksUnclosed]。0 でなければ、はみ出しの
+	// 記録を要るカテゴリを判定しない。
+	LayoutRisksUnclosed int
+	// OthersUnclosed は、公開ファイルで開いた引用符が閉じなかった、ほかのロケールの
+	// 名前（ディレクトリ名順）。報告しないロケールも入る。1つでもあれば、ロケールどうしを
+	// 比べるカテゴリを判定しない。
+	OthersUnclosed []string
+
 	// Counts はカテゴリごとの件数。全カテゴリに値が入る。
 	Counts map[Category]int
 }
@@ -132,12 +149,16 @@ type Summary struct {
 // canJudge はそのカテゴリを判定できたかを返す。false のとき Counts の 0 は
 // 「1件も無い」ではなく「判定していない」を意味する。
 //
-// 判定できないのは次の6つの場合しかない。作業コピーが要るのに読んでいないとき、
-// 再生順のキーが要るのに読めていないとき、再生順の台詞IDが要るのに無いとき、
-// 再生順に norm 列が無いとき、はみ出しの記録が要るのに読んでいないとき、1つ前の版の
-// 再生順を取り出せないとき（または今の版と同じ内容に見えるとき）で、どれも「0 件」と
-// 書くと嘘になる。
+// 判定できないのは、閉じない引用符で読めなかったファイルに依るとき
+// （[Summary.unclosedBlocks]）と、次の6つの場合しかない。作業コピーが要るのに
+// 読んでいないとき、再生順のキーが要るのに読めていないとき、再生順の台詞IDが要るのに
+// 無いとき、再生順に norm 列が無いとき、はみ出しの記録が要るのに読んでいないとき、
+// 1つ前の版の再生順を取り出せないとき（または今の版と同じ内容に見えるとき）で、
+// どれも「0 件」と書くと嘘になる。
 func (s Summary) canJudge(c Category) bool {
+	if s.unclosedBlocks(c) {
+		return false
+	}
 	if c.needsWorking() && !s.HasWorking {
 		return false
 	}
@@ -159,6 +180,31 @@ func (s Summary) canJudge(c Category) bool {
 	return true
 }
 
+// unclosedBlocks は、閉じない引用符で読めなかったファイルのせいで、そのカテゴリを
+// 判定しないかを返す（決まったことの 3）。
+//
+// どのファイルがどのカテゴリに効くかは次のとおりで、見る順は judgeBlockReason と同じ。
+//
+//   - 再生順: 報告全体。どのカテゴリも再生順を判定か位置の根拠に使う。
+//   - このロケールの公開ファイル: このロケールのすべてのカテゴリ。
+//   - 作業コピー: 作業コピーを要るカテゴリ。タグの開閉とはみ出しの恐れは、
+//     --no-working のときと同じく公開ファイルを見る。
+//   - はみ出しの記録: はみ出しの恐れ。
+//   - ほかのロケールの公開ファイル: ロケールどうしを比べるカテゴリ。
+func (s Summary) unclosedBlocks(c Category) bool {
+	switch {
+	case s.OrderUnclosed > 0, s.PublishedUnclosed > 0:
+		return true
+	case c.needsWorking() && s.WorkingUnclosed > 0:
+		return true
+	case c.needsLayoutRisks() && s.LayoutRisksUnclosed > 0:
+		return true
+	case c.comparesLocales() && len(s.OthersUnclosed) > 0:
+		return true
+	}
+	return false
+}
+
 // Report は比較の結果。
 type Report struct {
 	OrderPath string
@@ -174,6 +220,19 @@ type Report struct {
 	// EmptyLocales は公開ファイルも作業コピーも無いロケールの名前
 	// （[Repo.EmptyLocales]）。--locale で絞っても全件入る。
 	EmptyLocales []string
+	// OrderUnclosed は [Repo.OrderUnclosed]。
+	OrderUnclosed int
+	// Unclosed は、閉じない引用符で読めず、報告するロケールのどれかの判定を止めた
+	// ファイル。並びは再生順、公開ファイル（ロケール順）、作業コピーとはみ出しの記録
+	// （報告するロケールの順）で、同じファイルは1回だけ入る。
+	//
+	// 公開ファイルは報告しないロケールのものも入る。ロケールどうしを比べる
+	// カテゴリを止めるからである。報告しないロケールの作業コピーとはみ出しの記録は
+	// 入らない。報告するロケールの判定には効かない。
+	//
+	// 1つでもあれば、dwloc diff は終了コードを1にする（決まったことのそのほか 6）。
+	// 判定していないカテゴリがある以上、「要確認なし」と言えない。
+	Unclosed []publish.UnclosedFile
 
 	// Locales は報告するロケールの要約。
 	Locales []Summary
@@ -342,15 +401,17 @@ func Compare(r *Repo, report []string) *Report {
 	idx := newOrderIndex(r.Order)
 
 	rep := &Report{
-		OrderPath:    r.OrderPath,
-		OrderKeys:    len(idx.first),
-		OrderLineIDs: len(idx.lineIDs),
-		ReadLocales:  len(r.Locales),
-		EmptyLocales: r.EmptyLocales,
+		OrderPath:     r.OrderPath,
+		OrderKeys:     len(idx.first),
+		OrderLineIDs:  len(idx.lineIDs),
+		ReadLocales:   len(r.Locales),
+		EmptyLocales:  r.EmptyLocales,
+		OrderUnclosed: r.OrderUnclosed,
 	}
 	if r.Order != nil {
 		rep.OrderRows = len(r.Order.Entries)
 	}
+	unclosedPublished := publishedUnclosedLocales(r.Locales)
 
 	// 全ロケールのハッシュキー集合と、キーごとの所有ロケール数。
 	sets := make([]map[string]struct{}, len(r.Locales))
@@ -377,11 +438,65 @@ func Compare(r *Repo, report []string) *Report {
 		if !want[i] {
 			continue
 		}
-		sum, findings := compareLocale(r, idx, loc, sets[i], owners, union)
+		sum, findings := compareLocale(r, idx, loc, sets[i], owners, union, othersThan(unclosedPublished, loc.Name))
 		rep.Locales = append(rep.Locales, sum)
 		rep.Findings = append(rep.Findings, findings...)
 	}
+	rep.Unclosed = unclosedFiles(r, want)
 	return rep
+}
+
+// publishedUnclosedLocales は、公開ファイルで開いた引用符が閉じなかったロケールの
+// 名前を、並びの順（ディレクトリ名順）に返す。
+func publishedUnclosedLocales(locales []Locale) []string {
+	var out []string
+	for _, loc := range locales {
+		if loc.PublishedUnclosed > 0 {
+			out = append(out, loc.Name)
+		}
+	}
+	return out
+}
+
+// othersThan は names から self を除いた写しを返す。1つも残らなければ nil。
+func othersThan(names []string, self string) []string {
+	var out []string
+	for _, name := range names {
+		if name != self {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// unclosedFiles は [Report.Unclosed] を組み立てる。want は報告するロケールの印。
+func unclosedFiles(r *Repo, want []bool) []publish.UnclosedFile {
+	var out []publish.UnclosedFile
+	seen := make(map[string]struct{})
+	add := func(path string, line int) {
+		if line == 0 {
+			return
+		}
+		if _, dup := seen[path]; dup {
+			// はみ出しの記録は、作業コピーと同じフォルダーにある1つのファイルを
+			// 全ロケールが読むので、同じファイルが何度も来る。
+			return
+		}
+		seen[path] = struct{}{}
+		out = append(out, publish.UnclosedFile{Path: path, Line: line})
+	}
+	add(r.OrderPath, r.OrderUnclosed)
+	for _, loc := range r.Locales {
+		add(loc.PublishedPath, loc.PublishedUnclosed)
+	}
+	for i, loc := range r.Locales {
+		if !want[i] {
+			continue
+		}
+		add(loc.WorkingPath, loc.WorkingUnclosed)
+		add(loc.LayoutRisksPath, loc.LayoutRisksUnclosed)
+	}
+	return out
 }
 
 // reportedLocales はどのロケールを報告するかを決める。
@@ -424,28 +539,35 @@ func hashKeySet(rows []Row) map[string]struct{} {
 	return set
 }
 
-// compareLocale は1ロケール分の要約と報告を作る。
+// compareLocale は1ロケール分の要約と報告を作る。othersUnclosed は、公開ファイルで
+// 開いた引用符が閉じなかった、ほかのロケールの名前。
 func compareLocale(r *Repo, idx *orderIndex, loc Locale,
-	mine map[string]struct{}, owners map[string]int, union map[string]struct{}) (Summary, []Finding) {
+	mine map[string]struct{}, owners map[string]int, union map[string]struct{},
+	othersUnclosed []string) (Summary, []Finding) {
 
 	sum := Summary{
-		Locale:           loc.Name,
-		PublishedPath:    loc.PublishedPath,
-		WorkingPath:      loc.WorkingPath,
-		HasWorking:       loc.HasWorking,
-		WorkingExists:    loc.WorkingExists,
-		OrderKeys:        len(idx.first) > 0,
-		OrderLineIDs:     len(idx.lineIDs) > 0,
-		OrderNorms:       idx.hasNorms,
-		OldOrder:         r.OldOrder != nil,
-		OldOrderReason:   r.OldOrderReason,
-		OldOrderReasonID: r.OldOrderReasonID,
-		WorkingRows:      len(loc.Working),
-		HasLayoutRisks:   loc.HasLayoutRisks,
-		LayoutRisksExist: loc.LayoutRisksExist,
-		LayoutRisksPath:  loc.LayoutRisksPath,
-		LayoutRiskRows:   len(loc.LayoutRisks),
-		Counts:           make(map[Category]int, len(categories)),
+		OrderUnclosed:       r.OrderUnclosed,
+		PublishedUnclosed:   loc.PublishedUnclosed,
+		WorkingUnclosed:     loc.WorkingUnclosed,
+		LayoutRisksUnclosed: loc.LayoutRisksUnclosed,
+		OthersUnclosed:      othersUnclosed,
+		Locale:              loc.Name,
+		PublishedPath:       loc.PublishedPath,
+		WorkingPath:         loc.WorkingPath,
+		HasWorking:          loc.HasWorking,
+		WorkingExists:       loc.WorkingExists,
+		OrderKeys:           len(idx.first) > 0,
+		OrderLineIDs:        len(idx.lineIDs) > 0,
+		OrderNorms:          idx.hasNorms,
+		OldOrder:            r.OldOrder != nil,
+		OldOrderReason:      r.OldOrderReason,
+		OldOrderReasonID:    r.OldOrderReasonID,
+		WorkingRows:         len(loc.Working),
+		HasLayoutRisks:      loc.HasLayoutRisks,
+		LayoutRisksExist:    loc.LayoutRisksExist,
+		LayoutRisksPath:     loc.LayoutRisksPath,
+		LayoutRiskRows:      len(loc.LayoutRisks),
+		Counts:              make(map[Category]int, len(categories)),
 	}
 	for _, c := range categories {
 		sum.Counts[c] = 0
@@ -624,6 +746,14 @@ func compareLocale(r *Repo, idx *orderIndex, loc Locale,
 	var findings []Finding
 	for _, c := range categories {
 		list := found[c]
+		if !sum.canJudge(c) {
+			// 判定していないカテゴリの行は出さない。閉じない引用符で公開ファイルを
+			// 読めなかったロケールでは、自分のキーが空なので、ほかのロケールの
+			// キーがすべて「他のロケールにあって無い行」に化ける。ほかの止め方
+			// （作業コピーが無い、再生順を読めていない、など）は、材料が無いので
+			// もともと1件も作らない。ここはそれを、止めたカテゴリすべてで確かにする。
+			list = nil
+		}
 		sort.SliceStable(list, func(i, j int) bool { return list[i].Key < list[j].Key })
 		sum.Counts[c] = len(list)
 		findings = append(findings, list...)

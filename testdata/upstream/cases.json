@@ -212,6 +212,24 @@
       "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,い\rち\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
     },
     {
+      "name": "lone-cr-source-key",
+      "note": "原文（source_en）の中に単独の CR があり、key 列のキーがその原文（CR のまま）から作ったもの。ゲームが書く作業コピーと同じ7列。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\nffdf6471efafbe64,UI,,,UI,\"Alpha\rBeta\",訳\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "lone-cr-source-line-id",
+      "note": "原文（source_en）の中に単独の CR がある台詞ID の行。キーを原文から作らない。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\nline:0a0b0c01,L01 Ember,Ember_1_intro,1,Ember,\"Alpha\rBeta\",訳\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,に\r\n"
+    },
+    {
+      "name": "lone-cr-source-2col",
+      "note": "原文（source_en）の中に単独の CR がある2列の作業コピー（source_en,translation）。key 列が無いので、キーを原文から作る。",
+      "as": "working",
+      "text": "source_en,translation\n\"Alpha\rBeta\",訳\ntwo,に\n"
+    },
+    {
       "name": "cr-only-published",
       "note": "公開ファイル全体が単独の CR で改行している。",
       "as": "published",

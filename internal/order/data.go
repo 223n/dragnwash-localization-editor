@@ -73,28 +73,29 @@ func LoadCSharp(scriptOrderCSV, levelFlowCSV []byte) *Data {
 }
 
 // LoadPowerShell は、公開CSV生成（tools/hash-strings.ps1 の Read-Csv）と同じ
-// 読み方で2つのCSVを読む。
+// 読み方で2つのCSVを読む。上流 main と同じく、ファイル全体を解釈する
+// （csvfile.ReadPowerShell）。引用符で囲んだ値は行をまたいでも1つの値になる。
 //
-// ヘッダーの列名が重複しているときだけエラーを返す。元実装では
-// ConvertFrom-Csv が例外を投げ、$ErrorActionPreference = 'Stop' によって
-// 処理全体が止まる（移植仕様「公開CSV生成 / 敵対検証」[low]）。どちらのファイルで
-// 起きたかが分かるように包んで返す。
+// エラーを返すのは、ヘッダーの列名が重複しているときと、閉じない引用符があるとき
+// だけ。列名の重複では、元実装も ConvertFrom-Csv が例外を投げ、
+// $ErrorActionPreference = 'Stop' によって処理全体が止まる（移植仕様「公開CSV生成 /
+// 敵対検証」[low]）。どちらのファイルで起きたかが分かるように包んで返す。
 //
 // levelFlowCSV に nil を渡すと Levels は空になる。
 func LoadPowerShell(scriptOrderCSV, levelFlowCSV []byte) (*Data, error) {
-	orderRows, err := csvfile.ReadPowerShellRows(scriptOrderCSV)
+	orderFile, err := csvfile.ReadPowerShell(scriptOrderCSV)
 	if err != nil {
 		return nil, fmt.Errorf("script_order.csv: %w", err)
 	}
-	flowRows, err := csvfile.ReadPowerShellRows(levelFlowCSV)
+	flowFile, err := csvfile.ReadPowerShell(levelFlowCSV)
 	if err != nil {
 		return nil, fmt.Errorf("level_flow.csv: %w", err)
 	}
 	return &Data{
 		// key が空の行も残す。数も並びも元実装の $order と一致させるため
 		// （[ParseAllEntries] を参照）。
-		Entries: ParseAllEntries(orderRows),
-		Levels:  ParseLevels(flowRows),
+		Entries: ParseAllEntries(orderFile.Rows()),
+		Levels:  ParseLevels(flowFile.Rows()),
 	}, nil
 }
 

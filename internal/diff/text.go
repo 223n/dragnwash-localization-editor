@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/order"
@@ -52,6 +53,12 @@ func (r *Report) writeTextHeader(b *strings.Builder, opt TextOptions) {
 	fmt.Fprintf(b, "再生順      %s   %d 行 / キー %d 種 / 台詞ID %d 件\n",
 		orderPath, r.OrderRows, r.OrderKeys, r.OrderLineIDs)
 	switch {
+	case r.OrderUnclosed > 0:
+		// 閉じない引用符で再生順を1行も使えない。下の「読めていません」より先に、
+		// どこを直せばよいかを言う。どのカテゴリも判定しないので、「台本から
+		// 消えた行など」と絞った言い方はしない。
+		fmt.Fprintf(b, "            %d行目で開いた引用符がファイルの終わりまで閉じないので、再生順を読めません。\n", r.OrderUnclosed)
+		b.WriteString("            直すまで、どのカテゴリも判定しません。\n")
 	case r.OrderKeys == 0:
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
 		// どれも成り立たない。判定を止めてあることを、件数より先に言う。
@@ -97,25 +104,39 @@ func lineIDCategoryNames() string {
 // writeTextLocale は1ロケール分を書く。
 func (r *Report) writeTextLocale(b *strings.Builder, opt TextOptions, sum Summary) {
 	b.WriteString("\n")
-	fmt.Fprintf(b, "%s  %s   ハッシュ %d 行 / 台詞ID %d 行",
-		sum.Locale, relPath(opt.Root, sum.PublishedPath), sum.HashRows, sum.LineRows)
-	if sum.BrokenRows > 0 {
-		// 公開ファイルにこの行があること自体がおかしい。直し方は validate が言うので
-		// ここでは数だけ出して、そちらへ送る。
-		fmt.Fprintf(b, " / 形も分からない %d 行（dwloc validate で確かめてください）", sum.BrokenRows)
+	if sum.PublishedUnclosed > 0 {
+		// 行を1つも使っていないので、「ハッシュ 0 行」とは書かない。0 行と書くと、
+		// 公開ファイルが空だと読まれる。
+		fmt.Fprintf(b, "%s  %s   %s\n", sum.Locale, relPath(opt.Root, sum.PublishedPath),
+			unclosedText(sum.PublishedUnclosed))
+		b.WriteString("    このロケールは、直すまでどのカテゴリも判定しません。\n")
+	} else {
+		fmt.Fprintf(b, "%s  %s   ハッシュ %d 行 / 台詞ID %d 行",
+			sum.Locale, relPath(opt.Root, sum.PublishedPath), sum.HashRows, sum.LineRows)
+		if sum.BrokenRows > 0 {
+			// 公開ファイルにこの行があること自体がおかしい。直し方は validate が言うので
+			// ここでは数だけ出して、そちらへ送る。
+			fmt.Fprintf(b, " / 形も分からない %d 行（dwloc validate で確かめてください）", sum.BrokenRows)
+		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 
-	if sum.HasWorking {
+	switch {
+	case sum.WorkingUnclosed > 0:
+		// 読まなかったのでも無いのでもない。「--no-working」や「書き出してください」と
+		// 書くと、直す先を取り違える。
+		fmt.Fprintf(b, "    作業コピー  %s   %s\n", relPath(opt.Root, sum.WorkingPath), unclosedText(sum.WorkingUnclosed))
+		b.WriteString("                未翻訳と publish で捨てられる行などは判定しません。\n")
+	case sum.HasWorking:
 		fmt.Fprintf(b, "    作業コピー  %s   %d 行", relPath(opt.Root, sum.WorkingPath), sum.WorkingRows)
 		if sum.SourceMissing > 0 {
 			fmt.Fprintf(b, " / 原文が未取得 %d 行", sum.SourceMissing)
 		}
 		b.WriteString("\n")
-	} else if sum.WorkingExists {
+	case sum.WorkingExists:
 		fmt.Fprintf(b, "    作業コピー  読みませんでした（%s、--no-working）\n", relPath(opt.Root, sum.WorkingPath))
 		b.WriteString("                未翻訳と publish で捨てられる行は判定しません。\n")
-	} else {
+	default:
 		fmt.Fprintf(b, "    作業コピー  ありません（%s）\n", relPath(opt.Root, sum.WorkingPath))
 		b.WriteString("                未翻訳と publish で捨てられる行は判定できません。\n")
 		b.WriteString("                ゲーム内で作業コピーを書き出すと判定できるようになります。\n")
@@ -124,8 +145,12 @@ func (r *Report) writeTextLocale(b *strings.Builder, opt TextOptions, sum Summar
 	// はみ出しの記録は、作業コピーが無くても読めることがある（ゲーム内で
 	// レイアウトの検査だけを走らせた場合）。読めたときだけ出す。無いほうが
 	// 普通なので、無いことをここで毎回言わない。判定できないことは
-	// カテゴリの行が言う。
-	if sum.HasLayoutRisks {
+	// カテゴリの行が言う。閉じない引用符で読めなかったときは、直す先を言うために出す。
+	switch {
+	case sum.LayoutRisksUnclosed > 0:
+		fmt.Fprintf(b, "    はみ出しの記録  %s   %s\n",
+			relPath(opt.Root, sum.LayoutRisksPath), unclosedText(sum.LayoutRisksUnclosed))
+	case sum.HasLayoutRisks:
 		fmt.Fprintf(b, "    はみ出しの記録  %s   %d 行\n",
 			relPath(opt.Root, sum.LayoutRisksPath), sum.LayoutRiskRows)
 	}
@@ -221,6 +246,9 @@ func writeCategory(b *strings.Builder, opt TextOptions, sum Summary, c Category,
 // 差し替えるためである。日本語の文面は Text に入ったまま残るので、この関数を
 // %s で書式に渡す CLI 側は、文字列を返していたころと同じ文面を出す。
 func judgeBlockReason(sum Summary, c Category) reason.Reason {
+	if why, ok := unclosedBlockReason(sum, c); ok {
+		return why
+	}
 	if c.needsWorking() && !sum.HasWorking {
 		if sum.WorkingExists {
 			return reason.New(reason.JudgeWorkingNotRead, "作業コピーを読んでいません")
@@ -255,6 +283,41 @@ func judgeBlockReason(sum Summary, c Category) reason.Reason {
 		return reason.New(reason.JudgeOldOrderUnreadable, "1つ前の再生順を読めていません")
 	}
 	return reason.New(reason.JudgeOrderUnreadable, "再生順を読めていません")
+}
+
+// unclosedText は、閉じない引用符で読めなかったファイルの見出しに添える文を返す。
+// line は引用符が開いた物理行。
+func unclosedText(line int) string {
+	return fmt.Sprintf("%d行目で開いた引用符がファイルの終わりまで閉じないので、読めません", line)
+}
+
+// unclosedBlockReason は、閉じない引用符で読めなかったファイルのせいでそのカテゴリを
+// 判定しなかったときの理由を返す。そうでなければ第2戻り値が false。
+//
+// 見る順は [Summary.unclosedBlocks] と同じにしてある。どのファイルかは、パスではなく
+// 役割（再生順・公開ファイル・作業コピー・はみ出しの記録）で言う。text 形式では
+// ロケールの見出しにパスが出ており、画面も断り書きにパスを出す。理由の文にパスを
+// 入れると、このパッケージは表示の基準になるルートを知らないので、手元の絶対パスが
+// csv の標準エラーへそのまま出る。
+func unclosedBlockReason(sum Summary, c Category) (reason.Reason, bool) {
+	line := func(id, what string, n int) reason.Reason {
+		return reason.New(id, fmt.Sprintf("%sの%d行目の引用符が閉じません", what, n), "line", strconv.Itoa(n))
+	}
+	switch {
+	case sum.OrderUnclosed > 0:
+		return line(reason.JudgeOrderUnclosed, "再生順", sum.OrderUnclosed), true
+	case sum.PublishedUnclosed > 0:
+		return line(reason.JudgePublishedUnclosed, "公開ファイル", sum.PublishedUnclosed), true
+	case c.needsWorking() && sum.WorkingUnclosed > 0:
+		return line(reason.JudgeWorkingUnclosed, "作業コピー", sum.WorkingUnclosed), true
+	case c.needsLayoutRisks() && sum.LayoutRisksUnclosed > 0:
+		return line(reason.JudgeLayoutRisksUnclosed, "はみ出しの記録", sum.LayoutRisksUnclosed), true
+	case c.comparesLocales() && len(sum.OthersUnclosed) > 0:
+		locales := strings.Join(sum.OthersUnclosed, ", ")
+		return reason.New(reason.JudgeOtherPublishedUnclosed,
+			"ほかのロケール（"+locales+"）の公開ファイルの引用符が閉じません", "locales", locales), true
+	}
+	return reason.Reason{}, false
 }
 
 // carryCopiedFirst は「複製」を先にした写しを返す。元の並びは変えない。
@@ -415,22 +478,29 @@ func writeScriptGapDetail(b *strings.Builder, list []Finding) {
 //
 // のべ件数も添えるのは、上の一覧の数字（カテゴリごとの件数）を足しても締めの数に
 // ならないため。黙って減らすと、どちらかが間違っているように見える。
+//
+// 閉じない引用符で読まなかったファイルがあるとき（[Report.Unclosed]）は、「要確認は
+// ありません」と書かない。そのファイルに依るカテゴリは判定しておらず、終了コードも
+// 1 になる（決まったことのそのほか 6）。「要確認はありません」は「見るものは無い、
+// 終了コードは 0」と読めるので、判定していないカテゴリがあることを代わりに書く。
 func (r *Report) writeTextFooter(b *strings.Builder) {
 	b.WriteString("\n")
-	if len(r.Locales) == 0 {
-		b.WriteString("報告するロケールがありません。\n")
-		return
-	}
 	rows := r.RowCountByStatus(StatusReview)
-	if rows == 0 {
+	switch {
+	case len(r.Locales) == 0:
+		b.WriteString("報告するロケールがありません。\n")
+	case rows > 0:
+		if total := r.CountByStatus(StatusReview); total != rows {
+			fmt.Fprintf(b, "要確認が %d 行あります（カテゴリをまたぐ重なりを含めて、のべ %d 件）。\n", rows, total)
+		} else {
+			fmt.Fprintf(b, "要確認が %d 行あります。\n", rows)
+		}
+	case len(r.Unclosed) == 0:
 		b.WriteString("要確認はありません。（--all で内訳、--strict で要作業も終了コード 1）\n")
-		return
 	}
-	if total := r.CountByStatus(StatusReview); total != rows {
-		fmt.Fprintf(b, "要確認が %d 行あります（カテゴリをまたぐ重なりを含めて、のべ %d 件）。\n", rows, total)
-		return
+	if len(r.Unclosed) > 0 {
+		b.WriteString("引用符が閉じないファイルがあるので、判定していないカテゴリがあります（直すまで終了コード 1）。\n")
 	}
-	fmt.Fprintf(b, "要確認が %d 行あります。\n", rows)
 }
 
 // localeFindings はそのロケールの Finding をカテゴリ別に分ける。
