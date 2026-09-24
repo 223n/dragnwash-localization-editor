@@ -503,6 +503,38 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 	}
 }
 
+// TestListIsNotEditableWhileLoading は、読み直しと切り替えの読み込みが返るまで、
+// 一覧の訳を開かせないことを見る。
+//
+// 実際に起きた: 読み込みのあいだも前の一覧で打てた。読めた時点で load が抱えている
+// 訳（state.pending）ごと片付けるので、打った訳はファイルにも画面にも残らず、保存の
+// 欄は「保存済み」になった。捨てると答えたあとは flush が送らないので必ず消え、
+// 答えていなくても保存が落ちれば同じだった。振る舞いは E2E の boot.spec.mjs が
+// 見ている。
+func TestListIsNotEditableWhileLoading(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	if !strings.Contains(functionBody(t, js, "openEditor"), "if (state.loading) {") {
+		t.Error("openEditor が読み込みの最中にも開く。打った訳が読めた時点で消える")
+	}
+	// 読みにいく前に、開いている入力欄を閉じること。開いたままだと読み込みのあいだも打てる。
+	body := functionBody(t, js, "load")
+	commit := strings.Index(body, "commitEditor();")
+	fetch := strings.Index(body, `getJSON("/api/lines`)
+	if commit < 0 || fetch < 0 || commit > fetch {
+		t.Error("load が、読みにいく前に開いている入力欄を閉じていない")
+	}
+	// 読み込みの最中であることを一覧に出し、打てそうな印を下ろすこと。出さないと、
+	// 押しても開かない欄が黙って並ぶ。
+	if !strings.Contains(functionBody(t, js, "syncBusy"), `el.list.setAttribute("aria-busy"`) {
+		t.Error("読み込みの最中であることを一覧に出していない")
+	}
+	css := uiSource(t, "ui/app.css")
+	if !strings.Contains(css, `.list[aria-busy="true"] .row .translation[tabindex] {`) {
+		t.Error("読み込みの最中に、訳の欄の打てそうな印を下ろしていない")
+	}
+}
+
 // TestExportStopsWhileTranslationsAreOutsideTheFile は、ファイルに入っていない訳
 // （競合・保存できない行・行き先の無い訳）が残っているあいだ、書き出しが中身を
 // 取りにいかないことを見る。

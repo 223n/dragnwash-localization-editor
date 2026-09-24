@@ -19,6 +19,8 @@
     出したうえで、どちらを載せるかを人に選ばせる。黙って上書きも、黙って破棄もしない。
   - 保存できなかった行は「保存できていない行」として画面に残す。入力は消さない。
   - 未保存のまま頁を閉じようとしたら beforeunload で止める。
+  - 読み直しと切り替えの読み込みが返るまで、一覧を編集させない。読めた時点で
+    抱えている訳は片付くので、そのあいだに打てると、打った訳が黙って消える。
   - 入力欄は1つだけ作って、いま触っている行へ差し込む。1721行ぶんの入力欄を
     常設すると、開くだけで重くなる。
 
@@ -170,6 +172,7 @@
     state.loading   最後に始めた読み込みの札（{ locale: 読みにいったロケール }）。
                     読んでいなければ null。応答は、札がこれと同じときだけ描く
                     （load を見よ）。ロケールの欄もこれを見てそろえる（syncLocale）。
+                    立っているあいだは一覧を編集させない（openEditor と syncBusy）。
   */
   var state = {
     locale: "",
@@ -1244,6 +1247,15 @@
     if (isLocked(n)) {
       return;
     }
+    /*
+      読み込みの最中も開かない（load を見よ）。読めた時点で一覧は描き直され、抱えて
+      いる訳（state.pending）も片付くので、そのあいだに打った訳は黙って消える。
+      マウス（mousedown）も Tab（focusin）も Enter の行送りもここを通るので、ここで
+      止めれば全部止まる。読めなければ load が札を下ろし、また開けるようになる。
+    */
+    if (state.loading) {
+      return;
+    }
     var entry = state.rows.get(n);
     if (!entry || !entry.editable) {
       return;
@@ -1579,6 +1591,13 @@
     if (isLocked(n)) {
       return;
     }
+    /*
+      読み込みの最中も同じ。開かず（openEditor が止める）、既定の動作も止めない。
+      読み終えるまでのあいだも、訳をマウスで選んで写せるようにしておく。
+    */
+    if (state.loading) {
+      return;
+    }
     e.preventDefault();
     openEditor(n);
   });
@@ -1667,6 +1686,10 @@
       送った時点の世代を覚えておく。返ってくるまでにロケールが変わっていたら、
       その応答は画面のものではない。載せると、別ロケールの版と件数が入り、
       誰も触っていないファイルで 409 が出る。
+
+      読み直しと切り替えは送り終えてから読みにいき（settle）、読み込みのあいだは
+      一覧を編集させない（load）ので、送りかけの応答が読み込みのあとに返る道は、
+      いまは画面の操作では見つかっていない。世代の見分けは守りとして残す。
     */
     var gen = state.gen;
     state.saving = true;
@@ -2732,12 +2755,32 @@
     var ticket = locale ? { locale: locale } : null;
     state.loading = ticket;
     syncLocale();
+    syncBusy();
     if (!locale) {
       stopHolding(holding);
       clear(el.list);
       el.rows.textContent = "";
       showMessage(t("ui.select_locale"));
       return;
+    }
+    /*
+      読み終えるまで一覧を編集させない（openEditor が state.loading を見る）。
+
+      返るまでのあいだも前の一覧は出たままで、以前はそこで打てた。読めた時点で
+      下の .then が抱えている訳ごと片付けるので、打った訳は黙って消えた（実際に
+      起きた。ファイルにも画面にも残らず、保存の欄は「保存済み」になった）。捨てると
+      答えたあとは flush が送らないので必ず消え、答えていなくても、保存が落ちれば
+      同じだった。捨てると答えた訳の上に、新しい訳を打ち足させない。
+
+      開いている入力欄は閉じ、閉じるときの保存へ回す（commitEditor）。捨てると
+      答えたあとなら flush が送らないので、捨てると答えた訳は送られない。答えて
+      いなければ送る。尋ねずに読みにくるのは抱えている訳が無いときなので、送る
+      ものはふつう無い。
+
+      読めなければ、下の .catch が札を下ろして元に戻す。
+    */
+    if (state.editing !== null) {
+      commitEditor();
     }
     showMessage(t("ui.loading"));
     /* URL に載せるのはロケール名だけ。原文も訳も URL には載せない。 */
@@ -2821,6 +2864,7 @@
         */
         state.loading = null;
         syncLocale();
+        syncBusy();
       })
       .catch(function () {
         /*
@@ -2840,8 +2884,10 @@
           失敗の中身は出さない。翻訳者にできるのは読み直すことだけ。
           ロケールの欄は元に戻す。戻さないと、欄だけが新しいロケールを指した
           まま中身は前のロケール、という食い違いが画面に残る。
+          一覧もまた編集できるようにする。前の一覧のまま、何も変わっていない。
         */
         syncLocale();
+        syncBusy();
         showMessage(t("ui.load_failed"));
         updateStatus();
       });
@@ -2857,6 +2903,16 @@
   */
   function syncLocale() {
     el.locale.value = state.loading ? state.loading.locale : state.locale;
+  }
+
+  /*
+    一覧が読み込みの最中かどうかを、一覧そのものに出す（aria-busy）。読み終えるまで
+    訳の欄は開かない（openEditor）。何も出さないと、押しても開かない欄が黙って
+    並ぶ。app.css がこれを見て、打てそうな印（cursor: text）を下ろす。「読み込んで
+    います」の文は、load が #message に出している。
+  */
+  function syncBusy() {
+    el.list.setAttribute("aria-busy", state.loading ? "true" : "false");
   }
 
   /*
@@ -3144,6 +3200,8 @@
             選んだロケールはここで控える。尋ねるのは送り終えてからなので、そのあいだに
             先に始めた読み込みが返ると、欄は描いたロケールへそろえ直される（load）。
             欄の値を読み直すと、選んでいないロケールを読みにいく。
+            読み込みのあいだは一覧を編集させない（load）ので、読み込みと保存が重なる
+            この並びは、いまは画面の操作では起きない。控えるのは守りとして残す。
           */
           var chosen = el.locale.value;
           askDiscard("ui.switch_confirm").then(function (answer) {

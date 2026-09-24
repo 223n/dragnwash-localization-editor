@@ -1197,6 +1197,17 @@ button {
 }
 
 /*
+  読み込みの最中の一覧（app.js の load が aria-busy を立てる）。読み終えるまで
+  訳の欄は開かないので、cursor: text を下ろす。打てない欄に「打てそうな」印は
+  出さない（上の競合している行と同じ考え）。読み込んでいることは #message が言う。
+  .row まで書くのは、上の .row .translation[tabindex] に詳細度で勝つためである。
+  同じ詳細度だと、あとに書いたほうが勝つ。順序に頼らない。
+*/
+.list[aria-busy="true"] .row .translation[tabindex] {
+  cursor: progress;
+}
+
+/*
   差し込む入力欄。textarea なので、出ている側の欄（.row .translation[tabindex]）と
   同じ寸法・同じ折り返しにそろえる。そろえないと、打ち始めた瞬間に行の高さが
   跳ねる。高さは app.js が中身に合わせて伸ばす（fitEditor）。

@@ -842,6 +842,11 @@ Conditions chosen for the previous locale are not carried over.
 They are only cleared when the load succeeded.  
 When the load fails, the conditions, the search box and the list are all left as they were.
 
+When you reload or switch locale, the translation column does not open until the load has finished.  
+While it loads, the bar says "Loading...".  
+Anything typed during the load would be dropped unsaved the moment the load succeeded.  
+When the load fails, the previous list stays and can be edited again.
+
 A row in conflict (the file changed underneath you) cannot be edited until you choose which side to keep.  
 Pressing the translation column on that row does not open the input box; the row says that you can edit it once you have chosen which side to keep.  
 Typing into an undecided row could mean either "put my translation on top" or "take the translation from the file".  
