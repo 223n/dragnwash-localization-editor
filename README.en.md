@@ -232,13 +232,17 @@ To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
 That is why the tab does nothing when you come back after stepping away.  
-The black window shows `No activity for 30m. Stopping.`.  
+A black window opened by double-click closes at that point.  
+If you started it from the command line, it shows `No activity for 30m. Stopping.`.  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
 Start it again and open the new `URL` shown in the black window.  
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
 The default is there so that no translator is left with a server nobody can reach still listening on their PC.
 
-If you put it in the wrong place, it tells you where it should go and exits.
+If you put it in the wrong place, it tells you where it should go and exits.  
+When it stops while starting up (the published file is malformed, it cannot get a port, and so on), the black window also keeps the reason on screen and waits with `Enter キーを押すと閉じます。` ("Press Enter to close").  
+Read the reason, then press `Enter`.  
+When you stop it with `Ctrl+C`, or when it ends because of the idle timeout, it closes without waiting.
 
 On a PC that has the game installed, a `dwloc` started by double-click also looks for the game folder.  
 If it finds one, it saves to the working copy there.  

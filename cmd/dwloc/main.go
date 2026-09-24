@@ -261,7 +261,16 @@ func runDefault(args []string, root, game string, noGame bool, stdout, stderr io
 	if noGame {
 		editArgs = []string{"--no-game"}
 	}
-	return startEdit(editArgs, root, game, stdout, stderr)
+	code := startEdit(editArgs, root, game, stdout, stderr)
+	// 起動の途中で誤りで終わったとき（列名の重複した公開ファイル、ロケールが
+	// 1つも無い、ポートを取れない、など）も、ダブルクリックで開いた窓はすぐ閉じる。
+	// 理由を読めるよう、引数を1つも受け取っていないときだけ Enter を待つ。
+	// 正常に終わったとき（時間切れと Ctrl+C。どちらも 0）は待たない。Ctrl+C を
+	// 押した人を、もう1度待たせる理由は無い。時間切れで窓が閉じることは README に書く。
+	if code != exitOK && len(args) == 0 {
+		waitForEnter(stderr)
+	}
+	return code
 }
 
 // notARepoText は、翻訳リポジトリではない場所で起動されたときの案内です。

@@ -689,6 +689,50 @@ func TestDefaultWaitsForEnterOnlyWhenBare(t *testing.T) {
 	})
 }
 
+// TestDefaultWaitsForEnterWhenTheEditorFails は、素で呼ばれた edit が誤りで
+// 終わったときも Enter を待つことを見る。
+//
+// 列名の重複した公開ファイル、ロケールが1つも無い、ポートを取れない、などで
+// edit は起動の途中で終わる。ダブルクリックで開いた窓は終わると同時に閉じるので、
+// 待たないと理由を読む間も無く消え、どのファイルを直せばよいかが分からない。
+//
+// 正常に終わったとき（時間切れと Ctrl+C。どちらも終了コード0）は待たない。
+// Ctrl+C を押した人を、もう1度 Enter で待たせる理由は無い。時間切れで窓が
+// 閉じることは README に書いてある。
+func TestDefaultWaitsForEnterWhenTheEditorFails(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "Translations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origIn, origEdit := stdin, startEdit
+	t.Cleanup(func() { stdin, startEdit = origIn, origEdit })
+
+	for _, tt := range []struct {
+		name     string
+		editCode int
+		args     []string
+		wantWait bool
+	}{
+		{name: "素で呼ばれて誤りで終われば待つ", editCode: exitError, wantWait: true},
+		{name: "素で呼ばれても正常に終われば待たない", editCode: exitOK, wantWait: false},
+		{name: "引数があれば誤りで終わっても待たない", editCode: exitError, args: []string{"--root", repo}, wantWait: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stdin = strings.NewReader("\n")
+			startEdit = func([]string, string, string, io.Writer, io.Writer) int { return tt.editCode }
+			t.Chdir(repo)
+
+			var out, errOut bytes.Buffer
+			if code := run(tt.args, &out, &errOut); code != tt.editCode {
+				t.Fatalf("終了コード = %d、edit の %d をそのまま返すことを期待", code, tt.editCode)
+			}
+			if got := strings.Contains(errOut.String(), enterPrompt); got != tt.wantWait {
+				t.Errorf("Enter を待った = %v、期待 %v\n%s", got, tt.wantWait, errOut.String())
+			}
+		})
+	}
+}
+
 // TestLooksLikeRepo は、翻訳リポジトリらしさの見方を確かめる。
 //
 // 見るのは Translations ディレクトリの有無だけである。中身まで確かめないのは、
