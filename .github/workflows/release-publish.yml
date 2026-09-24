@@ -254,7 +254,10 @@ jobs:
         # 動かせるのはランナーと同じ対象の書庫だけで、GitHub がホストするランナーでは linux/amd64 になる。
         # 6つとも同じ ldflags と同じ手順で作っているので、1つ動けば版の埋め込みと書庫の形は効いている。
         # -trimpath を付けると go version -m に ldflags が残らないため、
-        # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）
+        # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）。
+        #
+        # ubuntu-latest は 2026年10月から Ubuntu 26.04 へ移り、sha256sum や mktemp が Rust 版の coreutils になる。
+        # この段と前の段は、ubuntu:24.04 と ubuntu:26.04 のコンテナで同じように動くことを確かめてある
         env:
           VERSION: ${{ steps.version.outputs.version }}
           # 作った実行ファイルを走らせる段なので、ジョブ全体の GH_TOKEN を空にする。
