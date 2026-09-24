@@ -1,6 +1,6 @@
 {
   "name": "dragnwash-localization-editor",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Drag'n Wash Localizationの翻訳作業を助けるクロスプラットフォームなエディター。",
   "license": "Apache-2.0",
