@@ -20,6 +20,10 @@ tools/check-translations.py（翻訳リポジトリの dev ブランチの版）
   - 各ロケールに strings.csv があり、ヘッダーと各行の形が正しいこと
   - credits.txt があれば、最初の行が状態語
     （supervised、proofread、converted、provisional、fun）であること
+  - textures/ があれば、中身が .png と credits.csv と fallback.txt だけであること。
+    絵は小文字の .png、8MB 以下、4096x4096 以下の PNG で、credits.csv に
+    1枚1行（file,author,note）の出典があり、fallback.txt に書いたロケールが
+    実在すること
 
 オプション:
   --root <ディレクトリ>
@@ -31,7 +35,8 @@ tools/check-translations.py（翻訳リポジトリの dev ブランチの版）
 終了コード:
   0   問題なし
   1   問題あり
-  2   検査できなかった（Translations が読めない、など）
+  2   検査できなかった（Translations が読めない、textures/credits.csv を
+      CSV として読めない、など）
 `
 
 // runValidate は公開ファイルを検証します。

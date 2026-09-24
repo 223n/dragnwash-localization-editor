@@ -2,6 +2,7 @@ package validate
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,22 @@ type upstreamCase struct {
 	upstreamCrash string
 }
 
-// upstreamCases は、上流の調査（f816618、c8fda90、912f519）で dwloc と
+// fakePNG は PNG のシグネチャと IHDR の見出しだけを持つ見本を作る。上流も dwloc も
+// 先頭24バイトしか見ないので、画素のデータは要らない。pad は後ろに足すバイト数で、
+// ファイルの大きさの上限を試すのに使う。
+func fakePNG(width, height uint32, pad int) string {
+	var b bytes.Buffer
+	b.Write(pngSignature)
+	b.Write([]byte{0, 0, 0, 13})
+	b.WriteString("IHDR")
+	_ = binary.Write(&b, binary.BigEndian, width)
+	_ = binary.Write(&b, binary.BigEndian, height)
+	b.Write([]byte{8, 6, 0, 0, 0})
+	b.Write(make([]byte, pad))
+	return b.String()
+}
+
+// upstreamCases は、上流の調査（f816618、c8fda90、cc01bfc、912f519）で dwloc と
 // 判定が割れた入力と、その周りの境目。
 func upstreamCases() []upstreamCase {
 	long := strings.Repeat
@@ -63,8 +79,11 @@ func upstreamCases() []upstreamCase {
 		return withStrings(map[string]string{"Translations/xx/credits.txt": body})
 	}
 	const (
+		tex        = "Translations/xx/textures/"
+		texCredits = tex + "credits.csv"
 		notStatus  = `" is not a status; use one of supervised, proofread, converted, provisional, fun`
 		parseError = "could not be parsed as CSV (field larger than field limit (131072))"
+		onlyPNG    = ": only .png files, credits.csv and fallback.txt belong in textures/"
 	)
 
 	return []upstreamCase{
@@ -247,14 +266,149 @@ func upstreamCases() []upstreamCase {
 			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
 		},
 		{
-			name: "strings.csvが無くてもcredits.txtを見る",
+			name: "strings.csvが無くてもcredits.txtとtexturesを見る",
 			files: map[string]string{
 				"Translations/xx/credits.txt": "done\n",
+				tex + "a.txt":                 "",
 			},
 			want: []string{
 				"Translations/xx: no strings.csv",
 				"Translations/xx/credits.txt:1: \"done" + notStatus,
+				tex + "a.txt" + onlyPNG,
 			},
+		},
+
+		// textures（cc01bfc）。
+		{
+			name: "PNGでない絵と置いてはいけないファイル",
+			files: withStrings(map[string]string{
+				tex + "title.png":  "not a png",
+				tex + "readme.txt": "x",
+			}),
+			want: []string{
+				tex + "readme.txt" + onlyPNG,
+				tex + "title.png: not a PNG file",
+				"Translations/xx/textures: credits.csv is missing (file,author,note - one row per picture)",
+			},
+		},
+		{
+			name: "texturesの検査をひととおり",
+			files: withStrings(map[string]string{
+				"Translations/yy/strings.csv":      upHeader + upRowA,
+				"Translations/_hidden/strings.csv": upHeader,
+				tex + "a.png":                      fakePNG(16, 16, 0),
+				tex + "b.PNG":                      fakePNG(4097, 10, 0),
+				tex + "c.png":                      fakePNG(10, 5000, 0),
+				tex + "d.png":                      string(pngSignature),
+				tex + "e.png":                      fakePNG(1, 1, 0),
+				tex + "sub/x.png":                  fakePNG(1, 1, 0),
+				tex + "fallback.txt":               "# メモ\n\nyy\nxx\nzz\n_hidden\na/b\n  yy  \r\n..\n",
+				texCredits: "\ufeff file , author ,note\na.png,me,drawn\n\n , \nb.PNG,,\nc.png,me\n" +
+					"a.png,me,x\nnothere.png,me,x\n\"d.png\",\"me\",\"ふた\nつの行\"\nf.png,me,x\n",
+			}),
+			want: []string{
+				tex + "fallback.txt:4: xx is this language itself",
+				tex + "fallback.txt:5: zz is not a language in Translations/",
+				tex + "fallback.txt:6: _hidden is not a language in Translations/",
+				tex + "fallback.txt:7: a/b is not a language in Translations/",
+				tex + "fallback.txt:9: .. is not a language in Translations/",
+				tex + "sub: no folders inside textures/",
+				tex + "b.PNG: use a lowercase .png extension",
+				tex + "b.PNG: 4097x10, larger than 4096x4096",
+				tex + "c.png: 10x5000, larger than 4096x4096",
+				tex + "d.png: not a PNG file",
+				texCredits + ":5: who made b.PNG? (author is empty)",
+				texCredits + ":5: say what was done for b.PNG (note is empty), for example: drawn from scratch, or game texture repainted",
+				texCredits + ":6: expected 3 columns (file,author,note), found 2",
+				texCredits + ":7: a.png is listed twice",
+				texCredits + ":8: nothere.png is not in textures/",
+				// 上流はレコードの番号で数えるので、複数行の d.png の次は物理行の11ではなく10。
+				texCredits + ":10: f.png is not in textures/",
+				tex + "c.png: no row in credits.csv",
+				tex + "e.png: no row in credits.csv",
+			},
+		},
+		{
+			name: "credits.csvの見出しが違うと行を見ない",
+			files: withStrings(map[string]string{
+				tex + "a.png": fakePNG(1, 1, 0),
+				texCredits:    "file,author\n",
+			}),
+			want: []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			name:  "credits.csvが空",
+			files: withStrings(map[string]string{texCredits: ""}),
+			want:  []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			name:  "credits.csvの1行目が空行",
+			files: withStrings(map[string]string{texCredits: "\nfile,author,note\n"}),
+			want:  []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			name:  "絵が無くcredits.csvだけ",
+			files: withStrings(map[string]string{texCredits: "file,author,note\n"}),
+		},
+		{
+			// フォルダーかどうかを名前より先に見る。
+			name:  "fallback.txtという名前のフォルダー",
+			files: withStrings(map[string]string{tex + "fallback.txt/yy": ""}),
+			want:  []string{tex + "fallback.txt: no folders inside textures/"},
+		},
+		{
+			name:  "texturesという名前のファイルは見ない",
+			files: withStrings(map[string]string{"Translations/xx/textures": "メモ"}),
+		},
+		{
+			name:  "隠しファイルも置いてはいけないもの",
+			files: withStrings(map[string]string{tex + ".keep": ""}),
+			want:  []string{tex + ".keep" + onlyPNG},
+		},
+		{
+			name:  "名前が.pngだけのファイルは絵ではない",
+			files: withStrings(map[string]string{tex + ".png": fakePNG(1, 1, 0)}),
+			want:  []string{tex + ".png" + onlyPNG},
+		},
+		{
+			name: "8MBを超える絵",
+			files: withStrings(map[string]string{
+				tex + "big.png": fakePNG(10, 10, 8*1024*1024),
+				texCredits:      "file,author,note\nbig.png,me,x\n",
+			}),
+			want: []string{tex + "big.png: 8192 KB, more than 8 MB"},
+		},
+		{
+			name: "8MBを超えてPNGでもない",
+			files: withStrings(map[string]string{
+				tex + "big.png": string(make([]byte, 8*1024*1024+1)),
+				texCredits:      "file,author,note\nbig.png,me,x\n",
+			}),
+			want: []string{
+				tex + "big.png: 8192 KB, more than 8 MB",
+				tex + "big.png: not a PNG file",
+			},
+		},
+		{
+			// fallback.txt は splitlines() で分けるので、\x1c や U+2028 でも行が割れる。
+			name: "fallback.txtはsplitlinesの区切りで分ける",
+			files: withStrings(map[string]string{
+				"Translations/yy/strings.csv": upHeader + upRowA,
+				tex + "fallback.txt":          "yy\x1cqq\u2028xx\vzz\n",
+			}),
+			want: []string{
+				tex + "fallback.txt:2: qq is not a language in Translations/",
+				tex + "fallback.txt:3: xx is this language itself",
+				tex + "fallback.txt:4: zz is not a language in Translations/",
+			},
+		},
+		{
+			name: "credits.csvのフィールドが長すぎる",
+			files: withStrings(map[string]string{
+				texCredits: "file,author,note\na.png,me," + long("x", 131073) + "\n",
+			}),
+			wantErr:       "field larger than field limit (131072)",
+			upstreamCrash: "_csv.Error: field larger than field limit (131072)",
 		},
 	}
 }

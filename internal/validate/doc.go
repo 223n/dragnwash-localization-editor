@@ -5,12 +5,12 @@
 // 基準は上流の dev ブランチの版。翻訳の Pull Request は dev に向けて出し、
 // CI は dev の check-translations.py で走るため。003ed1e で移植したあと、
 // f816618（空白だけの行、CSV として読めないとき）、c8fda90（コメントの判定）、
-// 912f519（credits.txt）に追いついている。
+// cc01bfc（textures/）、912f519（credits.txt）に追いついている。
 //
 // このパッケージが守りたいものは2つある。
 //
 //   - 公開ファイルが機械で読める形を保つこと（ヘッダー、キーの形、重複、空の訳）。
-//     ロケールごとの credits.txt の状態語も見る。
+//     ロケールごとの credits.txt の状態語と、textures/ の絵とその出典も見る。
 //   - 英語原文が公開リポジトリに漏れないこと。原文は作品そのものなので、
 //     source_en 列のあるファイルや Translations/_discovered/ の作業コピーが
 //     コミットされていたら止める。
@@ -45,8 +45,8 @@
 //   - 行は "\r\n" / "\n" / "\r" だけで割る。上流の comment_lines は
 //     str.splitlines() で数えるので、値に U+2028 などがあると行番号がずれて
 //     誤報や見逃しが起きる。
-//   - 例外で落ちる経路を落ちないようにした。Translations が無い・ファイルが読めない
-//     ときは [CheckTree] がエラーを返す。
+//   - 例外で落ちる経路を落ちないようにした。Translations が無い・ファイルが読めない・
+//     textures/credits.csv が CSV として読めないときは [CheckTree] がエラーを返す。
 //     不正なUTF-8は元実装なら異常終了するが、ここでは検査を続ける。
 //   - 出力は常にUTF-8。元実装は Windows のロケール依存で、非ASCIIを含む
 //     メッセージを出そうとすると UnicodeEncodeError で落ちうる。

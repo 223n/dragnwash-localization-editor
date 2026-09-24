@@ -43,11 +43,11 @@ const mustNotBeCommitted = "must not be committed (contains source text)"
 //  2. Translations 直下の各ディレクトリを名前順に。名前が '_' で始まるものは飛ばす。
 //     ロケールごとに strings.local.csv（追跡されていたら問題）、strings.csv
 //     （あれば中身を検査、無ければ "no strings.csv"）、credits.txt（あれば
-//     最初の行の状態語）の順。
+//     最初の行の状態語）、textures/（あれば中身）の順。
 //
-// エラーを返すのは Translations が読めないときと、あると分かっているファイルが
-// 読めないときだけ。元実装はどれもトレースバックで異常終了する
-// （移植仕様「形式検証 / 未決の点」）。
+// エラーを返すのは Translations が読めないとき、あると分かっているファイルや
+// フォルダーが読めないとき、textures/credits.csv が CSV として読めないときだけ。
+// 元実装はどれもトレースバックで異常終了する（移植仕様「形式検証 / 未決の点」）。
 // 落ちるより、何が読めなかったかを呼び出し側へ返す方がCIで原因が分かる。
 // 中身の問題は error ではなく [Problem] として返るので、error が非nilなら
 // 「検査できなかった」の意味になる。
@@ -113,7 +113,7 @@ func CheckTree(root string, tracked Tracked) ([]Problem, error) {
 		published := filepath.Join(dir, PublishedFile)
 		if _, err := os.Stat(published); err != nil {
 			// 「無い」ことを指すので、表示パスはファイルではなくディレクトリ。
-			// 上流はここで次のロケールへ飛ばず、credits.txt も見る。
+			// 上流はここで次のロケールへ飛ばず、credits.txt と textures/ も見る。
 			problems = append(problems, Problem{Path: show.of(dir), Message: "no " + PublishedFile})
 		} else {
 			data, err := os.ReadFile(published)
@@ -131,6 +131,16 @@ func CheckTree(root string, tracked Tracked) ([]Problem, error) {
 				return nil, fmt.Errorf("%s が読めない: %w", show.of(credits), err)
 			}
 			problems = append(problems, checkCredits(show.of(credits), data)...)
+		}
+
+		// 上流の cc01bfc。is_dir() なので、同じ名前のファイルは見ない。
+		textures := filepath.Join(dir, TexturesDir)
+		if info, err := os.Stat(textures); err == nil && info.IsDir() {
+			found, err := checkTextures(show, translations, name, textures)
+			if err != nil {
+				return nil, err
+			}
+			problems = append(problems, found...)
 		}
 	}
 	return problems, nil
