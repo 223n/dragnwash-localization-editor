@@ -551,6 +551,13 @@ test.describe("広い画面の左の列", () => {
     await app.keyboard.press("Tab");
     await expect(search(app)).toBeFocused();
   });
+
+  // 左の列（aside）は読み上げの目印（complementary）になる。名前が無いと、目印の一覧に
+  // 「補足」とだけ並び、何の列かが分からない（以前は、AX の木で名前の無い目印はこれだけ
+  // だった）。名前は開閉ボタン（#menu）と同じ目録の文で、画面は文言を持たない。
+  test("左の列は、目録の名前を持つ読み上げの目印になる", async ({ app }) => {
+    await expect(app.getByRole("complementary", { name: msg("ja", "ui.sidebar"), exact: true })).toBeVisible();
+  });
 });
 
 // 画面（app.js の matchMedia）と見た目（app.css の @media）が同じ幅で切り替わることを見る。

@@ -503,6 +503,12 @@
     */
     el.menu.setAttribute("aria-label", t("ui.sidebar"));
     el.sidebarClose.setAttribute("aria-label", t("ui.sidebar_close"));
+    /*
+      左の列（aside）は読み上げの目印（complementary）になる。名前が無いと、目印の
+      一覧に「補足」とだけ並び、何の列かが分からない。開閉ボタンと同じ文を使うのは、
+      ボタンが開け閉めする先がこの列だからである（aria-controls で結んである）。
+    */
+    el.sidebar.setAttribute("aria-label", t("ui.sidebar"));
     el.finderTitle.textContent = t("ui.finder_title");
     el.colLine.textContent = t("ui.col_line");
     el.colStatus.textContent = t("ui.col_status");
