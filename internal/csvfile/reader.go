@@ -50,6 +50,22 @@ func (f PowerShellFile) Err() error {
 	return nil
 }
 
+// Rows は、データのレコードの値だけを読んだ順に並べて返す。レコードが1つも
+// 無ければ nil。
+//
+// 行番号も ID も要らない使い手（publish の集め方、diff、order）のための入口である。
+// 行単位の [ReadPowerShellRows] と同じ形で返すので、使い手は読み方だけを替えられる。
+func (f PowerShellFile) Rows() []Row {
+	if len(f.Records) == 0 {
+		return nil
+	}
+	rows := make([]Row, len(f.Records))
+	for i, r := range f.Records {
+		rows[i] = r.Row
+	}
+	return rows
+}
+
 // PowerShellHeader はヘッダーのレコード。
 type PowerShellHeader struct {
 	// Fields は列名。
@@ -120,8 +136,9 @@ func (r PowerShellRecord) MultiLine() bool { return r.EndLine > r.Line }
 // 最初の列名が '#' で始まるヘッダー（`"#key"` など）は、上流と違って飛ばさずに
 // ヘッダーとして返す（[PowerShellHeader.CommentLike]）。
 //
-// いまの publish・diff・order・edit は、まだ行単位の [ReadPowerShellRows] で読む。
-// 全体を解釈する読み手へ移す作業（docs/port-spec.md）の PR2 で、これに切り替える。
+// publish・diff・order は、全体を解釈する読み手へ移す作業（docs/port-spec.md）の
+// PR2 から、この読み手で読む。edit は PR2 から行の種類を区切りの関数で決め、保存の
+// 単位をレコードへ移すのは PR3 である。
 func ReadPowerShell(data []byte) (PowerShellFile, error) {
 	f := ReadPowerShellMarked(data)
 	if err := f.Err(); err != nil {

@@ -98,6 +98,25 @@ const (
 	JudgeNoLayoutRisks = "judge_no_layout_risks"
 	// JudgeLayoutRisksNotRead はその記録があるのに読まなかったこと（--no-working）。
 	JudgeLayoutRisksNotRead = "judge_layout_risks_not_read"
+	// JudgeOrderUnclosed は、再生順（data/script_order.csv）で開いた引用符が
+	// ファイルの終わりまで閉じないこと。置換は line（引用符が開いた物理行）。
+	//
+	// 全体を解釈して読むと、その行から後ろがすべて1つの値に崩れる。再生順は
+	// どのカテゴリの判定にも位置の根拠にも使うので、報告全体を判定しない。
+	JudgeOrderUnclosed = "judge_order_unclosed"
+	// JudgePublishedUnclosed は、そのロケールの公開ファイルで開いた引用符が
+	// 閉じないこと。置換は line。そのロケールはどのカテゴリも判定しない。
+	JudgePublishedUnclosed = "judge_published_unclosed"
+	// JudgeWorkingUnclosed は、作業コピーで開いた引用符が閉じないこと。
+	// 置換は line。作業コピーを要るカテゴリを判定しない。
+	JudgeWorkingUnclosed = "judge_working_unclosed"
+	// JudgeLayoutRisksUnclosed は、はみ出しの記録で開いた引用符が閉じないこと。
+	// 置換は line。
+	JudgeLayoutRisksUnclosed = "judge_layout_risks_unclosed"
+	// JudgeOtherPublishedUnclosed は、ほかのロケールの公開ファイルで開いた引用符が
+	// 閉じないこと。置換は locales（そのロケールの名前を ", " でつないだもの）。
+	// 他のロケールと比べるカテゴリを判定しない。
+	JudgeOtherPublishedUnclosed = "judge_other_published_unclosed"
 )
 
 // 1つ前の版の再生順を取り出せない理由（internal/diff の oldorder.go と load.go）。
@@ -146,6 +165,10 @@ const (
 	NoteDroppedBroken = "note_dropped_broken"
 	// NoteDroppedMismatch は source_en のハッシュが key と合わないこと。
 	NoteDroppedMismatch = "note_dropped_mismatch"
+	// NoteDroppedSourceCRLF は source_en のハッシュが key と合わないが、原文の中の
+	// CRLF を LF にすると合うこと。表計算ソフトなどで作業コピーを保存し直すと起きる
+	// （決まったことのそのほか 7）。
+	NoteDroppedSourceCRLF = "note_dropped_source_crlf"
 )
 
 // 引き継ぎ候補の注記（internal/diff の carryTarget.note）。
@@ -233,6 +256,13 @@ const (
 	EditNoNUL = "edit_no_nul"
 	// EditBadUTF8 は訳が正しいUTF-8でないこと。
 	EditBadUTF8 = "edit_bad_utf8"
+	// EditMultiline はその行が、複数の物理行にまたがるレコードに属すること。
+	// 置換は line と end（レコードの最初と最後の物理行）。保存は物理行の単位なので、
+	// レコードの単位で書けるようになるまで（PR3）編集させない。
+	EditMultiline = "edit_multiline"
+	// EditUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
+	// 置換は line（引用符が開いた物理行）。ファイル全体を読み取り専用にする。
+	EditUnclosedQuote = "edit_unclosed_quote"
 )
 
 // 書き出すと訳が失われる理由（internal/publish の guard.go）。
@@ -253,12 +283,12 @@ const (
 	PublishBaseDrift = "publish_base_drift"
 )
 
-// 1行ずつ読むと訳を黙って失う形（internal/publish の shape.go）。
+// 読むと訳や原文を取り違える形（internal/publish の shape.go）。
 //
-// publish は1物理行を1レコードとして読む。この読み方で読み違えるファイルは、
-// 読み違えた結果どうしを突き合わせても気づけない（いまの公開ファイルも同じ
-// 読み方で読むため）。そうした形を、書く前にファイルの形そのものから見つける。
-// どれも置換を持たない。どのファイルの何行目かは、理由の外に持つ。
+// publish は上流 main と同じくファイル全体を解釈して読む。読み手は規則どおりに
+// 読むだけで、引用符の閉じ誤りと正当な複数行の値を見分けない。そのまま書くと、
+// 英語の原文が訳として公開されたり、訳が黙って落ちたりする形を、書く前にファイルの
+// 形そのものから見つける。どのファイルの何行目かは、理由の外に持つ。
 const (
 	// PublishNoKeyColumn は、ヘッダーに key 列も source_en 列も無いこと。
 	// どの行もキーを決められず、すべて捨てられる。
@@ -266,24 +296,44 @@ const (
 	// PublishNoTranslationColumn は、ヘッダーに translation 列が無いこと。
 	// すべての行が訳の無い行として読まれる。
 	PublishNoTranslationColumn = "publish_no_translation_column"
-	// PublishMultilineCurrent は、いまの公開ファイルに行をまたぐ値があること。
-	// 1行ずつ読むと、その訳は切り詰められる。
-	PublishMultilineCurrent = "publish_multiline_current"
-	// PublishMultilineTranslated は、入力の行をまたぐレコードに訳が入っていること。
-	PublishMultilineTranslated = "publish_multiline_translated"
-	// PublishMultilineDiverges は、入力の行をまたぐレコードのせいで、1行ずつ
-	// 読んだ訳と全体を読んだ訳が食い違うこと。
-	PublishMultilineDiverges = "publish_multiline_diverges"
-	// PublishRowsUnread は、空でない行があるのに1行ずつ読むと1行も読めないこと。
+	// PublishHashHeader は、ヘッダーの最初の列名が '#' で始まること。上流はその
+	// ヘッダーを飛ばし、次の行をヘッダーにするので、訳を1行も公開しない。
+	PublishHashHeader = "publish_hash_header"
+	// PublishRowsUnread は、空でない行があるのに1行も読めないこと（行の区切りが
+	// LF・CRLF・CR 以外）。
 	PublishRowsUnread = "publish_rows_unread"
 	// PublishUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
 	PublishUnclosedQuote = "publish_unclosed_quote"
+	// PublishSwallowKeyShaped は、行をまたぐレコードの続きの物理行が、単独で読むと
+	// キーの形で始まるレコードに見えること。置換は line（その物理行）。
+	PublishSwallowKeyShaped = "publish_swallow_key_shaped"
+	// PublishSwallowSameColumns は、続きの物理行が、単独で読むとヘッダーと同じ
+	// 列の数のレコードに見えること。置換は line。
+	PublishSwallowSameColumns = "publish_swallow_same_columns"
+	// PublishSwallowTextAfterQuote は、行をまたいだ引用がその物理行で閉じ、閉じ
+	// 引用符のすぐ後ろに文字が続くこと。置換は line。
+	PublishSwallowTextAfterQuote = "publish_swallow_text_after_quote"
+	// PublishLoneCR は、値の中に単独の CR（後ろに LF の続かない CR）があること。
+	// 置換は column（列名）。原文（source_en 列）の値なら key_kind（その行のキーの
+	// 決まり方。internal/publish の LoneCRKey*）も入る。原文を直してよいかは
+	// キーの決まり方で変わり、CLI の直し方がこれで分かれる。目録の文面は key_kind を
+	// 使わない。
+	PublishLoneCR = "publish_lone_cr"
+	// PublishCRCut は、引用符で囲まない値が引用の外の単独の CR で切れたと見られる
+	// こと。置換は line（切れた後半が読まれる物理行）。
+	PublishCRCut = "publish_cr_cut"
+	// PublishOrderLineBreak は、再生順のデータの値のうち、publish が引用せずに
+	// そのまま書く値（見出しの文言と order 列）に CR か LF があること。置換は
+	// column（列名）。
+	PublishOrderLineBreak = "publish_order_line_break"
 )
 
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOrderNoLineIDs,
 	JudgeOldOrderUnreadable, JudgeOrderNoNorms, JudgeNoLayoutRisks, JudgeLayoutRisksNotRead,
+	JudgeOrderUnclosed, JudgePublishedUnclosed, JudgeWorkingUnclosed, JudgeLayoutRisksUnclosed,
+	JudgeOtherPublishedUnclosed,
 
 	OldOrderNoGit, OldOrderNoRepository, OldOrderNotTracked, OldOrderNotCommitted,
 	OldOrderOnlyOneVersion, OldOrderGitFailed, OldOrderUnreadable, OldOrderNoLineIDs,
@@ -292,7 +342,7 @@ var all = []string{
 	NoteUntranslated, NoteVanished, NoteStrayLineID, NoteNotPublished,
 	NoteScriptGap, NoteUnknownOrigin,
 
-	NoteDroppedBroken, NoteDroppedMismatch,
+	NoteDroppedBroken, NoteDroppedMismatch, NoteDroppedSourceCRLF,
 
 	NoteCarryMoved, NoteCarryCopied, NoteCarryCopiedUnknown,
 
@@ -308,12 +358,13 @@ var all = []string{
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
+	EditMultiline, EditUnclosedQuote,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 
-	PublishNoKeyColumn, PublishNoTranslationColumn, PublishMultilineCurrent,
-	PublishMultilineTranslated, PublishMultilineDiverges, PublishRowsUnread,
-	PublishUnclosedQuote,
+	PublishNoKeyColumn, PublishNoTranslationColumn, PublishHashHeader, PublishRowsUnread,
+	PublishUnclosedQuote, PublishSwallowKeyShaped, PublishSwallowSameColumns,
+	PublishSwallowTextAfterQuote, PublishLoneCR, PublishCRCut, PublishOrderLineBreak,
 }
 
 // All はこのパッケージが名前を付けた識別子を全部返す。

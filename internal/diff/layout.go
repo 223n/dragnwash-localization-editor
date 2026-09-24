@@ -67,12 +67,14 @@ type LayoutRisk struct {
 // ParseLayoutRisks は layout_risks.csv を読む。
 //
 // 原文が空の行は捨てる。キーを導けないので、どの行の話か決められない。
-// 読み方は公開ファイルや作業コピーと同じ（[csvfile.ReadPowerShellRows]）。
+// 読み方は公開ファイルや作業コピーと同じ（[csvfile.ReadPowerShell]）。原文が行を
+// またいでも1つの値として読むので、作業コピーの行と同じキーで結び付く。
 func ParseLayoutRisks(data []byte) ([]LayoutRisk, error) {
-	records, err := csvfile.ReadPowerShellRows(data)
+	f, err := csvfile.ReadPowerShell(data)
 	if err != nil {
 		return nil, err
 	}
+	records := f.Rows()
 	out := make([]LayoutRisk, 0, len(records))
 	for _, rec := range records {
 		source := rec.Get("source_en")
@@ -126,9 +128,13 @@ func layoutRiskFindings(idx *orderIndex, loc Locale) []Finding {
 		return nil
 	}
 	// キーごとに、比がいちばん大きい行を選ぶ。
+	//
+	// キーは原文の CRLF を LF にそろえてから求める。キーは Mod が LF の原文から
+	// 計算したもので、記録を表計算ソフトなどで保存し直して原文の改行が CRLF に
+	// 変わっても、同じ行に結び付けるためである（[lfLineEnds]）。
 	worst := make(map[string]LayoutRisk, len(loc.LayoutRisks))
 	for _, risk := range loc.LayoutRisks {
-		k := key.For(risk.SourceEn)
+		k := key.For(lfLineEnds(risk.SourceEn))
 		if got, seen := worst[k]; seen && got.Ratio >= risk.Ratio {
 			continue
 		}
@@ -145,10 +151,11 @@ func layoutRiskFindings(idx *orderIndex, loc Locale) []Finding {
 			return
 		}
 		risk, ok := worst[k]
-		if !ok || risk.Translation != translation {
+		if !ok || lfLineEnds(risk.Translation) != lfLineEnds(translation) {
 			// 測ったときの訳と、いま読んでいる訳が違う。別の言語で走らせた
 			// 結果か、測ったあとに直した行である。どちらも、この行の警告として
-			// は出せない。
+			// は出せない。改行コード（CRLF と LF）だけの違いは同じ訳と見なす
+			// （[lfLineEnds]）。
 			return
 		}
 		seen[k] = struct{}{}

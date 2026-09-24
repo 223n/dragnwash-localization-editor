@@ -296,34 +296,71 @@ func TestExportChecksTheBaseBeforeTheLosses(t *testing.T) {
 }
 
 func TestExportRefusesUnsafeShapes(t *testing.T) {
-	// publish は、1行ずつ読むと訳を失う形のファイルを書く前に止める。画面の
-	// 書き出しも同じところで止めないと、切り詰めた訳や黙って落ちた行を、翻訳者が
-	// 自分の手でリポジトリへ写せてしまう。この形は失われる訳の確かめ（CheckLoss）
-	// では捕まらない。いまの公開ファイルも同じ読み方で読むからである。
-	const multiline = "ながい\nやく"
+	// publish は、読むと訳や原文を取り違える形のファイルを書く前に止める。画面の
+	// 書き出しも同じところで止めないと、英語の原文を飲み込んだ訳や黙って落ちた行を、
+	// 翻訳者が自分の手でリポジトリへ写せてしまう。この形は失われる訳の確かめ
+	// （CheckLoss）では捕まらない。いまの公開ファイルの訳は消えないからである。
+	//
+	// 画面の書き出しには、確かめたうえで通す指定（dwloc publish --accept-multiline
+	// <ロケール>:<key>）が無い。正しい複数行の値で止まったときは、dwloc publish で
+	// レコードごとに指定して書く（文面で案内する）。
 	for _, tc := range []struct {
 		name string
 		// working はリポジトリの作業コピー。空なら置かない。
 		working string
 		// published は置き換える公開ファイル。空なら newTestRoot のまま。
 		published string
+		// order は置き換える再生順（data/script_order.csv）。空なら newTestRoot のまま。
+		order string
 	}{
 		{
-			name: "作業コピーの訳が行をまたぐ",
+			// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
+			name: "作業コピーで引用符が別の行で閉じる",
 			working: strings.Join([]string{
 				"key,section,node,order,speaker,translation",
 				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
-				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！",
-				keyVanished + ",L01 Ryan,Ryan_1_intro,3,Ryan," + jaVanished,
-				keyUI + ",UI,,,UI,\"" + multiline + "\"",
+				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"ながい",
+				keyVanished + ",L01 Ryan,Ryan_1_intro,3,Ryan," + jaVanished + "\"",
 				"",
 			}, "\n"),
 		},
 		{
-			name: "いまの公開ファイルの訳が行をまたぐ",
+			// 作業コピー（組み立ての入力）の閉じない引用符。形の確かめを組み立てより前に
+			// 置くので、組み立ての読み方の誤り（書き出しの失敗、500）ではなく、形の崩れ
+			// として断る（publish の終了コード1と直し方に当たる）。
+			name: "作業コピーの引用符が閉じない",
+			working: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"ながい",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "いまの公開ファイルの訳に単独の CR がある",
 			published: strings.Join([]string{
 				"key,section,node,order,speaker,translation",
-				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"" + multiline + "\"",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"ながい\rやく\"",
+				"",
+			}, "\n"),
+		},
+		{
+			// 再生順の見出しに使う値の改行。書き出すと、公開ファイルの見出しの2行目が
+			// '#' で始まらない行になり、次に読むときデータの行になる（publish と同じく
+			// 再生順のデータの形を最初に見る）。
+			name: "再生順の見出しに使う値に改行がある",
+			order: strings.Join([]string{
+				"section,phase,node,order,line_id,key,speaker,condition",
+				"L01 Ryan,intro,\"Ryan_1\nintro\",1,line:aaaaaaaa," + keyKept + ",Ryan,",
+				"",
+			}, "\n"),
+		},
+		{
+			// 再生順の閉じない引用符。読み込みの誤り（500）ではなく、形の崩れとして断る。
+			name: "再生順の引用符が閉じない",
+			order: strings.Join([]string{
+				"section,phase,node,order,line_id,key,speaker,condition",
+				"L01 Ryan,intro,Ryan_1_intro,1,line:aaaaaaaa," + keyKept + ",\"Ryan,",
 				"",
 			}, "\n"),
 		},
@@ -333,6 +370,7 @@ func TestExportRefusesUnsafeShapes(t *testing.T) {
 			for rel, body := range map[string]string{
 				filepath.Join("Translations", "_discovered", "ja.working.csv"): tc.working,
 				filepath.Join("Translations", "ja", "strings.csv"):             tc.published,
+				filepath.Join("data", "script_order.csv"):                      tc.order,
 			} {
 				if body == "" {
 					continue
@@ -379,9 +417,11 @@ func TestExportChecksTheShapeBeforeTheBase(t *testing.T) {
 		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
 		"",
 	}, "\n")
+	// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
 	working := strings.Join([]string{
 		"key,section,node,order,speaker,translation",
-		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし\n？\"",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし",
+		keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！\"",
 		"",
 	}, "\n")
 	game := newGameWithBase(t, base, working)

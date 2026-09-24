@@ -94,6 +94,27 @@ func TestReadPowerShell(t *testing.T) {
 // 閉じない引用符で値を返すと、後ろの行（英語の原文やキー）を飲み込んだ値が
 // 呼び出し側へ渡る。上流の報告 #11 の漏れは、確かめ忘れた呼び出し側から起きる
 // （decisions の 3）。
+// TestPowerShellFileRows は、行だけが要る使い手（publish・diff・order）の入口が、
+// レコードの値を読んだ順に返すことを見る。
+func TestPowerShellFileRows(t *testing.T) {
+	f, err := ReadPowerShell([]byte("a,b\n1,\"x\ny\"\n,\n2,z\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := f.Rows()
+	if len(rows) != 2 || rows[0].Get("b") != "x\ny" || rows[1].Get("a") != "2" {
+		t.Errorf("Rows = %+v", rows)
+	}
+	// レコードが無ければ nil。行単位の ReadPowerShellRows と同じ形で返す。
+	empty, err := ReadPowerShell([]byte("a,b\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := empty.Rows(); got != nil {
+		t.Errorf("レコードが無いのに %+v", got)
+	}
+}
+
 func TestReadPowerShellErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -275,8 +296,8 @@ func TestCommentLikeOnFixture(t *testing.T) {
 // 無いファイルでは同じレコードを返すことを、上流との突き合わせの入力の表の全件で見る。
 //
 // 2つは同じ区切りの関数に載っていて、違うのは誤りの扱いだけのはずである。
-// ここが割れると、PR2 で publish の守りを主の読み手へ移したときに、守りの結果まで
-// 変わってしまう。
+// PR1 のあいだは、ここが割れると、publish の守りを主の読み手へ移したとき（PR2）に
+// 守りの結果まで変わってしまうことを見張っていた。
 func TestReadPowerShellAgreesWithWhole(t *testing.T) {
 	for _, c := range loadFixtureCases(t).Cases {
 		t.Run(c.Name, func(t *testing.T) {
