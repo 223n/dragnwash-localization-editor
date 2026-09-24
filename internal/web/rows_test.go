@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -604,6 +605,119 @@ func TestReadOnlyFileCannotBeSaved(t *testing.T) {
 	if lines.ReadOnlyReason == "" {
 		t.Fatal("読み取り専用の理由が出ていない")
 	}
+	before := readFile(t, path)
+	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 2, Translation: jaTyped})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	if after := readFile(t, path); after != before {
+		t.Error("読み取り専用のファイルが書き換わった")
+	}
+}
+
+// TestMultilineRecordIsReadOnly は、複数の物理行にまたがるレコードのどの物理行も、
+// 理由を付けて編集させないことを見る。
+//
+// 保存は物理行の単位なので、行をまたぐレコードの1行目へ書くと続きの行が残り、
+// publish の読み方では壊れたレコードになる。1行目には全体を解釈して読んだキーと
+// 原文の全体を出し、バッジ（未翻訳など）もそこへ付ける。続きの行は生の行のまま出し、
+// 値の中の '#' で始まる行も見出しにしない。
+func TestMultilineRecordIsReadOnly(t *testing.T) {
+	const multi = "para1\n\n# para2"
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	body := strings.Join([]string{
+		"key,section,node,order,speaker,source_en,translation",
+		key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + "," + jaHello,
+		key.For(multi) + ",UI,,,UI,\"" + multi + "\",",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	lines := getLines(t, s, "ja")
+	if lines.ReadOnlyReason != "" {
+		t.Fatalf("ファイル全体を読み取り専用にしている: %s", lines.ReadOnlyReason)
+	}
+	why := s.cat.T(ja, "reason."+reason.EditMultiline, "line", "3", "end", "5")
+
+	byLine := make(map[int]lineView)
+	for _, l := range lines.Lines {
+		byLine[l.Number] = l
+	}
+	if l := byLine[2]; !l.Editable {
+		t.Errorf("1物理行のレコードを編集させない: %+v", l)
+	}
+	first, ok := byLine[3]
+	if !ok || first.Kind != lineKindData || first.Editable || first.Reason != why ||
+		first.Key != key.For(multi) || first.Source != multi {
+		t.Errorf("行をまたぐレコードの1行目 = %+v", first)
+	}
+	if !slices.ContainsFunc(first.Badges, func(b badgeView) bool { return b.Category == "untranslated" }) {
+		t.Errorf("1行目に未翻訳のバッジが無い: %+v", first.Badges)
+	}
+	// 4行目は空行なので並べない。5行目は値の中の '#' の行で、見出しではない。
+	if _, ok := byLine[4]; ok {
+		t.Errorf("続きの空行を並べている: %+v", byLine[4])
+	}
+	if l := byLine[5]; l.Kind != lineKindData || l.Editable || l.Reason != why || l.Text != "# para2\"," {
+		t.Errorf("続きの行 = %+v", l)
+	}
+
+	before := readFile(t, path)
+	for _, n := range []int{3, 5} {
+		rec := save(t, s, "ja", lines.Version, rowEdit{Line: n, Translation: jaTyped})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%d行目: 状態コードが %d、422 を期待", n, rec.Code)
+			continue
+		}
+		got := decode[errorResponse](t, rec.Body.Bytes())
+		if len(got.Results) != 1 || !strings.Contains(got.Results[0].Error, why) {
+			t.Errorf("%d行目: 理由が違う: %+v", n, got.Results)
+		}
+	}
+	if after := readFile(t, path); after != before {
+		t.Error("断ったのにファイルが変わった")
+	}
+}
+
+// TestUnclosedQuoteFileIsReadOnly は、閉じない引用符のあるファイルを全体で読み取り
+// 専用にし、引用符が開いた行から後ろを生の行のまま並べることを見る（決まったことの 3）。
+func TestUnclosedQuoteFileIsReadOnly(t *testing.T) {
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	body := strings.Join([]string{
+		"key,section,node,order,speaker,source_en,translation",
+		key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + "," + jaHello,
+		key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + ",\"さ",
+		"# --- 見出しに見える行 ---",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	lines := getLines(t, s, "ja")
+	why := s.cat.T(ja, "reason."+reason.EditUnclosedQuote, "line", "3")
+	if lines.ReadOnlyReason != why {
+		t.Fatalf("読み取り専用の理由 = %q、%q を期待", lines.ReadOnlyReason, why)
+	}
+	for _, l := range lines.Lines {
+		if l.Editable || l.Kind != lineKindData || l.Reason != why {
+			t.Errorf("%d行目 = %+v、理由つきの読み取り専用のデータ行を期待", l.Number, l)
+		}
+		// 引用符が開いた行から後ろは、レコードとして解釈しない。
+		if l.Number >= 3 && l.Key != "" {
+			t.Errorf("%d行目をレコードとして読んでいる: %+v", l.Number, l)
+		}
+	}
+	if len(lines.Lines) != 3 {
+		t.Errorf("並べた行が %d 行、3 行（2〜4行目）を期待: %+v", len(lines.Lines), lines.Lines)
+	}
+
 	before := readFile(t, path)
 	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 2, Translation: jaTyped})
 	if rec.Code != http.StatusUnprocessableEntity {

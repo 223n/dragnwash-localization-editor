@@ -20,8 +20,9 @@ publish と画面は同じ関数を呼ぶ。別々に書くと、片方だけが
 // RecordSign は、続きの物理行がレコードを飲み込まれたものだと疑う理由。
 //
 // SignKeyShaped と SignSameColumns は、その物理行を単独で読むとレコードに見える
-// ことを表す。SignTextAfterQuote は、単独で読んでもレコードに見えないが、全体を
-// 解釈して読んだときの引用の閉じ方が、飲み込んだときにしか起きない形であることを表す。
+// ことを表す。正当な複数行の値でも当たる。SignTextAfterQuote は、全体を解釈して
+// 読んだときの引用の閉じ方が、飲み込んだときにしか起きない形であることを表す。
+// その行が単独で読むとレコードに見えるかは問わない。
 type RecordSign int
 
 const (
@@ -108,8 +109,9 @@ type Swallow struct {
 	ID, Line, EndLine int
 	// SwallowedLine は、飲み込まれたと疑う続きの物理行。
 	SwallowedLine int
-	// Sign は疑う理由。1つの物理行に理由が重なれば、単独で読むとレコードに見える
-	// 理由（キーの形、区切りの数の順）を採る。
+	// Sign は疑う理由。レコードに閉じ引用符の後ろに文字が続く行があれば、その
+	// レコードは [SignTextAfterQuote] の行だけを返す（[FindSwallows]）。そうでなければ、
+	// 単独で読むとレコードに見える理由（キーの形、区切りの数の順）を採る。
 	Sign RecordSign
 }
 
@@ -131,6 +133,16 @@ type Swallow struct {
 // [textAfterQuoteLines]）。こちらは行の中身ではなく全体を解釈したときの閉じ方で
 // 見るので、'#' で始まる行でも当たる。
 //
+// レコードにこの行が1つでもあれば、そのレコードはこの行だけを返し、ほかの続きの
+// 行がレコードに見えるかは見ない（同じ行がキーの形や区切りの数に当たっても、
+// 理由は [SignTextAfterQuote] にする）。閉じ引用符の後ろに文字を書く書き手は無いので、
+// そのレコードは正当な複数行の値ではありえない。単独で読むとレコードに見える理由は
+// 正当な値でも当たるので、呼び出し側は確かめたうえで通せる（publish の
+// --accept-multiline）。その理由で返すと、通してはならない飲み込みが通せる形になり、
+// 英語の原文やキーが訳として公開される。飲み込まれた行は、値を開いた行から閉じ引用符の
+// 行までのあいだにあり、どちらもレコードの範囲（Line〜EndLine）に入るので、どこを
+// 直すかは範囲と閉じ引用符の行で言える。
+//
 // 正当な複数行の値でも当たることがある（原文の2行目がカンマを多く含むなど）。
 // そのため、呼び出し側は、確かめたうえで通す指定を用意すること。閉じない引用符の
 // レコードは見ない。そちらは [UnclosedQuoteError] が先に止める。
@@ -148,11 +160,13 @@ func FindSwallows(segs Segments) []Swallow {
 		tails := textAfterQuoteLines(segs, seg)
 		for n := seg.Line + 1; n <= seg.EndLine; n++ {
 			sign, ok := RecordSign(0), false
-			if line, _ := segs.PhysicalLine(n); strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
-				sign, ok = looksLikeRecord(line, columns)
-			}
-			if !ok && tails[n] {
+			switch line, _ := segs.PhysicalLine(n); {
+			case tails[n]:
 				sign, ok = SignTextAfterQuote, true
+			case len(tails) > 0:
+				// 閉じ引用符の後ろに文字が続く行があるレコード。この行は返さない。
+			case strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#"):
+				sign, ok = looksLikeRecord(line, columns)
 			}
 			if ok {
 				out = append(out, Swallow{ID: seg.ID, Line: seg.Line, EndLine: seg.EndLine, SwallowedLine: n, Sign: sign})
@@ -179,23 +193,27 @@ type CRCut struct {
 // なる。ゲームの CsvReader は引用の外の CR を捨てて「いち」と読むので、publish が
 // そのまま書くと訳を失う。
 //
-// 返すのは、単独の CR で終わるレコードのうち、次のセグメントがレコードに見えない
-// ものである。次のセグメントがレコードに見えれば、行末の単独の CR で改行しただけ
-// （CR だけの改行のファイルなど）と見て返さない。次のセグメントは、区切りの関数が
-// 分けたとおりに見る。
+// 見分け方はファイルで分ける（決まったことの 14）。
 //
-//   - 空行（空白だけの行を含む）・'#' で始まる行・空のレコード（"," や `""`）なら
-//     返さない。CR だけの改行のファイルは、見出しのコメント行や空行、空のレコードの
-//     前でも単独の CR で改行するので、そこで止めると、意図して読んでいる CR だけの
-//     ファイルが通らなくなる。代わりに、値が CR の直後の '#' で切れる形は見逃す。
-//   - レコードなら、最初の値がキーの形か、区切りの数（Offsets の個数）がヘッダーの
-//     列数と同じときに、レコードに見えるとする（[FindSwallows] と同じ見方）。区切りは
-//     レコード全体で数える。次の物理行だけを単独で読むと、キー列の空いた行の原文が
-//     行をまたぐとき、引用が開いたまま行が終わって区切りが足りず、正当な CR だけの
-//     ファイルで当たってしまう。
+//   - 行の区切り（引用の外の終端）がすべて単独の CR のファイルには当てない。
+//     CR だけで改行したファイルは読むと決めてある（上流と意図して違える点）。
+//     そうしたファイルでは、どの単独の CR も行の区切りで、値の中の CR と見分ける
+//     手がかりが無い。見出しのコメント行・空行・空のレコード・列の足りない
+//     レコードの前でも単独の CR で改行するので、当てると正当なファイルが止まる。
+//   - それ以外のファイル（LF や CRLF で改行した行が1つでもあるもの）では、単独の
+//     CR で終わるレコードのうち、次のセグメント（区切りの関数が分けたとおりのもの）が
+//     レコードに見えないものを返す。次が空行（空白だけの行を含む）・'#' で始まる行・
+//     空のレコード（"," や `""`）でも返す。値が CR の直後の '#' で切れる形
+//     （`い\r# ち`）を見逃さないためである。
+//
+// 次のセグメントがレコードに見えれば、行末の単独の CR で改行しただけと見て返さない。
+// レコードに見えるのは、最初の値がキーの形か、区切りの数（Offsets の個数）が
+// ヘッダーの列数と同じときである（[FindSwallows] と同じ見方）。区切りはレコード全体で
+// 数える。次の物理行だけを単独で読むと、キー列の空いた行の原文が行をまたぐとき、
+// 引用が開いたまま行が終わって区切りが足りず、正当な行末の CR で当たってしまう。
 func FindCRCuts(segs Segments) []CRCut {
 	header, ok := segs.Header()
-	if !ok {
+	if !ok || crOnlyLineBreaks(segs) {
 		return nil
 	}
 	columns := len(header.Offsets)
@@ -204,18 +222,31 @@ func FindCRCuts(segs Segments) []CRCut {
 		if !seg.HasFields() || seg.Term != TermCR || i+1 >= len(segs.List) {
 			continue
 		}
-		// ヘッダーは最初のフィールドを持つセグメントなので、次に来るのは空行・コメント・
-		// 空のレコード・レコードのどれかである。
 		next := segs.List[i+1]
-		if next.Kind != SegmentRecord {
-			continue
-		}
-		if keyShaped(next.Fields[0]) || len(next.Offsets) == columns {
+		if next.Kind == SegmentRecord && (keyShaped(next.Fields[0]) || len(next.Offsets) == columns) {
 			continue
 		}
 		out = append(out, CRCut{ID: seg.ID, Line: seg.Line, EndLine: seg.EndLine, NextLine: next.Line})
 	}
 	return out
+}
+
+// crOnlyLineBreaks は、引用の外の行の区切りがすべて単独の CR かを返す。行の区切りが
+// 1つも無いファイル（1行だけで改行の無いもの）は false。
+//
+// 見るのはセグメントの終端（引用の外の改行）だけで、引用の中の改行は見ない。
+// 引用した値の中の LF は、行の区切りではなく値の一部だからである。
+func crOnlyLineBreaks(segs Segments) bool {
+	seen := false
+	for _, seg := range segs.List {
+		switch seg.Term {
+		case TermCR:
+			seen = true
+		case TermLF, TermCRLF:
+			return false
+		}
+	}
+	return seen
 }
 
 // ValueSpot は、レコードの値1つの場所。

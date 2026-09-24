@@ -31,11 +31,14 @@ type Loss struct {
 	// Locale はロケール名。--path で走らせたときは空になる（ロケールを決められない）。
 	Locale string
 	// Key はいまの公開ファイルの行から決めたキー。キーを決められなかった行では、
-	// key 列の値をトリムしたものがそのまま入る。
+	// key 列の値をトリムしたものがそのまま入る。表示するときは [Visible] を通すこと。
 	Key string
-	// Line はいまの公開ファイルでの1始まりの物理行番号。
-	Line int
+	// Line と EndLine は、いまの公開ファイルでその行（レコード）が占める物理行の
+	// 範囲（1始まり、両端を含む）。値が行をまたがなければ同じ値になる。表示と報告の
+	// 照合に使う（決まったことのそのほか 3）。
+	Line, EndLine int
 	// Head はいまの訳の先頭だけ（[lossHeadRunes] 文字）。丸ごとは持たない。
+	// 制御文字（値の中の改行など）は見える印に置き換えてある（[Visible]）。
 	Head string
 	// Why は失われる理由。
 	Why reason.Reason
@@ -47,17 +50,20 @@ type Loss struct {
 // current は [BuildTarget] の出力先にいまあるバイト列、next は組み立てた結果。
 // 返りが空なら、訳は1つも失われない。
 //
-// 読み方は publish が入力を読むときと同じ（[csvfile.ReadPowerShellRowsNumbered]）で、
+// 読み方は publish が入力を読むときと同じ（全体を解釈する [csvfile.ReadPowerShell]）で、
 // キーの決め方も同じ（[rowKey]）である。守りが見ているものと publish が書くものが
-// 別の読み方で決まっていると、守りを通ったのに消える、という形になる。
+// 別の読み方で決まっていると、守りを通ったのに消える、という形になる。current も
+// next も同じ読み手で読むので、行をまたぐ訳も1つの訳として突き合わせる。
 //
-// 誤りを返すのは current か next のヘッダー列名が重複しているときだけである。
-// そのときは「失われないこと」を確かめられていないので、呼び出し側は書かないこと。
+// 誤りを返すのは、current か next のヘッダー列名が重複しているときと、閉じない
+// 引用符があるときだけである。そのときは「失われないこと」を確かめられていないので、
+// 呼び出し側は書かないこと。
 func CheckLoss(locale string, current, next []byte) ([]Loss, error) {
-	rows, err := csvfile.ReadPowerShellRowsNumbered(current)
+	file, err := csvfile.ReadPowerShell(current)
 	if err != nil {
 		return nil, err
 	}
+	rows := file.Records
 	if len(rows) == 0 {
 		// まだ何も入っていないファイル。失うものが無い。
 		return nil, nil
@@ -94,7 +100,7 @@ func CheckLoss(locale string, current, next []byte) ([]Loss, error) {
 		survivor, found := kept[folded]
 		switch {
 		case how == keyDropped || !found:
-			losses = append(losses, Loss{Locale: locale, Key: k, Line: row.Line,
+			losses = append(losses, Loss{Locale: locale, Key: k, Line: row.Line, EndLine: row.EndLine,
 				Head: head(tr), Why: reason.New(reason.PublishRowGone,
 					"この行が新しい出力に無い")})
 		case survivor == "":
@@ -102,7 +108,7 @@ func CheckLoss(locale string, current, next []byte) ([]Loss, error) {
 			// 立たない。それでも見ているのは、守りの条件を「キーがあるかどうか」
 			// だけに狭めないためである。出力の作り方が変わって空の訳を書くように
 			// なったとき、狭い守りは黙って通す。
-			losses = append(losses, Loss{Locale: locale, Key: k, Line: row.Line,
+			losses = append(losses, Loss{Locale: locale, Key: k, Line: row.Line, EndLine: row.EndLine,
 				Head: head(tr), Why: reason.New(reason.PublishTranslationCleared,
 					"新しい出力ではこの行の訳が空になる")})
 		}
@@ -131,10 +137,11 @@ func CheckTargetLoss(t Target, out []byte) ([]Loss, error) {
 // 畳んでも変わらないが、台詞IDは lineTable が大文字小文字を区別せずに引くので、
 // ここだけ区別すると、綴りの大小が違う台詞ID行を「失われた」と誤って報せる。
 func survivors(next []byte) (map[string]string, error) {
-	rows, err := csvfile.ReadPowerShellRows(next)
+	file, err := csvfile.ReadPowerShell(next)
 	if err != nil {
 		return nil, err
 	}
+	rows := file.Rows()
 	out := make(map[string]string, len(rows))
 	for _, row := range rows {
 		k := strings.TrimSpace(row.Get(colKey))
@@ -150,14 +157,46 @@ func survivors(next []byte) (map[string]string, error) {
 	return out, nil
 }
 
-// head は訳の先頭だけを返す。長さは [lossHeadRunes] 文字。
+// head は訳の先頭だけを返す。長さは [lossHeadRunes] 文字。制御文字は見える印に
+// 置き換える（[Visible]）。
 //
 // 文字数はルーンで数える。バイトで切ると日本語の訳が途中で割れて、壊れた
 // UTF-8 が端末へ出る。
 func head(s string) string {
 	runes := []rune(s)
 	if len(runes) <= lossHeadRunes {
+		return Visible(s)
+	}
+	return Visible(string(runes[:lossHeadRunes])) + lossHeadEllipsis
+}
+
+// Visible は、報告に出す値の中の制御文字を見える印に置き換える。
+//
+// 全体を解釈して読むので、訳やキーに改行が入りうる。そのまま端末へ出すと、報告の
+// 1件が何行にも割れたり、CR で行頭へ戻って前の文字を上書きしたりして、別の行の
+// 報告と読み違える。LF は ↵、CR は ␍、タブは ␉、ほかの C0 制御文字は
+// Unicode の制御文字の図（U+2400 から）、DEL は ␡、NEL・LINE SEPARATOR・
+// PARAGRAPH SEPARATOR は ␤ にする。1文字を1文字に置き換えるので、文字数は変わらない。
+func Visible(s string) string {
+	if !strings.ContainsFunc(s, needsMark) {
 		return s
 	}
-	return string(runes[:lossHeadRunes]) + lossHeadEllipsis
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n':
+			return '↵'
+		case r == 0x7f:
+			return '␡'
+		case r < 0x20:
+			return 0x2400 + r
+		case r == 0x85 || r == 0x2028 || r == 0x2029:
+			return '␤'
+		}
+		return r
+	}, s)
+}
+
+// needsMark は、[Visible] が置き換える文字かを返す。
+func needsMark(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029
 }
