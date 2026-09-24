@@ -73,7 +73,13 @@ body:
     id: logs
     attributes:
       label: ログやエラーの出力／Logs and error output
-      description: そのまま貼り付けてください。自動でコードブロックになります。／Paste it as it is. It becomes a code block automatically.
+      description: >-
+        その日の `logs/dwloc_<日付>.log` を貼り付けてください。自動でコードブロックになります。
+        画面に出た `dwloc diff` の出力は、原文（ゲームの台本）と訳を含むので貼らないでください。
+        0.10.0 までの版の記録には原文と訳が入っていることがあるので、貼る前に中身を確かめてください。／
+        Paste that day's `logs/dwloc_<date>.log`. It becomes a code block automatically.
+        Do not paste the `dwloc diff` output from your screen, because it contains the source text (the game's script) and translations.
+        Logs from versions up to 0.10.0 may contain source text and translations, so check the contents before you paste.
       render: text
 
   - type: checkboxes

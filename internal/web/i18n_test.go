@@ -316,6 +316,27 @@ func TestLookupFallsBackToPrimarySubtag(t *testing.T) {
 	}
 }
 
+// TestCheckUILang は、目録に当たる --ui-lang を通し、当たらない値を渡せる言語の
+// 一覧つきで断ることを見る。空は「指定なし」なので通す。
+func TestCheckUILang(t *testing.T) {
+	for _, lang := range []string{"", "ja", "EN", "en-US", "ja-JP"} {
+		if err := CheckUILang(lang); err != nil {
+			t.Errorf("CheckUILang(%q) = %v、通すことを期待", lang, err)
+		}
+	}
+	for _, lang := range []string{"eng", "de", "zz"} {
+		err := CheckUILang(lang)
+		if err == nil {
+			t.Errorf("CheckUILang(%q) が通した", lang)
+			continue
+		}
+		// 原典を先に並べる。
+		if want := "--ui-lang は ja か en です: " + lang; err.Error() != want {
+			t.Errorf("CheckUILang(%q) = %q、%q を期待", lang, err, want)
+		}
+	}
+}
+
 func TestServerMessagesUseOrigin(t *testing.T) {
 	// 起動時のメッセージは、指定が無ければ原典（日本語）で出す。
 	// このコマンドの使い方の説明は日本語に固定されているので、そこだけ

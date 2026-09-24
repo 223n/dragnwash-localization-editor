@@ -236,7 +236,7 @@ func TestRunDiffArgumentErrors(t *testing.T) {
 		{
 			name:       "余分な引数はエラーにする",
 			args:       []string{"diff", "--root", root, "ja"},
-			wantStderr: []string{"余分な引数です", "使い方: dwloc diff"},
+			wantStderr: []string{"余分な引数です", "使い方は dwloc diff --help で表示します。"},
 		},
 	}
 	for _, tt := range tests {

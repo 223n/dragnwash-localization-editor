@@ -397,7 +397,7 @@ func (a acceptSet) unmatchedAccepts(used []bool, all []publish.Hazard) []string 
 
 // runPublish は公開用CSVを生成します。
 func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc publish", stderr)
+	fs := newFlagSet("dwloc publish")
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	var locales localeList
@@ -412,7 +412,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), publishUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 	if len(paths) > 0 && len(locales) > 0 {
 		// 元実装の -Path は走査そのものを置き換えるので、絞り込みと重ねる意味が
@@ -1013,12 +1013,15 @@ func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) in
 	}
 
 	fmt.Fprint(stderr, publishBaseDriftText)
+	// 食い違う訳の見本は画面にだけ出します。記録には、ロケールと件数とキーを残します。
+	samples := newUnrecorded(stderr, nil)
+	defer samples.Close()
 	for _, res := range found {
 		fmt.Fprintf(stderr, "dwloc:   %s（%d 件）\n", res.Locale, res.Count)
 		for _, d := range res.Sample {
 			fmt.Fprintf(stderr, "dwloc:       %s\n", publish.Visible(d.Key))
-			fmt.Fprintf(stderr, "dwloc:         コミット済み 「%s」\n", d.Repo)
-			fmt.Fprintf(stderr, "dwloc:         ゲーム側     「%s」\n", d.Game)
+			fmt.Fprintf(samples, "dwloc:         コミット済み 「%s」\n", d.Repo)
+			fmt.Fprintf(samples, "dwloc:         ゲーム側     「%s」\n", d.Game)
 		}
 		if res.Count > len(res.Sample) {
 			fmt.Fprintf(stderr, "dwloc:       ほかに %d 件あります。\n", res.Count-len(res.Sample))
@@ -1098,6 +1101,9 @@ func reportLosses(root string, targets []publish.Target, built [][]byte, stderr 
 	}
 
 	fmt.Fprint(stderr, publishLossText)
+	// 訳の先頭は画面にだけ出します。記録には、行番号とキーと理由を残します。
+	samples := newUnrecorded(stderr, nil)
+	defer samples.Close()
 	shown := 0
 	for i, t := range targets {
 		if len(found[i]) == 0 {
@@ -1111,8 +1117,10 @@ func reportLosses(root string, targets []publish.Target, built [][]byte, stderr 
 			}
 			// 行は開始行を主に範囲で出す（決まったことのそのほか 3）。キーは、キーを
 			// 決められなかった行では key 列の値そのままなので、制御文字を印に置き換える。
-			fmt.Fprintf(stderr, "dwloc:       %s %s 「%s」 %s\n",
+			// 訳の先頭は画面にだけ出し、記録には行とキーと理由だけを残します。
+			fmt.Fprintf(samples, "dwloc:       %s %s 「%s」 %s\n",
 				lineRange(l.Line, l.EndLine), publish.Visible(l.Key), l.Head, l.Why)
+			samples.Record("dwloc:       %s %s %s\n", lineRange(l.Line, l.EndLine), publish.Visible(l.Key), l.Why)
 			shown++
 		}
 	}

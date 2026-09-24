@@ -316,7 +316,7 @@ func TestVerboseLogHasNoRowContent(t *testing.T) {
 		t.Errorf("記録にトークンが出ている:\n%s", text)
 	}
 	// 出てよいものは出ている。
-	for _, want := range []string{"GET /api/lines 200", "locale=ja", "lines="} {
+	for _, want := range []string{`GET "/api/lines" 200`, "locale=ja", "lines="} {
 		if !strings.Contains(text, want) {
 			t.Errorf("記録に %q が無い:\n%s", want, text)
 		}

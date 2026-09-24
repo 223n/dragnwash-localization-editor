@@ -232,7 +232,8 @@ To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
 That is why translations are not saved when you come back after stepping away.  
-The black window shows `No activity for 30m. Stopping.`.  
+A black window opened by double-click closes at that point.  
+If you started it from the command line, it shows `No activity for 30m0s. Stopping.`.  
 If you type a translation in the old tab, the top bar says it cannot reach the server, and the translations that are not in the file yet are listed.  
 The list shows them as plain text, so you can select and copy them.  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
@@ -241,16 +242,23 @@ On the new screen, typing the key into the search box brings up the row.
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
 The default is there so that no translator is left with a server nobody can reach still listening on their PC.
 
-If you put it in the wrong place, it tells you where it should go and exits.
+If you put it in the wrong place, it tells you where it should go and exits.  
+When it stops while starting up (the published file is malformed, it cannot get a port, and so on), the black window also keeps the reason on screen and waits with `Enter キーを押すと閉じます。` ("Press Enter to close").  
+Read the reason, then press `Enter`.  
+When you stop it with `Ctrl+C`, or when it ends because of the idle timeout, it closes without waiting.
 
 On a PC that has the game installed, a `dwloc` started by double-click also looks for the game folder.  
 If it finds one, it saves to the working copy there.  
-If you want it to stay inside the folder you put it in, add `--no-game` from the command line.  
+If you want it to stay inside the folder you put it in, add `--no-game` from the command line (`dwloc --no-game`).  
 For details, see "Using the game folder" below.
 
 On Windows you can start it this way.  
 Starting it from the file manager on macOS and Linux has not been verified, so  
 if it does not work, use the commands below.
+
+On macOS and Linux, do not put `dwloc` inside the translation repository; point to it with `--root` instead.  
+The translation repository's `.gitignore` only excludes the Windows `dwloc.exe`, so `dwloc` on those systems can end up in a commit through `git add -A`.  
+When started somewhere that is not a translation repository, `dwloc` on those systems also suggests `--root` rather than moving it.
 
 ### Using it from the command line
 
@@ -281,6 +289,11 @@ If you want to build it yourself, see "Development" below.
 | `edit` | Starts a server only you can reach and lets you edit translations in the browser |
 | `version` | Prints the version |
 
+The description of each subcommand is shown by `dwloc <subcommand> --help` or `dwloc help <subcommand>`.  
+`dwloc --version` also prints the version.  
+When an argument is wrong, it prints one line with the reason and one line such as `使い方は dwloc diff --help で表示します。` ("see dwloc diff --help for usage"), then stops (exit code `2`).  
+For options that need a unit, such as `--idle-timeout`, it also says how to write the value.
+
 On a PC that has the game installed, the last two can stop the moment you run them.  
 You do not even get the `--dry-run` report; it ends with "the translation in the game is older, so not a single byte was written" (exit code `1`).  
 That is what actually happens on this development machine.  
@@ -296,6 +309,7 @@ The options you will use most are these.
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
+| `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |
@@ -304,6 +318,13 @@ The options you will use most are these.
 `--no-working` and `--no-game` have different jobs.  
 `--no-game` does not look for the game folder at all.  
 `--no-working` looks for it, and even when it finds one, does not read the working copy.
+
+With `--format csv`, a value that starts with `=`, `+`, `-`, `@`, a tab or a CR gets `'` added in front.  
+This keeps a spreadsheet from reading it as a formula when you paste it.  
+Translations come from the published files, so a translation someone else added could run as a formula on the screen of whoever opens it.  
+Even without bad intent, a line of dialogue starting with `-` turns into `#NAME?` or the like.  
+When you do not want the `'` (when comparing against a machine), add `--raw-csv`.  
+The published files that `publish` writes and the exports from the screen do not get it, because they need the same bytes as the upstream tools.
 
 ### The two buttons inside the game
 
@@ -398,6 +419,9 @@ They read and write only inside `--root`.
 ./dwloc edit    --root ../dragnwash-localization --no-game
 ```
 
+Like `--root`, you can also put it before the subcommand.  
+It then also applies to `edit` when you leave the subcommand out (`dwloc --no-game`).
+
 Use it in situations like these.
 
 - When matching up `diff` output with another PC or machine
@@ -417,8 +441,8 @@ Use it in situations like these.
 Giving `--game` and `--no-game` together stops without doing anything (exit code `2`).  
 There is no way for the tool to decide which of the two you mistyped.
 
-`validate` accepts `--game` but does not use it.  
-There is no `--no-game` for it either, because there is nothing to cancel.
+`validate` and `version` accept `--game` and `--no-game` but do not use them.  
+This is so that options you add to every subcommand do not make `validate` alone fail.
 
 #### It always tells you where it searched
 
@@ -849,6 +873,10 @@ There is no switch inside the screen, so restart it with `--ui-lang ja`.
 ./dwloc edit --root ../dragnwash-localization --locale ja --ui-lang ja
 ```
 
+`--ui-lang` accepts `ja` and `en` (it also accepts forms such as `EN` or `en-US`).  
+Any other value (`eng`, `fr` and so on) stops with `--ui-lang は ja か en です` ("--ui-lang is ja or en") and exit code `2`.  
+Falling back to Japanese without a word would show guidance someone cannot read when they meant to choose English.
+
 The colour scheme follows the OS setting (light or dark).
 Even in the dark scheme, the meaningful colours (needs work, needs checking, informational, save state) keep the same hues, and the name is always shown as well.
 The meaningful colours are separated in both hue and lightness so that they can be told apart with colour vision differences (protan, deutan and tritan).
@@ -1217,17 +1245,39 @@ One file per day.
 However many times you run it on the same day, it appends to the same file.  
 When you report something that did not work, please attach that day's file.
 
+In the log, your home folder path (`C:\Users\<name>` or `/home/<name>`) is replaced with `~`.  
+This is because the path contains your user name.  
+The screen shows it as it is.
+
+The list and CSV from `diff`, and the translation heads and mismatch samples that `publish` shows, are printed on screen only.  
+The log keeps only the counts, keys, line numbers, reasons and headings, plus how many lines were left out.  
+A line such as `dwloc: 原文や訳を含む 23 行は記録しません（画面には出しました）。` in the log marks where lines were left out.  
+It means "23 lines containing source text or translations are not logged (they were shown on screen)".
+
+> [!WARNING]
+> **Do not paste the `diff` output from your screen into a public place such as an issue.**  
+> It contains the source text (the game's script) and translations.  
+> When you report something, attach that day's log file instead of the screen output.
+>
+> **Logs from versions up to `0.10.0` may contain source text and translations.**  
+> Check the contents of the log for any day you ran `diff` or `publish` with such a version before you paste it.
+
 `dwloc edit` records each request on its own line in the file.  
 With `--verbose`, the same thing is printed on screen as well.
 
 ```text
-10:30:45 === dwloc 0.6.0 edit (windows/amd64) ===
+10:30:45 === dwloc 0.6.0 edit --ui-lang en（windows/amd64）===
 10:30:45 Listening. Open this URL in your browser.
-10:30:52 dwloc edit: GET /api/lines 200 12ms locale=ja lines=1721
-10:31:03 dwloc edit: POST /api/rows 200 31ms locale=ja rows=1
+10:30:45 URL: http://127.0.0.1:52341/?t=***
+10:30:52 dwloc edit: GET "/api/lines" 200 12ms locale=ja lines=1721
+10:31:03 dwloc edit: POST "/api/rows" 200 31ms locale=ja edits=1 saved=1
 ```
 
 It writes only the method, path, status code, duration, locale name and count.  
+The counts are such things as the number of lines read (`lines`), translations sent (`edits`) and translations actually saved (`saved`).  
+The path is wrapped in `"`, with line breaks and the like written as `\n`. Anything past 200 bytes is cut off.  
+The method is written as it is when it is a standard name such as `GET` or `POST`; anything else is wrapped in `"` and cut off past 32 bytes.  
+Requests that were turned away (`404`) are logged too, so this keeps their paths and methods from adding fake lines or bloating the log.  
 **It does not write the source text or the translation.**  
 The token that appears in the URL the first time is replaced with `***` too.  
 You can paste a log file as it is without the game's script leaving with it.

@@ -565,8 +565,13 @@ func TestSaveLogHasNoRowContent(t *testing.T) {
 			t.Errorf("記録に行の中身が出ている（%q）:\n%s", secret, out)
 		}
 	}
-	if !strings.Contains(out, "POST /api/rows") {
+	if !strings.Contains(out, `POST "/api/rows"`) {
 		t.Errorf("記録に要求が出ていない:\n%s", out)
+	}
+	// 件数の項目名は README の記録の例と同じにする（edits は送られた訳の数、
+	// saved は実際に保存した数）。例と食い違うと、記録を添えて知らせる人が戸惑う。
+	if !strings.Contains(out, " locale=ja edits=1 saved=1\n") {
+		t.Errorf("記録の件数が README の例の形になっていない:\n%s", out)
 	}
 }
 

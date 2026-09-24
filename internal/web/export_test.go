@@ -184,7 +184,7 @@ func TestExportIsRecorded(t *testing.T) {
 	do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
 
 	text := file.String()
-	for _, want := range []string{"GET /api/export 200", "locale=ja", "form=published", "bytes="} {
+	for _, want := range []string{`GET "/api/export" 200`, "locale=ja", "form=published", "bytes="} {
 		if !strings.Contains(text, want) {
 			t.Errorf("記録に %q が無い:\n%s", want, text)
 		}
