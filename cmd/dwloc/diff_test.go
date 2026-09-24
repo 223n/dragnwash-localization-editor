@@ -451,7 +451,14 @@ func TestRunDiffUnclosedQuote(t *testing.T) {
 					t.Errorf("絶対パスが出ている:\n%s", stderr)
 				}
 				if format == diffFormatText {
-					checkContains(t, "stdout", stdout, []string{tt.held})
+					// 締めの行は終了コード1と食い違う「要確認はありません」にしない。
+					checkContains(t, "stdout", stdout, []string{
+						tt.held,
+						"\n引用符が閉じないファイルがあるので、判定していないカテゴリがあります（直すまで終了コード 1）。\n",
+					})
+					if strings.Contains(stdout, "要確認はありません") {
+						t.Errorf("終了コード1なのに要確認が無いと書いている:\n%s", stdout)
+					}
 				} else {
 					// csv の本体には書く場所が無いので、保留の行が標準エラーに出る。
 					_, why, _ := strings.Cut(tt.held, "判定していません")

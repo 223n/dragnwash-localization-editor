@@ -406,10 +406,15 @@ func TestWriteTextUnclosed(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := b.String()
-			for _, w := range tc.want {
+			// 締めの行は、判定していないカテゴリがあることを言い、「要確認はありません」とは
+			// 言わない（終了コードは 1 になる）。
+			for _, w := range append(tc.want, "\n"+unclosedFooter) {
 				if !strings.Contains(out, w) {
 					t.Errorf("%q が無い:\n%s", w, out)
 				}
+			}
+			if strings.Contains(out, "要確認はありません") {
+				t.Errorf("判定していないカテゴリがあるのに要確認が無いと書いている:\n%s", out)
 			}
 			// 出てはいけない文は ja の見出しより後ろで見る。de は作業コピーを持たない
 			// ので、de の見出しには「書き出すと判定できる」が出る。
@@ -418,6 +423,48 @@ func TestWriteTextUnclosed(t *testing.T) {
 				if strings.Contains(ja, a) {
 					t.Errorf("%q が出ている:\n%s", a, out)
 				}
+			}
+		})
+	}
+}
+
+// unclosedFooter は、閉じない引用符で読まなかったファイルがあるときの締めの行。
+const unclosedFooter = "引用符が閉じないファイルがあるので、判定していないカテゴリがあります（直すまで終了コード 1）。\n"
+
+// TestWriteTextFooter は、締めの行の書き分けを固定する。
+//
+// 閉じない引用符で読まなかったファイルがあれば、要確認の有無にかかわらず、判定して
+// いないカテゴリがあることを書く。「要確認はありません」は書かない。そのとき
+// dwloc diff の終了コードは 1 で、「要確認はありません」は「見るものは無い、終了
+// コードは 0」と読めるからである（決まったことのそのほか 6）。
+func TestWriteTextFooter(t *testing.T) {
+	ja := []Summary{{Locale: "ja"}}
+	unclosed := []publish.UnclosedFile{{Path: "data/script_order.csv", Line: 2}}
+	review := func(key string, c Category) Finding { return Finding{Locale: "ja", Category: c, Key: key} }
+	tests := []struct {
+		name string
+		r    Report
+		want string
+	}{
+		{"ロケールが無い", Report{}, "\n報告するロケールがありません。\n"},
+		{"ロケールが無く閉じない引用符がある", Report{Unclosed: unclosed},
+			"\n報告するロケールがありません。\n" + unclosedFooter},
+		{"要確認が無い", Report{Locales: ja},
+			"\n要確認はありません。（--all で内訳、--strict で要作業も終了コード 1）\n"},
+		{"要確認が無く閉じない引用符がある", Report{Locales: ja, Unclosed: unclosed}, "\n" + unclosedFooter},
+		{"要確認があり閉じない引用符がある",
+			Report{Locales: ja, Unclosed: unclosed, Findings: []Finding{review("k1", CatVanished)}},
+			"\n要確認が 1 行あります。\n" + unclosedFooter},
+		{"カテゴリをまたぐ要確認",
+			Report{Locales: ja, Findings: []Finding{review("k1", CatVanished), review("k1", CatCarryover)}},
+			"\n要確認が 1 行あります（カテゴリをまたぐ重なりを含めて、のべ 2 件）。\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b strings.Builder
+			tt.r.writeTextFooter(&b)
+			if got := b.String(); got != tt.want {
+				t.Errorf("締めの行\n got %q\nwant %q", got, tt.want)
 			}
 		})
 	}

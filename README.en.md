@@ -1062,7 +1062,8 @@ The categories that depend on that file appear as "not judged (the quote on line
 Which file and which line are printed on standard error.  
 For a published file, no category of that locale is judged, nor are "Missing here but present in another locale" and "No locale has a translation" of the other locales.  
 For `data/script_order.csv`, no category is judged at all.  
-Until it is fixed, the exit code is `1`.
+Until it is fixed, the exit code is `1`.  
+The closing line of the `text` format does not say that nothing needs review either; it says that some categories are not judged.
 
 `publish` assembles everything it targets before writing anything out.  
 If even one of them fails to assemble, it writes nothing.  

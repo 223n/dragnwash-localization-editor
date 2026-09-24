@@ -478,22 +478,29 @@ func writeScriptGapDetail(b *strings.Builder, list []Finding) {
 //
 // のべ件数も添えるのは、上の一覧の数字（カテゴリごとの件数）を足しても締めの数に
 // ならないため。黙って減らすと、どちらかが間違っているように見える。
+//
+// 閉じない引用符で読まなかったファイルがあるとき（[Report.Unclosed]）は、「要確認は
+// ありません」と書かない。そのファイルに依るカテゴリは判定しておらず、終了コードも
+// 1 になる（決まったことのそのほか 6）。「要確認はありません」は「見るものは無い、
+// 終了コードは 0」と読めるので、判定していないカテゴリがあることを代わりに書く。
 func (r *Report) writeTextFooter(b *strings.Builder) {
 	b.WriteString("\n")
-	if len(r.Locales) == 0 {
-		b.WriteString("報告するロケールがありません。\n")
-		return
-	}
 	rows := r.RowCountByStatus(StatusReview)
-	if rows == 0 {
+	switch {
+	case len(r.Locales) == 0:
+		b.WriteString("報告するロケールがありません。\n")
+	case rows > 0:
+		if total := r.CountByStatus(StatusReview); total != rows {
+			fmt.Fprintf(b, "要確認が %d 行あります（カテゴリをまたぐ重なりを含めて、のべ %d 件）。\n", rows, total)
+		} else {
+			fmt.Fprintf(b, "要確認が %d 行あります。\n", rows)
+		}
+	case len(r.Unclosed) == 0:
 		b.WriteString("要確認はありません。（--all で内訳、--strict で要作業も終了コード 1）\n")
-		return
 	}
-	if total := r.CountByStatus(StatusReview); total != rows {
-		fmt.Fprintf(b, "要確認が %d 行あります（カテゴリをまたぐ重なりを含めて、のべ %d 件）。\n", rows, total)
-		return
+	if len(r.Unclosed) > 0 {
+		b.WriteString("引用符が閉じないファイルがあるので、判定していないカテゴリがあります（直すまで終了コード 1）。\n")
 	}
-	fmt.Fprintf(b, "要確認が %d 行あります。\n", rows)
 }
 
 // localeFindings はそのロケールの Finding をカテゴリ別に分ける。
