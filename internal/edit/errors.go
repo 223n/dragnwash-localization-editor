@@ -8,8 +8,8 @@ import (
 )
 
 // ErrReadOnly はファイル全体が読み取り専用であることを表す。
-// ヘッダーが受理される4種のいずれでもないか、ヘッダー行そのものが無い。
-// 理由の文言は [File.ReadOnlyReason] で取れる。
+// 開いた引用符がファイルの終わりまで閉じないか、ヘッダー行そのものが無いか、
+// ヘッダーが受理される4種のいずれでもない。理由の文言は [File.ReadOnlyReason] で取れる。
 var ErrReadOnly = errors.New("このファイルは読み取り専用")
 
 // ErrNoPath は [Parse] で作った（ファイルに紐づいていない）[File] を
@@ -54,9 +54,12 @@ func (e *ConflictError) Unwrap() []error {
 }
 
 // NotEditableError はその行を編集できないことを表す。
-// 行が存在しない、データ行でない、列数がヘッダーと合わない、のいずれか。
+// 行が存在しない、データ行でない、編集できない行（列数がヘッダーと合わない、など）の
+// いずれか。
 type NotEditableError struct {
-	// Line は1始まりの物理行番号。
+	// ID は要求された行の ID（[Line.ID]）。
+	ID int
+	// Line はその行の最初の物理行（1始まり）。そんな行が無ければ 0。
 	Line int
 	// Reason は編集できない理由。そのまま画面に出せる日本語。
 	Reason string
@@ -69,6 +72,9 @@ type NotEditableError struct {
 }
 
 func (e *NotEditableError) Error() string {
+	if e.Line == 0 {
+		return "編集できない: " + e.Reason
+	}
 	return fmt.Sprintf("%d行目は編集できない: %s", e.Line, e.Reason)
 }
 
@@ -76,13 +82,15 @@ func (e *NotEditableError) Error() string {
 //
 // 文面と識別子を別々に代入する場所を増やさないための入口である。片方だけ入った
 // 誤りを返すと、画面は英語で出せるのに CLI が黙る（あるいはその逆）行ができる。
-func notEditable(line int, why reason.Reason) *NotEditableError {
-	return &NotEditableError{Line: line, Reason: why.Text, Cause: why}
+func notEditable(id, line int, why reason.Reason) *NotEditableError {
+	return &NotEditableError{ID: id, Line: line, Reason: why.Text, Cause: why}
 }
 
 // InvalidValueError は訳の値そのものが受け付けられないことを表す。
 type InvalidValueError struct {
-	// Line は1始まりの物理行番号。
+	// ID は要求された行の ID（[Line.ID]）。
+	ID int
+	// Line はその行の最初の物理行（1始まり）。
 	Line int
 	// Reason は受け付けられない理由。
 	Reason string
@@ -96,8 +104,8 @@ func (e *InvalidValueError) Error() string {
 }
 
 // invalidValue は理由から [InvalidValueError] を作る。
-func invalidValue(line int, why reason.Reason) *InvalidValueError {
-	return &InvalidValueError{Line: line, Reason: why.Text, Cause: why}
+func invalidValue(id, line int, why reason.Reason) *InvalidValueError {
+	return &InvalidValueError{ID: id, Line: line, Reason: why.Text, Cause: why}
 }
 
 // short は版（SHA-256 の16進64桁）を画面向けに短く切る。

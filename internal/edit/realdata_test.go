@@ -157,29 +157,29 @@ func TestRealDataSingleLineEdit(t *testing.T) {
 			}
 
 			// 先頭・真ん中・末尾のデータ行を1本ずつ試す。
-			var numbers []int
+			var editable []Line
 			for _, line := range Parse(before).Lines() {
 				if line.Kind == KindData && line.Editable {
-					numbers = append(numbers, line.Number)
+					editable = append(editable, line)
 				}
 			}
-			if len(numbers) < minDataLines {
-				t.Fatalf("編集できるデータ行が %d 行しかない", len(numbers))
+			if len(editable) < minDataLines {
+				t.Fatalf("編集できるデータ行が %d 行しかない", len(editable))
 			}
-			picks := []int{numbers[0], numbers[len(numbers)/2], numbers[len(numbers)-1]}
+			picks := []Line{editable[0], editable[len(editable)/2], editable[len(editable)-1]}
 
-			for _, number := range picks {
+			for _, pick := range picks {
 				f := Parse(before)
-				if err := f.SetTranslation(number, `テスト訳 "引用", カンマ`); err != nil {
-					t.Fatalf("%d行目の書き換えに失敗した: %v", number, err)
+				if err := f.SetTranslation(pick.ID, `テスト訳 "引用", カンマ`); err != nil {
+					t.Fatalf("%d行目の書き換えに失敗した: %v", pick.Number, err)
 				}
 				after := f.Bytes()
-				assertOnlyLineChanged(t, before, after, number)
+				assertOnlyLineChanged(t, before, after, pick.Number)
 
-				// 書き戻した行を読み直すと、入れた値がそのまま取れる。
-				line, _ := Parse(after).Line(number)
-				if got := line.Translation(); got != `テスト訳 "引用", カンマ` {
-					t.Errorf("%d行目の訳が %q", number, got)
+				// 書き戻した行を読み直すと、同じ ID で入れた値がそのまま取れる。
+				line, _ := Parse(after).Line(pick.ID)
+				if got := line.Translation(); got != `テスト訳 "引用", カンマ` || line.Number != pick.Number {
+					t.Errorf("%d行目の訳が %q（読み直した行番号 %d）", pick.Number, got, line.Number)
 				}
 			}
 		})
@@ -224,20 +224,20 @@ func TestRealDataSyntheticWorkingCopy(t *testing.T) {
 			// 未訳行（訳が空の行）を1本選んで訳を入れる。作業コピーで
 			// いちばん多い編集の形で、ParsePowerShellRecord が末尾の空
 			// フィールドを落とすせいで壊しやすいのもこの形。
-			number := 0
+			var pick Line
 			for _, line := range f.Lines() {
 				if line.Kind == KindData && line.Translation() == "" {
-					number = line.Number
+					pick = line
 					break
 				}
 			}
-			if number == 0 {
+			if pick.ID == 0 {
 				t.Fatal("訳が空の行が1本も無い")
 			}
-			if err := f.SetTranslation(number, "訳を入れた"); err != nil {
-				t.Fatalf("%d行目の書き換えに失敗した: %v", number, err)
+			if err := f.SetTranslation(pick.ID, "訳を入れた"); err != nil {
+				t.Fatalf("%d行目の書き換えに失敗した: %v", pick.Number, err)
 			}
-			assertOnlyLineChanged(t, before, f.Bytes(), number)
+			assertOnlyLineChanged(t, before, f.Bytes(), pick.Number)
 		})
 	}
 }

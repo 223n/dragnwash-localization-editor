@@ -246,7 +246,7 @@ const (
 	// EditFieldCount はフィールド数がヘッダーと合わないこと。
 	// 置換は header（ヘッダーの列数）と row（その行の列数）。
 	EditFieldCount = "edit_field_count"
-	// EditNoSuchLine はその行番号が無いこと。
+	// EditNoSuchLine はその ID の行が無いこと。
 	EditNoSuchLine = "edit_no_such_line"
 	// EditNotDataLine はデータ行でないこと。置換は kind（行の種類）。
 	EditNotDataLine = "edit_not_data_line"
@@ -256,10 +256,10 @@ const (
 	EditNoNUL = "edit_no_nul"
 	// EditBadUTF8 は訳が正しいUTF-8でないこと。
 	EditBadUTF8 = "edit_bad_utf8"
-	// EditMultiline はその行が、複数の物理行にまたがるレコードに属すること。
-	// 置換は line と end（レコードの最初と最後の物理行）。保存は物理行の単位なので、
-	// レコードの単位で書けるようになるまで（PR3）編集させない。
-	EditMultiline = "edit_multiline"
+	// EditMultilineTranslation は訳に改行（CR か LF）があること。訳への改行の
+	// 入力を足すまで（PR4）編集させない。いまの画面は改行を空白に置き換えるので、
+	// 開いて1字打つと、翻訳者が見ていない改行まで消える。
+	EditMultilineTranslation = "edit_multiline_translation"
 	// EditUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
 	// 置換は line（引用符が開いた物理行）。ファイル全体を読み取り専用にする。
 	EditUnclosedQuote = "edit_unclosed_quote"
@@ -358,7 +358,7 @@ var all = []string{
 
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
-	EditMultiline, EditUnclosedQuote,
+	EditMultilineTranslation, EditUnclosedQuote,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 

@@ -248,7 +248,7 @@ func TestSetTranslationTouchesOneLineOnly(t *testing.T) {
 			for _, line := range f.Lines() {
 				if line.Kind == KindData {
 					if seen++; seen == 2 {
-						target = line.Number
+						target = line.ID
 						break
 					}
 				}
@@ -270,12 +270,12 @@ func TestSetTranslationTouchesOneLineOnly(t *testing.T) {
 				t.Fatalf("行数が変わった: %d -> %d", len(before), len(after))
 			}
 			for i := range before {
-				if before[i].Number == target {
+				if before[i].ID == target {
 					continue
 				}
-				if before[i].Text != after[i].Text {
-					t.Errorf("%d行目が変わった:\n before %q\n after  %q",
-						before[i].Number, before[i].Text, after[i].Text)
+				if before[i].Text != after[i].Text || before[i].ID != after[i].ID {
+					t.Errorf("ID %d の行が変わった:\n before %q\n after  %q",
+						before[i].ID, before[i].Text, after[i].Text)
 				}
 			}
 
@@ -443,7 +443,7 @@ func TestSetTranslationRejects(t *testing.T) {
 		assertNotEditable(t, f.SetTranslation(1, "x"), 1)
 	})
 
-	t.Run("無い行番号", func(t *testing.T) {
+	t.Run("無い ID", func(t *testing.T) {
 		f := Parse([]byte(header))
 		for _, n := range []int{99, 0, -1} {
 			assertNotEditable(t, f.SetTranslation(n, "x"), n)
@@ -524,14 +524,16 @@ func TestKindString(t *testing.T) {
 	}
 }
 
-func assertNotEditable(t *testing.T, err error, line int) {
+// assertNotEditable は err が id の行の [NotEditableError] であることを確かめる。
+// 行があれば、誤りの行番号がその行の最初の物理行であることも見る。
+func assertNotEditable(t *testing.T, err error, id int) {
 	t.Helper()
 	var e *NotEditableError
 	if !errors.As(err, &e) {
 		t.Fatalf("err = %v, want *NotEditableError", err)
 	}
-	if e.Line != line {
-		t.Errorf("行番号が %d, want %d", e.Line, line)
+	if e.ID != id {
+		t.Errorf("ID が %d, want %d", e.ID, id)
 	}
 	if e.Reason == "" {
 		t.Error("理由が空")
@@ -603,9 +605,9 @@ func TestReadOnlyCause(t *testing.T) {
 	})
 }
 
-// TestLineOutOfRange は、無い行番号を引いても落ちずに「無い」と返すことを見る。
+// TestLineOutOfRange は、無い ID を引いても落ちずに「無い」と返すことを見る。
 //
-// 行番号は画面から届く値で、ファイルを読み直したあとの古い番号や、壊れた要求の
+// ID は画面から届く値で、ファイルを読み直したあとの古い ID や、壊れた要求の
 // 値も来る。範囲の外で添字を引くと、1つの要求でサーバーごと落ちる。
 func TestLineOutOfRange(t *testing.T) {
 	f := Parse([]byte(sampleWorking))

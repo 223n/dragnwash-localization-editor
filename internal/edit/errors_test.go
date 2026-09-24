@@ -86,31 +86,41 @@ func TestConflictErrorMessage(t *testing.T) {
 func TestNotEditableErrorCarriesOneReason(t *testing.T) {
 	const header = "key,section,node,order,speaker,translation\n"
 	tests := []struct {
-		name     string
-		content  string
+		name    string
+		content string
+		id      int
+		// line は誤りに入る行番号（その行の最初の物理行）。行が無ければ 0。
 		line     int
 		wantID   string
 		wantArgs []string
+		wantText string
 	}{
 		{
-			name:    "無い行番号",
-			content: header,
-			line:    5,
-			wantID:  reason.EditNoSuchLine,
+			name:     "無い ID",
+			content:  header,
+			id:       5,
+			line:     0,
+			wantID:   reason.EditNoSuchLine,
+			wantText: "編集できない: そんな行は無い",
 		},
 		{
 			name:     "コメント行",
 			content:  header + "# 見出し\n",
+			id:       2,
 			line:     2,
 			wantID:   reason.EditNotDataLine,
 			wantArgs: []string{"kind", "comment"},
+			wantText: "2行目は編集できない: データ行ではない（comment）",
 		},
 		{
+			// 行をまたぐレコードの後ろでは、ID と行番号がずれる。誤りは行番号で言う。
 			name:     "列が多い行",
-			content:  header + "abc,,,,,,余分\n",
-			line:     2,
+			content:  header + "k0,\"a\nb\",,,,\n" + "abc,,,,,,余分\n",
+			id:       3,
+			line:     4,
 			wantID:   reason.EditFieldCount,
 			wantArgs: []string{"header", "6", "row", "7"},
+			wantText: "4行目は編集できない: フィールド数がヘッダーと合わない（ヘッダーは6列、この行は7列）",
 		},
 	}
 
@@ -118,8 +128,11 @@ func TestNotEditableErrorCarriesOneReason(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := Parse([]byte(tt.content))
 			var e *NotEditableError
-			if err := f.SetTranslation(tt.line, "x"); !errors.As(err, &e) {
+			if err := f.SetTranslation(tt.id, "x"); !errors.As(err, &e) {
 				t.Fatalf("err = %v, want *NotEditableError", err)
+			}
+			if e.ID != tt.id || e.Line != tt.line {
+				t.Errorf("ID と行番号が %d・%d、期待 %d・%d", e.ID, e.Line, tt.id, tt.line)
 			}
 			if e.Cause.ID != tt.wantID {
 				t.Errorf("識別子が %q、期待 %q", e.Cause.ID, tt.wantID)
@@ -130,12 +143,12 @@ func TestNotEditableErrorCarriesOneReason(t *testing.T) {
 			if e.Cause.Text != e.Reason {
 				t.Errorf("文面が2つに割れている: Reason %q / Cause.Text %q", e.Reason, e.Cause.Text)
 			}
-			if want := fmt.Sprintf("%d行目は編集できない: %s", tt.line, e.Reason); e.Error() != want {
-				t.Errorf("Error() = %q、期待 %q", e.Error(), want)
+			if e.Error() != tt.wantText {
+				t.Errorf("Error() = %q、期待 %q", e.Error(), tt.wantText)
 			}
 			// 行が持っている理由と、書き込みが返す理由は同じもの。画面は行を
 			// 並べるときに前者を、保存を拒まれたときに後者を出す。
-			if line, ok := f.Line(tt.line); ok && line.Kind == KindData && line.Cause.ID != e.Cause.ID {
+			if line, ok := f.Line(tt.id); ok && line.Kind == KindData && line.Cause.ID != e.Cause.ID {
 				t.Errorf("行の理由 %q と書き込みの理由 %q が違う", line.Cause.ID, e.Cause.ID)
 			}
 		})
@@ -162,8 +175,8 @@ func TestInvalidValueErrorCarriesOneReason(t *testing.T) {
 			if err := f.SetTranslation(2, tt.value); !errors.As(err, &e) {
 				t.Fatalf("err = %v, want *InvalidValueError", err)
 			}
-			if e.Line != 2 {
-				t.Errorf("行番号が %d", e.Line)
+			if e.ID != 2 || e.Line != 2 {
+				t.Errorf("ID と行番号が %d・%d", e.ID, e.Line)
 			}
 			if e.Cause.ID != tt.wantID {
 				t.Errorf("識別子が %q、期待 %q", e.Cause.ID, tt.wantID)

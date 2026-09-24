@@ -11,23 +11,23 @@ import (
 
 /*
 ここの試験は、編集モデルが、publish と同じ全体を解釈する読み方の区切り
-（csvfile.SplitSegments）で行の種類を決め、複数の物理行にまたがるレコードと閉じない
-引用符のファイルを編集させないことを固定する（決まったことの 3。design の phases[2]）。
+（csvfile.SplitSegments）のセグメントを1つずつ行にし、複数の物理行にまたがる
+レコードを1つの行として扱うことと、閉じない引用符のファイルを編集させないことを
+固定する（決まったことの 2・3。design の phases[3]）。
 
-全体を解釈する読み手へ移す作業（docs/port-spec.md）の PR2 の最初のコミットでは、
-同じ入力で、物理行を1行ずつ見ていたときの結果を固定していた（名前の末尾が
-LineBasedNow の試験。決まったことの 13）。後半のコミットで、次のように期待値を直した。
+全体を解釈する読み手へ移す作業（docs/port-spec.md）の PR2 では、保存が物理行の
+単位だったので、行をまたぐレコードのどの物理行も編集させず、続きの行を生の行として
+1行ずつ並べていた。PR3 で、次のように期待値を直した。
 
-  - 訳が行をまたぐレコードの1行目: 編集できる行で訳は「いち」 → 編集できない
-    （理由は行をまたぐレコード）。書くと続きの行が残り、publish の読み方では壊れた
-    レコードになるため。
-  - 原文が行をまたぐレコードの1行目: 列数が合わないので編集できない → 行をまたぐ
-    レコードなので編集できない。キーと原文の全体を持つ。
-  - 続きの行: 列数が合わない行 → レコードとして解釈しない生の行。
-  - 閉じない引用符: その物理行の終わりで閉じたものとして、どの行も編集できる →
-    ファイル全体を読み取り専用にし、引用符が開いた行から後ろを生の行のまま並べる。
+  - 行をまたぐレコードは、途中の物理行も含めて1つの行になる。ID はセグメントの
+    通し番号で、行番号は最初と最後の物理行（Number と EndNumber）。
+  - 原文が行をまたぐ訳の空いたレコード: 編集できない → 訳が1行に収まるので書ける。
+  - 訳が行をまたぐレコード: 行をまたぐレコードの理由 → 訳に改行がある理由
+    （訳への改行の入力は PR4 で足す）。
+  - 閉じない引用符: 変わらない（ファイル全体を読み取り専用にし、引用符が開いた行から
+    後ろを生の行のまま並べる）。
 
-保存の単位は物理行のまま（PR3 でレコードへ移す）。見本の英文と訳はどれも架空の文である。
+見本の英文と訳はどれも架空の文である。
 */
 
 // mlWorking は、実物と同じく CRLF で区切った作業コピー。訳が行をまたぐレコード
@@ -39,9 +39,9 @@ var mlWorking = "key,section,node,order,speaker,source_en,translation\r\n" +
 	key.For("two") + ",UI,,,UI,two,さん\r\n" +
 	key.For("three") + ",UI,,,UI,three,\"よん\n# ご\"\r\n"
 
-// TestParseMultilineRecords は、行をまたぐレコードのどの物理行も、理由を付けて編集
-// させないことを固定する。1行目はキーと原文の全体を持ち、続きの行はレコードとして
-// 解釈しない生の行になる。値の中の '#' で始まる行は見出しにしない。
+// TestParseMultilineRecords は、行をまたぐレコードを1つの行にし、訳に改行があるときは
+// 理由を付けて編集させないことを固定する。原文が行をまたぐレコードは、訳が1行に
+// 収まるかぎり書け、変わるのはそのレコードの最終フィールドだけである。
 func TestParseMultilineRecords(t *testing.T) {
 	f := Parse([]byte(mlWorking))
 	if f.ReadOnly() {
@@ -49,29 +49,24 @@ func TestParseMultilineRecords(t *testing.T) {
 	}
 
 	type want struct {
-		kind        Kind
-		editable    bool
-		key         string
-		source      string
-		translation string
-		// span は行をまたぐレコードの理由の置換（"2-3" の形）。空なら理由が無いか、
-		// その理由ではない。
-		span string
+		id, number, end int
+		kind            Kind
+		editable        bool
+		key             string
+		source          string
+		translation     string
+		cause           string
 	}
 	wants := []want{
-		{kind: KindHeader},
-		{kind: KindData, key: key.For("one"), source: "one", span: "2-3"},
-		{kind: KindData, span: "2-3"},
-		{kind: KindData, key: key.For("para1\n\npara2"), source: "para1\n\npara2", span: "4-6"},
-		{kind: KindBlank, span: "4-6"},
-		{kind: KindData, span: "4-6"},
-		{kind: KindData, editable: true, key: key.For("two"), source: "two", translation: "さん"},
-		{kind: KindData, key: key.For("three"), source: "three", span: "8-9"},
-		{kind: KindData, span: "8-9"},
+		{id: 1, number: 1, end: 1, kind: KindHeader},
+		{id: 2, number: 2, end: 3, kind: KindData, key: key.For("one"), source: "one", cause: reason.EditMultilineTranslation},
+		{id: 3, number: 4, end: 6, kind: KindData, editable: true, key: key.For("para1\n\npara2"), source: "para1\n\npara2"},
+		{id: 4, number: 7, end: 7, kind: KindData, editable: true, key: key.For("two"), source: "two", translation: "さん"},
+		{id: 5, number: 8, end: 9, kind: KindData, key: key.For("three"), source: "three", cause: reason.EditMultilineTranslation},
 	}
 	lines := f.Lines()
 	if len(lines) != len(wants) {
-		t.Fatalf("物理行ごとに %d 行のはずが %d 行", len(wants), len(lines))
+		t.Fatalf("セグメントごとに %d 行のはずが %d 行", len(wants), len(lines))
 	}
 	for i, w := range wants {
 		l := lines[i]
@@ -79,29 +74,50 @@ func TestParseMultilineRecords(t *testing.T) {
 		if l.Kind == KindData && len(l.Fields) == 7 {
 			source = l.Fields[5]
 		}
-		span := ""
-		if l.Cause.ID == reason.EditMultiline {
-			span = argOf(l.Cause, "line") + "-" + argOf(l.Cause, "end")
-		}
-		got := want{l.Kind, l.Editable, l.Key(), source, l.Translation(), span}
+		got := want{l.ID, l.Number, l.EndNumber, l.Kind, l.Editable, l.Key(), source, l.Translation(), l.Cause.ID}
 		if got != w {
-			t.Errorf("%d行目 = %+v\n       want %+v", l.Number, got, w)
+			t.Errorf("%d番目 = %+v\n       want %+v", i, got, w)
 		}
+	}
+	if f.PhysicalLines() != 9 {
+		t.Errorf("物理行の数 = %d、9 を期待", f.PhysicalLines())
 	}
 
-	// どの物理行にも書かせない。理由は行をまたぐレコード。
-	for _, n := range []int{2, 3, 4, 6, 8, 9} {
+	// 訳に改行があるレコードには書かせない。
+	for _, id := range []int{2, 5} {
 		var notEditable *NotEditableError
-		if err := f.SetTranslation(n, "訳"); !errors.As(err, &notEditable) || notEditable.Cause.ID != reason.EditMultiline {
-			t.Errorf("%d行目に書けてしまう、または理由が違う: %v", n, err)
+		if err := f.SetTranslation(id, "訳"); !errors.As(err, &notEditable) ||
+			notEditable.Cause.ID != reason.EditMultilineTranslation {
+			t.Errorf("ID %d に書けてしまう、または理由が違う: %v", id, err)
 		}
 	}
-	// 1物理行に収まるレコードは、いままでどおり書ける。触っていない行は1バイトも変えない。
-	if err := f.SetTranslation(7, "さんさん"); err != nil {
-		t.Fatalf("7行目に書けない: %v", err)
+	// 原文が行をまたぐレコードと、1物理行に収まるレコードには書ける。触っていない
+	// レコードは1バイトも変えず、レコードの終端（CRLF）も残す。
+	if err := f.SetTranslation(3, "段落"); err != nil {
+		t.Fatalf("ID 3 に書けない: %v", err)
 	}
-	if want := strings.Replace(mlWorking, ",two,さん\r\n", ",two,さんさん\r\n", 1); string(f.Bytes()) != want {
-		t.Errorf("書いた結果が違う\n got %q\nwant %q", f.Bytes(), want)
+	if err := f.SetTranslation(4, "さんさん"); err != nil {
+		t.Fatalf("ID 4 に書けない: %v", err)
+	}
+	written := strings.Replace(mlWorking, "para2\",\r\n", "para2\",段落\r\n", 1)
+	written = strings.Replace(written, ",two,さん\r\n", ",two,さんさん\r\n", 1)
+	if string(f.Bytes()) != written {
+		t.Errorf("書いた結果が違う\n got %q\nwant %q", f.Bytes(), written)
+	}
+	// 読み直しても同じ ID の同じレコードになる。
+	again := Parse(f.Bytes())
+	if l, ok := again.Line(3); !ok || l.Number != 4 || l.EndNumber != 6 || l.Translation() != "段落" {
+		t.Errorf("読み直した ID 3 = %+v", l)
+	}
+	// 訳を空に戻すと、元のバイト列に戻る。
+	for _, id := range []int{3, 4} {
+		orig, _ := Parse([]byte(mlWorking)).Line(id)
+		if err := f.SetTranslation(id, orig.Translation()); err != nil {
+			t.Fatalf("ID %d を戻せない: %v", id, err)
+		}
+	}
+	if string(f.Bytes()) != mlWorking {
+		t.Errorf("元に戻らない\n got %q\nwant %q", f.Bytes(), mlWorking)
 	}
 }
 
@@ -166,8 +182,11 @@ func TestParseUnclosedQuote(t *testing.T) {
 					t.Errorf("%d行目の理由 = %s、閉じない引用符を期待", l.Number, l.Cause.ID)
 				}
 			}
-			for _, l := range lines {
-				if err := f.SetTranslation(l.Number, "訳"); !errors.Is(err, ErrReadOnly) {
+			for i, l := range lines {
+				if l.ID != lines[0].ID+i || l.Number != l.EndNumber {
+					t.Errorf("%d番目の ID と行番号 = %d・%d〜%d", i, l.ID, l.Number, l.EndNumber)
+				}
+				if err := f.SetTranslation(l.ID, "訳"); !errors.Is(err, ErrReadOnly) {
 					t.Errorf("%d行目に書けてしまう、または読み取り専用の誤りでない: %v", l.Number, err)
 				}
 			}

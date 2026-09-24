@@ -14,25 +14,24 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
-// Kind は物理行の種類。
+// Kind は行（セグメント）の種類。
 type Kind int
 
 // 種類は、publish と同じ区切りの関数（csvfile.SplitSegments）が分けたセグメントから
-// 決める。レコードの境目にない物理行（行をまたぐレコードの続きの行と、閉じない
-// 引用符から後ろの行）は、レコードとして解釈しない生の行として、空白だけなら
-// [KindBlank]、ほかは [KindData] にする。どちらも編集させない。
+// 決める。閉じない引用符から後ろの物理行は、レコードとして解釈しない生の行として、
+// 空白だけなら [KindBlank]、ほかは [KindData] にする。どちらも編集させない。
 const (
 	// KindComment はレコードの境目にある、生の先頭1文字が '#' の行。作業コピーと
 	// 公開ファイルの `# ===== ... =====` / `# --- ... ---` の見出しがこれ。
 	KindComment Kind = iota
 	// KindBlank は空行相当の行。レコードの境目にある空行・空白だけの行（全角空白や
-	// NO-BREAK SPACE だけの行も）と、ヘッダーより後ろの "," や `""` の行（空のレコード）。
+	// NO-BREAK SPACE だけの行も）と、ヘッダーより後ろの、読むと値がどれも空になる
+	// レコード（"," や `""`、",,,,,," の行）。
 	KindBlank
-	// KindHeader は最初のレコード（区切りの関数のヘッダー）の最初の物理行。
-	// "," の行でもヘッダーになる（受理はされない）。
+	// KindHeader は最初のレコード（区切りの関数のヘッダー）。"," の行でもヘッダーに
+	// なる（受理はされない）。
 	KindHeader
-	// KindData はヘッダーより後ろのレコードの物理行と、レコードとして解釈しない
-	// 生の行。
+	// KindData はヘッダーより後ろのレコードと、レコードとして解釈しない生の行。
 	KindData
 )
 
@@ -51,18 +50,31 @@ func (k Kind) String() string {
 	return fmt.Sprintf("Kind(%d)", int(k))
 }
 
-// Line は1物理行の見え方。[File.Lines] が返す複製で、書き換えても
-// [File] には反映されない。書き換えは [File.SetTranslation] を通す。
+// Line は1つの行（セグメント）の見え方。コメント行と空行は1物理行で1つ、レコードは
+// 引用符で囲んだ値が行をまたげば複数の物理行で1つになる。
+//
+// [File.Lines] が返す複製で、書き換えても [File] には反映されない。書き換えは
+// [File.SetTranslation] を通す。
 type Line struct {
-	// Number は1始まりの物理行番号。行の同定にはこれを使う。
-	Number int
+	// ID は1始まりの通し番号で、区切りの関数のセグメントの ID と同じ値になる。
+	// 行の同定にはこれを使う。自分の保存では変わらない（書く前の事後確認で確かめる）。
+	//
+	// 閉じない引用符から後ろは、セグメントに分けずに1物理行ずつ並べ、引用符が開いた
+	// セグメントの ID から続けて番号を振る。そのファイルは読み取り専用なので、この
+	// 番号で書くことは無い。
+	ID int
+	// Number は最初の物理行（1始まり）、EndNumber は最後の物理行。1物理行に収まる
+	// 行では同じ値になる。表示と報告の照合にだけ使い、同定には使わない。
+	Number, EndNumber int
 	// Kind は行の種類。
 	Kind Kind
-	// Text は改行文字を含む生の行。末尾行に改行が無ければ含まない。
+	// Text は終端（行を終える改行）を含む生のバイト列。行をまたぐレコードでは、
+	// 途中の改行も含む。ファイルの最後の行に改行が無ければ終端を含まない。
 	Text string
-	// Fields は KindData のときだけ入る。csvfile.ParsePowerShellRecord の
-	// 結果を、区切りの数（csvfile.FieldOffsets の個数）まで空文字で埋めたもの。
-	// 埋めるのは、未訳行 `a,b,` で落ちる末尾の空フィールドを戻すため。
+	// Fields は KindData のレコードとヘッダーだけに入る。全体を解釈して読んだ値
+	// （csvfile.SplitSegments の Fields）を、区切りの数（Offsets の個数）まで空文字で
+	// 埋めたもの。埋めるのは、未訳の行 `a,b,` で落ちる末尾の空フィールドを戻すため。
+	// 値の中の改行は、ファイルにあるとおり（LF・CRLF・単独の CR）のまま入る。
 	Fields []string
 	// Editable はこの行の訳を書き換えてよいか。
 	Editable bool
@@ -73,6 +85,13 @@ type Line struct {
 	// 文面と別に持つのは、画面（internal/web）が目録で差し替えるためである。
 	// Cause.Text は常に Reason と同じ文字列になる。
 	Cause reason.Reason
+
+	// term は Text の終わりの終端（"\r\n" / "\n" / "\r" / ""）。
+	term string
+	// last は最終フィールドの開始位置（Text の先頭から）。KindData のレコードだけ。
+	last int
+	// columns は区切りの数（csvfile.FieldOffsets の個数）。KindData のレコードだけ。
+	columns int
 }
 
 // setReason は編集できない理由を、文面と識別子の両方へ一度に入れる。
@@ -85,11 +104,9 @@ func (l *Line) setReason(why reason.Reason) {
 
 // Translation は最終フィールド（訳）を返す。
 //
-// データ行でないとき、および列数がヘッダーと合わずに編集できないときは空を返す。
-// 列が足りない行の最終フィールドは訳ではなく別の列（speaker など）なので、
-// それを訳として返すと画面の訳欄に無関係な値が並ぶ。書き込み側は同じ理由で
-// [File.SetTranslation] が止めているので、読み出し側もそろえる。
-// 行の中身は [Line.Text] で生のまま見られる。
+// データ行でないとき、および編集できないときは空を返す。列が足りない行の最終
+// フィールドは訳ではなく別の列（speaker など）なので、それを訳として返すと画面の
+// 訳欄に無関係な値が並ぶ。行の中身は [Line.Text] で生のまま見られる。
 func (l Line) Translation() string {
 	if l.Kind != KindData || !l.Editable || len(l.Fields) == 0 {
 		return ""
@@ -105,6 +122,9 @@ func (l Line) Key() string {
 	return l.Fields[0]
 }
 
+// body は Text から終端を除いたもの。
+func (l Line) body() string { return l.Text[:len(l.Text)-len(l.term)] }
+
 // File は1ファイル分の編集モデル。並行に使ってはいけない。
 type File struct {
 	path string
@@ -113,6 +133,8 @@ type File struct {
 	// header は受理されたヘッダー。読み取り専用で開いたときは nil。
 	header []string
 	lines  []Line
+	// physical はファイルの物理行の数（csvfile.Segments の Lines）。
+	physical int
 	// version は読み込んだ（または最後に保存した）バイト列全体の SHA-256。
 	version        string
 	dirty          bool
@@ -128,70 +150,44 @@ type File struct {
 // ファイルは、読み取り専用の [File] になる（[File.ReadOnly] と
 // [File.ReadOnlyReason] を見ること）。
 //
-// 行の種類は、publish と同じ全体を解釈する読み方の区切り（csvfile.SplitSegments）で
-// 決める。物理行を1行ずつ見て決めると、引用符で囲んだ値の中の '#' の行を見出しと、
-// 空行を区切りと取り違え、publish が1つのレコードとして読むものの一部だけを書き
-// 換えることになる。保存の単位は物理行のまま（PR3 でレコードへ移す）なので、
-// 複数の物理行にまたがるレコードは、どの物理行も理由を付けて編集させない。
+// 行は、publish と同じ全体を解釈する読み方の区切り（csvfile.SplitSegments）の
+// セグメントを1つずつ並べたものである。引用符で囲んだ値が物理行をまたぐレコードも
+// 1つの行になり、値の中の '#' の行や空行を、見出しや区切りと取り違えない。
 //
 // 保存したいなら [Open] を使う。Parse で作った File は保存先を持たない。
 func Parse(data []byte) *File {
 	f := &File{version: hashBytes(data)}
 
-	// BOM は csvfile.SplitPythonLines が落とすので、ここで覚えておく。
-	// 戻さないと BOM 付きファイルの1行目が変わってしまう。
-	if trimmed := csvfile.TrimBOM(data); len(trimmed) != len(data) {
-		f.bom = string(data[:len(data)-len(trimmed)])
-	}
-	for _, pl := range csvfile.SplitPythonLines(data) {
-		// 種類の既定は空行相当にしておく。どのセグメントにも入らない物理行は無い
-		// （区切りの関数も同じ3種の改行で分ける）が、あれば画面に並べない。
-		f.lines = append(f.lines, Line{Number: pl.Number, Kind: KindBlank, Text: pl.Text})
-	}
+	whole := csvfile.ReadPowerShellMarked(data)
+	segs := whole.Segments
+	f.bom = segs.Text[:segs.BOM]
+	f.physical = segs.Lines
 
-	segs := csvfile.SplitSegments(data)
-	// tail は、閉じない引用符が開いたレコードの最初の物理行の添字。無ければ -1。
-	// そこから後ろはレコードとして解釈せず、物理行のまま並べる（決まったことの 3）。
-	tail := -1
 	headerIndex := -1
 	var headerBody string
-	// records は、1物理行に収まるデータのレコードの添字。フィールドと編集可否は、
-	// ヘッダーが決まってから物理行の読み方で求める（[File.refresh]）。
+	// records は、KindData のレコードの f.lines での添字。編集可否は、ヘッダーが
+	// 決まってから求める（[File.judge]）。
 	var records []int
 	for _, seg := range segs.List {
-		if seg.Line < 1 || seg.EndLine > len(f.lines) {
-			continue
-		}
-		first := seg.Line - 1
 		if seg.Unclosed() {
-			tail = first
+			// 閉じない引用符が開いたセグメントから後ろは、レコードとして解釈せず、
+			// 物理行のまま並べる（決まったことの 3）。
+			f.appendRaw(segs, seg)
 			break
 		}
-		switch seg.Kind {
-		case csvfile.SegmentComment:
-			f.lines[first].Kind = KindComment
-		case csvfile.SegmentHeader:
-			f.markLines(seg, KindHeader)
-			headerIndex, headerBody = first, segs.Body(seg)
-		case csvfile.SegmentRecord:
-			f.markLines(seg, KindData)
-			if seg.MultiLine() {
-				f.markMultiline(seg)
-			} else {
-				records = append(records, first)
-			}
-		default:
-			// 空行と、"," や `""` の行（空のレコード）。いままでどおり空行相当。
-			f.markLines(seg, KindBlank)
+		line := Line{ID: seg.ID, Number: seg.Line, EndNumber: seg.EndLine,
+			Text: segs.Text[seg.Start : seg.End+len(seg.Term)], term: string(seg.Term)}
+		line.Kind = kindOf(seg)
+		switch line.Kind {
+		case KindHeader:
+			headerIndex, headerBody = len(f.lines), segs.Body(seg)
+		case KindData:
+			line.Fields = padFields(seg.Fields, len(seg.Offsets))
+			line.last = seg.Offsets[len(seg.Offsets)-1] - seg.Start
+			line.columns = len(seg.Offsets)
+			records = append(records, len(f.lines))
 		}
-	}
-	if tail >= 0 {
-		for i := tail; i < len(f.lines); i++ {
-			f.lines[i].Kind = rawKind(f.lines[i].Text)
-		}
-		if headerIndex >= tail {
-			headerIndex = -1
-		}
+		f.lines = append(f.lines, line)
 	}
 
 	// ヘッダーの受理は、いままでどおり生テキストの完全一致で見る（[matchHeader]）。
@@ -204,12 +200,12 @@ func Parse(data []byte) *File {
 		f.header = header
 		f.lines[headerIndex].Fields = slices.Clone(header)
 		for _, i := range records {
-			f.refresh(i)
+			f.judge(&f.lines[i])
 		}
 	}
 
 	switch {
-	case tail >= 0:
+	case segs.UnclosedLine > 0:
 		// 閉じない引用符は、ヘッダーの形より先に言う。ヘッダーの中で開いたときは、
 		// ヘッダーにファイルの終わりまでが入っているので、受理されない理由より
 		// 引用符のほうが直す先を指す（publish の形の確かめも (e) だけを出す）。
@@ -222,62 +218,93 @@ func Parse(data []byte) *File {
 	case header == nil:
 		// ヘッダー行そのものは %q で引用してから渡す。引用を目録の側にやらせると、
 		// 言語ごとに引用符が変わり、同じファイルの同じ行が別の綴りで出る。
+		number := f.lines[headerIndex].Number
 		f.markReadOnly(reason.New(reason.EditBadHeader, fmt.Sprintf(
 			"%d行目のヘッダーが %q で、受理される4種のいずれでもない（"+
 				"key,section,node,order,speaker,translation / key,speaker,translation / key,translation / "+
 				"key,section,node,order,speaker,source_en,translation）",
-			f.lines[headerIndex].Number, headerBody),
-			"line", strconv.Itoa(f.lines[headerIndex].Number),
+			number, headerBody),
+			"line", strconv.Itoa(number),
 			"text", fmt.Sprintf("%q", headerBody)))
 	}
 	return f
 }
 
-// markLines は、seg の最初の物理行の種類を kind にする。行をまたぐセグメントの
-// 続きの行は、生の行として並べる（[rawKind]）。
-func (f *File) markLines(seg csvfile.Segment, kind Kind) {
-	f.lines[seg.Line-1].Kind = kind
-	for n := seg.Line + 1; n <= seg.EndLine; n++ {
-		f.lines[n-1].Kind = rawKind(f.lines[n-1].Text)
+// kindOf はセグメントの種類から行の種類を決める。空のレコード（"," や `""` の行）は
+// 空行相当にする。
+func kindOf(seg csvfile.Segment) Kind {
+	switch seg.Kind {
+	case csvfile.SegmentComment:
+		return KindComment
+	case csvfile.SegmentHeader:
+		return KindHeader
+	case csvfile.SegmentRecord:
+		return KindData
+	}
+	return KindBlank
+}
+
+// emptyRecord は、区切りの関数が読んだ値（末尾の空フィールドを落としたもの）が、
+// 空のレコード（csvfile.SegmentEmpty）の形かを返す。
+func emptyRecord(fields []string) bool {
+	return len(fields) == 0 || len(fields) == 1 && fields[0] == ""
+}
+
+// padFields は、値を区切りの数まで空文字で埋めた複製を返す。
+func padFields(fields []string, columns int) []string {
+	out := slices.Clone(fields)
+	for len(out) < columns {
+		out = append(out, "")
+	}
+	return out
+}
+
+// appendRaw は、閉じない引用符が開いたセグメント seg の最初の物理行からファイルの
+// 終わりまでを、1物理行ずつ生の行として並べる。ID は seg の ID から続けて振る。
+func (f *File) appendRaw(segs csvfile.Segments, seg csvfile.Segment) {
+	id := seg.ID
+	for n := seg.Line; n <= segs.Lines; n++ {
+		body, term := segs.PhysicalLine(n)
+		f.lines = append(f.lines, Line{ID: id, Number: n, EndNumber: n,
+			Kind: rawKind(body), Text: body + string(term), term: string(term)})
+		id++
 	}
 }
 
-// markMultiline は、複数の物理行にまたがるレコードのどの物理行も、理由を付けて
-// 編集させない。
-//
-// 保存は物理行の単位で最終フィールドを差し替えるので、行をまたぐレコードの1行目へ
-// 書くと、続きの行が残って publish の読み方では壊れたレコードになる（行単位で
-// 読んでいたときは、訳が行をまたぐレコードの1行目が、訳の切れた編集できる行に
-// 見えていた）。レコードの単位で書けるようになるまで（PR3）、どの物理行も書かせない。
-//
-// 1行目には全体を解釈して読んだ値を持たせる。キーでバッジを結び付け、原文の欄に
-// 原文の全体を出すためである。訳は出さない（[Line.Translation] は編集できない行では
-// 空を返す）。画面は編集できない行の生の行を出す。
-func (f *File) markMultiline(seg csvfile.Segment) {
-	why := reason.New(reason.EditMultiline,
-		fmt.Sprintf("行をまたぐレコード（%d〜%d行目）の行なので、まだ編集できない", seg.Line, seg.EndLine),
-		"line", strconv.Itoa(seg.Line), "end", strconv.Itoa(seg.EndLine))
-	fields := slices.Clone(seg.Fields)
-	for len(fields) < len(seg.Offsets) {
-		fields = append(fields, "")
-	}
-	f.lines[seg.Line-1].Fields = fields
-	for n := seg.Line; n <= seg.EndLine; n++ {
-		f.lines[n-1].Editable = false
-		f.lines[n-1].setReason(why)
-	}
-}
-
-// rawKind は、レコードとして解釈しない物理行（行をまたぐセグメントの続きの行と、
-// 閉じない引用符から後ろの行）の種類を返す。空白だけの行は空行相当、ほかは生の行を
-// 見せるためにデータ行にする。'#' で始まっていても見出しにはしない。引用符で囲んだ
-// 値の中の行で、publish はコメントとして落とさない。
-func rawKind(text string) Kind {
-	body, _ := splitTerminator(text)
+// rawKind は、レコードとして解釈しない物理行（閉じない引用符から後ろの行）の種類を
+// 返す。空白だけの行は空行相当、ほかは生の行を見せるためにデータ行にする。'#' で
+// 始まっていても見出しにはしない。引用符で囲んだ値の中の行で、publish はコメント
+// として落とさない。
+func rawKind(body string) Kind {
 	if strings.TrimSpace(body) == "" {
 		return KindBlank
 	}
 	return KindData
+}
+
+// judge は、受理したヘッダーのもとで、データのレコード1つの編集可否を決める。
+func (f *File) judge(line *Line) {
+	if line.columns != len(f.header) {
+		// 安全弁。列が多い行を最終フィールドの位置で切ると、余った列を巻き込んで
+		// 壊す。列が少ない行は別の列を訳だと思って書き換える。どちらも直せない
+		// 壊し方なので、編集させずに翻訳者へ見せる。
+		line.Editable = false
+		line.setReason(reason.New(reason.EditFieldCount,
+			fmt.Sprintf("フィールド数がヘッダーと合わない（ヘッダーは%d列、この行は%d列）",
+				len(f.header), line.columns),
+			"header", strconv.Itoa(len(f.header)), "row", strconv.Itoa(line.columns)))
+		return
+	}
+	if tr := line.Fields[len(line.Fields)-1]; strings.ContainsAny(tr, "\r\n") {
+		// 訳への改行の入力は PR4 で足す（決まったことの 1）。いまの画面は改行を空白に
+		// 置き換えるので、開いて1字打つと、翻訳者が見ていない改行まで消える。
+		line.Editable = false
+		line.setReason(reason.New(reason.EditMultilineTranslation,
+			"訳に改行がある（改行の入る訳は、まだ画面から書き換えられない）"))
+		return
+	}
+	line.Editable = true
+	line.setReason(reason.Reason{})
 }
 
 // Open はファイルを読んで編集モデルにする。読み取りに失敗したときだけ誤りを返す。
@@ -315,7 +342,11 @@ func (f *File) ReadOnlyCause() reason.Reason { return f.readOnlyCause }
 // Dirty は読み込み後に1バイトでも変えたかを返す。
 func (f *File) Dirty() bool { return f.dirty }
 
-// Lines はすべての物理行を複製して返す。
+// PhysicalLines はファイルの物理行の数を返す。区切りは "\r\n" / "\n" / "\r" の3種で、
+// BOM は数えない。末尾の改行の後ろに空の行は数えない。
+func (f *File) PhysicalLines() int { return f.physical }
+
+// Lines はすべての行を複製して返す。
 func (f *File) Lines() []Line {
 	out := make([]Line, len(f.lines))
 	for i, line := range f.lines {
@@ -325,9 +356,9 @@ func (f *File) Lines() []Line {
 	return out
 }
 
-// Line は物理行番号で1行を引く。無ければ第2戻り値が false。
-func (f *File) Line(number int) (Line, bool) {
-	i, ok := f.indexOf(number)
+// Line は ID で1行を引く。無ければ第2戻り値が false。
+func (f *File) Line(id int) (Line, bool) {
+	i, ok := f.indexOf(id)
 	if !ok {
 		return Line{}, false
 	}
@@ -336,54 +367,51 @@ func (f *File) Line(number int) (Line, bool) {
 	return line, true
 }
 
-// SetTranslation は number 行の最終フィールド（訳）を value に差し替える。
+// SetTranslation は ID が id のレコードの最終フィールド（訳）を value に差し替える。
 //
-// 書き換えるのは最終フィールドの開始位置から行末（改行の手前）までだけで、
-// 他の行にも、この行の前半にも触れない。改行文字はその行が元々持っていた
-// 種類（CRLF / LF / CR / 無し）のまま残る。
+// 書き換えるのは最終フィールドの開始位置からレコードの本体の終わり（レコードを
+// 終える改行の手前）までだけで、ほかの行にも、このレコードの前半にも触れない。
+// 終端はそのレコードが元々持っていた種類（CRLF / LF / CR / 無し）のまま残る。
+// 原文が行をまたぐレコードも、訳が1行に収まるかぎり書ける。
 //
-// 差し替えた結果がいまの行と1バイトも変わらないなら、何もせず nil を返す
+// 差し替えた結果がいまのレコードと1バイトも変わらないなら、何もせず nil を返す
 // （[File.Dirty] も立たない）。
 //
 // 誤りを返す場合:
 //
 //   - ファイル全体が読み取り専用: [ErrReadOnly]
-//   - 行が無い / データ行でない / 列数がヘッダーと合わない / 行をまたぐレコードの行:
-//     [NotEditableError]
+//   - 行が無い / データ行でない / 編集できない行: [NotEditableError]
 //   - value に CR か LF が入っている: [InvalidValueError]
 //
-// value の CR / LF を拒むのは、保存が物理行の単位だからである。公開ファイルの読み手
-// （csvfile.ReadPowerShell）は全体を解釈するので、引用した値の中の改行は読めるが、
-// 改行を入れると、この行が行をまたぐレコードになり、物理行の編集モデルと食い違う。
-// レコードの単位で保存するようになるまで（PR3）、書けない値は書かせない。
-// 訳への改行の入力は PR4 で足す（決まったことの 1）。
-func (f *File) SetTranslation(number int, value string) error {
+// value の CR / LF を拒むのは、訳への改行の入力を PR4 で足すからである
+// （決まったことの 1）。
+func (f *File) SetTranslation(id int, value string) error {
 	if f.readOnly {
 		return fmt.Errorf("%w: %s", ErrReadOnly, f.readOnlyReason)
 	}
-	i, ok := f.indexOf(number)
+	i, ok := f.indexOf(id)
 	if !ok {
-		return notEditable(number, reason.New(reason.EditNoSuchLine, "そんな行番号は無い"))
+		return notEditable(id, 0, reason.New(reason.EditNoSuchLine, "そんな行は無い"))
 	}
 	line := &f.lines[i]
 	if line.Kind != KindData {
 		// 種類の名前（comment / blank / header / data）は ASCII のまま渡す。
 		// ファイルの見え方を指す語で、[Kind.String] と doc コメントが同じ綴りを
 		// 使っている。訳すと、画面と説明が別の語で同じものを指すことになる。
-		return notEditable(number, reason.New(reason.EditNotDataLine,
+		return notEditable(id, line.Number, reason.New(reason.EditNotDataLine,
 			"データ行ではない（"+line.Kind.String()+"）", "kind", line.Kind.String()))
 	}
 	if !line.Editable {
-		return notEditable(number, line.Cause)
+		return notEditable(id, line.Number, line.Cause)
 	}
 	if strings.ContainsAny(value, "\r\n") {
-		return invalidValue(number, reason.New(reason.EditNoNewline, "訳に改行は入れられない"))
+		return invalidValue(id, line.Number, reason.New(reason.EditNoNewline, "訳に改行は入れられない"))
 	}
 	if strings.ContainsRune(value, 0) {
 		// NUL は Python の csv.reader が _csv.Error にする値だが、
 		// internal/validate はその再現をしていない。ここで止めないと
 		// 誰も気づかないまま公開ファイルまで届く。
-		return invalidValue(number, reason.New(reason.EditNoNUL, "訳に NUL は入れられない"))
+		return invalidValue(id, line.Number, reason.New(reason.EditNoNUL, "訳に NUL は入れられない"))
 	}
 	if !utf8.ValidString(value) {
 		// 不正なUTF-8も後段のどこも検出しない（validate の doc コメント参照）。
@@ -394,24 +422,38 @@ func (f *File) SetTranslation(number int, value string) error {
 		// そちらは internal/web が復号する前に本文のバイト列を見て止めている
 		// （handleRows の "error.bad_utf8"）。だからここを消してよい、とは
 		// ならない。このパッケージを直に使う側には、まだここしか無い。
-		return invalidValue(number, reason.New(reason.EditBadUTF8, "訳が正しいUTF-8ではない"))
+		return invalidValue(id, line.Number, reason.New(reason.EditBadUTF8, "訳が正しいUTF-8ではない"))
 	}
 
-	body, term := splitTerminator(line.Text)
-	offsets := csvfile.FieldOffsets(body)
-	// 最終フィールドの開始位置から行末まで。ここより前は1バイトも触らない。
-	start := offsets[len(offsets)-1]
-	text := body[:start] + escapeTranslation(value) + term
+	// 最終フィールドの開始位置から本体の終わりまで。ここより前は1バイトも触らない。
+	text := line.body()[:line.last] + escapeTranslation(value) + line.term
 	if text == line.Text {
 		return nil
 	}
 	line.Text = text
-	// 書き戻した行を読み直してモデルを更新する。escapeTranslation のおかげで
-	// 読み戻した値は書いた値と一致するので、画面とファイルとゲームの3つが
-	// 同じ値を指す。
-	f.refresh(i)
+	refresh(line)
 	f.dirty = true
 	return nil
+}
+
+// refresh は、書き換えたレコードの値を生のバイト列から読み直す。
+//
+// レコードはレコードの境目（引用の外の物理行の先頭）から始まり、読み方は後ろへ
+// 向かうだけなので、そのレコードのバイト列だけを読んでもファイルの中で読むのと
+// 同じ値になる。
+//
+// 訳を消した結果、空のレコードになることがある（キーの空いた2列の行を "," にした
+// とき）。読み直すと空行相当になるので、モデルもそろえる。
+func refresh(line *Line) {
+	seg := csvfile.SplitSegments([]byte(line.Text)).List[0]
+	if emptyRecord(seg.Fields) {
+		line.Kind = KindBlank
+		line.Fields = nil
+		line.Editable = false
+		line.setReason(reason.New(reason.EditNotRecord, "この行はレコードとして読まれない"))
+		return
+	}
+	line.Fields = padFields(seg.Fields, len(seg.Offsets))
 }
 
 // escapeTranslation は訳をCSVの1フィールドとして書ける形にする。
@@ -423,7 +465,7 @@ func (f *File) SetTranslation(number int, value string) error {
 // 足す理由は、この値を読む相手が1つではないこと。同じファイルを次の3つが読む。
 //
 //	ゲーム内Mod   CsvReader.cs（移植は csvfile.ParseCSharpRecords）。空白を削らない
-//	publish       ConvertFrom-Csv（移植は csvfile.ParsePowerShellRecord）。
+//	publish       ConvertFrom-Csv（移植は csvfile.ReadPowerShell）。
 //	              引用符なしフィールドの先頭空白を全部、末尾空白を1個残して削る
 //	validate      Python の csv.reader。空白を削らない
 //
@@ -460,53 +502,12 @@ func (f *File) Bytes() []byte {
 	return out
 }
 
-// refresh は i 番目のデータ行のフィールドと編集可否を、生テキストから求め直す。
-func (f *File) refresh(i int) {
-	line := &f.lines[i]
-	body, _ := splitTerminator(line.Text)
-
-	// 種類も数え直す。訳を消した結果その行が空行相当（"," など）になることがあり、
-	// Kind を据え置くと「モデルはデータ行、読み直すと空行」という食い違いが残る。
-	// 2列のヘッダーでキーが空の行で起きる。
-	if !isRecord(body) {
-		line.Kind = KindBlank
-		line.Fields = nil
-		line.Editable = false
-		line.setReason(reason.New(reason.EditNotRecord, "この行はレコードとして読まれない"))
-		return
-	}
-	line.Kind = KindData
-
-	// 区切りの数は FieldOffsets で数える。ParsePowerShellRecord は末尾の空
-	// フィールドを落とすので、未訳行 `a,b,` を2列と数えてしまう。
-	offsets := csvfile.FieldOffsets(body)
-	fields, _ := csvfile.ParsePowerShellRecord(body)
-	for len(fields) < len(offsets) {
-		fields = append(fields, "")
-	}
-	line.Fields = fields
-
-	if len(offsets) != len(f.header) {
-		// 安全弁。列が多い行を最終フィールドの位置で切ると、余った列を巻き込んで
-		// 壊す。列が少ない行は別の列を訳だと思って書き換える。どちらも直せない
-		// 壊し方なので、編集させずに翻訳者へ見せる。
-		line.Editable = false
-		line.setReason(reason.New(reason.EditFieldCount,
-			fmt.Sprintf("フィールド数がヘッダーと合わない（ヘッダーは%d列、この行は%d列）",
-				len(f.header), len(offsets)),
-			"header", strconv.Itoa(len(f.header)), "row", strconv.Itoa(len(offsets))))
-		return
-	}
-	line.Editable = true
-	line.setReason(reason.Reason{})
-}
-
-// indexOf は物理行番号から f.lines の添字を引く。
-// 行番号は1始まりの連番なので添字は number-1 だが、入力が壊れていても
-// 落ちないように範囲と実際の番号を確かめる。
-func (f *File) indexOf(number int) (int, bool) {
-	i := number - 1
-	if i < 0 || i >= len(f.lines) || f.lines[i].Number != number {
+// indexOf は ID から f.lines の添字を引く。
+// ID は1始まりの連番なので添字は id-1 だが、入力が壊れていても
+// 落ちないように範囲と実際の ID を確かめる。
+func (f *File) indexOf(id int) (int, bool) {
+	i := id - 1
+	if i < 0 || i >= len(f.lines) || f.lines[i].ID != id {
 		return 0, false
 	}
 	return i, true
@@ -516,9 +517,8 @@ func (f *File) indexOf(number int) (int, bool) {
 // データ行はどれも編集させず、理由を入れておく。
 //
 // 閉じない引用符のファイルでは、引用符が開いたレコードより前の行は読めていて
-// （[File.refresh] が編集できると決めていることがある）、そこからも編集可否を
-// 倒す。行をまたぐレコードの理由も、ファイル全体の理由で上書きする。ファイル全体が
-// 書けない以上、直す先はファイル全体の理由のほうである。
+// （[File.judge] が編集できると決めていることがある）、そこからも編集可否を
+// 倒す。ファイル全体が書けない以上、直す先はファイル全体の理由のほうである。
 func (f *File) markReadOnly(why reason.Reason) {
 	f.readOnly = true
 	f.readOnlyReason = why.Text
@@ -529,32 +529,6 @@ func (f *File) markReadOnly(why reason.Reason) {
 			f.lines[i].setReason(why)
 		}
 	}
-}
-
-// isRecord は、1物理行に収まるレコードの本体（改行を除いたもの）が、書き換えたあとも
-// レコードとして読まれるかを返す。空行相当の判定は csvfile.ParsePowerShellRecord の
-// 第2戻り値をそのまま使う（"," や `""` の行は空行相当になる。区切りの関数の空の
-// レコードと同じ）。
-//
-// 行の種類を最初に決めるのは区切りの関数（[Parse]）で、ここは訳を書き換えた行を
-// 読み直すとき（[File.refresh]）に使う。2列の作業コピーでキーの空いた行の訳を消すと、
-// その行は "," になって空行相当に変わる。
-func isRecord(body string) bool {
-	_, ok := csvfile.ParsePowerShellRecord(body)
-	return ok
-}
-
-// splitTerminator は行を本体と行末の改行に分ける。
-// csvfile.SplitPythonLines が返す行は "\r\n" / "\n" / "\r" のいずれかで終わるか、
-// 末尾行なら終端を持たない。
-func splitTerminator(text string) (body, term string) {
-	switch {
-	case strings.HasSuffix(text, "\r\n"):
-		return text[:len(text)-2], "\r\n"
-	case strings.HasSuffix(text, "\n"), strings.HasSuffix(text, "\r"):
-		return text[:len(text)-1], text[len(text)-1:]
-	}
-	return text, ""
 }
 
 // hashBytes は版を計算する。バイト列全体の SHA-256 の16進。

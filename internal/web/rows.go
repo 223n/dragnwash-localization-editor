@@ -30,14 +30,19 @@ const maxRowsEdits = 20000
 
 // rowEdit は1行ぶんの書き換え要求。
 type rowEdit struct {
-	// Line は1始まりの物理行番号。書き込む先はこれで決める。
-	// クライアントにパスは書かせない。
-	Line int `json:"line"`
+	// ID は行（レコード）の ID（[edit.Line.ID]、lineView の id）。書き込む先はこれで
+	// 決める。クライアントにパスは書かせない。
+	//
+	// 物理行の番号では引かない。引用符で囲んだ値に改行があるレコードは複数の
+	// 物理行にまたがり、ほかのレコードの値の改行が増えれば、後ろのレコードの行番号が
+	// ずれる。ID はセグメントの通し番号で、自分の保存では変わらない
+	// （internal/edit の書く前の事後確認で確かめる）。
+	ID int `json:"id"`
 	// Key はクライアントがその行にあると思っているキー（先頭フィールド）。
 	//
-	// 行番号だけで同定すると、409 のあとが危うい。409 を受けた画面は読み直した
+	// ID だけで同定すると、409 のあとが危うい。409 を受けた画面は読み直した
 	// 内容に自分の編集を載せ直すが、そのあいだによそが行を足したり消したり
-	// していると、同じ行番号が別のキーの行を指す。訳が別の行へ入り、その行に
+	// していると、同じ ID が別のキーの行を指す。訳が別の行へ入り、その行に
 	// もとからあった訳が消える。
 	//
 	// 空なら照合しない。キーを持たない行（キー列が空の作業コピー）があるため
@@ -61,7 +66,11 @@ type rowsRequest struct {
 // 行ごとに返すのは、1行の失敗で残り全部を巻き添えにしないため。失敗した行は
 // 画面が「保存できていない行」として残し、翻訳者の入力を捨てない。
 type rowResult struct {
-	Line int `json:"line"`
+	// ID は要求の ID をそのまま返す。
+	ID int `json:"id"`
+	// Number は、その行のいまの最初の物理行。表示を差し替えるためだけの値で、
+	// 同定には使わない。そんな行が無ければ 0。
+	Number int `json:"n"`
 	// Saved はこの行が保存されたか。
 	Saved bool `json:"saved"`
 	// Translation は保存後にモデルから読み直した値。画面はこれで欄を更新する。
@@ -201,7 +210,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 		if !out.results[i].Saved {
 			continue
 		}
-		line, ok := out.file.Line(out.results[i].Line)
+		line, ok := out.file.Line(out.results[i].ID)
 		if !ok {
 			continue
 		}
@@ -216,7 +225,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	tags := s.tagStates(target.Locale)
 	badges := s.badgesByKey(cat, s.findings[target.Locale], filled, tags)
 	for i := range out.results {
-		if line, ok := out.file.Line(out.results[i].Line); ok {
+		if line, ok := out.file.Line(out.results[i].ID); ok {
 			out.results[i].Badges = badges[line.Key()]
 		}
 	}
@@ -289,19 +298,22 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	results := make([]rowResult, 0, len(req.Edits))
 	applied := 0
 	for _, e := range req.Edits {
-		res := rowResult{Line: e.Line}
+		res := rowResult{ID: e.ID}
+		if line, ok := file.Line(e.ID); ok {
+			res.Number = line.Number
+		}
 		if !keyMatches(file, e) {
-			// その行番号には別のキーの行がある。書くと訳が別の行へ入り、
+			// その ID には別のキーの行がある。書くと訳が別の行へ入り、
 			// その行にもとからあった訳が消える。書かずに理由を返す。
 			res.Error = s.cat.T(cat, "error.row_moved")
 			results = append(results, res)
 			continue
 		}
-		switch err := file.SetTranslation(e.Line, e.Translation); {
+		switch err := file.SetTranslation(e.ID, e.Translation); {
 		case err == nil:
 			applied++
 			res.Saved = true
-			if line, ok := file.Line(e.Line); ok {
+			if line, ok := file.Line(e.ID); ok {
 				res.Translation = line.Translation()
 				if res.Translation != e.Translation {
 					// CSV として書き戻して読み直すと値が変わる場合
@@ -406,6 +418,10 @@ func addWarning(res *rowResult, text string) {
 func (s *server) editErrorText(cat *Catalog, err error) string {
 	var notEditable *edit.NotEditableError
 	if errors.As(err, &notEditable) {
+		if notEditable.Line == 0 {
+			// そんな行が無い。外枠の「N行目は」を書けないので、理由だけを出す。
+			return s.reasonText(cat, notEditable.Cause)
+		}
 		return s.cat.T(cat, "error.not_editable",
 			"line", itoa(notEditable.Line), "reason", s.reasonText(cat, notEditable.Cause))
 	}
@@ -417,7 +433,7 @@ func (s *server) editErrorText(cat *Catalog, err error) string {
 	return err.Error()
 }
 
-// keyMatches は、要求が指す行がクライアントの思っているキーの行かを返す。
+// keyMatches は、要求の ID が指す行がクライアントの思っているキーの行かを返す。
 //
 // キーを送ってこない要求（キー列が空の行）は照合しない。行が無いときも通す。
 // 行が無いことは [edit.File.SetTranslation] が断るので、理由を2か所で作らない。
@@ -425,7 +441,7 @@ func keyMatches(file *edit.File, e rowEdit) bool {
 	if e.Key == "" {
 		return true
 	}
-	line, ok := file.Line(e.Line)
+	line, ok := file.Line(e.ID)
 	if !ok {
 		return true
 	}

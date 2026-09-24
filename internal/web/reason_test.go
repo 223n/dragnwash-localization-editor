@@ -890,14 +890,14 @@ func TestSaveErrorIsTranslated(t *testing.T) {
 		target := 0
 		for _, line := range lines.Lines {
 			if line.Kind == lineKindData && !line.Editable {
-				target = line.Number
+				target = line.ID
 			}
 		}
 		if target == 0 {
 			t.Fatalf("%s: 編集できない行が無い", lang)
 		}
 
-		rec := save(t, s, "ja", lines.Version, rowEdit{Line: target, Translation: "x"})
+		rec := save(t, s, "ja", lines.Version, rowEdit{ID: target, Translation: "x"})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%s: 状態コードが %d\n%s", lang, rec.Code, rec.Body.String())
 		}

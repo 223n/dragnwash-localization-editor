@@ -1,7 +1,6 @@
 package edit
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -11,17 +10,19 @@ import (
 )
 
 /*
-ここの試験は、保存をレコードの単位へ移す前（全体を解釈する読み手へ移す作業の PR3 の
-最初のコミット）の編集モデルの結果を固定する（決まったことの 13）。名前の末尾は
-どれも Now で、切り替えるコミットで期待値を直す。
+ここの試験は、保存をレコードの単位へ移す作業（全体を解釈する読み手へ移す作業の PR3）で
+変わる編集モデルの結果を見る。
 
-固定するのは PR3 で変わるものである。
+PR3 の最初のコミットでは、切り替える前の結果を名前の末尾が Now の試験で固定した
+（決まったことの 13）。切り替えたコミットで期待値を直し、名前から Now を外した。
+Now のまま残っているものは、まだ切り替えていない結果である。
 
-  - 行は物理行で並び、行をまたぐレコードの続きの行も1行ずつ並ぶ。保存も物理行の
-    番号で引き、行をまたぐレコードはどの物理行も編集できない。
+  - 行はセグメント（レコード）で並び、保存は ID で引く。行をまたぐレコードは1つの行に
+    なり、訳が1行に収まるかぎり書ける（以前は物理行で並び、行をまたぐレコードの
+    どの物理行も編集できなかった）。
   - カンマだけの行（",,,,,,"）は、キーの空いた編集できる行になる（改善の ui-15）。
   - 行の区切りが CR だけのファイルも、ゲームの読み方と値が割れる行も編集できる。
-  - 飲み込みの疑いのあるレコードの理由は、行をまたぐレコードの理由と同じになる。
+  - 飲み込みの疑いのあるレコードは、訳に改行がある理由で編集できない。
 
 見本の英文と訳はどれも架空の文である。
 */
@@ -49,46 +50,59 @@ var nowWorking = "key,section,node,order,speaker,source_en,translation\r\n" +
 	key.For(nowPara) + ",UI,,,UI,\"" + nowPara + "\",\r\n" +
 	key.For("Start") + ",UI,,,UI,Start,はじめる\r\n"
 
-// TestEditListsPhysicalLinesNow は、行が物理行で並び、保存も物理行の番号で引くことを
-// 固定する。行をまたぐレコードは、続きの行も1行ずつ並び、どの物理行も編集できない。
-func TestEditListsPhysicalLinesNow(t *testing.T) {
+// TestEditListsRecords は、行がセグメント（レコード）で並び、保存を ID で引くことを
+// 見る。行をまたぐレコードは1つの行になり、訳が1行に収まるかぎり書ける。書いても
+// 変わるのはそのレコードの最終フィールドだけで、訳を空に戻すと元のバイト列に戻る。
+//
+// PR3 の最初のコミットでは TestEditListsPhysicalLinesNow として、行が物理行で並び、
+// 続きの行も1行ずつ並んでどれも編集できず、保存を物理行の番号で引くことを固定していた。
+func TestEditListsRecords(t *testing.T) {
 	f := Parse([]byte(nowWorking))
 	if f.ReadOnly() {
 		t.Fatalf("読み取り専用になった: %s", f.ReadOnlyReason())
 	}
 	lines := f.Lines()
-	if len(lines) != 12 {
-		t.Fatalf("行が %d 行、物理行の 12 行を期待", len(lines))
+	if len(lines) != 10 || f.PhysicalLines() != 12 {
+		t.Fatalf("行が %d 行（物理行 %d 行）、10 行（物理行 12 行）を期待", len(lines), f.PhysicalLines())
 	}
 	wantKinds := []Kind{KindHeader, KindBlank, KindComment, KindComment, KindData, KindData,
-		KindBlank, KindComment, KindData, KindBlank, KindData, KindData}
+		KindBlank, KindComment, KindData, KindData}
+	wantNumbers := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 12}
 	for i, l := range lines {
-		if l.Number != i+1 || l.Kind != wantKinds[i] {
-			t.Errorf("%d番目 = {%d %v}、{%d %v} を期待", i, l.Number, l.Kind, i+1, wantKinds[i])
+		end := wantNumbers[i]
+		if i == 8 {
+			end = 11
+		}
+		if l.ID != i+1 || l.Number != wantNumbers[i] || l.EndNumber != end || l.Kind != wantKinds[i] {
+			t.Errorf("%d番目 = {ID %d, %d〜%d, %v}、{ID %d, %d〜%d, %v} を期待",
+				i, l.ID, l.Number, l.EndNumber, l.Kind, i+1, wantNumbers[i], end, wantKinds[i])
 		}
 	}
-	for _, n := range []int{9, 10, 11} {
-		l := lines[n-1]
-		if l.Editable || l.Cause.ID != reason.EditMultiline ||
-			argOf(l.Cause, "line") != "9" || argOf(l.Cause, "end") != "11" {
-			t.Errorf("%d行目 = %+v、行をまたぐレコード（9〜11行目）の理由を期待", n, l)
-		}
-	}
-	if got := lines[8].Key(); got != key.For(nowPara) {
-		t.Errorf("9行目のキー = %q", got)
+	para := lines[8]
+	if !para.Editable || para.Key() != key.For(nowPara) || para.Fields[5] != nowPara {
+		t.Errorf("原文が行をまたぐレコード = %+v", para)
 	}
 
-	var notEditable *NotEditableError
-	if err := f.SetTranslation(9, "訳"); !errors.As(err, &notEditable) || notEditable.Cause.ID != reason.EditMultiline {
-		t.Errorf("9行目に書けてしまう、または理由が違う: %v", err)
+	// 原文が行をまたぐレコード（ID 9）と、その後ろのレコード（ID 10。12行目）に書く。
+	if err := f.SetTranslation(9, "すすぐ"); err != nil {
+		t.Fatalf("ID 9 に書けない: %v", err)
 	}
-	// 12行目は物理行の番号で引く（セグメントの通し番号なら 10 になる）。
-	if err := f.SetTranslation(12, "スタート"); err != nil {
-		t.Fatalf("12行目に書けない: %v", err)
+	if err := f.SetTranslation(10, "スタート"); err != nil {
+		t.Fatalf("ID 10 に書けない: %v", err)
 	}
-	want := strings.Replace(nowWorking, ",Start,はじめる\r\n", ",Start,スタート\r\n", 1)
+	want := strings.Replace(nowWorking, "sort them.\",\r\n", "sort them.\",すすぐ\r\n", 1)
+	want = strings.Replace(want, ",Start,はじめる\r\n", ",Start,スタート\r\n", 1)
 	if got := string(f.Bytes()); got != want {
 		t.Errorf("書いた結果が違う\n got %q\nwant %q", got, want)
+	}
+	if err := f.SetTranslation(9, ""); err != nil {
+		t.Fatalf("ID 9 を空に戻せない: %v", err)
+	}
+	if err := f.SetTranslation(10, "はじめる"); err != nil {
+		t.Fatalf("ID 10 を戻せない: %v", err)
+	}
+	if got := string(f.Bytes()); got != nowWorking {
+		t.Errorf("元のバイト列に戻らない\n got %q\nwant %q", got, nowWorking)
 	}
 }
 
@@ -143,8 +157,12 @@ func TestEditGameReadsDifferentlyIsEditableNow(t *testing.T) {
 	}
 }
 
-// TestEditSwallowSuspectIsMultilineNow は、飲み込みの疑いのあるレコードが、行をまたぐ
-// レコードと同じ理由で編集できないことを固定する。
+// TestEditSwallowSuspectIsMultilineNow は、飲み込みの疑いのあるレコードが、訳に改行が
+// ある理由で編集できないことを固定する。
+//
+// PR3 の最初のコミットでは、どの物理行も行をまたぐレコードの理由で編集できないことを
+// 固定していた。保存をレコードの単位へ移したコミットで、レコード1つの行になり、理由が
+// 訳の改行に変わった。
 func TestEditSwallowSuspectIsMultilineNow(t *testing.T) {
 	data := "key,section,node,order,speaker,source_en,translation\r\n" +
 		key.For("one") + ",UI,,,UI,one,\"いち\r\n" +
@@ -154,9 +172,7 @@ func TestEditSwallowSuspectIsMultilineNow(t *testing.T) {
 		t.Fatalf("前提が崩れた: 飲み込みの疑い = %+v", got)
 	}
 	f := Parse([]byte(data))
-	for _, n := range []int{2, 3, 4} {
-		if l, _ := f.Line(n); l.Editable || l.Cause.ID != reason.EditMultiline {
-			t.Errorf("%d行目 = %+v、行をまたぐレコードの理由を期待", n, l)
-		}
+	if l, _ := f.Line(2); l.Number != 2 || l.EndNumber != 4 || l.Editable || l.Cause.ID != reason.EditMultilineTranslation {
+		t.Errorf("ID 2 = %+v、訳に改行がある理由の2〜4行目のレコードを期待", l)
 	}
 }
