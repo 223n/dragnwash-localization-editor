@@ -485,11 +485,10 @@ var publishDiffs = map[string]knownPublishDiff{
 		`in play order: 上流 0 / dwloc 2`,
 		`出力の 5 行目: 上流 "（無い）" / dwloc "# ===== Level 1: Ember (Rainy) ====="`,
 	}},
-	// hash-header-quoted-space と hash-header-nbsp は、いまは上流と同じバイトを書くので
-	// ここに無い。上流はそのヘッダーを飛ばさない（読んだ最初の値が '#' で始まらない）が、
-	// PR2 で (a) に足す csvfile.PowerShellHeader.CommentLike は前後の空白を除いて見るので
-	// 止まる。PR2 でこの2件が表に無い違いとして落ちたら、pubIntended で足す
-	// （docs/port-spec.md「上流と意図して違える点」）。
+	// hash-header-quoted-space と hash-header-nbsp は、上流と同じバイトを書くので
+	// ここに無い。上流はそのヘッダーを飛ばさない（読んだ最初の値が '#' で始まらない）。
+	// PR2 で (a) に足す csvfile.PowerShellHeader.CommentLike も読んだ最初の値そのもので
+	// 見るので、PR2 のあとも止まらずに上流と同じに書く。
 	"dup-columns-no-data": {pubPR2, whyPubDupNoData, []string{
 		`上流 変換できない / dwloc 書く`,
 	}},

@@ -62,24 +62,23 @@ type PowerShellHeader struct {
 	Unclosed bool
 }
 
-// CommentLike は、最初の列名が（前後の空白を除いて）'#' で始まるかを返す。
+// CommentLike は、読んだ最初の列名そのものが '#' で始まるかを返す。
 //
 // 行頭が '#' の物理行はコメントとして落ちるので、ここに来るのは `"#key"` や
-// ` #key` のように、引用符や空白の後ろに '#' があるヘッダーだけである。dwloc は
-// これをヘッダーとして返し、呼び出し側（publish の形の確かめ (a)）がこれを見て
-// 止める。(a) を「key 列が無い」に広げると、正当な source_en,translation の2列の
+// ` #key`（先頭の半角空白は読み手が落とす）のように、引用符や空白の後ろに '#' が
+// あるヘッダーだけである。上流の ConvertFrom-Csv はこのヘッダーを飛ばし、次の
+// レコード（データ）をヘッダーにするので、そのファイルの訳を1行も公開しない。
+// dwloc はこれをヘッダーとして返し、呼び出し側（publish の形の確かめ (a)）がこれを
+// 見て止める。(a) を「key 列が無い」に広げると、正当な source_en,translation の2列の
 // 作業コピーまで止まるので、'#' を見るこの判定を別に置く。
 //
-// 上流の ConvertFrom-Csv がヘッダーを飛ばす（次のレコード＝データをヘッダーにし、
-// そのファイルの訳を1行も公開しない）のは、読んだ最初の値そのものが '#' で始まる
-// ときだけである。`"#key"` と ` #key`（先頭の半角空白は読み手が落とす）がこれに
-// 当たる。引用の中の空白（`" #key"`）や、読み手が落とさない NO-BREAK SPACE の
-// 後ろに '#' があるヘッダーは、上流では飛ばさずにその名前の列になる（pwsh 7.4.6 と
-// 7.6.6 で実測）。この判定は前後の空白を除いて見るので、これらも '#' で始まると
-// 見なし、dwloc だけが止める。上流と意図して違える点で、移植仕様の表と入力の表
-// （hash-header-quoted-space、hash-header-nbsp）に載せてある。
+// 判定は上流の飛ばし方に合わせ、空白を除かずに見る。引用の中の空白（`" #key"`）や、
+// 読み手が落とさない NO-BREAK SPACE の後ろに '#' があるヘッダーは、上流では飛ばさずに
+// その名前の列になり、source_en から訳を書く（pwsh 7.4.6 と 7.6.6 で実測）。訳を
+// 失う形ではないので、dwloc も止めずに上流と同じに書く（入力の表の
+// hash-header-quoted-space、hash-header-nbsp）。
 func (h PowerShellHeader) CommentLike() bool {
-	return len(h.Fields) > 0 && strings.HasPrefix(strings.TrimSpace(h.Fields[0]), "#")
+	return len(h.Fields) > 0 && strings.HasPrefix(h.Fields[0], "#")
 }
 
 // PowerShellRecord はデータのレコード1つ。
