@@ -1239,6 +1239,22 @@ The binaries are built before the tag is created.
 If even one build fails, it stops without creating the tag or the GitHub Release.  
 That is so no Release goes out carrying only some of the six.
 
+The archives are unpacked and run before the tag is created.  
+Only the archive for the runner's own target can be run, which is `linux/amd64` on GitHub-hosted runners.  
+It checks three things.
+
+- `dwloc version` prints the version being released
+- On a copy of the sample (`samples/harbor`), `dwloc validate` ends with exit code 0
+- On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
+
+It also checks that the checksum list matches the archives.  
+It also checks that the archive holds all four files and that the executable permission is set.  
+If any of these fails, it stops without creating the tag or the GitHub Release.  
+Even when the build succeeds, a version left out of the binary or a mistake in how the archive was made only shows up when it is run.  
+The sample is copied first because its working copy is committed to this repository.  
+Running `validate` on it in place reports it as a working copy that must not be committed.  
+A Go test (`cmd/dwloc/samples_test.go`) checks on each pull request that the sample still passes these checks.
+
 Seven files are attached: the six archives and `dwloc_<version>_checksums.txt`.  
 The Release is created as a draft, and the seven files are attached at that point.  
 It counts what was attached, stops without publishing if it is not seven, and publishes the draft only once they are all there.  
@@ -1310,7 +1326,7 @@ That is because the "Publish release" workflow has the same check.
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
 | `release.yml` | Manually | Branches a release branch from `develop`, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
-| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
+| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels
 
