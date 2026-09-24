@@ -105,6 +105,22 @@ exportPublished は publish が作るのと同じCSVを組み立てる。
 返り値が (nil, "", nil) のときは、応答をこの中で書き終えている。
 */
 func (s *server) exportPublished(w http.ResponseWriter, cat *Catalog, target *publish.Target) ([]byte, string, error) {
+	/*
+		再生順のデータ（data/script_order.csv と data/level_flow.csv）の形を、読む前に
+		見る。publish と同じ順（cmd/dwloc の runPublish は再生順のデータの形を最初に
+		見る）。閉じない引用符は読み込みの誤り（500）ではなく形の崩れとして断り、
+		見出しの行へそのまま書く値の改行は、書き出すと公開ファイルの見出しが壊れる
+		ので断る。どちらも画面の指定では通せない。
+	*/
+	orderHazards, err := publish.CheckOrderShape(s.opt.Root)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(orderHazards) > 0 {
+		http.Error(w, s.cat.T(cat, "error.export_unsafe_shape",
+			"count", strconv.Itoa(len(orderHazards))), http.StatusConflict)
+		return nil, "", nil
+	}
 	data, err := publish.LoadOrder(s.opt.Root)
 	if err != nil {
 		return nil, "", err

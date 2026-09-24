@@ -56,6 +56,13 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
   - 引用符で囲まない値が、行の終わりの単独の CR で切れている
   - 空でない行があるのに、行の区切りを読み違えて1行も読めない
 
+再生順のデータ（data/script_order.csv と data/level_flow.csv）も、読む前に確かめます。
+閉じない引用符があるときと、publish が引用せずにそのまま書く値（script_order.csv の
+section・phase・node・condition・order 列と、level_flow.csv の dragon・weather・
+set_flags・end_flags 列）に改行があるときは、同じように止まります（終了コード 1）。
+改行があると、公開ファイルの見出しの行が2行に割れ、次に読むときデータの行として
+読まれるからです。
+
 行をまたぐ値の続きの行がレコードに見える形は、正しい複数行の値でも当たることが
 あります。値を確かめて正しければ、--accept-multiline でそのロケールを指定すると
 書けます。
@@ -88,7 +95,8 @@ Translations/<ロケール>/strings.csv 自身です。作業コピーはゲー�
         引用符の閉じ位置が正しいと確かめてから指定してください。通した行は
         標準エラーに出します。複数回指定するか、カンマ区切りで並べられます。
         --path で走らせたときは、ロケールの代わりにそのファイルを指定します。
-        閉じない引用符、閉じ引用符の後ろに文字が続く形、単独の CR は通しません。
+        閉じない引用符、閉じ引用符の後ろに文字が続く形、単独の CR、
+        再生順のデータの形は通しません。
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
 
@@ -313,6 +321,15 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 			"dwloc: --path を指定したので --game と --no-game は使いません。走査をしないため、作業コピーを探す先がありません。")
 	}
 
+	// 再生順のデータの形を、読む前に見ます。閉じない引用符は読み込みの誤り
+	// （終了コード 2）ではなく、どのファイルの何行目かと直し方にして止めます。
+	// 見出しの行へそのまま書く値の改行も、書けば公開ファイルの見出しが壊れるので
+	// ここで止めます。どちらもどのロケールにも効くので、ロケールを数えあげる前に
+	// 見ます。
+	if code := reportOrderShape(*root, stderr); code != exitOK {
+		return code
+	}
+
 	// 再生順は全ロケールで共通なので1回だけ読む。
 	data, err := publish.LoadOrder(*root)
 	if err != nil {
@@ -484,6 +501,7 @@ var publishShapeFix = map[string]string{
 	reason.PublishLoneCR: "値の中の単独の CR を LF に直すか取り除いてから、もう一度実行してください。",
 	reason.PublishCRCut: "{line}行目の手前（前の行の終わり）にある CR を取り除くか、値全体を引用符で囲んでから、もう一度実行してください。" +
 		"値に改行を入れたいなら、値を引用符で囲み、改行を LF にします。",
+	reason.PublishOrderLineBreak: "{column} 列の値から改行（CR と LF）を取り除いてから、もう一度実行してください。",
 }
 
 // publishGameBaseFix は、ゲーム側の公開ファイルで見つけた形の直し方の頭に添える文です。
@@ -505,13 +523,16 @@ func shapeFix(h publish.Hazard) string {
 	if accept == "" {
 		accept = h.Path
 	}
-	line := ""
+	line, column := "", ""
 	for i := 0; i+1 < len(h.Why.Args); i += 2 {
-		if h.Why.Args[i] == "line" {
+		switch h.Why.Args[i] {
+		case "line":
 			line = h.Why.Args[i+1]
+		case "column":
+			column = h.Why.Args[i+1]
 		}
 	}
-	fix := strings.NewReplacer("{line}", line, "{accept}", accept).Replace(publishShapeFix[h.Why.ID])
+	fix := strings.NewReplacer("{line}", line, "{accept}", accept, "{column}", column).Replace(publishShapeFix[h.Why.ID])
 	if h.GameBase {
 		fix = publishGameBaseFix + fix
 	}
@@ -575,6 +596,33 @@ func reportShape(root string, targets []publish.Target, accept acceptSet, stderr
 	return exitProblems
 }
 
+// reportOrderShape は、再生順のデータ（data/script_order.csv と data/level_flow.csv）の
+// 読み違える形を報告します。1件も無ければ exitOK を返します。
+//
+// 1件でもあれば exitProblems（1）で、どのロケールも書きません。--accept-multiline では
+// 通しません（publish.CheckOrderShape）。読めなくて確かめられなかったときだけが 2 です。
+// 見出しの文面は reportShape と同じにします。直す先が再生順のデータであることは、
+// ファイルの見出し（「再生順のデータ」）と1件ずつの理由が言います。
+func reportOrderShape(root string, stderr io.Writer) int {
+	hazards, err := publish.CheckOrderShape(root)
+	if err != nil {
+		path := root
+		var shapeErr *publish.ShapeError
+		if errors.As(err, &shapeErr) {
+			path, err = shapeErr.Path, shapeErr.Err
+		}
+		fmt.Fprintf(stderr, "dwloc: 再生順のデータを読めません: %s: %v\n", displayPath(root, path), err)
+		return exitError
+	}
+	if len(hazards) == 0 {
+		return exitOK
+	}
+	fmt.Fprint(stderr, publishShapeText)
+	writeHazards(root, hazards, stderr, true)
+	fmt.Fprintf(stderr, "dwloc: 読み違える形が %d か所あります。直すまでは書きません。\n", len(hazards))
+	return exitProblems
+}
+
 // writeHazards は形の崩れを1件ずつ出します。ファイルの見出しはファイルが変わる
 // ときだけ出し、先頭の [publishShapeListMax] 件で切ります。withFix なら直し方も添えます。
 func writeHazards(root string, hazards []publish.Hazard, stderr io.Writer, withFix bool) {
@@ -605,6 +653,8 @@ func fileLabel(root string, h publish.Hazard) string {
 		role = "いまの公開ファイル"
 	case h.GameBase:
 		role = "ゲーム側の公開ファイル"
+	case h.Order:
+		role = "再生順のデータ"
 	}
 	return fmt.Sprintf("%s%s（%s）", localePrefix(h.Locale), displayPath(root, h.Path), role)
 }

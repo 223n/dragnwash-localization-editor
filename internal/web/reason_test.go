@@ -599,7 +599,21 @@ func publishShapeReasons(t *testing.T) []reason.Reason {
 			out = append(out, h.Why)
 		}
 	}
-	return out
+
+	// 再生順のデータの、見出しの行へそのまま書く値の改行。
+	root := t.TempDir()
+	orderPath := publish.ScriptOrderPath(root)
+	if err := os.MkdirAll(filepath.Dir(orderPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orderPath, []byte("section,node,key\nL01,\"N\n1\","+hashKey+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found, err := publish.CheckOrderShape(root)
+	if err != nil || len(found) != 1 {
+		t.Fatalf("CheckOrderShape = %+v, %v。1件を期待", found, err)
+	}
+	return append(out, found[0].Why)
 }
 
 // causeOf は internal/edit の誤りから理由を取り出す。

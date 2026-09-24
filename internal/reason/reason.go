@@ -312,6 +312,10 @@ const (
 	// PublishCRCut は、引用符で囲まない値が引用の外の単独の CR で切れたと見られる
 	// こと。置換は line（切れた後半が読まれる物理行）。
 	PublishCRCut = "publish_cr_cut"
+	// PublishOrderLineBreak は、再生順のデータの値のうち、publish が引用せずに
+	// そのまま書く値（見出しの文言と order 列）に CR か LF があること。置換は
+	// column（列名）。
+	PublishOrderLineBreak = "publish_order_line_break"
 )
 
 // all は [All] が返す並び。定義した順のまま持つ。
@@ -349,7 +353,7 @@ var all = []string{
 
 	PublishNoKeyColumn, PublishNoTranslationColumn, PublishHashHeader, PublishRowsUnread,
 	PublishUnclosedQuote, PublishSwallowKeyShaped, PublishSwallowSameColumns,
-	PublishSwallowTextAfterQuote, PublishLoneCR, PublishCRCut,
+	PublishSwallowTextAfterQuote, PublishLoneCR, PublishCRCut, PublishOrderLineBreak,
 }
 
 // All はこのパッケージが名前を付けた識別子を全部返す。

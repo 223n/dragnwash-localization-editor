@@ -321,6 +321,10 @@ func TestLoadPowerShellDuplicateColumn(t *testing.T) {
 // PowerShell 方式を行単位で読んでいたときの結果（2つの物理行がそれぞれ別レコードになり、
 // 前半の section が "L01"、後半が `Ryan"` になる。件数は2件）を固定していた。order が
 // 上流 main と同じく全体を解釈して読むようになり、C# 方式と同じ1件になった。
+//
+// 読み手は改行を値に残すだけで止めない。section のように見出しの行へそのまま書く値に
+// 改行があると公開ファイルの見出しが壊れるので、publish と画面の書き出しは、読む前に
+// 形の確かめ（internal/publish の CheckOrderShape）で止める（決まったことのそのほか 8）。
 func TestLoadReadersAgreeOnMultilineField(t *testing.T) {
 	// 行頭の '#' はどちらも落とす。引用フィールド内の改行は、どちらも値に残す。
 	const orderCSV = "section,phase,node,order,line_id,key,speaker,condition\n" +

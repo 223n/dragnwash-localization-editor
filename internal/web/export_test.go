@@ -309,6 +309,8 @@ func TestExportRefusesUnsafeShapes(t *testing.T) {
 		working string
 		// published は置き換える公開ファイル。空なら newTestRoot のまま。
 		published string
+		// order は置き換える再生順（data/script_order.csv）。空なら newTestRoot のまま。
+		order string
 	}{
 		{
 			// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
@@ -329,12 +331,33 @@ func TestExportRefusesUnsafeShapes(t *testing.T) {
 				"",
 			}, "\n"),
 		},
+		{
+			// 再生順の見出しに使う値の改行。書き出すと、公開ファイルの見出しの2行目が
+			// '#' で始まらない行になり、次に読むときデータの行になる（publish と同じく
+			// 再生順のデータの形を最初に見る）。
+			name: "再生順の見出しに使う値に改行がある",
+			order: strings.Join([]string{
+				"section,phase,node,order,line_id,key,speaker,condition",
+				"L01 Ryan,intro,\"Ryan_1\nintro\",1,line:aaaaaaaa," + keyKept + ",Ryan,",
+				"",
+			}, "\n"),
+		},
+		{
+			// 再生順の閉じない引用符。読み込みの誤り（500）ではなく、形の崩れとして断る。
+			name: "再生順の引用符が閉じない",
+			order: strings.Join([]string{
+				"section,phase,node,order,line_id,key,speaker,condition",
+				"L01 Ryan,intro,Ryan_1_intro,1,line:aaaaaaaa," + keyKept + ",\"Ryan,",
+				"",
+			}, "\n"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newTestRoot(t)
 			for rel, body := range map[string]string{
 				filepath.Join("Translations", "_discovered", "ja.working.csv"): tc.working,
 				filepath.Join("Translations", "ja", "strings.csv"):             tc.published,
+				filepath.Join("data", "script_order.csv"):                      tc.order,
 			} {
 				if body == "" {
 					continue

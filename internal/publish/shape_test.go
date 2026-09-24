@@ -870,3 +870,113 @@ func TestCheckTargetShapeReadsEveryFile(t *testing.T) {
 		}
 	})
 }
+
+// TestCheckOrderShape は、再生順のデータ（data/script_order.csv と data/level_flow.csv）の
+// 閉じない引用符と、publish が引用せずにそのまま書く値の改行を見つけることを見る
+// （決まったことのそのほか 8）。
+//
+// 全体を解釈して読むと、引用した値に改行が入りうる。見出しの行へそのまま書くと、
+// 見出しの2行目が '#' で始まらない行になり、次に publish で読むときデータの行として
+// 読まれる。上流も同じ壊れ方をする。
+func TestCheckOrderShape(t *testing.T) {
+	const orderRow = "L01 Ryan,intro,N1,1,line:aa," + shapeK1 + ",Ryan,\n"
+	type found struct {
+		file, id, column string
+		line, end        int
+	}
+	tests := []struct {
+		name        string
+		order, flow string
+		want        []found
+	}{
+		{name: "どちらもふつう", order: orderHeader + orderRow, flow: flowHeader + "0,Ryan,Sunny,,\n"},
+		{name: "どちらも無い"},
+		{
+			// 見出しに使う列ごとに1件。改行は LF・CRLF・単独の CR のどれでも止める。
+			name: "script_order.csv の見出しに使う値",
+			order: orderHeader +
+				"\"L01\nRyan\",intro,N1,1,line:aa," + shapeK1 + ",Ryan,\n" +
+				"L01 Ryan,\"in\r\ntro\",\"N\r2\",2,line:bb," + shapeK2 + ",Ryan,\"$a\n$b\"\n",
+			want: []found{
+				{"script_order.csv", reason.PublishOrderLineBreak, "section", 2, 3},
+				{"script_order.csv", reason.PublishOrderLineBreak, "phase", 4, 7},
+				{"script_order.csv", reason.PublishOrderLineBreak, "node", 4, 7},
+				{"script_order.csv", reason.PublishOrderLineBreak, "condition", 4, 7},
+			},
+		},
+		{
+			// order 列は本体の行へエスケープせずに書く（移植仕様 R24f）。
+			name:  "script_order.csv の order 列",
+			order: orderHeader + "L01 Ryan,intro,N1,\"1\n2\",line:aa," + shapeK1 + ",Ryan,\n",
+			want:  []found{{"script_order.csv", reason.PublishOrderLineBreak, "order", 2, 3}},
+		},
+		{
+			// 話者は本体の行へ引用して書くので、改行があっても行は割れない。
+			name:  "script_order.csv の speaker 列は見ない",
+			order: orderHeader + "L01 Ryan,intro,N1,1,line:aa," + shapeK1 + ",\"Ry\nan\",\n",
+		},
+		{
+			name: "level_flow.csv の見出しに使う値",
+			flow: flowHeader + "0,\"Ry\nan\",Sunny,\"a | b\",\"c\nd\"\n",
+			want: []found{
+				{"level_flow.csv", reason.PublishOrderLineBreak, "dragon", 2, 4},
+				{"level_flow.csv", reason.PublishOrderLineBreak, "end_flags", 2, 4},
+			},
+		},
+		{
+			// 閉じない引用符のファイルは、値の改行を見ない。そこから後ろが1つの値に
+			// 崩れているので、直す先は引用符である。
+			name:  "閉じない引用符",
+			order: orderHeader + "\"L01\nRyan,intro,N1,1,line:aa," + shapeK1 + ",Ryan,\n",
+			flow:  "level,dragon\n0,\"Ryan\n",
+			want: []found{
+				{"script_order.csv", reason.PublishUnclosedQuote, "", 2, 3},
+				{"level_flow.csv", reason.PublishUnclosedQuote, "", 2, 2},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.order != "" {
+				writeFile(t, ScriptOrderPath(root), tt.order)
+			}
+			if tt.flow != "" {
+				writeFile(t, LevelFlowPath(root), tt.flow)
+			}
+			hazards, err := CheckOrderShape(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []found
+			for _, h := range hazards {
+				if !h.Order || h.Locale != "" || h.Current || h.GameBase {
+					t.Errorf("再生順のデータの印が違う: %+v", h)
+				}
+				column := ""
+				for i := 0; i+1 < len(h.Why.Args); i += 2 {
+					if h.Why.Args[i] == "column" {
+						column = h.Why.Args[i+1]
+					}
+				}
+				got = append(got, found{filepath.Base(h.Path), h.Why.ID, column, h.Line, h.EndLine})
+				if h.Acceptable() {
+					t.Errorf("確かめたうえで通せる形にしている: %+v", h)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("\n got %+v\nwant %+v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("読めないファイル", func(t *testing.T) {
+		root := t.TempDir()
+		mustMkdir(t, ScriptOrderPath(root))
+		_, err := CheckOrderShape(root)
+		var shapeErr *ShapeError
+		if !errors.As(err, &shapeErr) || shapeErr.Path != ScriptOrderPath(root) {
+			t.Errorf("読めないファイルを ShapeError にしていない: %v", err)
+		}
+	})
+}

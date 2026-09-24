@@ -41,6 +41,9 @@ publish は上流 main の hash-strings.ps1 と同じく、ファイル全体を
 	(g) 単独の CR
 	    値の中の単独の CR（上流の道具はその行を落とす）と、引用の外の単独の CR で
 	    切れた値（ゲームは CR を捨ててつなげて読み、publish は切れた前半だけを書く）。
+	(h) 再生順のデータ（data/script_order.csv と data/level_flow.csv）の値のうち、
+	    publish が引用せずにそのまま書く値（見出しの文言と order 列）の改行
+	    （[CheckOrderShape]。再生順のデータの閉じない引用符 (e) も同じ関数が見る）。
 
 確かめるファイルは、入力（作業コピー）、いまの公開ファイル（書き出し先）、ゲーム側の
 公開ファイル（土台の確かめ [CheckBase] が読むもの）の3つで、どれも同じ関数
@@ -64,8 +67,12 @@ type Hazard struct {
 	// 入力と書き出し先が同じファイルなら true。
 	Current bool
 	// GameBase は、そのファイルがゲーム側の公開ファイル（[Target.GameBase]）かどうか。
-	// Current と GameBase がどちらも false なら入力（作業コピー）である。
+	// Current・GameBase・Order がどれも false なら入力（作業コピー）である。
 	GameBase bool
+	// Order は、そのファイルが再生順のデータ（data/script_order.csv か
+	// data/level_flow.csv。[CheckOrderShape]）かどうか。そのときの Locale は空で、
+	// どのロケールの出力にも効く。
+	Order bool
 	// Line と EndLine は、形の崩れがある物理行の範囲（1始まり）。1行だけなら
 	// 同じ値になる。ファイル全体のこと（ヘッダーが見つからないなど）なら両方 0。
 	Line    int
@@ -339,6 +346,74 @@ func crCutHazards(f csvfile.PowerShellFile) []Hazard {
 			Why: reason.New(reason.PublishCRCut,
 				"引用符で囲まない値が行の終わりの単独の CR で切れ、"+next+"行目にある続きが別の行として読まれる。ゲームは CR を捨ててつなげて読む",
 				"line", next)})
+	}
+	return out
+}
+
+// orderRawColumns は、再生順のデータの列のうち、publish が引用せずにそのまま
+// 書く値の列。ファイル名から引く。
+//
+// script_order.csv の section・node・phase・condition は見出しの行（'# ===== … ====='
+// と '# --- … ---'）に、order は本体の行に、エスケープせずに書く（上流と同じ。
+// 移植仕様 R24f）。level_flow.csv の dragon・weather・set_flags・end_flags は、
+// セクションの見出しの文言（order.LevelMeta.Header）になる。key と line_id もそのまま
+// 書くが、入力の訳のキーと一致した行しか書かないので、改行の入った値は書かれない。
+var orderRawColumns = map[string][]string{
+	scriptOrderFile: {"section", "phase", "node", "condition", "order"},
+	levelFlowFile:   {"dragon", "weather", "set_flags", "end_flags"},
+}
+
+// CheckOrderShape は、root 配下の再生順のデータ（data/script_order.csv と
+// data/level_flow.csv）を読み、公開ファイルを読み違える形にする値が無いかを確かめる。
+// 返りが空なら、どちらにもその形は無い。ファイルが無ければ確かめない。
+//
+//	(e) 開いた引用符がファイルの終わりまで閉じない
+//	    再生順を読めない。読み込みの誤り（終了コード 2）ではなく、どのファイルの
+//	    何行目かを直し方とともに出すために、ここで見る。
+//	(h) publish が引用せずにそのまま書く値（[orderRawColumns]）に CR か LF がある
+//	    全体を解釈して読むと、引用した値に改行が入りうる。そのまま見出しの行へ書くと、
+//	    見出しの2行目が '#' で始まらない行になり、次に publish で読むときデータの
+//	    行として読まれる。その行に '"' があれば、後ろの行を値に飲み込む
+//	    （決まったことのそのほか 8。上流は同じ壊れ方をする）。行単位で読んでいた
+//	    あいだは、値が行をまたがないので起きなかった。
+//
+// どちらも、確かめたうえで通す指定（--accept-multiline）では通さない。直せる形で、
+// 翻訳の正しさとは関係が無いからである。誤りを返すのは、ファイルを読めないときだけで、
+// [ShapeError] に包む。
+func CheckOrderShape(root string) ([]Hazard, error) {
+	var out []Hazard
+	for _, path := range []string{ScriptOrderPath(root), LevelFlowPath(root)} {
+		data, err := readIfExists(path)
+		if err != nil {
+			return nil, &ShapeError{Path: path, Err: err}
+		}
+		if data == nil {
+			continue
+		}
+		found := checkOrderFile(data, orderRawColumns[filepath.Base(path)])
+		for i := range found {
+			found[i].Path, found[i].Order = path, true
+		}
+		out = append(out, found...)
+	}
+	return out, nil
+}
+
+// checkOrderFile は、再生順のデータ1つに (e) と (h) の形が無いかを確かめる。
+// columns は (h) で見る列。
+func checkOrderFile(data []byte, columns []string) []Hazard {
+	f := csvfile.ReadPowerShellMarked(data)
+	if f.Unclosed != nil {
+		// そこから後ろが1つの値に崩れているので、値の改行は見ない。直す先は
+		// 閉じない引用符である。
+		return unclosedHazards(f)
+	}
+	var out []Hazard
+	for _, v := range csvfile.LineBreakValues(f, columns...) {
+		out = append(out, Hazard{Line: v.Line, EndLine: v.EndLine,
+			Why: reason.New(reason.PublishOrderLineBreak,
+				v.Column+" 列の値に改行がある。publish はこの値を引用せずにそのまま書くので、改行の後ろが次に読むとき別の行として読まれる",
+				"column", v.Column)})
 	}
 	return out
 }

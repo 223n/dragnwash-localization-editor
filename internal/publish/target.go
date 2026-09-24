@@ -201,7 +201,8 @@ func LevelFlowPath(root string) string {
 // script_order.csv が空なら見出しは一切出ず、全ての行が末尾へ回る。
 //
 // エラーを返すのは、ヘッダーの列名が重複しているとき、閉じない引用符があるとき
-// （csvfile.UnclosedQuoteError）、読み取りに失敗したとき。
+// （csvfile.UnclosedQuoteError）、読み取りに失敗したとき。publish と画面の書き出しは、
+// 閉じない引用符を先に形の確かめ（[CheckOrderShape]）で直し方の案内にして止める。
 func LoadOrder(root string) (*order.Data, error) {
 	orderPath := ScriptOrderPath(root)
 	orderCSV, err := readIfExists(orderPath)

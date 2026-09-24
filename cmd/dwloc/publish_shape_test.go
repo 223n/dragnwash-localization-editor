@@ -606,6 +606,7 @@ func TestShapeFixNamesTheAcceptTarget(t *testing.T) {
 	}
 	for _, id := range []string{
 		reason.PublishSwallowTextAfterQuote, reason.PublishUnclosedQuote, reason.PublishLoneCR, reason.PublishCRCut,
+		reason.PublishOrderLineBreak,
 	} {
 		if fix := shapeFix(publish.Hazard{Locale: "ja", Why: reason.New(id, "", "line", "7")}); strings.Contains(fix, "--accept-multiline") {
 			t.Errorf("%s: 通せない形に通す指定を案内している: %s", id, fix)
@@ -668,6 +669,91 @@ func TestPublishShapeRefusesWhatItCannotRead(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
 	}
+}
+
+// TestPublishStopsOnOrderShape は、再生順のデータ（data/script_order.csv と
+// data/level_flow.csv）の閉じない引用符と、見出しの行へそのまま書く値の改行で
+// 止まることを見る（決まったことのそのほか 8）。
+//
+// 閉じない引用符は、読み込みの誤り（終了コード 2「再生順のデータを読めません」）では
+// なく、どの行をどう直すかを出して終了コード 1 で止める。見出しの値の改行は、書くと
+// 公開ファイルの見出しの2行目が '#' で始まらない行になり、次に読むときデータの行に
+// なる。どちらも --accept-multiline では通さない。
+func TestPublishStopsOnOrderShape(t *testing.T) {
+	const orderHeader = "section,phase,node,order,line_id,key,speaker,condition\n"
+	for _, tc := range []struct {
+		name, file, content string
+		want                []string
+	}{
+		{
+			name: "見出しに使う値の改行",
+			file: "data/script_order.csv",
+			content: orderHeader +
+				"L01 Ryan,intro,\"Ryan_1\nintro\",1,line:aaaaaaaa," + keyHello + ",Ryan,\n",
+			want: []string{
+				"dwloc:   data/script_order.csv（再生順のデータ）",
+				"2〜3行目: node 列の値に改行がある。publish はこの値を引用せずにそのまま書く",
+				"直し方: node 列の値から改行（CR と LF）を取り除いてから、もう一度実行してください。",
+			},
+		},
+		{
+			name:    "見出しの表の値の改行",
+			file:    "data/level_flow.csv",
+			content: "level,dragon,weather,set_flags,end_flags\n0,Ryan,\"Sun\r\nny\",,\n",
+			want: []string{
+				"dwloc:   data/level_flow.csv（再生順のデータ）",
+				"2〜3行目: weather 列の値に改行がある。",
+			},
+		},
+		{
+			name: "閉じない引用符",
+			file: "data/script_order.csv",
+			content: orderHeader +
+				"L01 Ryan,intro,Ryan_1_intro,1,line:aaaaaaaa," + keyHello + ",\"Ryan,\n",
+			want: []string{
+				"dwloc:   data/script_order.csv（再生順のデータ）",
+				"2行目: 開いた引用符がファイルの終わりまで閉じない",
+				`直し方: 引用符を閉じるか取り除いてから、もう一度実行してください。`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := lossRepo(t)
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(tc.file)), []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			before := readFile(t, root, jaPublishedPath)
+			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
+			if code != exitProblems {
+				t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+			}
+			checkContains(t, "標準エラー", stderr, append([]string{
+				shapeStopText, "読み違える形が 1 か所あります。直すまでは書きません。",
+			}, tc.want...))
+			if strings.Contains(stderr, "再生順のデータを読めません") || strings.Contains(stderr, publishAcceptText) {
+				t.Errorf("読み込みの誤りか、通す指定として扱っている:\n%s", stderr)
+			}
+			if stdout != "" {
+				t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+			}
+			if after := readFile(t, root, jaPublishedPath); after != before {
+				t.Errorf("公開ファイルが変わっている")
+			}
+		})
+	}
+
+	t.Run("読めない", func(t *testing.T) {
+		root := lossRepo(t)
+		flow := filepath.Join(root, "data", "level_flow.csv")
+		if err := os.Mkdir(flow, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		code, _, stderr := runCLI("publish", "--root", root, "--no-game")
+		if code != exitError {
+			t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr)
+		}
+		checkContains(t, "標準エラー", stderr, []string{"dwloc: 再生順のデータを読めません: data/level_flow.csv: "})
+	})
 }
 
 // TestPublishShapeReportsWholeFile は、行の区切りを読み違えたファイルで
