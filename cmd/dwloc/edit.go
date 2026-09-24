@@ -78,6 +78,8 @@ publish は回しません。保存は「触った行の最終フィールドだ
   --ui-lang <言語タグ>
         画面とメッセージの言語（ja、en）。省略するとブラウザーの
         Accept-Language を見て、当たらなければ en になります。
+        ja と en のほかの値（eng、fr など）は受け付けません（終了コード 2）。
+        大文字と小文字、en-US のような地域の付いた形は受けます。
   --idle-timeout <時間>
         操作が絶えてから自分で終わるまで（既定 30m、0 で終わりません）。
         30s や 1h30m のように書きます。
@@ -106,7 +108,7 @@ const editPortMax = 65535
 
 // runEdit は待ち受けを始めます。
 func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc edit", stderr)
+	fs := newFlagSet("dwloc edit")
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	// 打ち消しは3つとも受けます。publish と diff も --game を省いた
@@ -125,7 +127,7 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), editUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 	if *port < 0 || *port > editPortMax {
 		fmt.Fprintf(stderr, "dwloc: --port は 0 から %d です: %d\n", editPortMax, *port)
@@ -135,6 +137,12 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		// 負の値を 0（終わらない）に丸めると、切ったつもりの指定で
 		// 待ち受けが残り続けます。打ち間違いを別の意味にしません。
 		fmt.Fprintf(stderr, "dwloc: --idle-timeout は 0 以上です（0 で終わりません）: %s\n", *idleTimeout)
+		return exitError
+	}
+	// 目録に無い言語は、待ち受けを始める前に断ります。黙って日本語に落とすと、
+	// 英語を選んだつもりの人に読めない案内が出ます。
+	if err := web.CheckUILang(*uiLang); err != nil {
+		fmt.Fprintf(stderr, "dwloc: %v\n", err)
 		return exitError
 	}
 

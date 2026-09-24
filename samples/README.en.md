@@ -15,6 +15,7 @@ It contains none of the game's script.
 | `harbor/Translations/de/strings.csv` | The published file for `de`. Only 2 lines are translated |
 | `harbor/Translations/_discovered/ja.working.csv` | The working copy for `ja`. It has the source column and some untranslated lines |
 | `screenshots.mjs` | The script that retakes the screenshots in the README |
+| `compare-png.mjs` | Tells, pixel by pixel, whether a retaken image differs only by jitter |
 
 The sample deliberately keeps things worth showing on the screen.  
 There are 3 untranslated lines and 1 line whose tags differ from the source.  
@@ -57,13 +58,25 @@ npx playwright install chromium   # first time only
 npm run screenshots
 ```
 
-It writes 8 images to `docs/images/`.  
-It takes 4 scenes for each screen language (`ja` and `en`).  
+It takes 8 images for `docs/images/`.  
+That is 4 scenes, one image each per screen language (`ja` and `en`).  
 It opens a copy of the sample in a temporary directory, so `samples/harbor` does not change.
 
-Retaking the same sample does not always give byte-identical images.  
-Text such as the heading in the left column can shift by less than a pixel.  
-The difference cannot be seen, so commit retaken images only when the content of a scene has changed.
+Retaking the same sample does not give pixel-identical images.  
+The line under the table header and the text in the left column can move up or down by one pixel, and the colour of a corner can differ by 1.  
+So before writing, the script compares each image pixel by pixel with the image of the same name that is already there (by default, the committed image in `docs/images/`).  
+Images whose differences stay within that jitter are not rewritten.  
+For each image, the terminal shows one line saying whether it was written or kept, and why.
+
+Only these two count as jitter.
+
+- Pixels whose colour differs by at most 1 in each channel
+- Pixels that only moved up or down by one pixel, up to 0.5% of the image
+
+Only images whose scene content changed are rewritten, so you can commit the images that show a difference as they are.  
+However, a change where a line or text moves up or down by exactly one pixel cannot be told apart from jitter.  
+To replace an image even when it differs only by jitter, delete the old image before retaking.  
+The comparison lives in `compare-png.mjs` and is tested by the E2E spec `e2e/harness/compare-png.spec.mjs`.
 
 ## Changing the sample
 

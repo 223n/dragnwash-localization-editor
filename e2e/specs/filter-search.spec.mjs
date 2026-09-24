@@ -153,6 +153,8 @@ test.use({ repo: finderRepo() });
 // 時計を進めるときに、境目より少し先まで進めるための値。
 const searchDelay = 120;
 const autosaveDelay = 1500;
+// ロケールの欄で選んでから読みにいくまでの待ち（app.js の localeDelay）。
+const localeDelay = 400;
 
 // cat はカテゴリの表示名。待ち受けは目録の category.<識別子> をそのまま返す。
 function cat(id) {
@@ -402,6 +404,28 @@ test("見出しは下に出ている行のあるものだけを出し、節や�
   await chipBox(app, cat("untranslated")).check();
   await expect(visibleRows(app)).toHaveText(["6", "13"]);
   await expect(visibleHeadings(app)).toHaveText([H.level1, H.intro1, H.level2, H.intro2]);
+});
+
+// 条件も検索語も無いときは、画面はファイルの写しである（doc.go「画面に新しい判断を
+// 置かない」）。そのときまで「下に出ている行のある見出しだけ」を当てはめると、節点の末尾に
+// 翻訳者が書いたメモ（7行目）が、どの行も隠れていないのに一覧から消える。絞っていない
+// ときは見出しを全部出し、絞ったときだけ上の決め方にする。
+test("条件も検索語も無いときは、節点の末尾のメモも含めて見出しを全部出す", async ({ app }) => {
+  const all = [H.level1, H.intro1, H.memo, H.outro1, H.level2, H.intro2, H.note, H.ui];
+  await expect(visibleRows(app)).toHaveText(ALL_ROWS);
+  await expect(visibleHeadings(app)).toHaveText(all);
+
+  // 絞ればメモは下に行が無いので隠れ、外せばまた全部出る。
+  await searchBox(app).fill("wonderful");
+  await expect(visibleHeadings(app)).toHaveText([H.level1, H.outro1]);
+  await searchBox(app).fill("");
+  await expect(visibleRows(app)).toHaveText(ALL_ROWS);
+  await expect(visibleHeadings(app)).toHaveText(all);
+
+  await chipBox(app, cat("untranslated")).check();
+  await expect(visibleHeadings(app)).toHaveText([H.level1, H.intro1, H.level2, H.intro2]);
+  await app.locator("#filter-clear").click();
+  await expect(visibleHeadings(app)).toHaveText(all);
 });
 
 // 検索は、打った字を speaker・原文・訳・キーのどれかに含む行を出す（README の表）。
@@ -931,6 +955,7 @@ test.describe("ロケールを省いて起動したとき", () => {
     await openPaused(page, server);
     await expect(page.locator('#locale option[value=""]')).toHaveCount(1);
     await page.locator("#locale").selectOption("ja");
+    await page.clock.runFor(localeDelay);
     await expect(visibleRows(page)).toHaveText(ALL_ROWS);
     await expect(page.locator('#locale option[value=""]')).toHaveCount(0);
 
@@ -954,6 +979,7 @@ test.describe("ロケールを省いて起動したとき", () => {
     await expect(page.locator("#filters label.chip")).toHaveCount(0);
 
     await page.locator("#locale").selectOption("ja");
+    await page.clock.runFor(localeDelay);
     await expect(visibleRows(page)).toHaveText(ALL_ROWS);
     await expect(page.locator("#filters label.chip")).not.toHaveCount(0);
   });

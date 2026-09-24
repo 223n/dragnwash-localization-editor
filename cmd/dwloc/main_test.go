@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -77,6 +78,30 @@ func gitTestOpts() []string {
 		"-c", "user.email=dwloc@example.invalid",
 		"-c", "gc.auto=0",
 		"-c", "maintenance.auto=false",
+	}
+}
+
+// initGitRepo は root を git リポジトリにする。失敗したらテストを落とす。
+//
+// core.longpaths をリポジトリの設定として書く理由は、internal/diff の試験の
+// initGitRepo（oldorder_test.go）と同じ。Git for Windows は既定では 260 字を
+// 超えるパスを扱えず、TMP が深いと add や show が失敗する。dwloc が起動する git にも
+// 効かせるには、-c ではなくリポジトリの設定に書く必要がある。init にだけは -c でも
+// 渡す。init は設定を書く前に .git/hooks の見本などを書くので、TMP が深いとそこで落ちる。
+//
+// 飛ばさずに落とすのも同じ理由で、git が PATH にあるのに失敗するのは環境の不具合である。
+// git が無い環境は、呼び出し側が先に LookPath で見分けて飛ばす。
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"-c", "core.longpaths=true", "init"},
+		{"config", "core.longpaths", "true"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
+		}
 	}
 }
 
@@ -166,7 +191,7 @@ func TestRunArguments(t *testing.T) {
 			name:       "知らないフラグはエラーにする",
 			args:       []string{"--nope"},
 			wantCode:   exitError,
-			wantStderr: []string{"使い方:"},
+			wantStderr: []string{"知らないオプションです: --nope", "使い方は dwloc --help で表示します。"},
 		},
 		{
 			name:       "version は版を1行で出す",
@@ -197,7 +222,7 @@ func TestRunArguments(t *testing.T) {
 			name:       "version の知らないフラグはエラーにする",
 			args:       []string{"version", "--nope"},
 			wantCode:   exitError,
-			wantStderr: []string{"-nope", "使い方: dwloc version"},
+			wantStderr: []string{"--nope", "使い方は dwloc version --help で表示します。"},
 		},
 		{
 			name:       "publish の余分な引数はエラーにする",
@@ -566,6 +591,75 @@ func TestMainWithRecordHidesTheToken(t *testing.T) {
 	}
 }
 
+// TestMainWithRecordShortensTheHome は、記録にだけ、利用者のホームのパスを ~ に
+// 置き換えて書くことを見る。
+//
+// ホームのパスには利用者名が入る。記録は不具合の報告に添えて手元の外へ出るので、
+// そのまま書くと利用者名も一緒に出ていく。画面には全文を出す。書けないファイルの
+// 案内などは、権限の話が読めないと直し方に手が届かないためである。
+//
+// パスが出る場所は、見出しの引数、OS の誤り文、引数の誤りの文（打ち間違えた値）の
+// 3つがある。引数の誤りの文では、値を %q で囲むと Windows の \ が \\ に化けて、
+// ホームのパスとの照合に当たらなかった。
+func TestMainWithRecordShortensTheHome(t *testing.T) {
+	// ホームの最後の名前は、ほかに現れない綴りにしておく。記録にこの名前が1つでも
+	// 残っていれば、どんな書き方（\ を重ねた形など）でもホームのパスが漏れている。
+	const homeName = "dwloc-home-of-someone"
+
+	tests := []struct {
+		name string
+		// args は、ホームの下のパス（somewhere）を受け取って引数を返す。
+		args func(somewhere string) []string
+	}{
+		{
+			// 見出しの引数と、「翻訳リポジトリではありません」の案内に出る。
+			name: "--root",
+			args: func(somewhere string) []string { return []string{"--root", somewhere} },
+		},
+		{
+			// 見出しの引数と、「--limit の値…を読めません」の1行に出る。
+			name: "引数の誤りの値",
+			args: func(somewhere string) []string { return []string{"diff", "--limit", somewhere} },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetRecord(t)
+			home := filepath.Join(t.TempDir(), homeName)
+			// os.UserHomeDir が見る変数は OS で違う（Windows は USERPROFILE、ほかは HOME）。
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			somewhere := filepath.Join(home, "somewhere")
+			if err := os.MkdirAll(somewhere, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			t.Chdir(dir)
+			setArgs(t, tt.args(somewhere)...)
+
+			read := captureStd(t)
+			code := mainWithRecord()
+			_, stderr := read()
+			if code != exitError {
+				t.Fatalf("終了コード = %d\n%s", code, stderr)
+			}
+			// 画面には打ったままの全文が出ている。出ていなければ、この試験は何も
+			// 確かめていない。
+			checkContains(t, "標準エラー", stderr, []string{somewhere})
+
+			_, log := readLogs(t, dir)
+			if strings.Contains(log, homeName) {
+				t.Errorf("記録にホームのパスが残っている:\n%s", log)
+			}
+			// 見出し（引数）と、画面に出した文の両方で置き換わっている。
+			short := "~" + string(filepath.Separator) + "somewhere"
+			if got := strings.Count(log, short); got < 2 {
+				t.Errorf("記録に %q が %d 回、2 回以上を期待:\n%s", short, got, log)
+			}
+		})
+	}
+}
+
 // TestDefaultStartsTheEditor は、サブコマンドを省くと画面が始まることを見る。
 //
 // 翻訳者はコマンドプロンプトに慣れていないことが多い。翻訳リポジトリへ dwloc を
@@ -647,6 +741,88 @@ func TestDefaultWaitsForEnterOnlyWhenBare(t *testing.T) {
 			t.Errorf("引数があるのに Enter を待っている:\n%s", errOut.String())
 		}
 	})
+}
+
+// TestDefaultWaitsForEnterWhenTheEditorFails は、素で呼ばれた edit が誤りで
+// 終わったときも Enter を待つことを見る。
+//
+// 列名の重複した公開ファイル、ロケールが1つも無い、ポートを取れない、などで
+// edit は起動の途中で終わる。ダブルクリックで開いた窓は終わると同時に閉じるので、
+// 待たないと理由を読む間も無く消え、どのファイルを直せばよいかが分からない。
+//
+// 正常に終わったとき（時間切れと Ctrl+C。どちらも終了コード0）は待たない。
+// Ctrl+C を押した人を、もう1度 Enter で待たせる理由は無い。時間切れで窓が
+// 閉じることは README に書いてある。
+func TestDefaultWaitsForEnterWhenTheEditorFails(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "Translations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origIn, origEdit := stdin, startEdit
+	t.Cleanup(func() { stdin, startEdit = origIn, origEdit })
+
+	for _, tt := range []struct {
+		name     string
+		editCode int
+		args     []string
+		wantWait bool
+	}{
+		{name: "素で呼ばれて誤りで終われば待つ", editCode: exitError, wantWait: true},
+		{name: "素で呼ばれても正常に終われば待たない", editCode: exitOK, wantWait: false},
+		{name: "引数があれば誤りで終わっても待たない", editCode: exitError, args: []string{"--root", repo}, wantWait: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stdin = strings.NewReader("\n")
+			startEdit = func([]string, string, string, io.Writer, io.Writer) int { return tt.editCode }
+			t.Chdir(repo)
+
+			var out, errOut bytes.Buffer
+			if code := run(tt.args, &out, &errOut); code != tt.editCode {
+				t.Fatalf("終了コード = %d、edit の %d をそのまま返すことを期待", code, tt.editCode)
+			}
+			if got := strings.Contains(errOut.String(), enterPrompt); got != tt.wantWait {
+				t.Errorf("Enter を待った = %v、期待 %v\n%s", got, tt.wantWait, errOut.String())
+			}
+		})
+	}
+}
+
+// TestNotARepoAdvisesRootOutsideWindows は、翻訳リポジトリでない場所で起動した
+// ときの案内が、Windows 以外では dwloc を移させずに --root を勧めることを見る。
+//
+// 翻訳リポジトリの .gitignore が外しているのは dwloc.exe と dwloc*.log だけで、
+// macOS と Linux の本体 dwloc は外れない。案内どおりに翻訳リポジトリへ移すと、
+// git add -A で実行ファイルが Pull Request に入る。validate も上流の CI も
+// それを指摘しない。
+func TestNotARepoAdvisesRootOutsideWindows(t *testing.T) {
+	notRepo := t.TempDir()
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--root", notRepo}, &out, &errOut); code != exitError {
+		t.Fatalf("終了コード = %d", code)
+	}
+	moveHint := "Translations フォルダーと同じ場所へ dwloc を移して"
+	if runtime.GOOS == "windows" {
+		checkContains(t, "標準エラー", errOut.String(), []string{moveHint, "dwloc edit --root"})
+		return
+	}
+	if strings.Contains(errOut.String(), moveHint) {
+		t.Errorf("Windows 以外で dwloc を翻訳リポジトリへ移させている:\n%s", errOut.String())
+	}
+	checkContains(t, "標準エラー", errOut.String(), []string{"--root", ".gitignore"})
+}
+
+// TestNotARepoMessage は、案内の文を OS ごとに見る。どの OS で走らせても、
+// 両方の文を確かめられるようにする。
+func TestNotARepoMessage(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		msg := notARepoMessage(goos)
+		if strings.Contains(msg, "dwloc を移して") {
+			t.Errorf("%s: dwloc を翻訳リポジトリへ移させている:\n%s", goos, msg)
+		}
+		checkContains(t, goos+" の案内", msg, []string{"探した場所: %s", "--root", ".gitignore", "dwloc help"})
+	}
+	checkContains(t, "windows の案内", notARepoMessage("windows"),
+		[]string{"探した場所: %s", "dwloc を移して", "--root", "dwloc help"})
 }
 
 // TestLooksLikeRepo は、翻訳リポジトリらしさの見方を確かめる。

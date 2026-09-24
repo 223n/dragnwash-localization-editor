@@ -486,8 +486,15 @@ func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows 
 	stats := []statView{
 		{Label: s.cat.T(cat, "stats.file_lines"), Value: fileLines},
 		{Label: s.cat.T(cat, "stats.data_lines"), Value: dataRows},
-		{Label: s.cat.T(cat, "stats.hash_rows"), Value: sum.HashRows},
-		{Label: s.cat.T(cat, "stats.line_rows"), Value: sum.LineRows},
+	}
+	if sum.PublishedUnclosed == 0 {
+		// 閉じない引用符で読まなかった公開ファイルは、行を1つも使っていない。
+		// 「0」と並べると、公開ファイルが空だと読まれる。読めなかったことは断り書き
+		// （note.published_unclosed）が言う。CLI の text 形式も件数を書かない。
+		stats = append(stats,
+			statView{Label: s.cat.T(cat, "stats.hash_rows"), Value: sum.HashRows},
+			statView{Label: s.cat.T(cat, "stats.line_rows"), Value: sum.LineRows},
+		)
 	}
 	if sum.BrokenRows > 0 {
 		// 0 のときは出さない。実データでは13ロケールとも0件で、毎回「0」と
@@ -534,7 +541,19 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 		// 組み立てると、根拠と結論の対応が待ち受けと画面の2か所に割れる。
 		notes = append(notes, s.cat.T(cat, "note.no_source"))
 	}
+	if sum.PublishedUnclosed > 0 {
+		// 閉じない引用符で公開ファイルを読めず、このロケールは何も判定していない。
+		// どのファイルの何行目を直せばよいかを、パスつきでここで言う。件数の欄の
+		// 理由（JudgeBlockReason）はパスを持たない。
+		notes = append(notes, s.cat.T(cat, "note.published_unclosed",
+			"path", s.displayPath(target.Output), "line", itoa(sum.PublishedUnclosed)))
+	}
 	switch {
+	case sum.WorkingUnclosed > 0:
+		// 読まなかったのでも無いのでもない。「読んでいません」と書くと、
+		// --no-working を外せば直ると読まれる。
+		notes = append(notes, s.cat.T(cat, "note.working_unclosed",
+			"path", s.displayPath(sum.WorkingPath), "line", itoa(sum.WorkingUnclosed)))
 	case sum.HasWorking:
 		notes = append(notes, s.cat.T(cat, "note.working_read", "path", s.displayPath(sum.WorkingPath)))
 	case sum.WorkingExists:
@@ -542,7 +561,11 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 	default:
 		notes = append(notes, s.cat.T(cat, "note.working_none", "path", s.displayPath(sum.WorkingPath)))
 	}
-	if sum.HasLayoutRisks {
+	switch {
+	case sum.LayoutRisksUnclosed > 0:
+		notes = append(notes, s.cat.T(cat, "note.layout_risks_unclosed",
+			"path", s.displayPath(sum.LayoutRisksPath), "line", itoa(sum.LayoutRisksUnclosed)))
+	case sum.HasLayoutRisks:
 		// 読めたときだけ言う。無いほうが普通（ゲーム内でレイアウトの検査を
 		// 押したときだけ書かれる）なので、無いことをここで毎回断らない。
 		// 判定していないことはカテゴリのチップが言う。
@@ -550,6 +573,10 @@ func (s *server) buildNotes(cat *Catalog, target *publish.Target, sum diff.Summa
 			"path", s.displayPath(sum.LayoutRisksPath)))
 	}
 	switch {
+	case sum.OrderUnclosed > 0:
+		// 再生順を1行も使えず、どのカテゴリも判定していない。下の「読めていません」
+		// より先に、どの行を直せばよいかを言う。
+		notes = append(notes, s.cat.T(cat, "note.order_unclosed", "line", itoa(sum.OrderUnclosed)))
 	case !sum.OrderKeys:
 		// 再生順のキーが無いと、「再生順に無い」を根拠にするカテゴリがどれも
 		// 成り立たない（台本から消えた行など）。

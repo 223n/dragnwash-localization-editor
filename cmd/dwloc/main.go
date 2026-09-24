@@ -18,7 +18,9 @@
 //
 // 画面に出したものは logs/dwloc_<日付>.log にも残します（internal/logfile）。
 // 翻訳者にコマンドの出力を貼り直してもらうより、その日のファイルを添えてもらう
-// ほうが確実だからです。原文と訳は書きません。
+// ほうが確実だからです。原文と訳は書きません。diff の本文と publish の訳の断片は
+// 画面にだけ出し、記録には件数・キー・行番号・理由・見出しと、省いた行の数だけを
+// 残します（record.go）。
 package main
 
 import (
@@ -62,6 +64,8 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
 使い方:
   dwloc <サブコマンド> [オプション]
   dwloc                      サブコマンドを省くと edit を始めます
+  dwloc help <サブコマンド>  そのサブコマンドの説明を表示します
+  dwloc --version            版を表示します（dwloc version と同じ）
 
 サブコマンド:
   validate   公開ファイル（Translations/<ロケール>/strings.csv）を検証する
@@ -83,7 +87,9 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
         ゲームのフォルダーを探しも読みもしません（publish / diff / edit）。
         同じ答えが要るとき（機械との突き合わせ、コミットする中身を固定したい
         とき）に使います。--game と同時には指定できません。
-        validate は --game を受け取りますが使いません。
+        サブコマンドの前に置くと、省いたときの edit にも効きます
+        （dwloc --no-game）。
+        validate と version は --game と --no-game を受け取りますが使いません。
 
 終了コード:
   0   成功
@@ -96,8 +102,13 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
   画面に出したものを logs/dwloc_<日付>.log にも残します。1日1ファイルで、
   同じ日の実行は追記します。古いファイルは消しません。不具合を知らせるときは
   その日のファイルを添えてください。原文と訳は書きません。
+  diff の一覧と csv、publish が見せる訳の先頭は画面にだけ出し、記録には
+  件数・キー・行番号・理由と、省いた行の数だけを残します。
+  画面に出た diff の出力は原文と訳を含むので、公開の場へ貼らないでください。
+  0.10.0 までの版の記録には、原文と訳が入っていることがあります。
 
-サブコマンドごとの説明は dwloc <サブコマンド> --help で表示します。
+サブコマンドごとの説明は dwloc <サブコマンド> --help か
+dwloc help <サブコマンド> で表示します。
 `
 
 func main() {
@@ -119,6 +130,14 @@ func mainWithRecord() int {
 		return run(os.Args[1:], os.Stdout, os.Stderr)
 	}
 
+	// 記録にだけ、利用者のホームのパスを ~ に置き換えます。ホームのパスには
+	// 利用者名が入り、記録は不具合の報告に添えて手元の外へ出るためです。
+	// 画面には全文を出します。書けないファイルの案内などは、権限の話が読めないと
+	// 直し方に手が届かないためです。見出しに書く引数（--root や --game）にも効きます。
+	if home, err := os.UserHomeDir(); err == nil {
+		w.ShortenPath(home, "~")
+	}
+
 	// 実行の区切りはファイルにだけ入れます。1日分を追記していくので、
 	// どこからが今回の実行かが読めるようにします。画面には出しません。
 	fmt.Fprintf(w, "=== dwloc %s %s（%s/%s）===\n",
@@ -129,9 +148,9 @@ func mainWithRecord() int {
 	record = w
 	hideFromRecord = w.Hide
 
-	// 画面が先、記録が後。io.MultiWriter は最初の失敗でそこから先をやめるので、
-	// この順なら記録が書けなくなっても画面には出ます。
-	code := run(os.Args[1:], io.MultiWriter(os.Stdout, w), io.MultiWriter(os.Stderr, w))
+	// 画面が先、記録が後。記録が書けなくなっても画面には出ます（teeWriter）。
+	// 原文や訳を含む報告の本文は、サブコマンドが画面にだけ書きます（unrecorded）。
+	code := run(os.Args[1:], &teeWriter{screen: os.Stdout, record: w}, &teeWriter{screen: os.Stderr, record: w})
 
 	if err := w.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "dwloc: 記録を書けませんでした（%v）\n", err)
@@ -160,38 +179,102 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// 共通オプションは、サブコマンドの前にも置けるようにここで受ける。
 	// flag パッケージは最初の非フラグ引数で解釈を止めるので、
 	// "dwloc --root X validate --locale ja" のような並びが素直に通る。
-	global := newFlagSet("dwloc", stderr)
+	global := newFlagSet("dwloc")
 	root := global.String("root", ".", "翻訳リポジトリのルート")
 	game := global.String("game", "", gameFlagUsage)
+	noGame := global.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
+	// --version は version の別名です。版を確かめようとして、多くの道具が受ける
+	// この形を打つ人がいます（Issue の雛形は「最新の版でも起きるか」を尋ねます）。
+	showVersion := global.Bool("version", false, "版を表示する（version と同じ）")
 
 	if code, ok := parseFlags(global, args, usageText, stdout, stderr); !ok {
 		return code
 	}
 
 	rest := global.Args()
+	if *showVersion {
+		return runVersion(rest, stdout, stderr)
+	}
 	if len(rest) == 0 {
-		return runDefault(args, *root, *game, stdout, stderr)
+		return runDefault(args, *root, *game, *noGame, stdout, stderr)
+	}
+
+	// 共通の入口で受けた --no-game は、サブコマンドの引数の頭に足して渡します。
+	// publish / diff / edit はもともと --no-game を受けるので、受け口を2つに
+	// 増やさずに済みます。サブコマンドの後ろにもう1度書かれても、同じ指定が
+	// 2度効くだけです。validate と version へは渡しません（受けて使わない指定です）。
+	subArgs := rest[1:]
+	if *noGame {
+		subArgs = append([]string{"--no-game"}, subArgs...)
 	}
 
 	switch name := rest[0]; name {
 	case "validate":
 		return runValidate(rest[1:], *root, stdout, stderr)
 	case "publish":
-		return runPublish(rest[1:], *root, *game, stdout, stderr)
+		return runPublish(subArgs, *root, *game, stdout, stderr)
 	case "diff":
-		return runDiff(rest[1:], *root, *game, stdout, stderr)
+		return runDiff(subArgs, *root, *game, stdout, stderr)
 	case "edit":
-		return runEdit(rest[1:], *root, *game, stdout, stderr)
+		return runEdit(subArgs, *root, *game, stdout, stderr)
 	case "version":
 		return runVersion(rest[1:], stdout, stderr)
 	case "help":
+		return runHelp(rest[1:], stdout, stderr)
+	default:
+		return unknownSubcommand(name, stderr)
+	}
+}
+
+// subcommandUsage は、サブコマンドの名前からその使い方を引く表です。
+// help <サブコマンド> が使います。
+var subcommandUsage = map[string]string{
+	"validate": validateUsage,
+	"publish":  publishUsage,
+	"diff":     diffUsage,
+	"edit":     editUsage,
+	"version":  versionUsage,
+	"help":     usageText,
+}
+
+// runHelp は使い方を出します。後ろにサブコマンドの名前があれば、そのサブコマンドの
+// 使い方を出します（dwloc <サブコマンド> --help と同じ）。
+//
+// 後ろの名前を黙って捨てて全体の使い方を出すと、打ち間違いに気づけません。
+// 知らない名前と余分な引数は、ほかの入口と同じく断ります。
+//
+// 名前より前は、ほかのサブコマンドと同じく FlagSet で読みます。help --help と
+// help -h は使い方を求めたものなので、全体の使い方を出します。名前として引くと
+// 「知らないサブコマンドです: --help」になり、求めた人に実際と合わない理由を
+// 返します。ほかの - で始まる値は「知らないオプションです」で断ります。
+func runHelp(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("dwloc help")
+	if code, ok := parseFlags(fs, args, usageText, stdout, stderr); !ok {
+		return code
+	}
+	args = fs.Args()
+	if len(args) == 0 {
 		fmt.Fprint(stdout, usageText)
 		return exitOK
-	default:
-		fmt.Fprintf(stderr, "dwloc: 知らないサブコマンドです: %s\n\n", name)
-		fmt.Fprint(stderr, usageText)
+	}
+	usage, ok := subcommandUsage[args[0]]
+	if !ok {
+		return unknownSubcommand(args[0], stderr)
+	}
+	if len(args) > 1 {
+		fmt.Fprintf(stderr, "dwloc: 余分な引数です: %s\n", args[1])
+		fmt.Fprintln(stderr, "使い方は dwloc help で表示します。")
 		return exitError
 	}
+	fmt.Fprint(stdout, usage)
+	return exitOK
+}
+
+// unknownSubcommand は、知らないサブコマンドを受け取ったときの報告です。
+func unknownSubcommand(name string, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "dwloc: 知らないサブコマンドです: %s\n", name)
+	fmt.Fprintln(stderr, "使い方は dwloc help で表示します。")
+	return exitError
 }
 
 // stdin は Enter を待つときの読み取り先。テストが差し替えられるように変数にしてある。
@@ -210,13 +293,16 @@ var startEdit = runEdit
 //
 // 使い方の表示をここから外したのは、翻訳者にとって最初の1回がいちばん脱落しやすい
 // ためです。使い方は dwloc help と dwloc --help で今までどおり出ます。
-func runDefault(args []string, root, game string, stdout, stderr io.Writer) int {
+//
+// noGame は共通の入口で受けた --no-game です。ダブルクリックと同じ画面を、
+// ゲームを見ずに開くための指定なので、edit へそのまま渡します。
+func runDefault(args []string, root, game string, noGame bool, stdout, stderr io.Writer) int {
 	if !looksLikeRepo(root) {
 		where, err := filepath.Abs(root)
 		if err != nil {
 			where = root
 		}
-		fmt.Fprintf(stderr, notARepoText, where)
+		fmt.Fprintf(stderr, notARepoMessage(runtime.GOOS), where)
 		// ダブルクリックで開いた窓は、終わると同時に閉じる。理由を読む間も無く
 		// 消えるので、引数を1つも受け取っていないときだけ Enter を待つ。
 		// 端末から素の dwloc を打った場合もここを通るが、Enter を1回押すだけで済む。
@@ -228,13 +314,30 @@ func runDefault(args []string, root, game string, stdout, stderr io.Writer) int 
 	// 画面を始める前に、ほかのこともできると伝える。使い方を出さなくなったぶん、
 	// ここが唯一の手掛かりになる。
 	fmt.Fprintln(stdout, "サブコマンドを指定すると、検証や公開もできます（dwloc help）。")
-	return startEdit(nil, root, game, stdout, stderr)
+	var editArgs []string
+	if noGame {
+		editArgs = []string{"--no-game"}
+	}
+	code := startEdit(editArgs, root, game, stdout, stderr)
+	// 起動の途中で誤りで終わったとき（列名の重複した公開ファイル、ロケールが
+	// 1つも無い、ポートを取れない、など）も、ダブルクリックで開いた窓はすぐ閉じる。
+	// 理由を読めるよう、引数を1つも受け取っていないときだけ Enter を待つ。
+	// 正常に終わったとき（時間切れと Ctrl+C。どちらも 0）は待たない。Ctrl+C を
+	// 押した人を、もう1度待たせる理由は無い。時間切れで窓が閉じることは README に書く。
+	if code != exitOK && len(args) == 0 {
+		waitForEnter(stderr)
+	}
+	return code
 }
 
-// notARepoText は、翻訳リポジトリではない場所で起動されたときの案内です。
+// notARepoText は、Windows で翻訳リポジトリではない場所で起動されたときの案内です。
 //
 // 「見つかりません」だけで終わらせず、どこへ置けばよいかを図で示します。
 // ここで詰まると、翻訳者は道具そのものを諦めます。
+//
+// 移させるのは Windows だけです。翻訳リポジトリの .gitignore が dwloc.exe を
+// 外しているので、置いてもコミットに入りません。ほかの OS は [notARepoRootText]
+// です。
 const notARepoText = `dwloc: ここは翻訳リポジトリではないようです。
   探した場所: %s
 
@@ -251,6 +354,41 @@ Translations フォルダーと同じ場所へ dwloc を移してから、もう
 
 ほかの使い方は dwloc help で表示します。
 `
+
+// notARepoRootText は、Windows 以外で翻訳リポジトリではない場所で起動されたときの
+// 案内です。
+//
+// dwloc を翻訳リポジトリへ移させず、--root を勧めます。翻訳リポジトリの
+// .gitignore が外しているのは dwloc.exe と dwloc*.log だけで、macOS と Linux の
+// 本体 dwloc は外れません。移させると、git add -A で約11MBの実行ファイルが
+// Pull Request に入ります。validate も上流の CI もそれを指摘しません。
+// 書庫の README.txt も、macOS と Linux では --root で使うよう案内しています。
+// 上流の .gitignore を直すのは、上流への Pull Request が要るので、ここでは
+// 手当てしません。
+const notARepoRootText = `dwloc: ここは翻訳リポジトリではないようです。
+  探した場所: %s
+
+--root で翻訳リポジトリのフォルダー（Translations フォルダーのある場所）を
+指定して実行してください。
+  ./dwloc edit --root <翻訳リポジトリのパス>
+
+dwloc は翻訳リポジトリの中へ移さないでください。翻訳リポジトリの .gitignore が
+外しているのは Windows の dwloc.exe だけなので、ここの dwloc は
+git add -A でコミットに入ることがあります。
+
+ほかの使い方は dwloc help で表示します。
+`
+
+// notARepoMessage は、翻訳リポジトリではない場所で起動されたときの案内を、
+// OS に合わせて返します。書式の %s には探した場所が入ります。
+//
+// OS を引数で受けるのは、どの OS で試験を走らせても両方の文を確かめるためです。
+func notARepoMessage(goos string) string {
+	if goos == "windows" {
+		return notARepoText
+	}
+	return notARepoRootText
+}
 
 // gameFlagUsage は --game の1行説明。共通の入口とサブコマンドで同じ文を使います。
 // 何か所も言い回しが割れると、同じ指定が別のものに見えます。
@@ -554,59 +692,70 @@ dwloc の版を1行で表示します。ビルド時に版を埋め込んでい�
 
 // runVersion は版を表示します。
 func runVersion(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc version", stderr)
-	// --root と --game は使わないが、共通オプションのつもりで打たれても止まらない
-	// ように受ける。版の表示に根拠となるフォルダーは要らないので、値は読まない。
+	fs := newFlagSet("dwloc version")
+	// --root と --game と --no-game は使わないが、共通オプションのつもりで打たれても
+	// 止まらないように受ける。版の表示に根拠となるフォルダーは要らないので、値は読まない。
 	fs.String("root", "", "（version では使いません）")
 	fs.String("game", "", "（version では使いません）")
+	fs.Bool("no-game", false, "（version では使いません）")
 	if code, ok := parseFlags(fs, args, versionUsage, stdout, stderr); !ok {
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), versionUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 
 	fmt.Fprintf(stdout, "dwloc %s\n", version)
 	return exitOK
 }
 
-// newFlagSet は FlagSet を作ります。エラー文の行き先は標準エラーです。
+// newFlagSet は FlagSet を作ります。name は使い方の案内に出すコマンドの名前です
+// （"dwloc diff" など）。
 //
-// Usage を空の関数にしているのは、説明を出す先を自分で決めるためです。
-// flag は -h でも解釈の失敗でも Usage を呼びますが、前者は求められて出す説明
-// （標準出力）、後者は失敗の報告（標準エラー）で、行き先が違います。
-// flag に任せると両方が標準エラーへ出て、-h のときに二重に出ます。
-func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
+// flag 自身には何も書かせません（出力先は io.Discard、Usage は空の関数）。
+// flag は解釈に失敗すると英語の理由の1行を書き、-h でも失敗でも Usage を呼びます。
+// 理由は parseFlags が日本語に言い換えて標準エラーへ書き、使い方は -h のときだけ
+// 標準出力へ出します。求められて出す説明（標準出力）と失敗の報告（標準エラー）は
+// 行き先が違うので、flag に任せられません。
+func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	return fs
 }
 
 // parseFlags は共通の後始末つきで Parse を呼びます。
 // 第2戻り値が false のとき、第1戻り値をそのまま終了コードにします。
+//
+// 解釈に失敗したときは、理由を日本語の1行（[flagErrorText]）で書き、使い方の
+// 全文ではなく「使い方は … --help で表示します」の1行を添えます。全文（diff は
+// 80行を超える）を続けると、端末が小さいときに理由が上へ流れて見えなくなります。
 func parseFlags(fs *flag.FlagSet, args []string, usage string, stdout, stderr io.Writer) (int, bool) {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
 			return exitOK, false
 		}
-		// 解釈に失敗したときは flag 自身が理由の1行を標準エラーへ書いている。
-		// その後ろに1行あけて使い方を足す。
-		fmt.Fprintln(stderr)
-		fmt.Fprint(stderr, usage)
+		fmt.Fprintf(stderr, "dwloc: %s\n", flagErrorText(fs, err))
+		fmt.Fprintln(stderr, usageHint(fs))
 		return exitError, false
 	}
 	return exitOK, true
 }
 
-// unexpectedArg は余分な引数を受け取ったときの報告です。
+// usageHint は、引数を誤ったときに添える1行です。
+func usageHint(fs *flag.FlagSet) string {
+	return "使い方は " + fs.Name() + " --help で表示します。"
+}
+
+// unexpectedArg は余分な引数を受け取ったときの報告です。報告するのは、解釈の
+// 残りの最初の1つ（fs.Arg(0)）です。
 //
 // 黙って無視しないのは、"dwloc publish ja" のような打ち間違いを
 // 「全ロケールを書き出す」に化けさせないためです。
-func unexpectedArg(arg, usage string, stderr io.Writer) int {
-	fmt.Fprintf(stderr, "dwloc: 余分な引数です: %s\n\n", arg)
-	fmt.Fprint(stderr, usage)
+func unexpectedArg(fs *flag.FlagSet, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "dwloc: 余分な引数です: %s\n", fs.Arg(0))
+	fmt.Fprintln(stderr, usageHint(fs))
 	return exitError
 }
 

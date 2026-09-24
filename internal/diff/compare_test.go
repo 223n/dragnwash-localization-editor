@@ -659,19 +659,19 @@ func TestLoad(t *testing.T) {
 func TestReadUnreadableFile(t *testing.T) {
 	dir := t.TempDir()
 
-	if rows, err := readRowsFile(dir); err == nil {
+	if rows, _, err := readRowsFile(dir); err == nil {
 		t.Errorf("ディレクトリを読めたことにしている: %d 行", len(rows))
 	}
-	if risks, err := readLayoutRisks(dir); err == nil {
+	if risks, _, err := readLayoutRisks(dir); err == nil {
 		t.Errorf("ディレクトリを読めたことにしている: %v", risks)
 	}
 
 	missing := filepath.Join(dir, "missing.csv")
-	if rows, err := readRowsFile(missing); err != nil || rows != nil {
-		t.Errorf("無いファイルは0行のはず: rows=%v err=%v", rows, err)
+	if rows, line, err := readRowsFile(missing); err != nil || rows != nil || line != 0 {
+		t.Errorf("無いファイルは0行のはず: rows=%v line=%d err=%v", rows, line, err)
 	}
-	if risks, err := readLayoutRisks(missing); err != nil || risks != nil {
-		t.Errorf("無いファイルは nil のはず: risks=%v err=%v", risks, err)
+	if risks, line, err := readLayoutRisks(missing); err != nil || risks != nil || line != 0 {
+		t.Errorf("無いファイルは nil のはず: risks=%v line=%d err=%v", risks, line, err)
 	}
 }
 

@@ -314,46 +314,70 @@ func TestLoadPowerShellDuplicateColumn(t *testing.T) {
 	}
 }
 
-// TestLoadReadersDifferOnComments は2つの読み方の違いが出る入力を確かめる。
-// 実データにはこの形は無いが、どちらを選んだかで結果が変わることを残しておく。
-func TestLoadReadersDifferOnComments(t *testing.T) {
-	// 行頭の '#' はどちらも落とすが、PowerShell 方式は引用の中を見ないので
-	// 引用フィールド内の改行で行が割れる。
+// TestLoadReadersAgreeOnMultilineField は、引用フィールドの中の改行を、2つの読み方が
+// どちらも値に残すことを確かめる。実データにはこの形は無い。
+//
+// 全体を解釈する読み手へ移す作業（docs/port-spec.md）の PR2 の最初のコミットでは、
+// PowerShell 方式を行単位で読んでいたときの結果（2つの物理行がそれぞれ別レコードになり、
+// 前半の section が "L01"、後半が `Ryan"` になる。件数は2件）を固定していた。order が
+// 上流 main と同じく全体を解釈して読むようになり、C# 方式と同じ1件になった。
+//
+// 読み手は改行を値に残すだけで止めない。section のように見出しの行へそのまま書く値に
+// 改行があると公開ファイルの見出しが壊れるので、publish と画面の書き出しは、読む前に
+// 形の確かめ（internal/publish の CheckOrderShape）で止める（決まったことのそのほか 8）。
+func TestLoadReadersAgreeOnMultilineField(t *testing.T) {
+	// 行頭の '#' はどちらも落とす。引用フィールド内の改行は、どちらも値に残す。
 	const orderCSV = "section,phase,node,order,line_id,key,speaker,condition\n" +
 		"# これはコメント\n" +
 		"\"L01\nRyan\",intro,N1,1,line:0001,aaaaaaaaaaaaaaaa,Ryan,\n"
 
 	sharp := LoadCSharp([]byte(orderCSV), nil)
-	if len(sharp.Entries) != 1 {
-		t.Fatalf("C#方式の Entries = %d件, want 1", len(sharp.Entries))
-	}
-	if sharp.Entries[0].Section != "L01\nRyan" {
-		t.Errorf("C#方式の Section = %q, want %q", sharp.Entries[0].Section, "L01\nRyan")
-	}
-
 	shell, err := LoadPowerShell([]byte(orderCSV), nil)
 	if err != nil {
 		t.Fatalf("LoadPowerShell が失敗した: %v", err)
 	}
-	// 2つの物理行がそれぞれ別レコードになる。前半（"L01）は key が空、
-	// 後半（Ryan",intro,...）が key を持つ。件数が2件なのは pwsh 7.6.6 の
-	// ConvertFrom-Csv と同じで、key が空の行を捨てないため（[ParseAllEntries]）。
-	if len(shell.Entries) != 2 {
-		t.Fatalf("PowerShell方式の Entries = %d件, want 2", len(shell.Entries))
+	for name, data := range map[string]*Data{"C#方式": sharp, "PowerShell方式": shell} {
+		if len(data.Entries) != 1 {
+			t.Fatalf("%s の Entries = %d件, want 1", name, len(data.Entries))
+		}
+		if got, want := data.Entries[0].Section, "L01\nRyan"; got != want {
+			t.Errorf("%s の Section = %q, want %q", name, got, want)
+		}
+		if got, want := data.Entries[0].Key, "aaaaaaaaaaaaaaaa"; got != want {
+			t.Errorf("%s の Key = %q, want %q", name, got, want)
+		}
 	}
-	if shell.Entries[0].Section == "L01\nRyan" {
-		t.Error("PowerShell方式で複数行フィールドが読めてしまった")
-	}
-	if got, want := shell.Entries[0].Section, "L01"; got != want {
-		t.Errorf("前半の Section = %q, want %q", got, want)
-	}
-	if got := shell.Entries[0].Key; got != "" {
-		t.Errorf("前半の Key = %q, want 空文字", got)
-	}
-	if got, want := shell.Entries[1].Section, `Ryan"`; got != want {
-		t.Errorf("後半の Section = %q, want %q", got, want)
-	}
-	if got, want := shell.Entries[1].Key, "aaaaaaaaaaaaaaaa"; got != want {
-		t.Errorf("後半の Key = %q, want %q", got, want)
+}
+
+// TestLoadPowerShellUnclosedQuote は、閉じない引用符のある再生順を、どのファイルで
+// 起きたかを添えた誤りにすることを確かめる。
+//
+// 全体を解釈すると、ファイルの終わりまでが1つの値になる（上流の報告 #11 と同じ形）。
+// 読み手は型付きの誤り（csvfile.UnclosedQuoteError）を返す。PR2 の最初のコミットでは、
+// 行単位で読んで、閉じない引用符を物理行の終わりで閉じたものとして何事も無く読む
+// 振る舞い（2件、1件目の speaker が "Ryan,"）を固定していた。
+func TestLoadPowerShellUnclosedQuote(t *testing.T) {
+	const orderCSV = "section,phase,node,order,line_id,key,speaker,condition\n" +
+		"L01 Ryan,intro,N1,1,line:0001,aaaaaaaaaaaaaaaa,\"Ryan,\n" +
+		"L01 Ryan,intro,N1,2,line:0002,bbbbbbbbbbbbbbbb,Kobold,\n"
+
+	for _, tc := range []struct {
+		name            string
+		orderCSV, level string
+		wantIn          string
+	}{
+		{"script_order 側", orderCSV, testLevelsCSV, "script_order.csv"},
+		{"level_flow 側", "section,key\nL01 Ryan,aaaaaaaaaaaaaaaa\n", "level,dragon\n0,\"Ryan\n", "level_flow.csv"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadPowerShell([]byte(tc.orderCSV), []byte(tc.level))
+			var unclosed *csvfile.UnclosedQuoteError
+			if !errors.As(err, &unclosed) || unclosed.Line != 2 {
+				t.Fatalf("閉じない引用符の誤りになっていない: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Errorf("err = %v, want %q を含む", err, tc.wantIn)
+			}
+		})
 	}
 }

@@ -17,15 +17,19 @@
 //   edit-conflict-<言語>.png   打っているあいだによそが同じ行を書き換えた（競合の引き止め）
 //   edit-export-<言語>.png     上の帯の「別に保存」のメニュー
 //
-// 同じ見本を撮り直しても、画像のバイトは揃わないことがある。左の列の見出しの文字と
-// 表の見出しの下の線が、1画素に満たない幅でずれる（Chromium の文字の描き方による。
-// フォントの読み込みを待っても、文字の位置合わせを止めても揃わなかった）。目では
-// 見分けられないので、撮り直した画像は、場面の中身が変わったときだけコミットする。
+// 同じ見本を撮り直しても、画像は画素まで揃わない。左の列の文字と表の見出しの下の線が
+// 1画素上下にずれたり、角の色が1だけ違ったりする（Chromium の描き方による。フォントの
+// 読み込みを待っても、文字の位置合わせを止めても、箱の高さを整数の px にしても
+// 揃わなかった）。そこで書く前に、同じ名前で既にある画像（既定では docs/images/ の
+// コミット済みの画像）と画素で比べ、揺れの範囲なら書かない。場面の中身が変わった
+// 画像だけが書き換わるので、撮り直して差分の出た画像は、そのままコミットしてよい。
+// 揺れの範囲と、揺れと見分けられない変化は compare-png.mjs に書いてある。揺れの範囲
+// でも撮り直した画像にしたいときは、古い画像を消してから撮る。
 //
 // 見本の台詞は、この説明のために作った架空のものである。ゲームの台本を再配布しない
 // 方針なので、画面の例にゲームの台本を映してはいけない。
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
 import { launchDwloc } from "../e2e/support/dwloc.mjs";
+import { judgeRetake } from "./compare-png.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const sample = join(root, "samples", "harbor");
@@ -113,11 +118,32 @@ async function open(uiLang) {
   };
 }
 
+// readExisting は path にある画像を読む。まだ無ければ null を返す。
+async function readExisting(path) {
+  try {
+    return await readFile(path);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
 // shot は頁を撮る。キャレットは点滅するので隠し、ポインターは画面の隅へ退ける。
+//
+// 撮った画像は、同じ名前で既にある画像と比べ、揺れの範囲なら書かない（judgeRetake）。
+// 書いたか残したかと、その理由を1行ずつ出す。どの画像が変わったかを、git の差分を
+// 開く前に端末で読めるようにするためである。
 async function shot(page, name) {
   await page.mouse.move(0, 0);
-  await page.screenshot({ path: join(out, name), caret: "hide", animations: "disabled" });
-  console.log(join(out, name));
+  const taken = await page.screenshot({ caret: "hide", animations: "disabled" });
+  const path = join(out, name);
+  const verdict = judgeRetake(await readExisting(path), taken);
+  if (verdict.write) {
+    await writeFile(path, taken);
+  }
+  console.log(`${verdict.write ? "書きました" : "残しました"}: ${path}（${verdict.reason}）`);
 }
 
 async function typeIntoWheels(page) {

@@ -73,6 +73,36 @@ func TestRunEditRejectsBadFlags(t *testing.T) {
 	}
 }
 
+// TestRunEditRejectsUnknownUILang は、目録に無い --ui-lang を終了コード2で断ることを
+// 見る。
+//
+// 黙って日本語に落とすと、英語を選んだつもりで eng や english と打った人に、
+// 読めない日本語の案内が出る。画面の言語は Accept-Language で決まるので、
+// 黒い窓と画面で言語が割れる。--port や --format と同じく、知らない値は入口で断る。
+func TestRunEditRejectsUnknownUILang(t *testing.T) {
+	root := editTree(t)
+	for _, lang := range []string{"eng", "english", "fr", "zz"} {
+		code, stdout, stderr := runEditArgs(t, "--root", root, "--ui-lang", lang,
+			"--no-browser", "--idle-timeout", "1ns")
+		if code != exitError {
+			t.Errorf("%s: 終了コードが %d、%d を期待", lang, code, exitError)
+		}
+		checkContains(t, lang+" の標準エラー", stderr, []string{"--ui-lang は ja か en です", lang})
+		if strings.Contains(stdout, "http://127.0.0.1:") {
+			t.Errorf("%s: 待ち受けを始めている:\n%s", lang, stdout)
+		}
+	}
+
+	// 目録に当たる値は、大文字と小文字、地域の付いた形も受ける（画面と同じ照合）。
+	for _, lang := range []string{"en", "EN", "en-US", "ja-JP"} {
+		code, _, stderr := runEditArgs(t, "--root", root, "--ui-lang", lang,
+			"--no-browser", "--idle-timeout", "1ns")
+		if code != exitOK {
+			t.Errorf("%s: 終了コードが %d:\n%s", lang, code, stderr)
+		}
+	}
+}
+
 func TestRunEditRejectsUnknownLocale(t *testing.T) {
 	root := editTree(t)
 	code, _, stderr := runEditArgs(t, "--root", root, "--locale", "nope", "--no-browser")

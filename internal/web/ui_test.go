@@ -107,6 +107,12 @@ func TestSaveRetryDoesNotGiveUp(t *testing.T) {
 	if !strings.Contains(js, "i = retryDelays.length - 1") {
 		t.Error("最後の間隔で送り続ける形になっていない")
 	}
+	// 送り直さないのは、待っても直らないと分かっている 400・404・415 だけ。503（Windows の
+	// 共有違反）や 422 を足すと、原因が消えても訳が送られなくなる。振る舞いは E2E の
+	// save-failure.spec.mjs が見ている。
+	if !strings.Contains(js, "var refusedStatus = { 400: true, 404: true, 415: true };") {
+		t.Error("送り直さない状態コードが 400・404・415 から変わっている")
+	}
 }
 
 // topRegion は index.html の `<div class="top">` から、それに対応する閉じ div
@@ -161,7 +167,8 @@ func TestAlertsStayOnScreen(t *testing.T) {
 	css := uiSource(t, "ui/app.css")
 
 	inside := topRegion(t, html)
-	for _, want := range []string{`id="message"`, `id="conflict"`, `id="orphans"`} {
+	// unsent は、まだファイルに入っていない訳（待ち受けに届かないときに写すための一覧）。
+	for _, want := range []string{`id="message"`, `id="conflict"`, `id="orphans"`, `id="unsent"`} {
 		if !strings.Contains(inside, want) {
 			t.Errorf("%s が貼り付ける一帯の外にある。行の途中では見えなくなる", want)
 		}
@@ -497,7 +504,7 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 	if ld < 0 {
 		t.Fatal("load が無い")
 	}
-	fail := strings.Index(js[ld:], ".catch(function ()")
+	fail := strings.Index(js[ld:], ".catch(function (err)")
 	if fail < 0 || !strings.Contains(js[ld+fail:ld+fail+800], "stopHolding(holding)") {
 		t.Error("読み込みに失敗したときに、止めていた送り直しを戻していない")
 	}
@@ -985,13 +992,23 @@ func TestAlertsAreAnnounced(t *testing.T) {
 	for _, want := range []string{
 		`id="shown" class="shown" aria-live="polite"`,
 		`id="save-state" class="save-state" aria-live="polite"`,
-		`id="message" class="notice error" role="status"`,
+		// 出し方（失敗の .error か案内の .info か）は app.js の showMessage が決める。
+		// ここで error を固定すると、読み込みの案内まで失敗の赤い帯で出る。
+		`id="message" class="notice" role="status"`,
 		`id="empty" class="notice empty" role="status"`,
 		`id="filters" class="filters" role="group" aria-labelledby="filter-label"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("index.html に %q が無い。手応えが読み上げに出ない", want)
 		}
+	}
+
+	// 狭い画面で引き出しを開いているあいだは、帯と一覧が inert になり、#shown と #empty が
+	// 支援技術の木から外れる。そのあいだ同じ文を写す見張り（app.js の announceInDrawer）は、
+	// 引き出し（左の列）の中に置く。帯や一覧の中に置くと、一緒に inert になって告知されない。
+	sidebar := between(t, html, `<aside id="sidebar" class="sidebar">`, "</aside>")
+	if !strings.Contains(sidebar, `<p id="finder-status" class="sr-only" role="status"></p>`) {
+		t.Error("左の列に #finder-status が無い。引き出しを開いているあいだ、絞り込みと検索の結果が告知されない")
 	}
 
 	// 見張り（role="status"）は hidden で出し入れしない。hidden の要素は支援
@@ -1002,7 +1019,7 @@ func TestAlertsAreAnnounced(t *testing.T) {
 	// 断っておくと、ここで確かめているのは属性と形までである。読み上げソフトで
 	// 実際に告知されたかどうかは、この環境では確かめられていない。
 	for _, bad := range []string{
-		`class="notice error" role="status" hidden`,
+		`id="message" class="notice" role="status" hidden`,
 		`class="notice empty" role="status" hidden`,
 	} {
 		if strings.Contains(html, bad) {
@@ -1010,7 +1027,7 @@ func TestAlertsAreAnnounced(t *testing.T) {
 		}
 	}
 	js := uiSource(t, "ui/app.js")
-	for _, bad := range []string{"el.message.hidden", "el.empty.hidden"} {
+	for _, bad := range []string{"el.message.hidden", "el.empty.hidden", "el.finderStatus.hidden"} {
 		if strings.Contains(js, bad) {
 			t.Errorf("app.js が %s を触っている。中身の入れ替えで出し入れすること", bad)
 		}
@@ -1059,10 +1076,17 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if end < 0 {
 		t.Fatal("ロケールの切り替えの終わりが分からない")
 	}
-	// 読むのは change の時点で控えた値（chosen）。尋ねるのは送り終えてからなので、
-	// そのあいだに欄の値は変わりうる（app.js の load が欄を描いたロケールへそろえる）。
-	if !strings.Contains(js[start:start+end], "load(chosen, true)") {
+	// 読むのは change の時点で控えた値。少し待ってから（localeDelay）、送り終えるのを
+	// 待って尋ねるので、そのあいだに欄の値は変わりうる（app.js の load が欄を描いた
+	// ロケールへそろえる）。
+	if !strings.Contains(js[start:start+end], "state.localeChosen = el.locale.value;") {
+		t.Error("ロケールの欄の change で、選んだ値を控えていない")
+	}
+	if !strings.Contains(functionBody(t, js, "switchLocale"), "load(chosen, true)") {
 		t.Error("ロケールを切り替えても条件と検索語が残る。前のロケールの条件を持ち越す")
+	}
+	if strings.Contains(functionBody(t, js, "switchLocale"), "clearFinder()") {
+		t.Error("切り替えの手前で条件を外している。読み込みに失敗すると条件・検索欄・一覧が食い違う")
 	}
 	// 外すのは切り替えの手前ではなく、読めたときだけ。
 	//
@@ -1077,7 +1101,7 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if load < 0 {
 		t.Fatal("load が resetFinder を受けていない")
 	}
-	fail := strings.Index(js[load:], ".catch(function ()")
+	fail := strings.Index(js[load:], ".catch(function (err)")
 	ok := strings.Index(js[load:], "clearFinder();")
 	if ok < 0 {
 		t.Fatal("load が clearFinder を呼んでいない")
@@ -1402,6 +1426,45 @@ func TestOpenEditorReviewsTheRowItLeft(t *testing.T) {
 	// 差し込まれる（焦点は入っているのに欄が見えない）。
 	if strings.Index(body, "editor.focus()") > strings.Index(body, "reviewClosed(leaving)") {
 		t.Error("照らし直しが、行を開く前に走っている")
+	}
+}
+
+// TestNarrowAndWideLeaveNoGap は、狭い画面と広い画面の切り替わりが、app.css と
+// app.js で同じ1本の境目になっていることを見る。
+//
+// 広い側を @media (min-width: 901px) と書いていた。狭い側は (max-width: 900px) なので、
+// 900px と 901px のあいだ（ブラウザーの拡大率や高 DPI の画面で出る小数の幅）では、
+// どちらの指定も当たらない。そのあいだ app.js の matchMedia("(max-width: 900px)") は
+// 「広い」と答えるのに、見た目は狭い側の引き出しにも広い側の列の畳みにもならず、
+// 引き出しの閉じるボタンと幕が広い画面に出る。
+//
+// 広い側は狭い側のちょうど裏（not all and (max-width: …)）として書く。Media Queries
+// Level 4 の範囲の書き方（width > 900px）も同じ裏になるが、古いブラウザーでも通る形を採る。
+// 試験で小数の幅を作れない（Playwright の窓の幅は整数で、iframe も整数に丸められた）ので、
+// ここは字面で見る。
+func TestNarrowAndWideLeaveNoGap(t *testing.T) {
+	css := uiSource(t, "ui/app.css")
+	js := uiSource(t, "ui/app.js")
+
+	query := regexp.MustCompile(`matchMedia\("\(max-width: (\d+)px\)"\)`).FindAllStringSubmatch(js, -1)
+	if len(query) != 1 {
+		t.Fatalf("app.js の狭い画面の判定（matchMedia の max-width）が1つでない: %v", query)
+	}
+	width := query[0][1]
+
+	narrow := "@media (max-width: " + width + "px) {"
+	wide := "@media not all and (max-width: " + width + "px) {"
+	for _, want := range []string{narrow, wide} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css に %q が無い。app.js の matchMedia と同じ境目で切り替えること", want)
+		}
+	}
+	// 幅の指定を持つ @media は、この2つのほかに置かない。min-width で広い側を書くと、
+	// 境目の前後で小数の幅のすき間ができる。
+	for _, m := range regexp.MustCompile(`(?m)^\s*(@media [^{\n]*\{)`).FindAllStringSubmatch(css, -1) {
+		if strings.Contains(m[1], "width") && m[1] != narrow && m[1] != wide {
+			t.Errorf("app.css に境目と別の幅の指定がある: %q", m[1])
+		}
 	}
 }
 

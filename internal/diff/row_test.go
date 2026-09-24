@@ -179,6 +179,25 @@ func TestDroppedReason(t *testing.T) {
 			row:         Row{Key: "english", Kind: KindBroken, SourceEn: "Hello"},
 			wantDropped: true, wantNote: noteDroppedMismatch, wantID: reason.NoteDroppedMismatch,
 		},
+		{
+			// 表計算ソフトなどで保存し直して、原文の中の LF が CRLF に変わった行。
+			// publish は捨てる（上流と同じ）が、原文を書き換えたとは読ませない。
+			name:        "原文の CRLF を LF に戻すとキーが一致する行は、そう書いて捨てられる",
+			row:         Row{Key: key.For("para1\n\npara2"), Kind: KindHash, SourceEn: "para1\r\n\r\npara2"},
+			wantDropped: true, wantNote: noteDroppedSourceCRLF, wantID: reason.NoteDroppedSourceCRLF,
+		},
+		{
+			// 単独の CR はそろえない。LF に戻す直し方にならない。
+			name:        "単独の CR は CRLF と見なさない",
+			row:         Row{Key: key.For("para1\npara2"), Kind: KindHash, SourceEn: "para1\rpara2"},
+			wantDropped: true, wantNote: noteDroppedMismatch, wantID: reason.NoteDroppedMismatch,
+		},
+		{
+			// CRLF を LF にしても合わないなら、原文を書き換えた行である。
+			name:        "CRLF を LF にしても合わない行は不一致として捨てられる",
+			row:         Row{Key: other, Kind: KindHash, SourceEn: "para1\r\npara2"},
+			wantDropped: true, wantNote: noteDroppedMismatch, wantID: reason.NoteDroppedMismatch,
+		},
 	}
 
 	for _, tt := range tests {

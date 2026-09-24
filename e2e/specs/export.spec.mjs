@@ -36,6 +36,7 @@ import {
   publishedFile,
   sampleRepo,
   sampleWorkingCopy,
+  scriptOrder,
   workingCopy,
 } from "../support/repo.mjs";
 import { editor, openApp, saveState, typeTranslation, waitForSaved } from "../support/ui.mjs";
@@ -746,6 +747,76 @@ test.describe("コミット済みの訳が作業コピーに無いとき", () =>
     expect(log.written[0].equals(await server.readRoot(workingRel))).toBe(true);
   });
 });
+
+// 読むと訳や原文を取り違える形。publish は書く前に形を見て止め（internal/publish の
+// shape.go）、画面の書き出しも同じ確かめを同じ順で通る（export.go）。画面には、確かめた
+// うえで通す指定（dwloc publish --accept-multiline <ロケール>:<key>）を置かない。どのファイルの何行目かは
+// パスを含むので出さず、件数と直し方の案内（dwloc publish）だけを出す。
+const shapeCases = (() => {
+  const s = SAMPLE;
+  const head = ["", "# ===== Level 1: Ryan (Sunny) =====", "# --- intro: Ryan_1_intro ---"];
+  const row = (item, translation) =>
+    [keyFor(item.source), "L01 Ryan", "Ryan_1_intro", item.order, item.speaker, item.source, translation]
+      .map(field)
+      .join(",");
+  // 閉じ忘れた引用符が、キーの形で始まる次の行（goodbye）を訳に飲み込む。
+  const swallow = workingCopy([
+    ...head,
+    row(s.hello, "").replace(/,$/, ',"もしもし'),
+    row(s.goodbye, "さようなら") + '"',
+    { ...s.wonderful, translation: s.wonderful.ja },
+    "",
+  ]);
+  // 訳の中の単独の CR。上流の道具はこの行をあとで落とす。
+  const loneCR = workingCopy([
+    ...head,
+    { ...s.hello, translation: "もし\rもし" },
+    { ...s.goodbye, translation: "" },
+    { ...s.wonderful, translation: s.wonderful.ja },
+    "",
+  ]);
+  // 再生順の見出し（'# --- … ---'）に使う値の改行。書き出すと見出しの2行目がデータの行になる。
+  const order = sampleRepo();
+  order.root["data/script_order.csv"] = scriptOrder([{ ...s.hello, node: "Ryan_1\nintro" }, s.goodbye, s.wonderful]);
+  return [
+    { name: "作業コピーで引用符が別の行で閉じ、次の行を飲み込むとき", repo: sampleRepo({ workingCopy: swallow }) },
+    { name: "作業コピーの訳に単独の CR があるとき", repo: sampleRepo({ workingCopy: loneCR }) },
+    { name: "再生順の見出しに使う値に改行があるとき", repo: order },
+  ];
+})();
+
+for (const { name, repo } of shapeCases) {
+  test.describe(name, () => {
+    test.use({ repo });
+
+    test("公開ファイルの形は書き出さずに件数と案内を出し、リポジトリを書き換えない", async ({ page, server }) => {
+      await stubPicker(page);
+      const downloads = [];
+      page.on("download", (d) => downloads.push(d));
+      await openApp(page, server);
+      const before = await snapshot(server.root);
+      await openExport(page);
+
+      await choose(page, "published");
+      const text = msg("ja", "error.export_unsafe_shape", { count: 1 });
+      await expect(exportState(page)).toHaveText(text);
+      await expect(exportState(page)).toHaveClass(BAD);
+      // 画面に通す指定は無い。正しい複数行の値なら dwloc publish のレコード単位の指定
+      // （<ロケール>:<key>）で書く、と案内する。
+      expect(text).toContain("dwloc publish --accept-multiline <ロケール>:<key>");
+      await waitExportSettled(page);
+      expect((await pickerLog(page)).calls).toHaveLength(0);
+      expect(downloads).toHaveLength(0);
+      expectSameTree(before, await snapshot(server.root));
+
+      // 止めるのは publish の形だけで、いま編集しているファイルはそのまま出せる。
+      await choose(page, "working");
+      await expect(exportState(page)).toHaveText(msg("ja", "ui.export_done"));
+      const log = await pickerLog(page);
+      expect(log.written[0].equals(await server.readRoot(workingRel))).toBe(true);
+    });
+  });
+}
 
 test.describe("ゲームに入っている翻訳がコミット済みより古いとき", () => {
   // ゲーム側の公開ファイル（作業コピーの土台）の hello が古い訳のまま。その上に建つ

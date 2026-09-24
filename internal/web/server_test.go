@@ -516,7 +516,7 @@ func TestPanicBecomes500WithoutContent(t *testing.T) {
 	if got := rec.Header().Get("Content-Security-Policy"); got != contentSecurityPolicy {
 		t.Errorf("500 に守りのヘッダーが付いていない: %q", got)
 	}
-	if !strings.Contains(log.String(), "dwloc edit: panic /api/lines") {
+	if !strings.Contains(log.String(), `dwloc edit: panic "/api/lines"`) {
 		t.Errorf("記録にパスが無い: %q", log.String())
 	}
 	for _, secret := range []string{jaVanished, "secret-token", "locale=ja"} {
@@ -539,7 +539,7 @@ func TestLoggerRecordsAnUnwrittenResponseAs200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d", rec.Code)
 	}
-	if !strings.HasPrefix(file.String(), "dwloc edit: GET /quiet 200 ") {
+	if !strings.HasPrefix(file.String(), `dwloc edit: GET "/quiet" 200 `) {
 		t.Errorf("記録が %q", file.String())
 	}
 	if strings.Contains(file.String(), "secret-token") {

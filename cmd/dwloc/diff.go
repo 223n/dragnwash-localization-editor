@@ -13,7 +13,7 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--raw-csv] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
@@ -63,6 +63,12 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         判定しなかったカテゴリ（作業コピーが無いときの未翻訳など）は
         行が無いだけになるので、そのカテゴリと理由を標準エラーへ
         理由ごとに1行で書きます。
+        先頭が = + - @ タブ CR の値は、表計算が式として読まないように
+        頭に ' を付けます（-では、また → '-では、また）。
+  --raw-csv
+        --format csv の値に ' を付けず、そのまま書きます。機械と
+        突き合わせるときに使います。表計算で開くと式として読まれる
+        ことがあります。--format csv と一緒に使います。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
@@ -85,6 +91,21 @@ git が無い、git リポジトリでない、再生順の履歴が1版しか�
 再生順に台詞ID (line_id) が無いときは「台本に無い台詞ID行」も保留し、
 --format csv では同じく標準エラーへ書きます。
 
+公開ファイル・作業コピー・layout_risks.csv・data/script_order.csv のどれかで、
+開いた引用符がファイルの終わりまで閉じないときは、止まらずにそのファイルを
+読まずに続けます。publish と同じくファイル全体を解釈して読むので、そのままでは
+開いた行から後ろがすべて1つの値になるからです。そのファイルに依るカテゴリは
+「判定していません（作業コピーの N行目の引用符が閉じません）」と書き、
+どのファイルの何行目かを標準エラーへ書いて、終了コードを 1 にします。
+公開ファイルならそのロケールのすべてのカテゴリと、ほかのロケールの
+「他のロケールにあって無い行」「どのロケールにも訳が無い行」、
+作業コピーなら作業コピーを要るカテゴリ、layout_risks.csv なら
+「はみ出しの恐れがある行」、data/script_order.csv ならすべてのカテゴリが
+判定されません。
+data/level_flow.csv の閉じない引用符は、diff が見出しの文言を使わないので
+判定を止めず、終了コードも変えません。publish と画面の書き出しはこのファイルで
+止まるので、どの行かを標準エラーへ1行だけ書きます。
+
 data/script_order.csv が更新されたあと、dwloc publish より先に走らせてください。
 publish は再生順に置けなかった行の section 列を 'UI' に書き直すため、
 「台本から消えた行」の根拠が publish 後には弱くなります。
@@ -92,7 +113,8 @@ publish は再生順に置けなかった行の section 列を 'UI' に書き直
 
 終了コード:
   0   要確認なし（未翻訳が何件残っていても 0）
-  1   要確認あり（--strict のときは要作業も数えます）
+  1   要確認あり（--strict のときは要作業も数えます）、または
+      閉じない引用符で読めず、判定していないファイルがある
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、
       CSV のヘッダーに列名の重複がある、など）
 `
@@ -112,7 +134,7 @@ const (
 
 // runDiff は公開ファイルと再生順を突き合わせて報告します。
 func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("dwloc diff", stderr)
+	fs := newFlagSet("dwloc diff")
 	root := fs.String("root", defaultRoot, "翻訳リポジトリのルート")
 	game := fs.String("game", defaultGame, gameFlagUsage)
 	var locales localeList
@@ -122,15 +144,22 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	all := fs.Bool("all", false, "参考のカテゴリも一覧にする")
 	limit := fs.Int("limit", diffLimitDefault, "1カテゴリに並べる上限（0 で全件）")
 	format := fs.String("format", diffFormatText, "出力の形式（text または csv）")
+	rawCSV := fs.Bool("raw-csv", false, "csv の値に ' を付けずにそのまま書く")
 	strict := fs.Bool("strict", false, "要作業があるときも終了コードを1にする")
 	if code, ok := parseFlags(fs, args, diffUsage, stdout, stderr); !ok {
 		return code
 	}
 	if fs.NArg() > 0 {
-		return unexpectedArg(fs.Arg(0), diffUsage, stderr)
+		return unexpectedArg(fs, stderr)
 	}
 	if *format != diffFormatText && *format != diffFormatCSV {
 		fmt.Fprintf(stderr, "dwloc: --format は %s か %s です: %s\n", diffFormatText, diffFormatCSV, *format)
+		return exitError
+	}
+	if *rawCSV && *format != diffFormatCSV {
+		// text 形式には効かない指定です。黙って受けると、付けたつもりで効いて
+		// いない事故になります。
+		fmt.Fprintln(stderr, "dwloc: --raw-csv は --format csv と一緒に使います")
 		return exitError
 	}
 	if *limit < 0 {
@@ -161,10 +190,22 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
 			strings.Join(repo.EmptyLocales, ", "))
 	}
-	if len(repo.Order.Entries) == 0 || !hasOrderKeys(repo) {
+	if repo.LevelFlowUnclosed > 0 {
+		// 見出しの表の閉じない引用符は、diff の判定に使わないので終了コードを変えません
+		// （決まったことの 18）。それでも publish と画面の書き出しはこのファイルで止まる
+		// （形の確かめ）ので、diff が通ったあとで初めて気づくことにならないよう、1行だけ
+		// 伝えます。再生順の警告より先に出すのは、上の行と同じ理由です。
+		fmt.Fprintf(stderr,
+			"dwloc: 警告: %s の %d行目で開いた引用符がファイルの終わりまで閉じません。diff は見出しの文言を使わないので判定は変えませんが、publish と画面の書き出しはこのファイルで止まります。\n",
+			displayPath(*root, repo.LevelFlowPath), repo.LevelFlowUnclosed)
+	}
+	if repo.OrderUnclosed == 0 && (len(repo.Order.Entries) == 0 || !hasOrderKeys(repo)) {
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
 		// どれも成り立ちません。internal/diff はその判定を止めますが、
 		// 止めたこと自体は csv 形式の出力に出ないので、ここで必ず伝えます。
+		//
+		// 閉じない引用符で読めなかったときは、下の warnUnclosed がどの行かを
+		// 添えて伝えます。こちらでも書くと、同じ理由を2通りの言い方で並べます。
 		fmt.Fprintf(stderr,
 			"dwloc: 警告: %s から再生順を読めません。台本から消えた行などは判定しません。\n",
 			displayPath(*root, repo.OrderPath))
@@ -184,6 +225,11 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	// 報告だけを絞ります。比較の母集合は Compare が常に全ロケールから作ります。
 	report := diff.Compare(repo, locales)
 
+	// 閉じない引用符で読めなかったファイルは、形式に関わらず標準エラーへ書きます。
+	// text 形式の本文もロケールごとに書きますが、--locale で絞ると、ほかのロケールの
+	// 公開ファイルが原因で止めたカテゴリの、原因のファイルが本文に出ません。
+	warnUnclosed(*root, report, stderr)
+
 	if *format == diffFormatCSV {
 		// csv には「判定していません」が出ません。行が無いことと、判定して
 		// いないことが見分けられないので、判定を保留したカテゴリは必ず
@@ -195,14 +241,24 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		warnHeldCategories(report, stderr)
 	}
 
+	// 報告の本文は原文と訳を含むので、記録（logs/dwloc_<日付>.log）へは写しません。
+	// csv は1行も写さず、text は見出しと件数と理由の行だけを写します（record.go）。
 	if *format == diffFormatCSV {
-		if err := report.WriteCSV(stdout); err != nil {
+		body := newUnrecorded(stdout, nil)
+		defer body.Close()
+		write := report.WriteCSV
+		if *rawCSV {
+			write = report.WriteCSVRaw
+		}
+		if err := write(body); err != nil {
 			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
 			return exitError
 		}
 	} else {
+		body := newUnrecorded(stdout, diffHeadingLine)
+		defer body.Close()
 		opt := diff.TextOptions{Root: *root, All: *all, Limit: *limit}
-		if err := report.WriteText(stdout, opt); err != nil {
+		if err := report.WriteText(body, opt); err != nil {
 			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
 			return exitError
 		}
@@ -218,8 +274,13 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 // 赤くすると誰も見なくなります。--strict はその判断を CI 側へ預けるための指定で、
 // 未翻訳だけではなく要作業すべてを数えます（片方だけを数えると、どちらが
 // 効いているのかを使う側が覚えていなければならなくなるため）。
+//
+// 閉じない引用符で読めなかったファイルがあれば 1 にします（決まったことのそのほか 6）。
+// そのファイルに依るカテゴリは判定していないので、要確認が1件も無くても
+// 「要確認なし」とは言えません。0 で終わると、CI は直すべきファイルを見逃します。
+// 2 にしないのは、実行そのものは最後まで済み、報告も出ているからです。
 func diffExitCode(report *diff.Report, strict bool) int {
-	if report.Status() == diff.StatusReview {
+	if report.Status() == diff.StatusReview || len(report.Unclosed) > 0 {
 		return exitProblems
 	}
 	if strict && report.CountByStatus(diff.StatusTodo) > 0 {
@@ -278,6 +339,24 @@ func diffErrorText(root string, err error) string {
 		return fmt.Sprintf("%s: %v", displayPath(root, fileErr.Path), fileErr.Err)
 	}
 	return err.Error()
+}
+
+// warnUnclosed は、閉じない引用符で読めなかったファイルを、どの行で開いたかと
+// 直し方を添えて標準エラーへ書きます。
+//
+// どのカテゴリを止めたかは書きません。text 形式は本文の「判定していません（…）」が、
+// csv 形式は warnHeldCategories が、カテゴリごとに書きます。ここはどのファイルの
+// 何行目を直せばよいかを、パスで言うための行です。internal/diff の理由の文は
+// パスを持たない（表示の基準のルートを知らない）ので、パスはここで出します。
+func warnUnclosed(root string, report *diff.Report, stderr io.Writer) {
+	for _, u := range report.Unclosed {
+		fmt.Fprintf(stderr,
+			"dwloc: 警告: %s の %d行目で開いた引用符がファイルの終わりまで閉じないので、読みませんでした。そのファイルに依るカテゴリは判定しません。\n",
+			displayPath(root, u.Path), u.Line)
+	}
+	if len(report.Unclosed) > 0 {
+		fmt.Fprintln(stderr, "dwloc:       引用符を閉じるか取り除いてください。値の中の \" は \"\" と2つ重ねて書きます。")
+	}
 }
 
 // warnHeldCategories は、判定を保留したカテゴリを標準エラーへ書きます。

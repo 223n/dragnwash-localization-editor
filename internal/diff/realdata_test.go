@@ -723,10 +723,11 @@ func nodeKey(section, node string) string {
 // 引き継ぎ元は無いのが正しい。
 func insertOrderRow(t *testing.T, csvBytes []byte) []byte {
 	t.Helper()
-	rows, err := csvfile.ReadPowerShellRows(csvBytes)
+	f, err := csvfile.ReadPowerShell(csvBytes)
 	if err != nil {
 		t.Fatalf("再生順を読めない: %v", err)
 	}
+	rows := f.Rows()
 	if len(rows) == 0 {
 		t.Fatal("再生順が空")
 	}

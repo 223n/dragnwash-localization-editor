@@ -1,11 +1,13 @@
 package publish
 
 import (
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -46,8 +48,27 @@ func TestCheckLoss(t *testing.T) {
 			t.Errorf("理由が %q", got[0].Why.ID)
 		}
 		// 行番号はいまの公開ファイルのもの。ヘッダーが1行目なので2行目。
-		if got[0].Line != 2 {
-			t.Errorf("行番号が %d", got[0].Line)
+		if got[0].Line != 2 || got[0].EndLine != 2 {
+			t.Errorf("行番号が %d〜%d", got[0].Line, got[0].EndLine)
+		}
+	})
+
+	t.Run("行をまたぐ訳は範囲と印で出す", func(t *testing.T) {
+		// 全体を解釈して読むので、行をまたぐ訳も1つの行として突き合わせる。行番号は
+		// 開始行を主に範囲で持ち（決まったことのそのほか 3）、訳の先頭の改行は
+		// 見える印に置き換える。
+		current := HeaderLine + "\n" + keyA + ",UI,,,UI,\"いち\r\nに\"\n" + keyB + ",UI,,,UI,b\n"
+		next := publishedCSV([2]string{keyB, "b"})
+
+		got, err := CheckLoss("ja", []byte(current), []byte(next))
+		if err != nil {
+			t.Fatalf("CheckLoss: %v", err)
+		}
+		if len(got) != 1 || got[0].Key != keyA || got[0].Line != 2 || got[0].EndLine != 3 {
+			t.Fatalf("範囲が違う: %+v", got)
+		}
+		if got[0].Head != "いち␍↵に" {
+			t.Errorf("訳の先頭 = %q、改行を印にしていない", got[0].Head)
 		}
 	})
 
@@ -361,6 +382,8 @@ func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
 		working string
 		// wantLost は失われると報せるキー。空なら書き出してよい。
 		wantLost []string
+		// wantUnclosed は、組み立てそのものが閉じない引用符の誤りで止まることを期待するか。
+		wantUnclosed bool
 	}{
 		{
 			name:     "長さ0",
@@ -378,11 +401,14 @@ func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
 			wantLost: []string{keyB, keyC},
 		},
 		{
-			// source_en と translation が1つの列名に融合し、translation 列を
-			// 引けなくなる。全行が「訳が空」と見なされて落ちる。
-			name:     "ヘッダーの引用符が閉じていない",
-			working:  strings.Replace(whole, ",source_en,", `,"source_en,`, 1),
-			wantLost: []string{keyA, keyB, keyC},
+			// 行単位で読んでいたときは、source_en と translation が1つの列名に融合し、
+			// translation 列を引けなくなって、全行が「訳が空」と見なされて落ちていた
+			// （doc.go の実測表）。全体を解釈すると、ヘッダーがファイルの終わりまでを
+			// 飲み込むので、読み手が閉じない引用符の誤りを返し、組み立てそのものが止まる。
+			// cmd/dwloc と画面の書き出しは、その前に形の確かめ（CheckTargetShape）で止める。
+			name:         "ヘッダーの引用符が閉じていない",
+			working:      strings.Replace(whole, ",source_en,", `,"source_en,`, 1),
+			wantUnclosed: true,
 		},
 		{
 			name:     "公開ファイルにある行の訳を1つ空にした",
@@ -410,6 +436,13 @@ func TestCheckTargetLossCatchesABrokenWorkingCopy(t *testing.T) {
 				t.Fatalf("入力が作業コピーになっていない: %+v", targets)
 			}
 			out, _, err := BuildTarget(nil, targets[0])
+			if tt.wantUnclosed {
+				var unclosed *csvfile.UnclosedQuoteError
+				if !errors.As(err, &unclosed) || unclosed.Line != 1 {
+					t.Errorf("組み立てが閉じない引用符で止まらない: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("BuildTarget: %v", err)
 			}

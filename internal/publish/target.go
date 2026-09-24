@@ -2,11 +2,14 @@ package publish
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
 )
 
@@ -180,22 +183,34 @@ func WorkingPath(root, game, locale string) string {
 	return filepath.Join(base, TranslationsDir, DiscoveredDir, locale+WorkingSuffix)
 }
 
+// ScriptOrderPath は root 配下の再生順（data/script_order.csv）のパスを返す。
+// ファイルが無くても値を返す。
+func ScriptOrderPath(root string) string {
+	return filepath.Join(root, dataDir, scriptOrderFile)
+}
+
+// LevelFlowPath は root 配下の見出しの表（data/level_flow.csv）のパスを返す。
+// ファイルが無くても値を返す。
+func LevelFlowPath(root string) string {
+	return filepath.Join(root, dataDir, levelFlowFile)
+}
+
 // LoadOrder は root 配下の data/script_order.csv と data/level_flow.csv を、
 // 公開CSV生成と同じ読み方で読む（移植仕様 R5 / R6）。
 //
 // どちらのファイルも無くてよい。無ければ空として扱い、エラーにしない。
 // script_order.csv が空なら見出しは一切出ず、全ての行が末尾へ回る。
 //
-// エラーを返すのはヘッダーの列名が重複しているときと、読み取りに失敗したとき。
+// エラーを返すのは、ヘッダーの列名が重複しているとき、閉じない引用符があるとき
+// （csvfile.UnclosedQuoteError）、読み取りに失敗したとき。publish と画面の書き出しは、
+// 閉じない引用符を先に形の確かめ（[CheckOrderShape]）で直し方の案内にして止める。
 func LoadOrder(root string) (*order.Data, error) {
-	orderPath := filepath.Join(root, dataDir, scriptOrderFile)
-	flowPath := filepath.Join(root, dataDir, levelFlowFile)
-
+	orderPath := ScriptOrderPath(root)
 	orderCSV, err := readIfExists(orderPath)
 	if err != nil {
 		return nil, err
 	}
-	flowCSV, err := readIfExists(flowPath)
+	flowCSV, err := readIfExists(LevelFlowPath(root))
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +222,57 @@ func LoadOrder(root string) (*order.Data, error) {
 	// order パッケージは Source を設定しない約束なので、ここで入れる。
 	data.Source = orderPath
 	return data, nil
+}
+
+// UnclosedFile は、開いた引用符がファイルの終わりまで閉じないので読まなかった
+// ファイル1つ。
+type UnclosedFile struct {
+	// Path はそのファイル。
+	Path string
+	// Line は引用符が開いた物理行（1始まり）。
+	Line int
+}
+
+// LoadOrderMarked は [LoadOrder] と同じく読むが、閉じない引用符のあるファイルは
+// 誤りにせず、行の無いファイル（無いときと同じ）として読み、どのファイルの何行目かを
+// 返す。
+//
+// diff のための入口である。diff は閉じない引用符のあるファイルに依る判定だけを
+// 「判定していません」にして報告を続ける（決まったことの 3）。全体を解釈して読むと
+// 引用符が開いた行から後ろが1つの値に崩れるので、そのファイルの行は1つも使わない。
+// 値を半分だけ使うと、どこまでが正しい行かを読み手は決められない。
+//
+// 列名の重複と読み取りの失敗は、[LoadOrder] と同じく誤りにする。
+func LoadOrderMarked(root string) (*order.Data, []UnclosedFile, error) {
+	orderPath := ScriptOrderPath(root)
+	flowPath := LevelFlowPath(root)
+	var unclosed []UnclosedFile
+	read := func(path string) ([]byte, error) {
+		data, err := readIfExists(path)
+		if err != nil {
+			return nil, err
+		}
+		if line := csvfile.SplitSegments(data).UnclosedLine; line > 0 {
+			unclosed = append(unclosed, UnclosedFile{Path: path, Line: line})
+			return nil, nil
+		}
+		return data, nil
+	}
+	orderCSV, err := read(orderPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	flowCSV, err := read(flowPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	data, err := order.LoadPowerShell(orderCSV, flowCSV)
+	if err != nil {
+		return nil, nil, err
+	}
+	data.Source = orderPath
+	return data, unclosed, nil
 }
 
 // BuildTarget は1ターゲット分の入出力ファイルを読み、公開CSVのバイト列を組み立てる。
@@ -224,6 +290,55 @@ func BuildTarget(data *order.Data, t Target) ([]byte, Stats, error) {
 		return nil, Stats{}, err
 	}
 	return Build(data, inputCSV, existingCSV)
+}
+
+// SourceLineEndHint は、原文の CRLF を LF にするとキーが一致する入力の行1つ。
+type SourceLineEndHint struct {
+	// Line と EndLine は入力での物理行の範囲。
+	Line, EndLine int
+	// Key はその行の key 列の値（前後の空白を除いたもの）。
+	Key string
+}
+
+// SourceLineEndHints は、t の入力のうち、訳が入っているのに原文のハッシュが key と
+// 合わずに捨てられる行で、原文の CRLF を LF にすると key と一致するものを返す
+// （決まったことのそのほか 7）。
+//
+// 表計算ソフトなどで作業コピーを保存し直すと、原文（source_en）の中の改行が LF から
+// CRLF に変わることがある。キーは Mod が LF の原文から計算したものなので、合わなく
+// なり、publish はその行を捨てる（R15。上流と同じ）。止めはしないが、新しい訳が
+// 黙って公開されないので、呼び出し側が知らせる。値そのものは直さない。原文を
+// 書き換えて取り込むと、上流の道具と出力が食い違う。
+//
+// 読めないときは誤りを返す。形の確かめを通ったあとで呼ぶ前提なので、閉じない引用符の
+// 誤りはふつう起きない。
+func SourceLineEndHints(t Target) ([]SourceLineEndHint, error) {
+	data, err := os.ReadFile(t.Input)
+	if err != nil {
+		return nil, err
+	}
+	f, err := csvfile.ReadPowerShell(data)
+	if err != nil {
+		return nil, err
+	}
+	var out []SourceLineEndHint
+	for _, r := range f.Records {
+		if r.Get(colTranslation) == "" {
+			continue
+		}
+		if _, how := rowKey(r.Row); how != keyDropped {
+			continue
+		}
+		k := strings.ToLower(strings.TrimSpace(r.Get(colKey)))
+		src := r.Get(colSourceEn)
+		if k == "" || !strings.Contains(src, "\r\n") {
+			continue
+		}
+		if key.For(strings.ReplaceAll(src, "\r\n", "\n")) == k {
+			out = append(out, SourceLineEndHint{Line: r.Line, EndLine: r.EndLine, Key: strings.TrimSpace(r.Get(colKey))})
+		}
+	}
+	return out, nil
 }
 
 // WriteTarget は [BuildTarget] の結果を t.Output へ丸ごと上書き保存する。
@@ -254,22 +369,54 @@ func WriteTarget(data *order.Data, t Target) (Stats, error) {
 //
 // 一時ファイルは出力先と同じディレクトリに作る。os.Rename は別ボリュームへ
 // またげないため、システムの一時ディレクトリを使うと失敗しうる。
+//
+// 出力先がリンクのときは、リンクを残したままリンク先へ書く（元実装の
+// WriteAllText と同じ結果）。リンクをそのまま rename で置き換えると、リンクが
+// 普通のファイルに変わり、訳がリンク先（ゲームのフォルダーなど）へ届かない。
+//
+//   - シンボリックリンクは、たどった先の実体を出力先にする（[resolveLink]）。
+//     一時ファイルも実体のフォルダーに作る。
+//   - ハードリンク（名前が2つ以上あるファイル）は、rename では片方の名前しか
+//     新しくならないので、その場で書き直す（[overwrite]）。書く前に同じ
+//     フォルダーの一時ファイルへ全部を書き切っておき、置き場に同じ大きさを
+//     書けることを確かめてから書く。
+//
+// 権限は、いまあるファイルの値を引き継ぐ。新しいファイルは 0644 で作る。
 func WriteBytes(path string, out []byte) error {
-	dir := filepath.Dir(path)
+	target, err := resolveLink(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	// os.CreateTemp は 0600 で作る。新しいファイルは共有する前提なので、元実装が
+	// 作るファイルと同じ 0644 相当にする。既にあるファイルは、その値を引き継ぐ。
+	// 0600 や 0640 に絞ったファイルを書くたびに広げると、絞った意図が黙って消える
+	// （Windows では無視される）。
+	perm := fs.FileMode(0o644)
+	links := uint64(1)
+	if info, err := os.Stat(target); err == nil {
+		perm = info.Mode().Perm()
+		links = linkCount(target, info)
+	}
+
+	tmp, err := os.CreateTemp(dir, filepath.Base(target)+".tmp*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
 	// 失敗して抜けるときに一時ファイルを残さない。成功時は rename 済みで
-	// 消す相手がいないため、Remove の失敗は無視してよい。
+	// 消す相手がいないため、Remove の失敗は無視してよい。ハードリンクの書き直しが
+	// 途中で失敗したときだけは、書くはずだった中身として残す。
+	keep := false
 	defer func() {
 		tmp.Close()
-		os.Remove(tmpName)
+		if !keep {
+			os.Remove(tmpName)
+		}
 	}()
 
 	if _, err := tmp.Write(out); err != nil {
@@ -283,12 +430,19 @@ func WriteBytes(path string, out []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// os.CreateTemp は 0600 で作る。出力先は共有する前提のファイルなので、
-	// 元実装が作るファイルと同じ 0644 相当にそろえる（Windows では無視される）。
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if links > 1 {
+		touched, err := overwrite(target, out)
+		if err != nil && touched {
+			keep = true
+			return fmt.Errorf("%s を書き直す途中で失敗しました。書くはずだった中身は %s に残しました: %w",
+				target, tmpName, err)
+		}
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, target)
 }
 
 // readIfExists はファイルを読む。存在しなければ nil を返しエラーにしない。
