@@ -1130,13 +1130,15 @@ It means "23 lines containing source text or translations are not logged (they w
 With `--verbose`, the same thing is printed on screen as well.
 
 ```text
-10:30:45 === dwloc 0.6.0 edit (windows/amd64) ===
+10:30:45 === dwloc 0.6.0 edit --ui-lang en（windows/amd64）===
 10:30:45 Listening. Open this URL in your browser.
+10:30:45 URL: http://127.0.0.1:52341/?t=***
 10:30:52 dwloc edit: GET "/api/lines" 200 12ms locale=ja lines=1721
-10:31:03 dwloc edit: POST "/api/rows" 200 31ms locale=ja rows=1
+10:31:03 dwloc edit: POST "/api/rows" 200 31ms locale=ja edits=1 saved=1
 ```
 
 It writes only the method, path, status code, duration, locale name and count.  
+The counts are such things as the number of lines read (`lines`), translations sent (`edits`) and translations actually saved (`saved`).  
 The path is wrapped in `"`, with line breaks and the like written as `\n`. Anything past 200 bytes is cut off.  
 Requests that were turned away (`404`) are logged too, so this keeps their paths from adding fake lines or bloating the log.  
 **It does not write the source text or the translation.**  
