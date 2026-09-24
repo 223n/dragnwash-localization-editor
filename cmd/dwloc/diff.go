@@ -150,6 +150,17 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "dwloc: %s\n", diffErrorText(*root, err))
 		return exitError
 	}
+	if len(repo.EmptyLocales) > 0 {
+		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
+		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
+		//
+		// 再生順の警告より先に出します。csv 形式では、再生順の警告のあとに
+		// 判定を保留したカテゴリの行と、字下げした締めの1行が続きます
+		// （warnHeldCategories）。あいだにこの行が挟まると、締めがこの行の
+		// 続きに読めてしまいます。
+		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
+			strings.Join(repo.EmptyLocales, ", "))
+	}
 	if len(repo.Order.Entries) == 0 || !hasOrderKeys(repo) {
 		// 再生順が読めていないと、「再生順に無い」を根拠にするカテゴリが
 		// どれも成り立ちません。internal/diff はその判定を止めますが、
@@ -157,12 +168,6 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr,
 			"dwloc: 警告: %s から再生順を読めません。台本から消えた行などは判定しません。\n",
 			displayPath(*root, repo.OrderPath))
-	}
-	if len(repo.EmptyLocales) > 0 {
-		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
-		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
-		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
-			strings.Join(repo.EmptyLocales, ", "))
 	}
 	if len(repo.Locales) == 0 {
 		// 比較する相手が1つも無い状態です。報告を「0 件」と書いて成功で終わると、

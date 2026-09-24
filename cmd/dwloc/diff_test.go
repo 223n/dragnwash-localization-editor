@@ -1709,3 +1709,42 @@ func TestRunDiffCarryoverHeldWithoutGit(t *testing.T) {
 		t.Errorf("csv 本体に人向けの文面が混ざっている:\n%s", stdout)
 	}
 }
+
+// TestRunDiffCSVClosingLineFollowsHeldWarnings は、csv の標準エラーで、締めの1行
+// （「… の行が無いことは、0 件という意味ではありません」）が、判定を保留した
+// ことを述べる警告のすぐ後に来ることを見る。
+//
+// 締めの1行は字下げして、直前の警告の続きとして読ませている。再生順が無く、
+// 作業コピーとはみ出しの記録はあるときは、保留の理由の行が1つも出ず、再生順の
+// 警告に締めが続く。そこへ「訳が1件もないロケール」の行が挟まると、締めがその
+// 行の続きに読め、どのカテゴリの話なのかが分からなくなる。
+func TestRunDiffCSVClosingLineFollowsHeldWarnings(t *testing.T) {
+	root := makeTree(t, map[string]string{
+		"Translations/ja/strings.csv": diffCleanJA,
+		"Translations/_discovered/ja.working.csv": "key,source_en,translation\n" +
+			diffHelloKey + ",Hello,こんにちは\n",
+		"Translations/_discovered/layout_risks.csv": "source_en,translation,axis,required_px,available_px,ratio,object_path\n" +
+			"Hello,こんにちは,x,240,180,1.33,Canvas/Label\n",
+		"Translations/de/.keep": "",
+	})
+
+	code, stdout, stderr := runCLI("diff", "--root", root, "--format", "csv")
+	if code == exitError {
+		t.Fatalf("終了コード = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
+	closing := -1
+	for i, line := range lines {
+		if strings.Contains(line, "の行が無いことは、0 件という意味ではありません") {
+			closing = i
+		}
+	}
+	if closing < 1 {
+		t.Fatalf("締めの1行が無い:\n%s", stderr)
+	}
+	if prev := lines[closing-1]; !strings.HasPrefix(prev, "dwloc: 警告:") {
+		t.Errorf("締めの1行の直前が、保留を述べた警告ではない: %q\n--- 標準エラー ---\n%s", prev, stderr)
+	}
+	// 訳が1件もないロケールも、並びが変わっただけで伝えている。
+	checkContains(t, "stderr", stderr, []string{"訳が1件もないロケールがあります: de"})
+}
