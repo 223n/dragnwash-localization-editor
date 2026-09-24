@@ -404,6 +404,28 @@ test("見出しは下に出ている行のあるものだけを出し、節や�
   await expect(visibleHeadings(app)).toHaveText([H.level1, H.intro1, H.level2, H.intro2]);
 });
 
+// 条件も検索語も無いときは、画面はファイルの写しである（doc.go「画面に新しい判断を
+// 置かない」）。そのときまで「下に出ている行のある見出しだけ」を当てはめると、節点の末尾に
+// 翻訳者が書いたメモ（7行目）が、どの行も隠れていないのに一覧から消える。絞っていない
+// ときは見出しを全部出し、絞ったときだけ上の決め方にする。
+test("条件も検索語も無いときは、節点の末尾のメモも含めて見出しを全部出す", async ({ app }) => {
+  const all = [H.level1, H.intro1, H.memo, H.outro1, H.level2, H.intro2, H.note, H.ui];
+  await expect(visibleRows(app)).toHaveText(ALL_ROWS);
+  await expect(visibleHeadings(app)).toHaveText(all);
+
+  // 絞ればメモは下に行が無いので隠れ、外せばまた全部出る。
+  await searchBox(app).fill("wonderful");
+  await expect(visibleHeadings(app)).toHaveText([H.level1, H.outro1]);
+  await searchBox(app).fill("");
+  await expect(visibleRows(app)).toHaveText(ALL_ROWS);
+  await expect(visibleHeadings(app)).toHaveText(all);
+
+  await chipBox(app, cat("untranslated")).check();
+  await expect(visibleHeadings(app)).toHaveText([H.level1, H.intro1, H.level2, H.intro2]);
+  await app.locator("#filter-clear").click();
+  await expect(visibleHeadings(app)).toHaveText(all);
+});
+
 // 検索は、打った字を speaker・原文・訳・キーのどれかに含む行を出す（README の表）。
 // 大文字小文字を区別すると、原文の "Soap" を "soap" で探せない。訳は打つたびに変わるので、
 // 保存した訳でも当たらなければならない（setShownText が小文字の控えを更新する）。

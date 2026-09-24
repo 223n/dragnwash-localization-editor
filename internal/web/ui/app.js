@@ -1141,7 +1141,8 @@
 
     見出しは、その下に出ている行があるときだけ出す。深さ（section / node）は
     待ち受けが付けたものを使う。出ている行が1つも無い見出しだけを並べても、
-    読む手がかりにならない。
+    読む手がかりにならない。ただし条件も検索語も無いときは、全部出す（下の
+    everything）。
 
     ここで入力欄を閉じることはしない。閉じる必要が無い。開いている行は
     keepAlways が必ず出すので、入力欄を差し込んだまま行が隠れる道が無い。
@@ -1152,9 +1153,16 @@
     var q = el.search.value.toLowerCase();
     var heads = { section: null, node: null, other: null };
     var shown = 0;
+    /*
+      条件も検索語も無いときは、見出しを全部出す。そのときの一覧はファイルの写しで、
+      行も全部出ている。下の「下に出ている行のある見出しだけ」をそこでも当てはめると、
+      節点の末尾に翻訳者が書いたメモ（どちらの印も無いコメント行）が、次の節点で
+      捨てられて、何も絞っていないのに一覧から消えた。
+    */
+    var everything = state.filter.size === 0 && !q;
     state.items.forEach(function (item) {
       if (item.heading) {
-        setHidden(item.heading, true);
+        setHidden(item.heading, !everything);
         if (item.level === "section") {
           /* 節が変われば、その前の節に属していた見出しはもう関わらない。 */
           heads.node = null;
