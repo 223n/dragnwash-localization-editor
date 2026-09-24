@@ -2,10 +2,16 @@
 // 公開してよい形をしているかを検査する。tools/check-translations.py の移植で、
 // 元実装は CI がすべてのPull Requestで走らせている。
 //
-// 基準は上流の dev ブランチの版。翻訳の Pull Request は dev に向けて出し、
-// CI は dev の check-translations.py で走るため。003ed1e で移植したあと、
+// 基準は上流の dev ブランチの版。003ed1e で移植したあと、
 // f816618（空白だけの行、CSV として読めないとき）、c8fda90（コメントの判定）、
 // cc01bfc（textures/）、912f519（credits.txt）に追いついている。
+//
+// 翻訳者の Pull Request は、これまでどおりフォークから main へ出す（上流 130d57e。
+// dev はメンテナーの作業をためる場所）。そのため Pull Request の CI は main の
+// check-translations.py で走る。main と dev の差は 912f519 の credits.txt の検査
+// だけで、dev は次のリリースで main に入る。ここではその版に先に合わせた。
+// 結果として、credits.txt の状態語の1点だけは main の CI より厳しい。main の CI が
+// 通す credits.txt を、ここでは問題として報告することがある。
 //
 // このパッケージが守りたいものは2つある。
 //

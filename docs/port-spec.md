@@ -777,7 +777,9 @@ return 0
 
 この節だけは抽出結果ではない。003ed1e のあとに上流の`tools/check-translations.py`へ入った変更を、上流の dev（upstream/dev 9249232。origin/dev 63816a0 と`tools/`は同じ）で読み、Python 3.12.3（上流の CI と同じ Ubuntu 24.04）と 3.14.6 で実測して反映した。上の R1〜R24 や境界条件と食い違う場合は、こちらが正しい。
 
-基準を main ではなく dev に置くのは、翻訳の Pull Request が dev に向けて出され、その CI が dev の版で走るため。dev にだけある変更は 912f519（credits.txt）の1つで、残りは main にも入っている。
+基準は main ではなく dev に置いた。dev は次のリリースで main に入るので、その版に先に合わせておくためである。翻訳者の Pull Request は、これまでどおりフォークから main へ出す（上流 130d57e、2026-09-23。dev はメンテナーの作業をためる場所）。そのため Pull Request の CI は main の版で走る。main と dev の`tools/check-translations.py`の差は 912f519（credits.txt の状態語）だけで、ほかの変更は main にも入っている。
+
+したがって dwloc は、credits.txt の1点だけ main の CI より厳しい。main の CI が通す credits.txt を、dwloc は問題として報告することがある。いまの影響は小さい。upstream/main 56420df には credits.txt が1件も無く（upstream/dev は16件）、上流 dev の CONTRIBUTING は credits.txt をメンテナーが更新するものとしている。
 
 判定が割れる入力は、`internal/validate/upstream_test.go`に表として固定した。環境変数`DWLOC_UPSTREAM_CHECKER`に上流のスクリプトを渡すと、上流を実際に走らせて突き合わせる。
 

@@ -17,7 +17,9 @@ import (
 // 設定されていて Python が見つかれば、表の入力ごとに上流を実際に走らせ、
 // 報告が表の upstream（無ければ want）と一致するかも確かめる。設定されていなければ
 // dwloc の側だけを確かめる。CI には上流のリポジトリも Python も無いので、
-// 飛ばせることが必須。上流の PR の CI は dev の版で走るので、dev の版を渡す。
+// 飛ばせることが必須。dwloc は上流の dev の版に合わせてあるので、dev の版を渡す。
+// 翻訳者の PR の CI が走る main の版とは、credits.txt の検査の有無だけが違う
+// （main の版を渡すと credits.txt の入力だけが割れる）。
 //
 //	git -C <上流> show upstream/dev:tools/check-translations.py > check-translations.py
 //	DWLOC_UPSTREAM_CHECKER=$PWD/check-translations.py go test ./internal/validate -run Upstream

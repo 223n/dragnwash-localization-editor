@@ -13,6 +13,9 @@ const validateUsage = `使い方: dwloc validate [--root <ディレクトリ>]
 <ルート>/Translations 配下の公開ファイルを検証します。
 tools/check-translations.py（翻訳リポジトリの dev ブランチの版）と同じ検査を行い、
 同じ文面を標準出力へ書きます。
+翻訳の Pull Request は main へ出すので、その CI は main の版で走ります。
+main の版は credits.txt を見ないため、その1点だけ dwloc validate のほうが
+厳しくなります。dev の版は次のリリースで main に入ります。
 
 検査する内容:
   - Translations/_discovered 配下がコミットされていないこと
