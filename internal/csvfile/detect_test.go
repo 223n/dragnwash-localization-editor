@@ -92,6 +92,18 @@ func TestFindSwallows(t *testing.T) {
 			text: "key,section,translation\nk,s,\"a\nx,y\nz,w,v,u\"\n",
 		},
 		{
+			// 単独で読むとコメントになる行は、レコードを飲み込んだ証拠にならない。
+			// 読んでしまうと、この行は区切りの数がヘッダーと同じ（2つ）なので当たる。
+			name: "値の中の '#' の行は見ない",
+			text: "source_en,translation\none,\"いち\n# a, b\"\n",
+		},
+		{
+			// 空行と空白だけの行も同じ。列が1つのヘッダーでは、読んでしまうと区切りの数が
+			// 同じ（1つ）になって当たる。
+			name: "値の中の空行と空白だけの行は見ない",
+			text: "translation\n\"a\n\n  \nb,c\"\n",
+		},
+		{
 			// 閉じない引用符は UnclosedQuoteError が先に止めるので、飲み込みとしては見ない。
 			name: "閉じない引用符は見ない",
 			text: "key,translation\nk,\"a\n0123456789abcdef,b\n",
