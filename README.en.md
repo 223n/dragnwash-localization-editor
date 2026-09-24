@@ -231,10 +231,13 @@ You do not need a command prompt.
 To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
-That is why the tab does nothing when you come back after stepping away.  
+That is why translations are not saved when you come back after stepping away.  
 The black window shows `No activity for 30m. Stopping.`.  
+If you type a translation in the old tab, the top bar says it cannot reach the server, and the translations that are not in the file yet are listed.  
+The list shows them as plain text, so you can select and copy them.  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
-Start it again and open the new `URL` shown in the black window.  
+After copying them, start it again and open the new `URL` shown in the black window.  
+On the new screen, typing the key into the search box brings up the row.  
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
 The default is there so that no translator is left with a server nobody can reach still listening on their PC.
 
@@ -940,6 +943,17 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
+
+Saving also stops when the screen cannot reach the server.
+
+| What the screen says | What happened | Retrying |
+| ---- | ---- | ---- |
+| Cannot reach the server | `dwloc` has stopped (no activity for a while, or the black window was closed) | Keeps retrying. If it gets through, the translation goes in |
+
+Then the top bar lists the translations that are not in the file yet.  
+It shows the line number, the key and the translation, so copy them down before you restart.  
+After a restart the `URL` changes, and the old tab can no longer send them.  
+On the new screen, typing the key into the search box brings up the row.
 
 Rows with an unsaved translation, rows that could not be saved, and the row whose input box is currently open are not hidden even when they do not match the conditions.  
 Hiding them would make the row you need to fix, and the row you are touching, vanish from the screen.

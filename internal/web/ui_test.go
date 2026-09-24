@@ -161,7 +161,8 @@ func TestAlertsStayOnScreen(t *testing.T) {
 	css := uiSource(t, "ui/app.css")
 
 	inside := topRegion(t, html)
-	for _, want := range []string{`id="message"`, `id="conflict"`, `id="orphans"`} {
+	// unsent は、まだファイルに入っていない訳（待ち受けに届かないときに写すための一覧）。
+	for _, want := range []string{`id="message"`, `id="conflict"`, `id="orphans"`, `id="unsent"`} {
 		if !strings.Contains(inside, want) {
 			t.Errorf("%s が貼り付ける一帯の外にある。行の途中では見えなくなる", want)
 		}
@@ -497,7 +498,7 @@ func TestDiscardAsksAfterSending(t *testing.T) {
 	if ld < 0 {
 		t.Fatal("load が無い")
 	}
-	fail := strings.Index(js[ld:], ".catch(function ()")
+	fail := strings.Index(js[ld:], ".catch(function (err)")
 	if fail < 0 || !strings.Contains(js[ld+fail:ld+fail+800], "stopHolding(holding)") {
 		t.Error("読み込みに失敗したときに、止めていた送り直しを戻していない")
 	}
@@ -1086,7 +1087,7 @@ func TestLocaleChangeClearsTheFinder(t *testing.T) {
 	if load < 0 {
 		t.Fatal("load が resetFinder を受けていない")
 	}
-	fail := strings.Index(js[load:], ".catch(function ()")
+	fail := strings.Index(js[load:], ".catch(function (err)")
 	ok := strings.Index(js[load:], "clearFinder();")
 	if ok < 0 {
 		t.Fatal("load が clearFinder を呼んでいない")

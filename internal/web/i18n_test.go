@@ -136,18 +136,23 @@ func TestSaveFailedDetailDoesNotAdviseReloading(t *testing.T) {
 		"ja": {"読み直してください"},
 		"en": {"or reload"},
 	}
+	// 待ち受けに届かないとき（ui.unreachable）の案内も同じ。読み直しでは直らず、
+	// 読み直せば送れていない訳が消える。
+	keys := []string{"ui.save_failed_detail", "ui.unreachable"}
 	for lang, bad := range advice {
 		cat := c.byLang[lang]
 		if cat == nil {
 			t.Fatalf("%s の目録が無い", lang)
 		}
-		text := cat.Messages["ui.save_failed_detail"]
-		if text == "" {
-			t.Fatalf("%s.json に ui.save_failed_detail が無い", lang)
-		}
-		for _, phrase := range bad {
-			if strings.Contains(text, phrase) {
-				t.Errorf("%s の ui.save_failed_detail が読み直しを勧めている（%q）: %q", lang, phrase, text)
+		for _, key := range keys {
+			text := cat.Messages[key]
+			if text == "" {
+				t.Fatalf("%s.json に %s が無い", lang, key)
+			}
+			for _, phrase := range bad {
+				if strings.Contains(text, phrase) {
+					t.Errorf("%s の %s が読み直しを勧めている（%q）: %q", lang, key, phrase, text)
+				}
 			}
 		}
 	}

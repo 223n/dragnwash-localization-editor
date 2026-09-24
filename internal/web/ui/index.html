@@ -102,6 +102,8 @@
 
   export-state は例外として足した。ふだんは空で高さが0になり、中身が入るのは
   翻訳者が書き出しを押した直後だけである（#export-menu の注記）。
+  unsent（まだファイルに入っていない訳）も例外で、保存が止まっているときにしか
+  出ない（下の #unsent の注記）。
 -->
 <div class="top">
   <header class="bar">
@@ -263,6 +265,24 @@
       <span id="orphans-title"></span>
     </p>
     <ul id="orphans-list" class="orphans-list"></ul>
+  </section>
+
+  <!--
+    まだファイルに入っていない訳。保存が待ち受けに届かないとき（dwloc が時間切れで
+    終わったあとなど）にだけ出す（app.js の renderUnsent）。起動し直すと URL が変わり、このタブの訳は新しい
+    待ち受けへ送れないので、翻訳者が写せるように字として並べる。見た目は行き先の
+    無い訳（#orphans）と同じにする。どちらも「画面の中にしか無い訳」だからである。
+
+    帯へ入れるものを増やすと競合の引き止めが押し出される（上の注記）が、これは
+    保存が止まっているときにしか出ない。引き止めは帯の先頭に出る（#conflict の order）
+    ので、両方が出ても引き止めのボタンは押せる。
+  -->
+  <section id="unsent" class="orphans" hidden>
+    <p class="lead">
+      <svg class="icon" aria-hidden="true"><use href="#i-triangle-exclamation"/></svg>
+      <span id="unsent-title"></span>
+    </p>
+    <ul id="unsent-list" class="orphans-list"></ul>
   </section>
 </div>
 

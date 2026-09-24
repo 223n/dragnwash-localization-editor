@@ -140,7 +140,11 @@
     keysFold: document.getElementById("keys-fold"),
     orphans: document.getElementById("orphans"),
     orphansTitle: document.getElementById("orphans-title"),
-    orphansList: document.getElementById("orphans-list")
+    orphansList: document.getElementById("orphans-list"),
+    /* まだファイルに入っていない訳の一覧（renderUnsent を見よ）。 */
+    unsent: document.getElementById("unsent"),
+    unsentTitle: document.getElementById("unsent-title"),
+    unsentList: document.getElementById("unsent-list")
   };
 
   /*
@@ -165,6 +169,10 @@
                     保存の応答が「もう画面のものではない」と分かるようにする。
     state.saveError 要求そのものが落ちているか（届かない、404、503）。行ごとの
                     理由（state.failed）とは別に持つ。
+    state.stall     保存がどう止まっているか。"unreachable" は待ち受けに届かない
+                    （dwloc が終わったあとなど。送り直しは続ける）。止まって
+                    いなければ null。立っているあいだは、まだファイルに入って
+                    いない訳を一覧に並べる（renderUnsent）。
     state.inflight  いま送っている訳（行番号 → 値）。送っていなければ null。
                     返るまでのあいだ、その行の「ファイルの値」は entry.saved では
                     なくこちらになる見込みなので、onInput が未保存かどうかを決める
@@ -231,6 +239,7 @@
     switching: null,
     saving: false,
     saveError: false,
+    stall: null,
     inflight: null,
     sending: null,
     asking: 0,
@@ -523,7 +532,14 @@
     el.message.replaceChildren(ja, " ", en);
   }
 
-  /* 取りにいく先は同じ生成元だけ。相対のパスしか書かない。 */
+  /*
+    取りにいく先は同じ生成元だけ。相対のパスしか書かない。
+
+    待ち受けに届かなかった（fetch そのものが投げた。待ち受けが終わっていて接続を
+    拒まれた、など）ときは、unreachable の印を付けて投げる。応答が返った失敗
+    （404、500 など）と分けるためである。届かないときに「読み直してください」と
+    言っても、読み直しも届かない（load を見よ）。
+  */
   function getJSON(path) {
     return fetch(path, {
       credentials: "same-origin",
@@ -533,6 +549,10 @@
         throw new Error(String(res.status));
       }
       return res.json();
+    }, function () {
+      var err = new Error("unreachable");
+      err.unreachable = true;
+      throw err;
     });
   }
 
@@ -543,6 +563,9 @@
 
     状態コードで投げ分けない。409 も 422 も本文に理由が入っているので、
     呼び出し側が本文ごと受け取って扱う。
+
+    待ち受けに届かなかった（fetch そのものが投げた）ときも投げず、状態コード 0 で
+    返す。応答が返った失敗（503 など）と分けて扱うためである（onSaved を見よ）。
   */
   function postJSON(path, body) {
     return fetch(path, {
@@ -563,6 +586,8 @@
           return { status: res.status, body: null };
         }
       );
+    }, function () {
+      return { status: 0, body: null };
     });
   }
 
@@ -599,6 +624,7 @@
     el.conflictKeepLabel.textContent = t("ui.conflict_keep_mine");
     el.conflictTakeLabel.textContent = t("ui.conflict_take_file");
     el.orphansTitle.textContent = t("ui.orphans_title");
+    el.unsentTitle.textContent = t("ui.unsent_title");
     el.filterLabel.textContent = t("ui.filter");
     el.filterClearLabel.textContent = t("ui.filter_clear");
     el.searchLabel.textContent = t("ui.search");
@@ -1748,10 +1774,12 @@
           ので、「保存できません（もう一度試しています）」を下ろす。下ろさないと、
           閉じても何も失われないのに、翻訳者は存在しない失敗を直しにいく。
           scheduleRetry の早い戻りと同じ扱いで、1行ずつの理由（state.failed）は
-          そちらの表示に任せる。
+          そちらの表示に任せる。届かないの印も下ろし、まだファイルに
+          入っていない訳の一覧も閉じる（保存できない行は、行に理由と訳が出ている）。
         */
         state.saveError = false;
         state.retry = 0;
+        state.stall = null;
         showMessage("");
         updateStatus();
       }
@@ -1802,6 +1830,10 @@
       edits: edits
     })
       .then(function (res) {
+        /*
+          届かなかったときも、ここへ状態コード 0 で来る（postJSON）。扱いは onSaved が
+          状態コードで分ける。
+        */
         state.saving = false;
         if (gen !== state.gen) {
           updateStatus();
@@ -1812,14 +1844,12 @@
       })
       .catch(function () {
         /*
-          届かなかった。未保存の訳はそのまま抱えたままにする。失敗したことは
-          画面に出す（黙って成功したように見せない）。
+          応答を受け止めるところで投げた（応答の形が思っていたものと違う、など）。
+          未保存の訳はそのまま抱えたまま、送り直しへ回す。失敗したことは画面に出す
+          （黙って成功したように見せない）。ここで受け止めるので、送り終わり
+          （state.sending）が投げっぱなしになることは無い。
         */
         state.saving = false;
-        if (gen !== state.gen) {
-          updateStatus();
-          return;
-        }
         state.inflight = null;
         showMessage(t("ui.save_failed_detail"));
         scheduleRetry();
@@ -2079,12 +2109,15 @@
       if (body.current.locale !== state.locale) {
         return;
       }
+      /* 応答が返ったので、待ち受けには届いている。 */
+      state.stall = null;
       onConflict(body);
       return;
     }
     if (res.status === 200) {
       state.retry = 0;
       state.saveError = false;
+      state.stall = null;
       applyResults(body.results || [], sent);
       state.version = body.version;
       showMessage("");
@@ -2109,8 +2142,24 @@
       （編集できない行、書けない値）だけを取り出して、残りは未保存のまま抱える。
     */
     applyRowErrors(body.results || []);
-    showMessage(body.message ? body.message : t("ui.save_failed_detail"));
-    scheduleRetry();
+    if (res.status === 0) {
+      /*
+        待ち受けに届かなかった（postJSON が状態コード 0 で返す）。多くは、操作が無いまま
+        --idle-timeout がたって待ち受けが終わったあとである。以前は 503 と同じく「少し
+        置いてから自動でもう一度送ります」と言い続けたが、起動し直すと URL（ポートと
+        トークン）が変わるので、待ち受けが終わっていれば、この画面の訳は待っても送られ
+        ない。届かないことと起動し直し方を言い、まだファイルに入っていない訳を並べる
+        （renderUnsent）。一時的に届かなかっただけなら届きしだい入るよう、送り直しは
+        続ける。
+      */
+      state.stall = "unreachable";
+      showMessage(t("ui.unreachable"));
+      scheduleRetry();
+    } else {
+      state.stall = null;
+      showMessage(body.message ? body.message : t("ui.save_failed_detail"));
+      scheduleRetry();
+    }
     updateStatus();
   }
 
@@ -2286,6 +2335,51 @@
       el.orphansList.appendChild(row);
     });
     el.orphans.hidden = state.orphans.length === 0;
+  }
+
+  /*
+    まだファイルに入っていない訳を、帯の中の一覧（#unsent）に並べる。保存が止まって
+    いるとき（state.stall。待ち受けに届かない）だけ出す。
+
+    待ち受けが終わったあと（--idle-timeout）は、起動し直すと URL（ポートとトークン）が
+    変わり、このタブの訳は新しい待ち受けへは送れない。翻訳者が手で写すしかないので、
+    行き先の無い訳と同じ形で、字として並べる（選べばそのまま写せる）。行番号とキーを
+    添えるのは、新しい画面でその行を探すためである（検索の欄はキーにも当たる）。
+
+    並べるのは、送り直している訳（state.pending）と、行ごとに断られた訳（state.failed）。
+    どちらも画面の中にしか無い。競合で抱えている訳（state.mine）は並べない。その行に
+    「ファイルの訳 / あなたの訳」が並んでいて、「自分の訳を上に載せる」を選べば未保存へ
+    移ってここに並ぶ。行き先の無い訳は、すぐ上の #orphans に出ている。
+
+    文言は目録から。訳は textContent で入れる（行の中身を innerHTML に渡さない）。
+  */
+  function renderUnsent() {
+    var items = [];
+    if (state.stall) {
+      state.failed.forEach(function (bad, line) {
+        items.push({ line: line, text: bad.value });
+      });
+      state.pending.forEach(function (value, line) {
+        items.push({ line: line, text: value });
+      });
+      items.sort(function (a, b) {
+        return a.line - b.line;
+      });
+    }
+    clear(el.unsentList);
+    items.forEach(function (item) {
+      /* 並べるのは描いてある行の訳だけなので、その行は必ずある。 */
+      var entry = state.rows.get(item.line);
+      var row = li(null, "");
+      row.appendChild(span("note-label", t("ui.unsent_line", { line: item.line }) + " " + entry.key + ": "));
+      var text = span("note-value", item.text);
+      /* 訳なので向きは中身から決めさせる（renderOrphans と同じ）。 */
+      text.dir = "auto";
+      text.lang = state.locale;
+      row.appendChild(text);
+      el.unsentList.appendChild(row);
+    });
+    el.unsent.hidden = items.length === 0;
   }
 
   /*
@@ -2532,6 +2626,13 @@
   };
 
   function updateStatus() {
+    /*
+      まだファイルに入っていない訳の一覧も、ここで描き直す。保存の状態が変わる
+      ところ（打つ、送る、応答を受ける）はどれもここを通るので、一覧は打った訳と
+      いつも同じになる。下の早い戻りより前に置く。文が同じ「未保存 1 件」のままでも、
+      並べる訳は1字ごとに変わる。
+    */
+    renderUnsent();
     var text = t("ui.save_clean");
     var kind = "clean";
     if (state.mine) {
@@ -2969,6 +3070,8 @@
         state.failed = new Map();
         state.mine = null;
         state.orphans = [];
+        /* 読めたので待ち受けには届いている。抱えている訳も片付いた。 */
+        state.stall = null;
         /* 捨てると答えた訳は、ここで捨て終わった。送らない印も倒す。 */
         if (state.discarding === holding) {
           state.discarding = null;
@@ -2985,7 +3088,7 @@
         syncLocale();
         syncBusy();
       })
-      .catch(function () {
+      .catch(function (err) {
         /*
           読めなかったので何も捨てていない。捨てると答えた印を倒し、送り直しへ戻す。
           あとから別の読み込みが始まっていても同じにする（理由は上の .then の注記）。
@@ -3019,7 +3122,17 @@
         if (focused !== null) {
           openEditor(focused);
         }
-        showMessage(t("ui.load_failed"));
+        if (err.unreachable) {
+          /*
+            待ち受けに届かなかった（getJSON の印）。「読み直してください」と言っても、
+            読み直しも届かない。保存が届かなかったときと同じ案内を出し、まだファイルに
+            入っていない訳を並べる（renderUnsent。下の updateStatus が描く）。
+          */
+          state.stall = "unreachable";
+          showMessage(t("ui.unreachable"));
+        } else {
+          showMessage(t("ui.load_failed"));
+        }
         updateStatus();
       });
   }
