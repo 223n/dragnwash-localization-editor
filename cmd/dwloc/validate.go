@@ -14,8 +14,10 @@ const validateUsage = `使い方: dwloc validate [--root <ディレクトリ>]
 tools/check-translations.py（翻訳リポジトリの dev ブランチの版）と同じ検査を行い、
 同じ文面を標準出力へ書きます。
 翻訳の Pull Request は main へ出すので、その CI は main の版で走ります。
-main の版は credits.txt を見ないため、その1点だけ dwloc validate のほうが
-厳しくなります。dev の版は次のリリースで main に入ります。
+main と dev の版の差は credits.txt の検査だけで、その分 dwloc validate のほうが
+厳しくなります。上流の不具合を写していない入力（コメント行の引用符など）でも、
+dwloc validate だけが問題を報告することがあります。上流はこれまで dev を
+まとめて main へ入れてきたので、dev の版は次のリリースで main に入る見込みです。
 
 検査する内容:
   - Translations/_discovered 配下がコミットされていないこと

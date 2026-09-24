@@ -441,7 +441,7 @@ func TestPythonSuffix(t *testing.T) {
 		"..png":  ".png",
 		"...png": ".png",
 		"..PNG":  ".PNG",
-		// 先頭の '.' のあとにもう1つ '.' があれば、3.12 と 3.14 で同じ。
+		// 先頭に続く '.' より後ろに、末尾でない '.' があれば、3.12 と 3.14 で同じ。
 		".a.png": ".png",
 	}
 	for name, want := range tests {

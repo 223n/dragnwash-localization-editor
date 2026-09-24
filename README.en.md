@@ -972,9 +972,10 @@ Pictures must be lowercase `.png` files of at most 8 MB and at most 4096 pixels 
 Running it locally before you send anything lets you fix things before the automated check stops you.
 
 The checks follow the version on the `dev` branch of the translation repository.  
-That version goes into `main` with the next release.  
+Upstream has so far merged `dev` into `main` as a whole, so that version is expected to go into `main` with the next release.  
 Pull requests go to `main`, so for now the automated check runs the version on `main`.  
-The version on `main` does not look at `credits.txt`, so on that one point `dwloc validate` is stricter.
+The only difference between the versions on `main` and `dev` is the `credits.txt` check, and `dwloc validate` is stricter by that much.  
+Apart from that, `dwloc validate` alone may report a problem for inputs where it does not copy an upstream bug (such as a quote in a comment line).
 
 | What to do | Where it is written |
 | ---- | ---- |
