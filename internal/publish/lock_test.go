@@ -3,15 +3,38 @@ package publish
 import (
 	"bufio"
 	"errors"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// TestMain は、錠のファイルを試験用の一時フォルダーに置かせる（[LockDirEnv]）。
+// 利用者のキャッシュのフォルダーへ、試験が作った一時パスの錠のファイルを残さない。
+// 子のプロセス（[TestLockFileAcrossProcesses]）は親の値を受け継ぐので、上書きしない。
+func TestMain(m *testing.M) {
+	os.Exit(withLockDir(m))
+}
+
+// withLockDir は、LockDirEnv が無ければ一時フォルダーを作って渡し、試験を走らせる。
+func withLockDir(m *testing.M) int {
+	if os.Getenv(LockDirEnv) != "" {
+		return m.Run()
+	}
+	dir, err := os.MkdirTemp("", "dwloc-locks-test")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv(LockDirEnv, dir)
+	defer os.Unsetenv(LockDirEnv)
+	return m.Run()
+}
 
 // lockHelperEnv は、[TestLockFileAcrossProcesses] が子のプロセスとして自分を
 // 起動するときに、錠を掛けるファイルを渡す環境変数。
@@ -26,7 +49,7 @@ func shortLockWait(t *testing.T, d time.Duration) {
 }
 
 // TestLockFileIsExclusive は、同じファイルの錠を2つ同時に取れないことと、放したら
-// 取れること、放したあとに横のファイルを残さないことを見る。
+// 取れることと、錠のファイルを書き出し先のフォルダーに置かないことを見る。
 //
 // 同じプロセスの中でも、別に開いたものどうしは競り合う（flock は開いたファイルごと、
 // LockFileEx はハンドルごと）。画面の待ち受けを2つ動かしても、publish と画面を
@@ -43,8 +66,15 @@ func TestLockFileIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("錠を取れない: %v", err)
 	}
-	if _, err := os.Stat(path + lockSuffix); err != nil {
-		t.Errorf("錠を持っているあいだ、横のファイルが無い: %v", err)
+	name, err := lockName(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(name) != os.Getenv(LockDirEnv) {
+		t.Errorf("錠のファイルが %s にある。%s を期待", name, os.Getenv(LockDirEnv))
+	}
+	if _, err := os.Stat(name); err != nil {
+		t.Errorf("錠のファイルが無い: %v", err)
 	}
 
 	start := time.Now()
@@ -76,7 +106,45 @@ func TestLockFileIsExclusive(t *testing.T) {
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		t.Errorf("横のファイルが残った: %v", names)
+		t.Errorf("書き出し先のフォルダーにファイルが増えた: %v", names)
+	}
+}
+
+// TestLockFileUnderContention は、いくつもの取り手が短い間隔で錠を取っては放しても、
+// 2つが同時に錠を持たず、誤りも出ないことを見る。
+//
+// 放すときに錠のファイルを消していたころは、Windows でこの試験が落ちた。消した
+// ファイルをほかの取り手が開けず（削除の保留中で拒まれる）、2つが同時に錠を持つ
+// こともあった。
+func TestLockFileUnderContention(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "strings.csv")
+	if err := os.WriteFile(path, []byte("key,translation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var inside, doubles, errs int32
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				unlock, err := LockFile(path)
+				if err != nil {
+					atomic.AddInt32(&errs, 1)
+					continue
+				}
+				if atomic.AddInt32(&inside, 1) > 1 {
+					atomic.AddInt32(&doubles, 1)
+				}
+				time.Sleep(100 * time.Microsecond)
+				atomic.AddInt32(&inside, -1)
+				unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if doubles != 0 || errs != 0 {
+		t.Errorf("2つが同時に錠を持った回数 %d、誤り %d", doubles, errs)
 	}
 }
 
@@ -142,8 +210,38 @@ func TestLockFileAcrossProcesses(t *testing.T) {
 	unlock()
 }
 
-// TestLockFileFollowsSymlink は、シンボリックリンクの錠を、たどった先の実体の横で
-// 取ることを見る。書き出し（[WriteBytes]）も実体へ書くので、リンクと実体のどちらの
+// TestLockNameIsTheSameForTheSameFile は、同じファイルを指す綴りの違い（相対パス、
+// 途中の「.」、Windows と macOS の大文字小文字）が同じ錠のファイルになることと、
+// 別のファイルは別の錠のファイルになることを見る。
+func TestLockNameIsTheSameForTheSameFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "strings.csv")
+	if err := os.WriteFile(path, []byte("key,translation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want, err := lockName(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spellings := []string{filepath.Join(dir, ".", "strings.csv")}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		spellings = append(spellings, filepath.Join(dir, "STRINGS.CSV"))
+	}
+	t.Chdir(dir)
+	spellings = append(spellings, "strings.csv")
+	for _, s := range spellings {
+		if got, err := lockName(s); err != nil || got != want {
+			t.Errorf("%s の錠のファイル = %s（%v）、%s を期待", s, got, err, want)
+		}
+	}
+	other, err := lockName(filepath.Join(dir, "other.csv"))
+	if err != nil || other == want {
+		t.Errorf("別のファイルの錠のファイル = %s（%v）", other, err)
+	}
+}
+
+// TestLockFileFollowsSymlink は、シンボリックリンクの錠を、たどった先の実体で取る
+// ことを見る。書き出し（[WriteBytes]）も実体へ書くので、リンクと実体のどちらの
 // 名前から書いても同じ錠で直列になる。
 func TestLockFileFollowsSymlink(t *testing.T) {
 	shortLockWait(t, 100*time.Millisecond)
@@ -162,25 +260,25 @@ func TestLockFileFollowsSymlink(t *testing.T) {
 		t.Fatalf("リンクの錠を取れない: %v", err)
 	}
 	defer unlock()
-	if _, err := os.Stat(real + lockSuffix); err != nil {
-		t.Errorf("実体の横に錠のファイルが無い: %v", err)
-	}
-	if _, err := os.Lstat(link + lockSuffix); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("リンクの横に錠のファイルがある: %v", err)
-	}
 	if _, err := LockFile(real); err == nil {
 		t.Error("実体の名前から、リンクで持っている錠を取れた")
 	}
 }
 
-// TestLockFileErrors は、錠のファイルを置けないときと、リンク先をたどれないときに、
+// TestLockFileErrors は、リンク先をたどれないときと、錠のファイルを置けないときに、
 // 誤りを返すことを見る。
 func TestLockFileErrors(t *testing.T) {
-	if _, err := LockFile(filepath.Join(t.TempDir(), "無いフォルダー", "strings.csv")); err == nil {
-		t.Error("無いフォルダーに錠を置けたことになっている")
+	dir := t.TempDir()
+	// 錠のファイルを置くフォルダーの代わりに、ふつうのファイルを置く。
+	notDir := filepath.Join(dir, "file")
+	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(LockDirEnv, filepath.Join(notDir, "locks"))
+	if _, err := LockFile(filepath.Join(dir, "strings.csv")); err == nil {
+		t.Error("錠のファイルを置けないのに錠を取れたことになっている")
 	}
 
-	dir := t.TempDir()
 	link := filepath.Join(dir, "broken.csv")
 	if err := os.Symlink(filepath.Join(dir, "無い.csv"), link); err != nil {
 		t.Skipf("シンボリックリンクを作れない環境なので飛ばす: %v", err)
@@ -190,47 +288,29 @@ func TestLockFileErrors(t *testing.T) {
 	}
 }
 
-// TestLockFileInAFolderThatCannotBeWritten は、書き出し先のフォルダーに書けない
-// （錠のファイルを作れない）とき、錠を掛けずに通すことを見る。書き出しも同じ理由で
-// 失敗するので、呼び出し側は書き出しの誤りで知らせる（publish の「書き出せません」）。
-//
-// POSIX でフォルダーの書き込み権を外して確かめる。Windows はフォルダーの読み取り
-// 専用の属性ではファイルの作成を止められないので飛ばす。root で走っていても飛ばす。
-func TestLockFileInAFolderThatCannotBeWritten(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows はフォルダーの属性でファイルの作成を止められないので飛ばす")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "strings.csv")
-	if err := os.WriteFile(path, []byte("key,translation\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	if probe, err := os.CreateTemp(dir, "probe*"); err == nil {
-		probe.Close()
-		_ = os.Remove(probe.Name())
-		t.Skip("書き込み権を外しても書けたので飛ばす。root で走っていると効かない")
-	}
-
-	unlock, err := LockFile(path)
+// TestLockDir は、錠のファイルを置くフォルダーの選び方を見る。環境変数があれば
+// それを使い、無ければ利用者のキャッシュのフォルダーの dwloc/locks を使う。
+func TestLockDir(t *testing.T) {
+	t.Setenv(LockDirEnv, "")
+	cache, err := os.UserCacheDir()
 	if err != nil {
-		t.Fatalf("書けないフォルダーで誤りを返した: %v", err)
+		t.Skipf("利用者のキャッシュのフォルダーが無い環境なので飛ばす: %v", err)
 	}
-	unlock()
-	if err := WriteBytes(path, []byte("x")); err == nil {
-		t.Error("前提が崩れた: 書けないフォルダーへ書けた")
+	if got, want := lockDir(), filepath.Join(cache, "dwloc", "locks"); got != want {
+		t.Errorf("lockDir() = %s、%s を期待", got, want)
+	}
+	t.Setenv(LockDirEnv, "somewhere")
+	if got := lockDir(); got != "somewhere" {
+		t.Errorf("lockDir() = %s、環境変数の値を期待", got)
 	}
 }
 
 // TestSameFile は、開いているファイルと、いまその名前が指すファイルが同じかを
-// 見分けることを見る。錠を取るあいだに前の持ち主が名前を消して、別のファイルが
+// 見分けることを見る。錠を取るあいだに錠のファイルが消されて、別のファイルが
 // 作られた場合に、取り直すための見分けである。
 func TestSameFile(t *testing.T) {
 	dir := t.TempDir()
-	name := filepath.Join(dir, "x"+lockSuffix)
+	name := filepath.Join(dir, "x.lock")
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		t.Fatal(err)

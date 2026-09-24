@@ -52,9 +52,11 @@ func TestTwoEditorsDoNotLoseEachOthersSaves(t *testing.T) {
 			case http.StatusOK:
 				last = value
 				saved++
-			case http.StatusConflict, http.StatusServiceUnavailable:
-				// 409 はもう片方が先に書いたとき。503 は Windows で置き換えの最中に
-				// 書けなかったとき。どちらも書いていないので、次の回で読み直す。
+			case http.StatusConflict, http.StatusServiceUnavailable, http.StatusInternalServerError:
+				// 409 はもう片方が先に書いたとき。503 と 500 は Windows で、もう片方が
+				// 置き換えている最中に書けなかったか読めなかったとき（500 は保存の前に
+				// ファイルを開けなかった error.read_failed）。どれも書いていないので、
+				// 次の回で読み直す。
 			default:
 				lost <- fmt.Sprintf("ID %d: 状態コード %d: %s", id, rec.Code, rec.Body.String())
 			}

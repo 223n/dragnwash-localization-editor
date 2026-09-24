@@ -41,25 +41,9 @@ func tryLock(f *os.File) (bool, error) {
 	return false, err
 }
 
-// readOnlyFS は、Windows では使わない（読み取り専用の媒体への書き込みは権限の誤りに
-// なる）。
-func readOnlyFS(error) bool { return false }
-
 // unlockFile は f の錠を放す。ハンドルを閉じても OS は錠を放すが、放すまでの時間は
 // 決まっていないので、先に明示して放す。
 func unlockFile(f *os.File) {
 	var ol syscall.Overlapped
 	_, _, _ = procUnlockFileEx.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&ol)))
-}
-
-// release は錠を放し、横のファイルを消す。
-//
-// Windows は、ほかのプロセスが開いているファイルを消せない（Go の os.OpenFile は共有に
-// 削除を含めない）。そのため、放して閉じてから消す。錠を待っている dwloc がそのファイルを
-// 開いていれば消えずに残り、その dwloc が同じファイルで錠を取る。誰も開いていなければ
-// 消え、次の dwloc は新しく作る。どちらでも、2つが同時に錠を持つことは無い。
-func release(f *os.File, name string) {
-	unlockFile(f)
-	_ = f.Close()
-	_ = os.Remove(name)
 }

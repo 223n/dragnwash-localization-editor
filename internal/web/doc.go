@@ -77,7 +77,8 @@
 //     して出し続けられる。
 //   - dwloc edit を2つ動かして同じファイルを開いても、publish を同時に回しても、
 //     200 で返った訳を消さない。版の照合から rename までを OS の錠（Windows は
-//     LockFileEx、Linux と macOS は flock。書き出し先の横の <名前>.dwloc-lock に掛ける）で
+//     LockFileEx、Linux と macOS は flock。利用者のキャッシュのフォルダーの錠のファイルに
+//     掛ける。publish.LockFile）で
 //     囲むので、あとから書く側は版の照合に外れて 409 になる（改善の決定 3）。2つ目の
 //     dwloc edit は止めない。publish も書く直前に同じ錠を取って入力を読み直す。ゲームの
 //     Mod の書き出しはこの錠に従わないので、そちらは版の照合だけで見つける。

@@ -1092,10 +1092,11 @@ The screen shows the reloaded list with the reason it cannot be edited, and keep
 
 Saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
 The span from checking the version to finishing the write is wrapped in an OS lock.  
-The lock is taken on `<file name>.dwloc-lock`, placed next to the file being written for a moment.  
-It is deleted once the write is done.  
-When another `dwloc` is waiting for the lock, it may be left behind.  
-It does no harm, so you may delete it if it shows up in `git status`.  
+The lock is taken on a file kept only for locking, in your cache folder.  
+That is `%LocalAppData%\dwloc\locks` on Windows, `~/.cache/dwloc/locks` on Linux, and `~/Library/Caches/dwloc/locks` on macOS.  
+There is one empty file per file being written, and it is left in place.  
+No file is added to the translation repository or to the game folder.  
+If the `dwloc` holding the lock crashes, the OS releases the lock, so a lock file left behind never stops a save.  
 The one that writes later finds that the version no longer matches what the other wrote, which is a conflict.  
 `Export working copy` in the game does not take this lock, so there only the version check catches it.
 

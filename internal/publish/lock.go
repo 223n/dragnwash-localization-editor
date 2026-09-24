@@ -1,15 +1,19 @@
 package publish
 
 import (
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
-// lockSuffix は、錠を掛けるために書き出し先の横に置くファイルの名前の後ろ。
-const lockSuffix = ".dwloc-lock"
+// LockDirEnv は、錠のファイルを置くフォルダーを変える環境変数。試験が、利用者の
+// キャッシュのフォルダーへ錠のファイルを残さないために使う。ふだんは使わない。
+const LockDirEnv = "DWLOC_LOCK_DIR"
 
 // lockWait は、ほかの dwloc が錠を持っているときに待つ上限。lockPoll は試す間隔。
 //
@@ -37,45 +41,44 @@ func (e *LockTimeoutError) Error() string {
 // LockFile は、path への書き込みを、ほかの dwloc（画面の保存と publish）の書き込みと
 // 直列にする錠を取る。返す関数で錠を放す（改善の決定 3）。
 //
-// 錠は OS のもの（Windows は LockFileEx、Linux や macOS は flock）を、書き出し先の横に
-// 置いたファイル（<名前>.dwloc-lock）に掛ける。書き出し先そのものに掛けないのは、
-// 書き出しが一時ファイルからの rename でファイルを置き換える（錠を掛けたファイルが
-// 消える）ためと、Windows では錠を掛けたファイルをゲームが読めなくなるためである。
-// OS の錠は、持っているプロセスが終われば OS が放すので、落ちた dwloc が錠を残す
-// ことは無い。
+// 錠は OS のもの（Windows は LockFileEx、Linux や macOS は flock）を、錠のためだけの
+// ファイルに掛ける。書き出し先そのものに掛けないのは、書き出しが一時ファイルからの
+// rename でファイルを置き換える（錠を掛けたファイルが消える）ためと、Windows では
+// 錠を掛けたファイルをゲームが読めなくなるためである。OS の錠は、持っているプロセスが
+// 終われば OS が放すので、落ちた dwloc が錠を残すことは無い。
 //
-// 横のファイルは、放すときに消す。ほかの dwloc が錠を待っているときは、消えずに
-// 残ることがある（Windows はほかのプロセスが開いているファイルを消せない）。残っても
-// 次の錠に使われるだけで、害は無い。消した名前と錠の相手が分かれないよう、錠を取った
-// あとで、名前がいま開いているファイルを指しているかを確かめ、違えば取り直す。
+// 錠のファイルは、利用者のキャッシュのフォルダー（Windows は %LocalAppData%、Linux は
+// ~/.cache、macOS は ~/Library/Caches）の dwloc/locks に置き、名前は書き出し先の実体の
+// 絶対パスから作る（[lockName]）。書き出し先の横には置かない。横に置くと、作業コピーの
+// 無いロケールでは翻訳リポジトリの Translations/<ロケール>/ に錠のファイルが残り、
+// git status に出る。放すときに消す形も試したが、Windows では、消したファイルを
+// ほかの dwloc が開けない（削除の保留中で拒まれる）ことや、2つの dwloc が同時に錠を
+// 持つことがあった（試験で確かめた）。そのため錠のファイルは消さずに残す。中身は空で、
+// 書き出し先1つにつき1つである。
 //
-// path がシンボリックリンクなら、たどった先の実体の横に置く（[WriteBytes] と同じ
-// 実体に書くので、錠も同じ実体で取る）。ハードリンクの別の名前から書く道は直列に
-// ならない。
+// path がシンボリックリンクなら、たどった先の実体で名前を作る（[WriteBytes] と同じ
+// 実体に書くので、錠も同じ実体で取る）。途中のフォルダーのリンク、大文字小文字
+// （Windows と macOS）、Windows の 8.3 形式の短い名前の違いもそろえる。ハードリンクの
+// 別の名前から書く道は直列にならない。
 //
 // 錠は dwloc 同士の約束で、ゲーム（Mod の書き出し）や表計算ソフトは従わない。
 // そちらとの競り合いは、版の照合（画面）と書く直前の読み直し（publish）で見つける。
-//
-// 書き出し先のフォルダーに書けない（錠のファイルを作れない）ときは、錠を掛けずに
-// 何もしない関数を返す。書き出しも同じ理由で失敗するので、競り合う書き込みは起きない。
 func LockFile(path string) (unlock func(), err error) {
 	target, err := resolveLink(path)
 	if err != nil {
 		return nil, err
 	}
-	name := target + lockSuffix
+	name, err := lockName(target)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(lockWait)
 	for {
-		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o644)
+		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o600)
 		if err != nil {
-			if errors.Is(err, fs.ErrPermission) || readOnlyFS(err) {
-				// 書き出し先のフォルダーに書けない（権限が無い、読み取り専用で繋いだ
-				// 外付け、など）。書き出しも同じ理由で失敗する（[WriteBytes] は同じ
-				// フォルダーに一時ファイルを作る）ので、競り合う dwloc の書き込みは起きない。
-				// 錠を掛けずに通し、書き出しの誤りで知らせる。ここで止めると、publish の
-				// 「書き出せません」とその案内が、錠のファイルの誤りに置き換わる。
-				return func() {}, nil
-			}
 			return nil, err
 		}
 		locked, err := tryLock(f)
@@ -85,10 +88,13 @@ func LockFile(path string) (unlock func(), err error) {
 		}
 		if locked {
 			if sameFile(f, name) {
-				return func() { release(f, name) }, nil
+				return func() {
+					unlockFile(f)
+					_ = f.Close()
+				}, nil
 			}
-			// 錠を取るあいだに、前の持ち主がこの名前を消した。消えたファイルの錠は
-			// 誰とも競り合わないので、取り直す。
+			// 錠を取るあいだに、錠のファイルが消された（人が消した、など）。消えた
+			// ファイルの錠は誰とも競り合わないので、取り直す。
 			unlockFile(f)
 			f.Close()
 			continue
@@ -99,6 +105,42 @@ func LockFile(path string) (unlock func(), err error) {
 		}
 		time.Sleep(lockPoll)
 	}
+}
+
+// lockDir は錠のファイルを置くフォルダーを返す。
+func lockDir() string {
+	if d := os.Getenv(LockDirEnv); d != "" {
+		return d
+	}
+	if d, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(d, "dwloc", "locks")
+	}
+	return filepath.Join(os.TempDir(), "dwloc-locks")
+}
+
+// lockName は、書き出し先の実体 target の錠のファイルの名前を返す。
+//
+// 名前は、実体の絶対パスの SHA-256 の先頭から作る。同じファイルを指す綴りの違い
+// （相対パス、途中のフォルダーのリンク、Windows の 8.3 形式の短い名前、大文字小文字）を
+// そろえてから数える。そろえられない（実体もフォルダーも無い）ときは、絶対パスの
+// ままで数える。
+func lockName(target string) (string, error) {
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		abs = filepath.Join(dir, filepath.Base(abs))
+	}
+	key := abs
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		// どちらも既定のファイルシステムが大文字小文字を区別しない。
+		key = strings.ToLower(key)
+	}
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(lockDir(), hex.EncodeToString(sum[:12])+".lock"), nil
 }
 
 // sameFile は、開いているファイル f と、いま name が指すファイルが同じかを返す。
