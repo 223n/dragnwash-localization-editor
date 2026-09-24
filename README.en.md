@@ -234,7 +234,7 @@ To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
 That is why the tab does nothing when you come back after stepping away.  
-The black window shows `操作がないまま 30m たちました。待ち受けを終えます。` ("No activity for 30m. Stopping.").  
+The black window shows `操作がないまま 30m0s たちました。待ち受けを終えます。` ("No activity for 30m0s. Stopping.").  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
 Start it again and open the new `URL` shown in the black window.  
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
@@ -330,7 +330,7 @@ The table below gives English translations of the first lines you are most likel
 | `dwloc: 対象になるロケールがありません: …` | There is no locale to work on. Check `--locale`. | [Using it from the command line](#using-it-from-the-command-line) |
 | `dwloc: 検証できません: …` | `validate` cannot check the files, because it cannot read them. | [Using it from the command line](#using-it-from-the-command-line) |
 | `dwloc: 記録を残せません（…）。このまま続けます。` | It cannot keep a log (…). It carries on without one. | [Logs](#logs) |
-| `操作がないまま 30m たちました。待ち受けを終えます。` | No activity for 30m. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
+| `操作がないまま 30m0s たちました。待ち受けを終えます。` | No activity for 30m0s. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
 
 The exit code tells you the same thing without reading the text.  
 `0` means it succeeded.  

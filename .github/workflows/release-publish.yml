@@ -240,8 +240,8 @@ jobs:
                 Translations would be lost, so not a single byte was written.
               ゲームに入っている翻訳が古いので、1バイトも書きませんでした。
                 The translation in the game is older, so not a single byte was written.
-              操作がないまま 30m たちました。待ち受けを終えます。
-                No activity for 30m. Stopping.
+              操作がないまま 30m0s たちました。待ち受けを終えます。
+                No activity for 30m0s. Stopping.
             More translations are in "What dwloc prints is in Japanese" of the English README:
             https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md#what-dwloc-prints-is-in-japanese
 
