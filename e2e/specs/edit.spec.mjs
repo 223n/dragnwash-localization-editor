@@ -192,6 +192,32 @@ test("入力欄は頁に1つだけで、綴り検査・自動修正・翻訳を�
   await expect(translationCell(app, SAMPLE_LINES.hello)).toHaveText(SAMPLE.hello.ja);
 });
 
+// 強制色モード（Windows のハイコントラスト）では、ブラウザーが box-shadow を消し、色を
+// 系統の色へ置き換える。入力欄の焦点の印は枠の色と box-shadow で付けていて、outline は
+// none にしていたので、この状態では印がほぼ消えた（どこに打っているか分からない）。
+// 透明の輪郭を敷いておくと、強制色モードでは見える色の輪郭として描かれる。ふだんの
+// 配色では透明なので見た目は変わらない。
+test("強制色モードでも、入力欄に焦点の輪郭が残る", async ({ app }) => {
+  const outline = () =>
+    editor(app).evaluate((node) => {
+      const s = getComputedStyle(node);
+      return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) };
+    });
+
+  await openEditor(app, SAMPLE_LINES.hello);
+  expect(await outline()).toMatchObject({ style: "solid" });
+  expect((await outline()).width).toBeGreaterThanOrEqual(2);
+  // ふだんの配色では透明で、印は枠と box-shadow のまま。
+  expect(await editor(app).evaluate((node) => getComputedStyle(node).outlineColor)).toBe("rgba(0, 0, 0, 0)");
+
+  await app.emulateMedia({ forcedColors: "active" });
+  await expect(editor(app)).toBeFocused();
+  expect(await outline()).toMatchObject({ style: "solid" });
+  expect((await outline()).width).toBeGreaterThanOrEqual(2);
+  // 強制色モードでは、透明の輪郭が見える色に置き換わる。
+  expect(await editor(app).evaluate((node) => getComputedStyle(node).outlineColor)).not.toBe("rgba(0, 0, 0, 0)");
+});
+
 // 長い訳を横へ送らずに全部見ながら直せる、と README が約束している。textarea は
 // rows で決まった高さのままなので、画面が伸ばさないと送りの棒が出て、打っている
 // 場所の前後しか見えない。窓の幅が変わったときも測り直さないと同じことになる。

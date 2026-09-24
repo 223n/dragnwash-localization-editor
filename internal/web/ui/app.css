@@ -1225,6 +1225,11 @@ button {
   resize を切るのは、隅を引いて伸び縮みさせられると fitEditor の測り直しと
   食い違うためである。overflow-y は hidden にしない。窓の幅が変わったのに
   測り直せていない場面で、字が切れて見えなくなる。送りの棒が出るほうがよい。
+
+  焦点の印は枠の色と box-shadow で付け、輪郭（outline）は透明にしておく。none には
+  しない。強制色モード（Windows のハイコントラスト）ではブラウザーが box-shadow を
+  消して色を系統の色へ置き換えるので、none のままだと印がほぼ消えた。透明の輪郭は
+  強制色モードでは見える色で描かれる。ふだんの配色では透明なので見た目は変わらない。
 */
 .editor {
   display: block;
@@ -1233,7 +1238,7 @@ button {
   padding: 2px 8px;
   border: 1px solid var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
-  outline: none;
+  outline: 2px solid transparent;
   resize: none;
   overflow-y: auto;
   white-space: pre-wrap;
