@@ -451,3 +451,44 @@ func TestLineIDCountsGiveTheLineIDReason(t *testing.T) {
 		})
 	}
 }
+
+// TestOrderUnreadableCountsGiveTheOrderReason は、再生順のキーを読めず作業コピーは
+// あるときに、件数の欄の「判定していません（理由）」が、どのカテゴリでも再生順を
+// 読めていないことを理由にすることを見る。
+//
+// 引き継ぎ元の候補は作業コピーと norm 列を要る。norm はキーのある行からしか拾わない
+// ので、キーが無ければ norm も無い。そこで「norm 列がありません」と書くと、断り書き
+// （note.order_unreadable）が再生順を丸ごと読めていないと言っているのに、その
+// カテゴリだけ norm 列を直しに行かせることになる。
+func TestOrderUnreadableCountsGiveTheOrderReason(t *testing.T) {
+	for _, lang := range []string{"ja", "en"} {
+		t.Run(lang, func(t *testing.T) {
+			s := newTestServer(t, Options{UILang: lang})
+			cat := s.cat.lookup(lang)
+			want := s.cat.T(cat, "reason."+reason.JudgeOrderUnreadable)
+
+			// 再生順のほかは何もかも読めた集計。ほかの理由で止まるカテゴリを混ぜない。
+			// 全カテゴリは、実際の集計の件数から取る（件数には全カテゴリが入る）。
+			sum := judgedSummary("ja", s.summary("ja").Counts)
+			sum.OrderKeys, sum.OrderLineIDs, sum.OrderNorms = false, false, false
+			counts := s.buildCounts(cat, "ja", sum, nil)
+
+			for _, c := range counts {
+				if c.Judged {
+					continue
+				}
+				if c.Reason != want {
+					t.Errorf("%s の理由が %q、%q を期待", c.Category, c.Reason, want)
+				}
+			}
+			// 作業コピーを読めているので、作業コピーの理由で先に止まることはない。
+			// 名指しした相手が実際に判定されていないことを確かめておく。
+			if mustCount(t, counts, diff.CatCarryFrom.ID()).Judged {
+				t.Error("引き継ぎ元の候補を判定している。集計の前提が崩れている")
+			}
+			if !mustCount(t, counts, diff.CatUntranslated.ID()).Judged {
+				t.Error("未翻訳を判定していない。集計の前提が崩れている")
+			}
+		})
+	}
+}

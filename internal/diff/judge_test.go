@@ -89,6 +89,15 @@ func TestJudgeBlockReason(t *testing.T) {
 			wantID: reason.JudgeOrderNoNorms, wantText: "再生順に norm 列がありません",
 		},
 		{
+			// norm はキーのある行からしか拾わないので、キーが無ければ norm も無い。
+			// そこで「norm 列がありません」と書くと、text 形式の見出しや画面の断り書き
+			// （再生順を読めていません）と食い違い、norm 列だけを直しに行かせる。
+			// 台詞IDだけを要るカテゴリと同じく、再生順を丸ごと読めていないことを言う。
+			name: "キーも norm も無ければ引き継ぎ元の候補も再生順を読めていない", category: CatCarryFrom,
+			edit:   func(s *Summary) { s.OrderKeys, s.OrderNorms = false, false },
+			wantID: reason.JudgeOrderUnreadable, wantText: "再生順を読めていません",
+		},
+		{
 			name: "引き継ぎ元の候補は作業コピーを先に見る", category: CatCarryFrom,
 			edit:   func(s *Summary) { s.HasWorking, s.WorkingExists, s.OrderNorms = false, false, false },
 			wantID: reason.JudgeWorkingMissing, wantText: "作業コピーがありません",
@@ -148,10 +157,10 @@ func TestJudgeBlockReason(t *testing.T) {
 // canJudge と judgeBlockReason は同じ条件を別々に書いているので、どちらかに
 // 条件を足したときのずれをここで捕まえる。
 //
-// 再生順の2つの理由は、欠けているものを指すだけでなく互いに言い分ける。キーを
-// 読めているのに「再生順を読めていません」と書くと、キーだけで出した件数
-// （台本から消えた行など）と食い違う。キーも無いのに台詞IDのことだけを書くと、
-// 見出しの「再生順を読めていません」と食い違う。
+// 再生順の理由（キー・台詞ID・norm 列）は、欠けているものを指すだけでなく互いに
+// 言い分ける。キーを読めているのに「再生順を読めていません」と書くと、キーだけで
+// 出した件数（台本から消えた行など）と食い違う。キーも無いのに台詞IDや norm 列の
+// ことだけを書くと、見出しの「再生順を読めていません」と食い違う。
 func TestJudgeBlockReasonNamesAFailingCondition(t *testing.T) {
 	const customID = "test_custom"
 	flags := []func(*Summary, bool){
@@ -192,7 +201,8 @@ func TestJudgeBlockReasonNamesAFailingCondition(t *testing.T) {
 			case reason.JudgeWorkingMissing:
 				holds = c.needsWorking() && !sum.HasWorking && !sum.WorkingExists
 			case reason.JudgeOrderUnreadable:
-				holds = !sum.OrderKeys && (c.needsOrderKeys() || (c.needsOrderLineIDs() && !sum.OrderLineIDs))
+				holds = !sum.OrderKeys && (c.needsOrderKeys() ||
+					(c.needsOrderLineIDs() && !sum.OrderLineIDs) || (c.needsOrderNorms() && !sum.OrderNorms))
 			case reason.JudgeOrderNoLineIDs:
 				holds = sum.OrderKeys && c.needsOrderLineIDs() && !sum.OrderLineIDs
 			case reason.JudgeLayoutRisksNotRead:
@@ -200,7 +210,7 @@ func TestJudgeBlockReasonNamesAFailingCondition(t *testing.T) {
 			case reason.JudgeNoLayoutRisks:
 				holds = c.needsLayoutRisks() && !sum.HasLayoutRisks && !sum.LayoutRisksExist
 			case reason.JudgeOrderNoNorms:
-				holds = c.needsOrderNorms() && !sum.OrderNorms
+				holds = sum.OrderKeys && c.needsOrderNorms() && !sum.OrderNorms
 			case reason.JudgeOldOrderUnreadable:
 				holds = oldMissing && sum.OldOrderReason == ""
 			case customID:

@@ -685,6 +685,22 @@ func TestRunDiffCSVWarnsForEveryHeldCategory(t *testing.T) {
 				"vanished", "carryover", "stray_line_id", "not_published", "script_gap", "unknown_origin",
 			}},
 		},
+		{
+			// 作業コピーはあるので、止まるのは再生順を要るカテゴリだけである。引き継ぎ元の
+			// 候補も、norm 列ではなく再生順を読めていないことで止まる（norm はキーのある
+			// 行からしか拾わない）。理由の行は1つも無く、再生順の警告と締めだけになる。
+			name: "再生順を読めず作業コピーとはみ出しの記録はある",
+			files: map[string]string{
+				"Translations/ja/strings.csv":               diffCleanJA,
+				"Translations/_discovered/ja.working.csv":   working,
+				"Translations/_discovered/layout_risks.csv": layout,
+			},
+			noOrder: true,
+			judged:  map[string][]string{"ja": {"untranslated", "dropped", "tag_mismatch", "layout_risk"}},
+			orderHeld: map[string][]string{"ja": {
+				"vanished", "carryover", "carry_from", "stray_line_id", "not_published", "script_gap", "unknown_origin",
+			}},
+		},
 	}
 	idOf := make(map[string]string)
 	for c := range diffAllCounts(t) {
@@ -1258,6 +1274,19 @@ func TestWarnHeldCategories(t *testing.T) {
 			want: "dwloc: 警告: " + workingHeld + "（作業コピーがありません）。\n" +
 				"dwloc:       untranslated と vanished と carryover と carry_from と dropped と stray_line_id と tag_mismatch" +
 				" と not_published と script_gap と unknown_origin の行が無いことは、0 件という意味ではありません。\n",
+		},
+		{
+			// 作業コピーがあると、引き継ぎ元の候補を止めるのは再生順である。norm 列の
+			// 理由で書くと、再生順の警告と別の直し方（norm 列だけを足す）を言うことになる。
+			name: "再生順のキーを読めず作業コピーがあれば、引き継ぎ元の候補も再生順の警告に任せる",
+			locales: func() []diff.Summary {
+				s := ready("ja")
+				s.OrderKeys, s.OrderLineIDs, s.OrderNorms, s.OldOrder = false, false, false, false
+				s.OldOrderReason = diff.ErrNoGit.Error()
+				return []diff.Summary{s}
+			}(),
+			want: "dwloc:       vanished と carryover と carry_from と stray_line_id と not_published と script_gap" +
+				" と unknown_origin の行が無いことは、0 件という意味ではありません。\n",
 		},
 	}
 	for _, tt := range tests {
