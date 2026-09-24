@@ -11,12 +11,15 @@ import (
 const validateUsage = `使い方: dwloc validate [--root <ディレクトリ>]
 
 <ルート>/Translations 配下の公開ファイルを検証します。
-tools/check-translations.py と同じ検査を行い、同じ文面を標準出力へ書きます。
+tools/check-translations.py（翻訳リポジトリの dev ブランチの版）と同じ検査を行い、
+同じ文面を標準出力へ書きます。
 
 検査する内容:
   - Translations/_discovered 配下がコミットされていないこと
   - 各ロケールの strings.local.csv がコミットされていないこと
   - 各ロケールに strings.csv があり、ヘッダーと各行の形が正しいこと
+  - credits.txt があれば、最初の行が状態語
+    （supervised、proofread、converted、provisional、fun）であること
 
 オプション:
   --root <ディレクトリ>

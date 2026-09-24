@@ -36,19 +36,21 @@ const mustNotBeCommitted = "must not be committed (contains source text)"
 // [GitTracked] を root に対して作って使う。テストや、git を呼びたくない場所では
 // 自前の関数を渡す（[Tracked] 参照）。
 //
-// 見る順序は元実装のまま（移植仕様 R3〜R6）。問題の並びもこの順になる。
+// 見る順序は上流 dev の main() のまま（移植仕様 R3〜R6）。問題の並びもこの順になる。
 //
 //  1. Translations/_discovered の直下にあるファイルのうち、追跡されているもの。
 //     サブディレクトリには降りない。
 //  2. Translations 直下の各ディレクトリを名前順に。名前が '_' で始まるものは飛ばす。
-//     ロケールごとに strings.local.csv（追跡されていたら問題）、次に strings.csv
-//     （あれば中身を検査、無ければ "no strings.csv"）。
+//     ロケールごとに strings.local.csv（追跡されていたら問題）、strings.csv
+//     （あれば中身を検査、無ければ "no strings.csv"）、credits.txt（あれば
+//     最初の行の状態語）の順。
 //
-// エラーを返すのは Translations が読めないときと、あると分かっている strings.csv が
-// 読めないときだけ。元実装はどちらもトレースバックで異常終了する
-// （移植仕様「形式検証 / 未決の点」）。落ちるより、何が読めなかったかを
-// 呼び出し側へ返す方がCIで原因が分かる。中身の問題は error ではなく
-// [Problem] として返るので、error が非nilなら「検査できなかった」の意味になる。
+// エラーを返すのは Translations が読めないときと、あると分かっているファイルが
+// 読めないときだけ。元実装はどれもトレースバックで異常終了する
+// （移植仕様「形式検証 / 未決の点」）。
+// 落ちるより、何が読めなかったかを呼び出し側へ返す方がCIで原因が分かる。
+// 中身の問題は error ではなく [Problem] として返るので、error が非nilなら
+// 「検査できなかった」の意味になる。
 func CheckTree(root string, tracked Tracked) ([]Problem, error) {
 	if tracked == nil {
 		tracked = GitTracked(root)
@@ -111,14 +113,25 @@ func CheckTree(root string, tracked Tracked) ([]Problem, error) {
 		published := filepath.Join(dir, PublishedFile)
 		if _, err := os.Stat(published); err != nil {
 			// 「無い」ことを指すので、表示パスはファイルではなくディレクトリ。
+			// 上流はここで次のロケールへ飛ばず、credits.txt も見る。
 			problems = append(problems, Problem{Path: show.of(dir), Message: "no " + PublishedFile})
-			continue
+		} else {
+			data, err := os.ReadFile(published)
+			if err != nil {
+				return nil, fmt.Errorf("%s が読めない: %w", show.of(published), err)
+			}
+			problems = append(problems, CheckFile(show.of(published), data)...)
 		}
-		data, err := os.ReadFile(published)
-		if err != nil {
-			return nil, fmt.Errorf("%s が読めない: %w", show.of(published), err)
+
+		// 上流 dev の 912f519。無ければ何も言わない（ゲームは暫定訳として扱う）。
+		credits := filepath.Join(dir, CreditsFile)
+		if _, err := os.Stat(credits); err == nil {
+			data, err := os.ReadFile(credits)
+			if err != nil {
+				return nil, fmt.Errorf("%s が読めない: %w", show.of(credits), err)
+			}
+			problems = append(problems, checkCredits(show.of(credits), data)...)
 		}
-		problems = append(problems, CheckFile(show.of(published), data)...)
 	}
 	return problems, nil
 }

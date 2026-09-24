@@ -67,6 +67,19 @@ func TestRunValidate(t *testing.T) {
 			containsStdout: []string{"empty translation", "key is not 16 lowercase hex digits or a line ID", "2 problem(s)."},
 		},
 		{
+			// 上流 dev の 912f519。最初の行は状態語でなければならない。
+			name: "credits.txt の状態語が違えば問題にする",
+			files: map[string]string{
+				"Translations/ja/strings.csv": validFile,
+				"Translations/ja/credits.txt": "done\n",
+			},
+			wantCode: exitProblems,
+			containsStdout: []string{
+				`Translations/ja/credits.txt:1: "done" is not a status`,
+				"1 problem(s).",
+			},
+		},
+		{
 			name: "Translations が無ければ検査できないので終了コード2",
 			files: map[string]string{
 				"README.md": "",

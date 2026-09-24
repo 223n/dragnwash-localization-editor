@@ -51,11 +51,19 @@ type upstreamCase struct {
 	upstreamCrash string
 }
 
-// upstreamCases は、上流の調査（f816618、c8fda90）で dwloc と
+// upstreamCases は、上流の調査（f816618、c8fda90、912f519）で dwloc と
 // 判定が割れた入力と、その周りの境目。
 func upstreamCases() []upstreamCase {
 	long := strings.Repeat
+	withStrings := func(files map[string]string) map[string]string {
+		files[upPath] = upHeader + upRowA
+		return files
+	}
+	credits := func(body string) map[string]string {
+		return withStrings(map[string]string{"Translations/xx/credits.txt": body})
+	}
 	const (
+		notStatus  = `" is not a status; use one of supervised, proofread, converted, provisional, fun`
 		parseError = "could not be parsed as CSV (field larger than field limit (131072))"
 	)
 
@@ -204,6 +212,49 @@ func upstreamCases() []upstreamCase {
 			want:     []string{upPath + ":4: empty translation"},
 			why:      "上流は誤報を出し、4行目をコメントと取り違えて空の訳を見逃す",
 			upstream: []string{upPath + ":3: expected 6 fields, got 1"},
+		},
+
+		// credits.txt（912f519）。
+		{
+			name:  "credits.txtの状態語が違う",
+			files: credits("done\n名前\n"),
+			want:  []string{"Translations/xx/credits.txt:1: \"done" + notStatus},
+		},
+		{
+			name:  "credits.txtがコメントと空行だけ",
+			files: credits("# メモ\n\n  \n"),
+			want: []string{"Translations/xx/credits.txt: empty; the first line is the status " +
+				"(supervised, proofread, converted, provisional, fun)"},
+		},
+		{
+			name:  "credits.txtは前後の空白と大文字小文字を問わない",
+			files: credits("\ufeff# メモ\n  Supervised  \n名前\n"),
+		},
+		{
+			name:  "credits.txtの空白始まりの'#'もコメント",
+			files: credits("\n  # メモ\nnope\n"),
+			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
+		},
+		{
+			// Python の lower() は 'İ' を2文字にするので状態語にならない。
+			name:  "credits.txtの大文字小文字はASCIIだけ",
+			files: credits("prov\u0130sional\n"),
+			want:  []string{"Translations/xx/credits.txt:1: \"prov\u0130sional" + notStatus},
+		},
+		{
+			name:  "credits.txtはCRでも行を分ける",
+			files: credits("\r\rnope\r"),
+			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
+		},
+		{
+			name: "strings.csvが無くてもcredits.txtを見る",
+			files: map[string]string{
+				"Translations/xx/credits.txt": "done\n",
+			},
+			want: []string{
+				"Translations/xx: no strings.csv",
+				"Translations/xx/credits.txt:1: \"done" + notStatus,
+			},
 		},
 	}
 }
