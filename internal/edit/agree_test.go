@@ -18,8 +18,9 @@ import (
 // 見ている値と、ホットリロードでゲームが実際に表示する値が食い違う。
 //
 //	ゲーム内Mod   csvfile.ParseCSharpRecords（CsvReader.cs の移植）
-//	publish       csvfile.ParsePowerShellRecord（ConvertFrom-Csv の移植）
-//	validate      csvfile.ParsePythonRecords（Python の csv.reader の移植）
+//	publish       csvfile.ParsePowerShellRecord（ConvertFrom-Csv の移植）と、
+//	              全体を解釈する主の読み手 csvfile.ReadPowerShell（PR2 から publish が使う）
+//	validate      csvfile.ReadPythonRecords（Python の csv.reader の移植）
 func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 	values := []string{
 		"ふつうの訳",
@@ -70,9 +71,17 @@ func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 			if got := fields[len(fields)-1]; got != want {
 				t.Errorf("publish の読み = %q, want %q（行: %q）", got, want, body)
 			}
+			if file, err := csvfile.ReadPowerShell(out); err != nil || len(file.Records) != 1 {
+				t.Errorf("主の読み手で読めない: %v（%d 件）", err, len(file.Records))
+			} else if got := file.Records[0].Get("translation"); got != want {
+				t.Errorf("主の読み手の読み = %q, want %q（行: %q）", got, want, body)
+			}
 
 			// validate の読み方。
-			recs := csvfile.ParsePythonRecords(csvfile.ReadPythonLines(out))
+			recs, err := csvfile.ReadPythonRecords(out)
+			if err != nil {
+				t.Fatalf("validate の読みが失敗した: %v", err)
+			}
 			if len(recs) >= 2 {
 				got := recs[1].Fields[len(recs[1].Fields)-1]
 				if got != want {
@@ -80,6 +89,101 @@ func TestSetTranslationAgreesAcrossReaders(t *testing.T) {
 				}
 			} else {
 				t.Errorf("validate の読みでレコードが足りない: %d", len(recs))
+			}
+		})
+	}
+}
+
+// TestMultilineValuesAgreeAcrossReaders は、複数行の値と、引用の中で '#' から
+// 始まる行を含む値を書いたファイルを、3つの読み手が同じ値として読むことを確かめる。
+//
+// 全体を解釈する読み手へ移す作業の PR3 と PR4 で、保存はレコードの最終フィールド
+// （区切りの関数の Offsets の最後）から本体の終わりまでを差し替え、元の終端を
+// そのまま残す形になる。いまの SetTranslation は改行を拒むので、ここでは同じ
+// 差し替えを試験の中で組み立て、値は保存と同じ escapeTranslation で書く。
+// ファイルは実物の作業コピーと同じ形（レコードの区切りは CRLF、原文は空行を挟む
+// 複数行、値の中は LF）にする。
+//
+// 3つの読み手のどれかが別の値を返すと、画面で見ている訳と、ゲームが表示する訳と、
+// 検証が見る訳が食い違う。とくに '#' で始まる行は、行単位で読む道具がコメントとして
+// 落とす形なので、引用の中なら値に入ることをここで縛る。
+func TestMultilineValuesAgreeAcrossReaders(t *testing.T) {
+	const (
+		header = "key,section,node,order,speaker,source_en,translation\r\n"
+		// 原文が段落を空行で分けた複数行で、訳が空のレコード。実物の作業コピーに
+		// 1件だけある形と同じ（合成した文）。
+		record = "f2ea4a1f0e4e8626,UI,,,UI,\"para1\n\npara2\",\r\n"
+		// 後ろのレコードが飲み込まれていないことを見るための行。
+		after = "# --- node ---\r\n3fc4ccfe745870e2,UI,,,UI,two,に\r\n"
+	)
+	values := []string{
+		"一行目\n二行目",
+		"一行目\n\n  \n四行目",
+		"一行目\n# 二行目",
+		"# 先頭の行\n二行目",
+		"一行目\n#\n#三行目",
+		"\n",
+		"\n# だけ\n",
+		"カンマ,\nと改行",
+		"引用符 \"hi\"\n# と '#'",
+		"末尾に空白  \n 先頭に空白",
+		"CRLF の\r\n改行",
+		// 引用の中の単独の CR も、3つの読み手は同じ値に読む。publish が止めるのは、
+		// 上流の道具（Remove-NonRecords）があとでそのレコードを落とすためで、
+		// ここの3つの読み手の差のためではない（csvfile.LoneCRValues）。
+		"単独の\rCR",
+		"末尾の CR\r",
+	}
+
+	for _, want := range values {
+		t.Run(want, func(t *testing.T) {
+			segs := csvfile.SplitSegments([]byte(header + record + after))
+			seg := segs.List[1]
+			body := segs.Body(seg)
+			start := seg.Offsets[len(seg.Offsets)-1] - seg.Start
+			out := []byte(header + body[:start] + escapeTranslation(want) + string(seg.Term) + after)
+
+			// ゲーム内Mod の読み方。
+			game := csvfile.ReadCSharpRows(out)
+			if len(game) != 2 {
+				t.Fatalf("ゲーム内Mod の読みで %d 件（2件のはず）", len(game))
+			}
+
+			// publish の読み方（全体を解釈する主の読み手）。飲み込みと見なされないこと、
+			// ゲームの読み方と割れないことも見る。
+			file, err := csvfile.ReadPowerShell(out)
+			if err != nil || len(file.Records) != 2 {
+				t.Fatalf("主の読み手で読めない: %v（%d 件）", err, len(file.Records))
+			}
+			if got := csvfile.FindSwallows(file.Segments); got != nil {
+				t.Errorf("飲み込みと見なされた: %+v", got)
+			}
+			if got := csvfile.CSharpDisagreements(file); got != nil {
+				t.Errorf("ゲームの読み方と割れた: %+v", got)
+			}
+
+			// validate の読み方。先頭のレコードはヘッダー。
+			recs, err := csvfile.ReadPythonRecords(out)
+			if err != nil || len(recs) != 3 {
+				t.Fatalf("validate の読みで読めない: %v（%d 件）", err, len(recs))
+			}
+
+			for i, r := range file.Records {
+				for c, col := range []string{"key", "section", "node", "order", "speaker", "source_en", "translation"} {
+					ps, cs, py := r.Get(col), game[i].Get(col), recs[i+1].Fields[c]
+					if ps != cs || ps != py {
+						t.Errorf("[%d] %s が食い違う: 主の読み手 %q、ゲーム内Mod %q、validate %q", i, col, ps, cs, py)
+					}
+				}
+			}
+			if got := file.Records[0].Get("translation"); got != want {
+				t.Errorf("書いた訳 = %q, want %q", got, want)
+			}
+			if got := file.Records[0].Get("source_en"); got != "para1\n\npara2" {
+				t.Errorf("原文が変わった: %q", got)
+			}
+			if got := file.Records[1].Get("key"); got != "3fc4ccfe745870e2" {
+				t.Errorf("後ろのレコードのキー = %q", got)
 			}
 		})
 	}
@@ -148,37 +252,22 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// 書けない状態にする。閉じる相手が OS で違う。[publish.WriteBytes] は
-		// 同じディレクトリに一時ファイルを作ってから rename で置き換えるので、
-		// Windows はファイルの読み取り専用属性で止まり、POSIX はディレクトリの
-		// 書き込み権で止まる。ファイルだけを 0444 にしていたころは、POSIX では
-		// 置き換えが通ってしまい、この節は毎回飛ばされていた。
-		// 版の照合は読むだけなので、どちらでも通って再試行の経路まで届く。
-		closed, open := path, path
-		var closedMode, openMode os.FileMode = 0o444, 0o644
-		if runtime.GOOS != "windows" {
-			closed, open = dir, dir
-			closedMode, openMode = 0o555, 0o755
-		}
-		if err := os.Chmod(closed, closedMode); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(open, openMode) })
+		// 版の照合は読むだけなので、書けなくしても通って再試行の経路まで届く。
+		forbidSaving(t, path)
 
 		start := time.Now()
 		saveErr := f.Save()
 		elapsed := time.Since(start)
 
 		if saveErr == nil {
-			// root で走るとどちらの手も効かない。再試行の経路を確かめられないので飛ばす。
-			t.Skip("この環境では書けない状態にできなかったので飛ばす")
+			// 書けないことは forbidSaving が確かめてある。それでも通るのは、
+			// 一時ファイルを経ずに path を直接書き換えたときである（POSIX では
+			// 0o555 のディレクトリの中でも、既にあるファイルの上書きは通る）。
+			t.Fatalf("書けない状態で保存が通った。一時ファイルを経ていない（中身: %q）", readFile(t, path))
 		}
 		// 10ms + 30ms + 100ms を空けて4回試す。
 		if elapsed < 140*time.Millisecond {
 			t.Errorf("再試行していない: %v しか掛かっていない（誤り: %v）", elapsed, saveErr)
-		}
-		if err := os.Chmod(open, openMode); err != nil {
-			t.Fatal(err)
 		}
 		got, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -224,6 +313,53 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 			t.Errorf("第三者の書き込みを消した\ngot  %q\nwant %q", got, other)
 		}
 	})
+}
+
+// forbidSaving は path への保存が失敗する状態にする。止められたことを
+// 確かめられなければ、呼んだ試験を飛ばす。
+//
+// 閉じる相手が OS で違う。[publish.WriteBytes] は同じディレクトリに一時ファイルを
+// 作ってから rename で置き換えるので、Windows はファイルの読み取り専用属性で止まり、
+// POSIX はディレクトリの書き込み権で止まる。ファイルだけを 0444 にしていたころは、
+// POSIX では置き換えが通ってしまい、この節は毎回飛ばされていた。
+//
+// 止められたかは、調べる対象（[File.Save]）の成否ではなく、ここで実際に書いてみて
+// 確かめる。POSIX ではディレクトリに新しいファイルを作れないこと、Windows では
+// ファイルを書き込み用に開けないことを見る。対象の成否で代用していたころは、
+// 対象が一時ファイルを経ずに path を直接書き換える形へ戻ったときも「止められ
+// なかった環境」と読んで飛ばしていた。go test は飛ばした試験を成功として数えるので、
+// 再試行の経路が CI で1度も通らなくなっても誰も気づけない。
+//
+// 飛ばすのは、閉じても書けてしまう環境（root で走っている、など）だけである。
+func forbidSaving(t *testing.T, path string) {
+	t.Helper()
+
+	target := path
+	var closed, open os.FileMode = 0o444, 0o644
+	if runtime.GOOS != "windows" {
+		target, closed, open = filepath.Dir(path), 0o555, 0o755
+	}
+	if err := os.Chmod(target, closed); err != nil {
+		t.Fatal(err)
+	}
+	// 後始末で消せるように戻す。t.Cleanup は後入れ先出しなので、呼び出し側が
+	// 先に作った t.TempDir の削除より先に走る。
+	t.Cleanup(func() { _ = os.Chmod(target, open) })
+
+	if runtime.GOOS == "windows" {
+		probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err == nil {
+			_ = probe.Close()
+			t.Skipf("%s を読み取り専用にしても書き込み用に開けたので飛ばす", path)
+		}
+		return
+	}
+	probe, err := os.CreateTemp(target, "probe*")
+	if err == nil {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Skipf("%s に新しいファイルを作れたので飛ばす。root で走っていると効かない", target)
+	}
 }
 
 // TestSaveWithoutChangesKeepsModTime は「中身が同じなら書かない」を、時刻の

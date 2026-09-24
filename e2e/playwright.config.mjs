@@ -30,7 +30,8 @@ export default defineConfig({
   },
   projects: [
     { name: "chromium" },
-    // 試験の仕組み（support/ と coverage.mjs）そのものの試験。画面は開かず、生データも書かない。
+    // 試験の仕組み（support/ と coverage.mjs）そのものの試験と、画面の例の撮り直し（samples/）の
+    // 試験。dwloc の画面は開かず、生データも書かない。
     { name: "harness", testDir: "harness" },
   ],
 });

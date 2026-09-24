@@ -1,7 +1,9 @@
 package web
 
 import (
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,6 +161,38 @@ func TestCountsNeverGoBelowZero(t *testing.T) {
 	}
 }
 
+// TestCountsFollowTheTextOrder は、件数の欄（と、同じ並びから作る絞り込み）の
+// カテゴリの並びが、CLI の text 形式と同じであることを見る。
+//
+// text 形式は重さごと（要作業 → 要確認 → 参考）に、表示順の表（[diff.Categories]）の
+// 順で並べる（internal/diff の writeTextLocale）。README の表もその順である。
+// Category の値で並べていたころは、後から値を足したカテゴリ（引き継ぎ元の候補）が
+// 画面でだけ「原文とタグが違う行」の後ろに回っていた。値は割り当てにすぎず、
+// 表示順ではない（internal/diff の category.go）。
+//
+// 全カテゴリは、実際の集計の件数から取る（件数には全カテゴリが入る）。
+func TestCountsFollowTheTextOrder(t *testing.T) {
+	s := newTestServer(t, Options{UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	counts := s.buildCounts(ja, "ja", judgedSummary("ja", s.summary("ja").Counts), nil)
+
+	var want []string
+	for _, status := range []diff.Status{diff.StatusTodo, diff.StatusReview, diff.StatusInfo} {
+		for _, c := range diff.Categories() {
+			if c.Status() == status {
+				want = append(want, c.ID())
+			}
+		}
+	}
+	got := make([]string, 0, len(counts))
+	for _, c := range counts {
+		got = append(got, c.Category)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("件数の欄の並びが text 形式と違う\ngot  %v\nwant %v", got, want)
+	}
+}
+
 func TestStatsShowBrokenRowsOnlyWhenThereAreSome(t *testing.T) {
 	// 壊れた行の数は1件でもあるときだけ出す。実データでは全ロケールとも0件で、
 	// 毎回「0」と並べても読む手がかりにならない。1件でも出たらファイルが壊れている。
@@ -188,6 +222,42 @@ func TestStatsShowBrokenRowsOnlyWhenThereAreSome(t *testing.T) {
 			t.Errorf("%s: 出していない: %+v", tc.name, stats)
 		case tc.broken > 0 && found.Value != tc.broken:
 			t.Errorf("%s: 数が %d、%d を期待", tc.name, found.Value, tc.broken)
+		}
+	}
+}
+
+func TestStatsLeaveOutAnUnreadPublishedFile(t *testing.T) {
+	// 閉じない引用符で読まなかった公開ファイルは、ハッシュ行と台詞ID行を並べない。
+	// 行を1つも使っていないので、「0」と並べると公開ファイルが空だと読まれる。
+	// 読めなかったことは断り書き（note.published_unclosed）が言う。CLI の text 形式も
+	// この場面では件数を書かない（internal/diff の writeTextLocale）。
+	s := newTestServer(t, Options{UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	counted := []string{s.cat.T(ja, "stats.hash_rows"), s.cat.T(ja, "stats.line_rows")}
+	always := []string{s.cat.T(ja, "stats.file_lines"), s.cat.T(ja, "stats.data_lines")}
+
+	for _, tc := range []struct {
+		name     string
+		unclosed int
+	}{
+		{"読めた公開ファイル", 0},
+		{"引用符が閉じない公開ファイル", 2},
+	} {
+		// 数は、読み込みが0件で埋めたときと同じ値にする。
+		stats := s.buildStats(ja, diff.Summary{PublishedUnclosed: tc.unclosed}, 6, 2)
+		has := func(label string) bool {
+			return slices.ContainsFunc(stats, func(v statView) bool { return v.Label == label })
+		}
+		for _, label := range counted {
+			if got, want := has(label), tc.unclosed == 0; got != want {
+				t.Errorf("%s: %q を並べたか = %v、%v を期待: %+v", tc.name, label, got, want, stats)
+			}
+		}
+		// 編集しているファイルの行数は、公開ファイルが読めなくても数えられる。
+		for _, label := range always {
+			if !has(label) {
+				t.Errorf("%s: %q を並べていない: %+v", tc.name, label, stats)
+			}
 		}
 	}
 }
@@ -311,6 +381,47 @@ func TestNotesSayWhatCouldNotBeRead(t *testing.T) {
 			name: "原文の列が無い", hasSource: false,
 			sum:  base,
 			want: []string{note("note.no_source")},
+		},
+		{
+			// 閉じない引用符で読めなかった作業コピー。「読んでいません」と書くと、
+			// --no-working を外せば直ると読まれる。
+			name: "作業コピーの引用符が閉じない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.WorkingExists, sum.WorkingUnclosed = true, 3
+				return sum
+			},
+			want: []string{note("note.working_unclosed",
+				"path", "Translations/_discovered/ja.working.csv", "line", "3")},
+			notWant: []string{note("note.working_skipped", "path", "Translations/_discovered/ja.working.csv"),
+				note("note.working_none", "path", "Translations/_discovered/ja.working.csv")},
+		},
+		{
+			name: "公開ファイルの引用符が閉じない", hasSource: true,
+			sum:  func() diff.Summary { sum := base(); sum.PublishedUnclosed = 2; return sum },
+			want: []string{note("note.published_unclosed", "path", "Translations/ja/strings.csv", "line", "2")},
+		},
+		{
+			name: "はみ出しの記録の引用符が閉じない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.LayoutRisksExist, sum.LayoutRisksUnclosed, sum.LayoutRisksPath = true, 4, layout
+				return sum
+			},
+			want: []string{note("note.layout_risks_unclosed",
+				"path", "Translations/_discovered/ja.layout_risks.csv", "line", "4")},
+			notWant: []string{note("note.layout_risks_read", "path", "Translations/_discovered/ja.layout_risks.csv")},
+		},
+		{
+			// 再生順を1行も使えない。「読めていません」ではなく、どの行を直すかを言う。
+			name: "再生順の引用符が閉じない", hasSource: true,
+			sum: func() diff.Summary {
+				sum := base()
+				sum.OrderUnclosed, sum.OrderKeys, sum.OrderLineIDs = 2, false, false
+				return sum
+			},
+			want:    []string{note("note.order_unclosed", "line", "2")},
+			notWant: []string{note("note.order_unreadable"), lineIDsHead, oldHeldHead},
 		},
 	}
 	for _, tc := range cases {
@@ -447,6 +558,83 @@ func TestLineIDCountsGiveTheLineIDReason(t *testing.T) {
 			}
 			if lang == "en" && hasJapanese(want) {
 				t.Errorf("英語の理由に日本語が混ざっている: %q", want)
+			}
+		})
+	}
+}
+
+// TestOrderUnreadableCountsGiveTheOrderReason は、再生順のキーを読めず作業コピーは
+// あるときに、件数の欄の「判定していません（理由）」が、どのカテゴリでも再生順を
+// 読めていないことを理由にすることを見る。
+//
+// 引き継ぎ元の候補は作業コピーと norm 列を要る。norm はキーのある行からしか拾わない
+// ので、キーが無ければ norm も無い。そこで「norm 列がありません」と書くと、断り書き
+// （note.order_unreadable）が再生順を丸ごと読めていないと言っているのに、その
+// カテゴリだけ norm 列を直しに行かせることになる。
+// TestStartsWithUnclosedQuote は、閉じない引用符のファイルがあっても待ち受けを始め、
+// そのファイルに依るカテゴリを「判定していません」にして理由を出すことを見る。
+//
+// 全体を解釈する読み手へ移す作業の PR2 の前半では、読み手の誤りがそのまま起動の
+// 誤りになり、dwloc edit が開かなかった。直すための画面まで開けなくなるので、
+// diff と同じく、そのファイルに依る判定だけを止める（決まったことの 3）。
+func TestStartsWithUnclosedQuote(t *testing.T) {
+	root := newTestRoot(t)
+	working := filepath.Join(root, "Translations", "_discovered", "ja.working.csv")
+	if err := os.MkdirAll(filepath.Dir(working), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "key,section,node,order,speaker,source_en,translation\n" +
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,Hello,\"もしもし\n"
+	if err := os.WriteFile(working, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+
+	lines := getLines(t, s, "ja")
+	wantNote := s.cat.T(ja, "note.working_unclosed", "path", "Translations/_discovered/ja.working.csv", "line", "2")
+	if !hasNote(lines.Notes, wantNote) {
+		t.Errorf("断り書きに %q が無い: %q", wantNote, lines.Notes)
+	}
+	wantReason := s.cat.T(ja, "reason."+reason.JudgeWorkingUnclosed, "line", "2")
+	untranslated := mustCount(t, lines.Counts, diff.CatUntranslated.ID())
+	if untranslated.Judged || untranslated.Reason != wantReason {
+		t.Errorf("未翻訳 = judged %v reason %q、%q で止まるはず", untranslated.Judged, untranslated.Reason, wantReason)
+	}
+	// 作業コピーを要らないカテゴリは判定している。
+	if !mustCount(t, lines.Counts, diff.CatVanished.ID()).Judged {
+		t.Error("台本から消えた行を判定していない")
+	}
+}
+
+func TestOrderUnreadableCountsGiveTheOrderReason(t *testing.T) {
+	for _, lang := range []string{"ja", "en"} {
+		t.Run(lang, func(t *testing.T) {
+			s := newTestServer(t, Options{UILang: lang})
+			cat := s.cat.lookup(lang)
+			want := s.cat.T(cat, "reason."+reason.JudgeOrderUnreadable)
+
+			// 再生順のほかは何もかも読めた集計。ほかの理由で止まるカテゴリを混ぜない。
+			// 全カテゴリは、実際の集計の件数から取る（件数には全カテゴリが入る）。
+			sum := judgedSummary("ja", s.summary("ja").Counts)
+			sum.OrderKeys, sum.OrderLineIDs, sum.OrderNorms = false, false, false
+			counts := s.buildCounts(cat, "ja", sum, nil)
+
+			for _, c := range counts {
+				if c.Judged {
+					continue
+				}
+				if c.Reason != want {
+					t.Errorf("%s の理由が %q、%q を期待", c.Category, c.Reason, want)
+				}
+			}
+			// 作業コピーを読めているので、作業コピーの理由で先に止まることはない。
+			// 名指しした相手が実際に判定されていないことを確かめておく。
+			if mustCount(t, counts, diff.CatCarryFrom.ID()).Judged {
+				t.Error("引き継ぎ元の候補を判定している。集計の前提が崩れている")
+			}
+			if !mustCount(t, counts, diff.CatUntranslated.ID()).Judged {
+				t.Error("未翻訳を判定していない。集計の前提が崩れている")
 			}
 		})
 	}

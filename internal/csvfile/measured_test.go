@@ -7,10 +7,13 @@ import (
 
 // TestReadPowerShellRowsHeaderSelection は、ヘッダーに選ばれる行の規則を固定する。
 //
-// ConvertFrom-Csv が読み飛ばすのは完全な空行だけで、空白だけの行や "," も
-// ヘッダーになる（pwsh 7.6.6 で実測）。データ行に使う空行相当の判定をここへ
-// 持ち込むと、先頭に空白だけの行が1本あるだけで本物のヘッダーがデータ行へずれ、
-// 公開CSVの全行が黙って捨てられる。
+// ヘッダーの前で飛ばすのは、空行と空白だけの行である。上流の hash-strings.ps1
+// （55d2e09 / c8fda90 の Remove-NonRecords）がヘッダーを選ぶ前にこれらを落とす
+// ので、それに合わせてある。003ed1e の ConvertFrom-Csv は完全な空行しか飛ばさず、
+// 空白だけの行が列0個のヘッダーになって、公開CSVの全行が黙って捨てられていた。
+//
+// "," と '""' の行は上流でも落ちず、ヘッダーになる。データ行に使う空行相当の判定を
+// ここへ持ち込まないことも、あわせて固定する。
 func TestReadPowerShellRowsHeaderSelection(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -19,47 +22,85 @@ func TestReadPowerShellRowsHeaderSelection(t *testing.T) {
 		// wantKey は1行目の key 列。列が引けない場合は wantHasKey が false。
 		wantHasKey bool
 		wantKey    string
+		// wantHeaderLine はヘッダーに選んだ行の番号（[ReadPowerShellTable]）。
+		wantHeaderLine int
 	}{
 		{
-			name:       "空行は飛ばして次の行がヘッダーになる",
-			csv:        "\nkey,translation\nabc,あ\n",
-			wantLen:    1,
-			wantHasKey: true,
-			wantKey:    "abc",
+			name:           "空行は飛ばして次の行がヘッダーになる",
+			csv:            "\nkey,translation\nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 2,
 		},
 		{
-			name:       "空行が続いても飛ばす",
-			csv:        "\n\nkey,translation\nabc,あ\n",
-			wantLen:    1,
-			wantHasKey: true,
-			wantKey:    "abc",
+			name:           "空行が続いても飛ばす",
+			csv:            "\n\nkey,translation\nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 3,
 		},
 		{
-			// 列が0個のヘッダーになるので、以降の行はどの列も引けない。
-			name:       "空白だけの行はヘッダーになる",
-			csv:        "   \nkey,translation\nabc,あ\n",
-			wantLen:    2,
-			wantHasKey: false,
+			// 上流の報告 #8 の入力（p-ws-above-header）と同じ形。
+			name:           "空白だけの行は飛ばす",
+			csv:            "   \nkey,translation\nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 2,
 		},
 		{
-			name:       "タブだけの行もヘッダーになる",
-			csv:        "\t\nkey,translation\nabc,あ\n",
-			wantLen:    2,
-			wantHasKey: false,
+			name:           "タブだけの行も飛ばす",
+			csv:            "\t\nkey,translation\nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 2,
+		},
+		{
+			// .NET の Trim が落とす文字は、半角スペースとタブだけではない。
+			name:           "全角空白や改行でない空白文字だけの行も飛ばす",
+			csv:            "　\n \t\v\f\nkey,translation\nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 3,
+		},
+		{
+			// 上流の報告 #8 で、上流と一致していた入力（p-comment-blank-header）。
+			name:           "コメントと空行と空白だけの行が混ざっても飛ばす",
+			csv:            "# note\n\n  \n# more\nkey,translation\nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 5,
+		},
+		{
+			// 空白だけの行を落とすのはヘッダーの前だけの話ではないが、データ行では
+			// もともと [ParsePowerShellRecord] がレコードにしない。
+			name:           "ヘッダーの後ろの空白だけの行はレコードにならない",
+			csv:            "key,translation\n   \nabc,あ\n",
+			wantLen:        1,
+			wantHasKey:     true,
+			wantKey:        "abc",
+			wantHeaderLine: 1,
 		},
 		{
 			// 列が1個（名前は空文字）のヘッダー。元実装では H1 という既定名が
 			// 付くが、名前で引くかぎりどちらも key を引けない点は変わらない。
-			name:       "カンマだけの行もヘッダーになる",
-			csv:        ",\nkey,translation\nabc,あ\n",
-			wantLen:    2,
-			wantHasKey: false,
+			name:           "カンマだけの行はヘッダーになる",
+			csv:            ",\nkey,translation\nabc,あ\n",
+			wantLen:        2,
+			wantHasKey:     false,
+			wantHeaderLine: 1,
 		},
 		{
-			name:       "空の引用フィールドだけの行もヘッダーになる",
-			csv:        `""` + "\nkey,translation\nabc,あ\n",
-			wantLen:    2,
-			wantHasKey: false,
+			name:           "空の引用フィールドだけの行もヘッダーになる",
+			csv:            `""` + "\nkey,translation\nabc,あ\n",
+			wantLen:        2,
+			wantHasKey:     false,
+			wantHeaderLine: 1,
 		},
 	}
 
@@ -68,6 +109,13 @@ func TestReadPowerShellRowsHeaderSelection(t *testing.T) {
 			rows, err := ReadPowerShellRows([]byte(tt.csv))
 			if err != nil {
 				t.Fatalf("ReadPowerShellRows が失敗した: %v", err)
+			}
+			table, err := ReadPowerShellTable([]byte(tt.csv))
+			if err != nil {
+				t.Fatalf("ReadPowerShellTable が失敗した: %v", err)
+			}
+			if table.HeaderLine != tt.wantHeaderLine {
+				t.Errorf("ヘッダーの行 = %d, want %d", table.HeaderLine, tt.wantHeaderLine)
 			}
 			if len(rows) != tt.wantLen {
 				t.Fatalf("行数 = %d, want %d", len(rows), tt.wantLen)

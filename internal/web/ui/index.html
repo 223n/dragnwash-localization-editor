@@ -102,6 +102,8 @@
 
   export-state は例外として足した。ふだんは空で高さが0になり、中身が入るのは
   翻訳者が書き出しを押した直後だけである（#export-menu の注記）。
+  unsent（まだファイルに入っていない訳）も例外で、保存が止まっているときにしか
+  出ない（下の #unsent の注記）。
 -->
 <div class="top">
   <header class="bar">
@@ -196,14 +198,18 @@
   </header>
 
   <!--
-    失敗の理由。読み上げにも出す（role="status"）。
+    失敗の理由と、読み込みの案内。読み上げにも出す（role="status"）。
 
     hidden を出し入れしない。hidden の要素は支援技術の木から外れるので、
     文字が変わる瞬間にこの要素が木に居らず、告知しない実装があり得る。
     出し入れは中身の入れ替えで行い、空のときは app.css の .notice:empty が
     余白と下線を落とす（中身の無いブロックの高さは0になる）。
+
+    出し方（失敗の .error か、案内の .info か）は app.js の showMessage が中身と
+    一緒に決める。ここで error を固定していたころは、「読み込んでいます…」と
+    「ロケールを選んでください。」まで失敗と同じ赤い帯で出た。
   -->
-  <p id="message" class="notice error" role="status"></p>
+  <p id="message" class="notice" role="status"></p>
 
   <!--
     書き出しの結果。帯のメニュー（#export-menu）の外に置く。メニューは選んだ
@@ -259,6 +265,25 @@
       <span id="orphans-title"></span>
     </p>
     <ul id="orphans-list" class="orphans-list"></ul>
+  </section>
+
+  <!--
+    まだファイルに入っていない訳。保存が待ち受けに届かないとき（dwloc が時間切れで
+    終わったあとなど）と、待ち受けが受け付けないとき（400・404・415）にだけ出す
+    （app.js の renderUnsent）。起動し直すと URL が変わり、このタブの訳は新しい
+    待ち受けへ送れないので、翻訳者が写せるように字として並べる。見た目は行き先の
+    無い訳（#orphans）と同じにする。どちらも「画面の中にしか無い訳」だからである。
+
+    帯へ入れるものを増やすと競合の引き止めが押し出される（上の注記）が、これは
+    保存が止まっているときにしか出ない。引き止めは帯の先頭に出る（#conflict の order）
+    ので、両方が出ても引き止めのボタンは押せる。
+  -->
+  <section id="unsent" class="orphans" hidden>
+    <p class="lead">
+      <svg class="icon" aria-hidden="true"><use href="#i-triangle-exclamation"/></svg>
+      <span id="unsent-title"></span>
+    </p>
+    <ul id="unsent-list" class="orphans-list"></ul>
   </section>
 </div>
 
@@ -317,6 +342,20 @@
           <svg class="icon" aria-hidden="true"><use href="#i-filter-circle-xmark"/></svg>
           <span id="filter-clear-label"></span>
         </button>
+        <!--
+          引き出しの中の見張り。目には見せず、読み上げにだけ出す（sr-only）。
+
+          狭い画面で引き出しを開いているあいだは、帯（.top）と一覧（main）が inert に
+          なり、帯の「表示中 N 行」（#shown）も一覧の「当たる行がありません」（#empty）も
+          支援技術の木から外れる。引き出しの主な用途は絞り込みと検索なので、その結果が
+          告知されなくなる。そのあいだだけ app.js の applyView が同じ文をここへ写す。
+          閉じているとき、広い画面のときは空のままにする（帯の #shown が告知するので、
+          2か所で同じ文を読ませない）。
+
+          #message と同じく hidden は出し入れしない。畳み（details）の中にも入れない。
+          どちらも、文字が変わる瞬間にこの要素が木に居なくなる。
+        -->
+        <p id="finder-status" class="sr-only" role="status"></p>
       </div>
     </section>
 

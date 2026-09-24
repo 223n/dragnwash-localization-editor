@@ -26,7 +26,8 @@
           - 'package-lock.json'
           - 'LICENSE'
           - '.github/ISSUE_TEMPLATE/**'
-          - '.github/PULL_REQUEST_TEMPLATE.md'
+          # actions/labeler は大文字と小文字を区別する。実物の名前（小文字）に合わせ、英語版（.en.md）も拾う
+          - '.github/pull_request_template*.md'
           - '.github/labels.yml'
           - '.github/labeler.yml'
           - '.github/dependabot.yml'

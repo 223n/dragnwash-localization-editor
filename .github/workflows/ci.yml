@@ -1,24 +1,47 @@
 name: CI
 
-# 5つの検査をする。
+# 7つの検査をする。
 #   lint-ja         文書の書式（markdownlint）と日本語の書き方（textlint）。
 #                   規則は公開されている共有設定 @223n/lint-config-ja にあり、ここには「何を検査するか」だけを書く
 #   go              Goの書式（gofmt）、静的解析（go vet）、テストとカバレッジの閾値、全対象向けのビルド
-#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値
+#   go-windows      Windows での静的解析（go vet）とテスト。主な利用先で、Windows でだけ通る道を試す
+#   e2e             画面（internal/web/ui）を Playwright の Chromium で動かすテストと、app.js のカバレッジの閾値。
+#                   落ちたときは Playwright の出力（test-results/）を成果物として7日間残す
 #   lint-workflows  ワークフローの構文と型（actionlint）
 #   zizmor          ワークフローの安全性（zizmor）。アクションの SHA 固定、権限、危険な書き方を見る
+#   govulncheck     Goの標準ライブラリの既知の脆弱性（govulncheck）。go.mod の版の Go で、呼んでいる箇所を見る
+#
+# 週1回の実行（schedule）では govulncheck だけを走らせる。脆弱性の一覧はコードを変えなくても増えるため、
+# push と pull_request を待たずに気付けるようにする。ほかの検査はコードが変わらなければ結果も変わらない
 on:
   push:
     branches: [main, develop]
   pull_request:
+  schedule:
+    # 毎週月曜の朝（日本時間 9:30）。CodeQL（9:00）と重ならないようにずらす
+    - cron: '30 0 * * 1'
   # 手で動かすため。
   # GITHUB_TOKEN が開いた PR（リリースの PR など）では、pull_request の実行は「承認待ち」で作られ、
   # 書き込み権限のある人が「Approve workflows to run」を押すまで動かない
   workflow_dispatch:
+    inputs:
+      runner:
+        # ubuntu-latest が次の版へ移る前に、その版の本物のランナーで1回だけ試すときに使う。
+        # 変数 RUNS_ON はリリースを含むすべてのワークフローが見るので、試すだけならこちらを使う。
+        # 例: gh workflow run ci.yml --ref develop -f runner=ubuntu-26.04
+        # Windows のジョブ（go-windows）は、この入力に関わらず windows-latest で動く
+        description: 'この実行だけで使うランナーのラベル（例: ubuntu-26.04）。空なら変数 RUNS_ON、それも無ければ ubuntu-latest'
+        required: false
+        type: string
+        default: ''
 
-# 同じブランチに続けて push したとき、古い実行を止める
+# 同じブランチに続けて push したとき、古い実行を止める。
+# 止めるのは、きっかけ（イベント）とランナーが同じ古い実行だけにする。そのため組にイベント名とランナーの名前を入れる。
+# 入れないと、週1回の実行（schedule。既定ブランチの develop で動く）や develop で手で動かした実行が、
+# 走っている develop の push の CI を止める。リリース（release.yml）は push の実行を見るので、
+# 「止められた CI」を見て止まる。手で動かした実行が通っても、止められた push の実行のほうを見るので進めない
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
@@ -27,9 +50,11 @@ permissions:
 jobs:
   lint-ja:
     name: 日本語Lint
+    if: github.event_name != 'schedule'
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
-    # 無ければ GitHub がホストする ubuntu-latest で動く
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # 無ければ GitHub がホストする ubuntu-latest で動く。
+    # 手で動かすときだけ、入力 runner がどちらよりも先に効く
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     # 固まったまま枠を占め続けないようにする
     timeout-minutes: 10
     steps:
@@ -57,7 +82,8 @@ jobs:
 
   go:
     name: Go
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event_name != 'schedule'
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: リポジトリを取得
@@ -113,9 +139,48 @@ jobs:
             echo "ok ${target}"
           done
 
+  go-windows:
+    name: Go（Windows）
+    if: github.event_name != 'schedule'
+    # 翻訳者の多くは Windows で使う。Windows でだけ通る道（ドライブ文字、大文字と小文字を区別しない
+    # ファイルシステム、Steam の既定の場所）は、Linux のジョブでは飛ぶか別の期待値になるため、ここで試す。
+    # 変数 RUNS_ON と入力 runner は見ない。どちらも Linux のランナーを選ぶためのものである。
+    # macOS は足していない。利用先として少なく、ゲームの Mod も macOS では動かないため
+    runs-on: windows-latest
+    # Windows のランナーは Linux より遅い。手元の Windows でも、diff・cmd・web のパッケージが30〜60秒かかる
+    timeout-minutes: 20
+    defaults:
+      run:
+        # 既定の pwsh ではなく bash で書く。ほかのジョブと同じ書き方で読めるようにする
+        shell: bash
+    steps:
+      - name: リポジトリを取得
+        # .gitattributes が改行を LF に固定するので、ランナーの core.autocrlf に関わらず Linux と同じ中身になる
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Goを用意
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 静的解析する
+        run: go vet ./cmd/... ./internal/...
+
+      - name: テストする
+        # カバレッジの閾値は Linux の go ジョブだけで見る。Windows でだけ走る試験の分、数字が揺れるため。
+        #
+        # 一時ディレクトリ（TMP）はランナーの既定のまま使う。GitHub の Windows のランナーでは
+        # C:\Users\RUNNER~1\... の短い名前（8.3 形式）になり、作業場所（D:\a\...）とドライブも違う。
+        # 翻訳者の手元でも起こりうる形なので、揃え直さずにそのまま試す
+        run: go test ./cmd/... ./internal/... -count=1
+
   e2e:
     name: 画面のE2E
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event_name != 'schedule'
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: リポジトリを取得
@@ -141,7 +206,21 @@ jobs:
 
       - name: ブラウザーを入れる
         # Chromium だけを入れる。--with-deps は OS のライブラリも apt で入れるので、
-        # セルフホストのランナーでは sudo を使える必要がある
+        # セルフホストのランナーでは sudo を使える必要がある。
+        #
+        # apt で入れる包みの名前は OS の版ごとに違い、Playwright は版ごとの一覧を持っている。
+        # そのため ubuntu-latest が Ubuntu 26.04 へ移るとき（2026年10月19日から11月19日にかけて。
+        # https://github.com/actions/runner-images/issues/14748 ）、いちばん影響を受けるのはこの段である。
+        # Playwright は 1.61 から Ubuntu 26.04 を公式に扱い、26.04 向けの一覧を持つ。
+        # ubuntu:26.04（26.04.1）のコンテナに Node 22 と Go 1.27.1 だけを入れ、Playwright 1.63.0 で
+        # この段と npm run test:e2e が通ることを確かめた（2026年9月）。
+        # 同じコンテナで lint-ja と go の手順も通った。そのため runs-on は ubuntu-latest のままにする。
+        #
+        # 移る前に GitHub のランナーで試すときは、この CI を入力 runner に ubuntu-26.04 を渡して手で動かす
+        # （gh workflow run ci.yml --ref develop -f runner=ubuntu-26.04）。
+        # 変数 RUNS_ON は使わない。リリースを含むほかのワークフローも同じ変数を見るためである。
+        # 移ったあとにこの段で落ちたら、e2e の runs-on の既定だけを ubuntu-24.04 にして、
+        # Playwright を上げて通るのを確かめてから戻す
         run: npx playwright install --with-deps chromium
 
       - name: E2Eテストをする
@@ -149,9 +228,30 @@ jobs:
         # 下回ると失敗し、app.js のカバレッジをジョブの要約に出す
         run: npm run test:e2e
 
+      - name: 落ちたときにPlaywrightの出力を残す
+        # CI でだけ落ちた試験を、手元で追えるようにする。ログだけでは、そのとき画面がどうだったかが分からない。
+        # test-results/ には、落ちた試験ごとに trace.zip（操作、画面の写し、通信）と error-context.md が入る。
+        # trace.zip は npx playwright show-trace で開ける。
+        #
+        # 公開リポジトリなので、成果物は GitHub にログインした人なら誰でも落とせる。
+        # 中身は、試験が一時ディレクトリに作った見本（e2e/support/repo.mjs）と、127.0.0.1 の待ち受けとの
+        # やり取りだけである。待ち受けのセッションの Cookie も写るが、その実行の間だけ有効で、ランナーと一緒に消える。
+        # このジョブは秘密を環境に持たず、checkout も persist-credentials: false にしてある。
+        # それでも残す期間は短くする
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # 落ちたジョブだけを再実行すると、同じ実行の中でもう一度上げる。名前がぶつからないよう試行の番号を付ける
+          name: e2e-test-results-${{ github.run_attempt }}
+          path: test-results/
+          retention-days: 7
+          # 依存を入れる段などで落ちたときは、試験の出力がまだ無い
+          if-no-files-found: ignore
+
   lint-workflows:
     name: ワークフローの構文検査
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event_name != 'schedule'
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: リポジトリを取得
@@ -161,10 +261,51 @@ jobs:
 
       - name: actionlintを入れる
         id: actionlint
-        # 公式の導入スクリプトを使う。スクリプトはタグ v1.7.12 のコミットで固定し、版も渡す。
-        # shellcheck が入っていればシェルの検査も行い、無ければその規則だけ飛ばす
+        # 公式の Release の書庫を取り、版ごとに固定した sha256 と照合してから展開する。
+        # 以前使っていた公式の導入スクリプトは、書庫を取って展開するだけで、チェックサムを確かめない。
+        # actionlint の Release は不変（immutable）ではないので、同じ版の書庫でも差し替えられうる。
+        #
+        # 版を上げるときは、ACTIONLINT_VERSION と2つの sha256 を、その版の Release にある
+        # actionlint_<版>_checksums.txt の値へ書き換える。Dependabot はここを上げない。
+        # 書庫は Linux 向けだけを持つ。amd64 と arm64 のどちらのセルフホストのランナーでも動くよう、2つを持つ。
+        #
+        # shellcheck が入っていればシェルの検査も行い、無ければその規則だけ飛ばす。
+        # shellcheck はランナーに入っているものを使うので、ランナーの OS で版が変わる。
+        # Ubuntu 24.04 のランナーは 0.9.0、26.04 のランナーは 0.11.0 で、後者は規則が多い。
+        # rhysd/actionlint:1.7.12 のイメージ（shellcheck 0.11.0）で、指摘が無いことを確かめてある
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256_LINUX_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_SHA256_LINUX_ARM64: 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
         run: |
-          bash <(curl -sSfL 'https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash') 1.7.12
+          if [ "$(uname -s)" != 'Linux' ]; then
+            echo "::error::actionlint の書庫は Linux 向けだけを照合できる。Linux のランナーで動かす（$(uname -s)）"
+            exit 1
+          fi
+          case "$(uname -m)" in
+            x86_64 | amd64) arch='amd64'; sha="${ACTIONLINT_SHA256_LINUX_AMD64}" ;;
+            aarch64 | arm64) arch='arm64'; sha="${ACTIONLINT_SHA256_LINUX_ARM64}" ;;
+            *)
+              echo "::error::actionlint の書庫を照合できない CPU である: $(uname -m)"
+              exit 1
+              ;;
+          esac
+
+          name="actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz"
+          dir="${RUNNER_TEMP}/actionlint"
+          mkdir -p "${dir}"
+          curl -sSfL --retry 3 -o "${dir}/${name}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${name}"
+
+          # sha256sum -c が読む形（ハッシュ、空白2つ、ファイル名）で書き、照合する
+          printf '%s  %s\n' "${sha}" "${name}" > "${dir}/SHA256SUMS"
+          if ! (cd "${dir}" && sha256sum --check --strict SHA256SUMS); then
+            echo "::error::${name} の sha256 が固定した値と合わない。書庫が差し替えられたか、取得が壊れている"
+            exit 1
+          fi
+
+          tar -xzf "${dir}/${name}" -C "${dir}" actionlint
+          echo "executable=${dir}/actionlint" >> "$GITHUB_OUTPUT"
 
       - name: ワークフローを検査する
         env:
@@ -174,7 +315,8 @@ jobs:
 
   zizmor:
     name: ワークフローの安全性検査
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event_name != 'schedule'
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -193,3 +335,31 @@ jobs:
         with:
           version: v1.30.0
           advanced-security: false
+
+  govulncheck:
+    name: Goの脆弱性検査
+    runs-on: ${{ inputs.runner || vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Goを用意
+        # 配る実行ファイルと同じく、go.mod の go 行の版を入れる。govulncheck は、動いている Go の版を
+        # 標準ライブラリの版とみなして照らし合わせる。依存は標準ライブラリだけなので、キャッシュは要らない
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: 既知の脆弱性を調べる
+        # 呼んでいる関数に既知の脆弱性があれば失敗する。直すときは、go.mod の go 行を修正の入った版へ上げる。
+        # 版の上げは手で行う（依存が標準ライブラリだけなので、Dependabot は go 行を上げない）。
+        #
+        # govulncheck は、golang.org/x/vuln の版を固定して go run で取る。取った中身は、Go のチェックサムの
+        # データベース（sum.golang.org）で照合される。golang/govulncheck-action は使わない。
+        # あちらは govulncheck を毎回 @latest で入れるので、道具の版が実行ごとに変わりうる。
+        # 版を上げるときは、公開から7日以上たった版を選ぶ（Dependabot の cooldown と同じ考え）
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./cmd/... ./internal/...

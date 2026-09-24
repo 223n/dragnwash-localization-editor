@@ -64,12 +64,13 @@ The two "Source code" entries that GitHub adds automatically are the source code
 They contain no binaries.
 
 When you open the archive, it contains a single folder with the same name as the archive.  
-That folder has three things in it.
+That folder has four things in it.
 
 ```text
 dwloc_0.5.0_windows_amd64/
-  dwloc.exe     ← the program itself
+  dwloc.exe                ← the program itself
   LICENSE
+  THIRD_PARTY_NOTICES.md
   README.txt
 ```
 
@@ -77,7 +78,8 @@ dwloc_0.5.0_windows_amd64/
 | ---- | ---- |
 | `dwloc` (`dwloc.exe` on Windows) | The program itself |
 | `LICENSE` | The license (Apache License 2.0) |
-| `README.txt` | A short summary of how to run it |
+| `THIRD_PARTY_NOTICES.md` | The attribution for the icons on the screen (Font Awesome Free, CC BY 4.0) |
+| `README.txt` | A short summary of how to run it (in Japanese and English) |
 
 There is a folder wrapped around everything so that extracting the archive does not scatter loose files across your machine.
 
@@ -231,23 +233,34 @@ You do not need a command prompt.
 To stop it, press `Ctrl+C` in the black window that opened, or close the window.
 
 If there is no activity for 30 minutes, the server shuts itself down.  
-That is why the tab does nothing when you come back after stepping away.  
-The black window shows `No activity for 30m. Stopping.`.  
+That is why translations are not saved when you come back after stepping away.  
+A black window opened by double-click closes at that point.  
+If you started it from the command line, it shows `操作がないまま 30m0s たちました。待ち受けを終えます。` ("No activity for 30m0s. Stopping.").  
+If you type a translation in the old tab, the top bar says it cannot reach the server, and the translations that are not in the file yet are listed.  
+The list shows them as plain text, so you can select and copy them.  
 The `URL` is rebuilt every time it starts, so reloading the old tab only gives you `404 page not found`.  
-Start it again and open the new `URL` shown in the black window.  
+After copying them, start it again and open the new `URL` shown in the black window.  
+On the new screen, typing the key into the search box brings up the row.  
 If you want to keep it open for longer, add `--idle-timeout 0` from the command line.  
 The default is there so that no translator is left with a server nobody can reach still listening on their PC.
 
-If you put it in the wrong place, it tells you where it should go and exits.
+If you put it in the wrong place, it tells you where it should go and exits.  
+When it stops while starting up (the published file is malformed, it cannot get a port, and so on), the black window also keeps the reason on screen and waits with `Enter キーを押すと閉じます。` ("Press Enter to close").  
+Read the reason, then press `Enter`.  
+When you stop it with `Ctrl+C`, or when it ends because of the idle timeout, it closes without waiting.
 
 On a PC that has the game installed, a `dwloc` started by double-click also looks for the game folder.  
 If it finds one, it saves to the working copy there.  
-If you want it to stay inside the folder you put it in, add `--no-game` from the command line.  
+If you want it to stay inside the folder you put it in, add `--no-game` from the command line (`dwloc --no-game`).  
 For details, see "Using the game folder" below.
 
 On Windows you can start it this way.  
 Starting it from the file manager on macOS and Linux has not been verified, so  
 if it does not work, use the commands below.
+
+On macOS and Linux, do not put `dwloc` inside the translation repository; point to it with `--root` instead.  
+The translation repository's `.gitignore` only excludes the Windows `dwloc.exe`, so `dwloc` on those systems can end up in a commit through `git add -A`.  
+When started somewhere that is not a translation repository, `dwloc` on those systems also suggests `--root` rather than moving it.
 
 ### Using it from the command line
 
@@ -278,8 +291,13 @@ If you want to build it yourself, see "Development" below.
 | `edit` | Starts a server only you can reach and lets you edit translations in the browser |
 | `version` | Prints the version |
 
+The description of each subcommand is shown by `dwloc <subcommand> --help` or `dwloc help <subcommand>`.  
+`dwloc --version` also prints the version.  
+When an argument is wrong, it prints one line with the reason and one line such as `使い方は dwloc diff --help で表示します。` ("see dwloc diff --help for usage"), then stops (exit code `2`).  
+For options that need a unit, such as `--idle-timeout`, it also says how to write the value.
+
 On a PC that has the game installed, the last two can stop the moment you run them.  
-You do not even get the `--dry-run` report; it ends with "the translation in the game is older, so not a single byte was written" (exit code `1`).  
+You do not even get the `--dry-run` report; it ends with `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。` ("The translation in the game is older, so not a single byte was written.", exit code `1`).  
 That is what actually happens on this development machine.  
 Nothing is broken: `publish` is refusing to roll your work back.  
 How to get out of it is in "It stops when the translation in the game is older" below.
@@ -292,15 +310,56 @@ The options you will use most are these.
 | `--dry-run` | `publish` | Only shows what it would do and writes no file. The safety checks are the same |
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
-| `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet |
+| `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
+| `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
-| `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |
+| `--ui-lang ja` | `edit` | Chooses the language of the screen and of the messages `edit` prints in the black window |
 | `--idle-timeout` | `edit` | How long after the last activity it shuts down (`30m` by default, `0` never) |
 
 `--no-working` and `--no-game` have different jobs.  
 `--no-game` does not look for the game folder at all.  
 `--no-working` looks for it, and even when it finds one, does not read the working copy.
+
+With `--format csv`, a value that starts with `=`, `+`, `-`, `@`, a tab or a CR gets `'` added in front.  
+This keeps a spreadsheet from reading it as a formula when you paste it.  
+Translations come from the published files, so a translation someone else added could run as a formula on the screen of whoever opens it.  
+Even without bad intent, a line of dialogue starting with `-` turns into `#NAME?` or the like.  
+When you do not want the `'` (when comparing against a machine), add `--raw-csv`.  
+The published files that `publish` writes and the exports from the screen do not get it, because they need the same bytes as the upstream tools.
+
+### What dwloc prints is in Japanese
+
+Everything `dwloc` prints in the terminal is in Japanese: the usage, the error messages, and the reports of `validate`, `diff` and `publish`.  
+There is no option to switch it to English.  
+The screen of `edit` is different: it follows the language of your browser, so it comes out in English unless your browser asks for Japanese.  
+The messages `edit` prints in the black window are in Japanese, unless you start it with `--ui-lang en`.  
+When this README quotes what `dwloc` prints, the English in brackets is a translation, and the screen shows the Japanese.
+
+When it stops, the first line tells you why.  
+The table below gives English translations of the first lines you are most likely to see.  
+`<N>` and `…` stand for a number or a path that `dwloc` fills in.
+
+| First line it prints | In English | Details |
+| ---- | ---- | ---- |
+| `dwloc: ここは翻訳リポジトリではないようです。` | This does not look like a translation repository. It shows where it looked and where to put `dwloc`. | [The simplest way to start](#the-simplest-way-to-start) |
+| `dwloc: ゲームのフォルダーが見つかりません。` | The game folder was not found. | [When nothing is found](#when-nothing-is-found) |
+| `dwloc: ゲームのフォルダーを探しましたが、見つかりませんでした。` | It looked for the game folder and did not find it. It carries on without the game, so the source text column stays empty and "untranslated" is not judged. | [Using the game folder](#using-the-game-folder) |
+| `dwloc: ゲームのフォルダーが<N>個見つかりました。…` | `<N>` game folders were found. Choose one with `--game <folder>`. | [Using the game folder](#using-the-game-folder) |
+| `dwloc: --game と --no-game は一緒に指定できません。` | `--game` and `--no-game` cannot be given together. | [Use --no-game when you need the same answer every time](#use---no-game-when-you-need-the-same-answer-every-time) |
+| `dwloc: 訳が失われるので、1バイトも書きませんでした。` | Translations would be lost, so not a single byte was written. | [publish does not write if even one translation would be lost](#publish-does-not-write-if-even-one-translation-would-be-lost) |
+| `dwloc: ゲームに入っている翻訳が古いので、1バイトも書きませんでした。` | The translation in the game is older, so not a single byte was written. | [It stops when the translation in the game is older](#it-stops-when-the-translation-in-the-game-is-older) |
+| `dwloc: 読み違える形のファイルがあるので、1バイトも書きませんでした。` | There is a file in a shape it would misread, so not a single byte was written. `publish` stopped on purpose and changed no file. The lines below it say what to fix. | [publish does not write a file with a shape it would misread](#publish-does-not-write-a-file-with-a-shape-it-would-misread) |
+| `dwloc: Translations を読めません: …` | It cannot read `Translations`. Check `--root`. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 対象になるロケールがありません: …` | There is no locale to work on. Check `--locale`. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 検証できません: …` | `validate` cannot check the files, because it cannot read them. | [Using it from the command line](#using-it-from-the-command-line) |
+| `dwloc: 記録を残せません（…）。このまま続けます。` | It cannot keep a log (…). It carries on without one. | [Logs](#logs) |
+| `操作がないまま 30m0s たちました。待ち受けを終えます。` | No activity for 30m0s. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
+
+The exit code tells you the same thing without reading the text.  
+`0` means it succeeded.  
+`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, or `publish` stopped without writing).  
+`2` means it could not run (a wrong argument, a file it cannot read, and so on).
 
 ### The two buttons inside the game
 
@@ -395,6 +454,9 @@ They read and write only inside `--root`.
 ./dwloc edit    --root ../dragnwash-localization --no-game
 ```
 
+Like `--root`, you can also put it before the subcommand.  
+It then also applies to `edit` when you leave the subcommand out (`dwloc --no-game`).
+
 Use it in situations like these.
 
 - When matching up `diff` output with another PC or machine
@@ -414,8 +476,8 @@ Use it in situations like these.
 Giving `--game` and `--no-game` together stops without doing anything (exit code `2`).  
 There is no way for the tool to decide which of the two you mistyped.
 
-`validate` accepts `--game` but does not use it.  
-There is no `--no-game` for it either, because there is nothing to cancel.
+`validate` and `version` accept `--game` and `--no-game` but do not use them.  
+This is so that options you add to every subcommand do not make `validate` alone fail.
 
 #### It always tells you where it searched
 
@@ -522,6 +584,8 @@ When it stops, it writes no locale at all.
 
 When it stops, it lists the rows that would be lost by locale, line number, key and the beginning of the current translation only.  
 It does not print the whole translation.  
+For a row whose translation spans lines, it prints the line numbers as a range such as "lines 2 to 3" (`2〜3行目`).  
+Line breaks in the translation are replaced with visible marks, such as `↵` for LF and `␍` for CR.  
 The exit code is `1` (the same meaning as when `validate` finds a problem).  
 `--dry-run` makes the same judgement and gives the same report.
 
@@ -555,9 +619,10 @@ The original `Translations/ja/strings.csv` was 191,650 bytes with 1,721 data row
 | One translation of a row present in the published file emptied | 1 | No | 1 |
 | As-is (one untranslated row translated) | 0 | Yes | 0 |
 
-In the second row, `source_en` and `translation` fuse into a single column name, so the `translation` column can no longer be looked up.  
-Every row is then taken as "translation empty" and dropped.  
-Before this check existed, that passed with exit code 0 and left the published file with nothing but a header line.
+In the second row, back when it read one line at a time, `source_en` and `translation` fused into a single column name, so the `translation` column could no longer be looked up.  
+Every row was then taken as "translation empty" and dropped.  
+Before this check existed, that passed with exit code 0 and left the published file with nothing but a header line.  
+Now that input is stopped earlier by the check in "publish does not write a file with a shape it would misread" below (it stops as a quote that is never closed; the exit code is the same `1`).
 
 In the last row, `ja/strings.csv` went from 191,650 bytes to 191,653 bytes.  
 The added translation row itself is 63 bytes.  
@@ -571,6 +636,136 @@ What it protects is the translations only.
 Even with a healthy working copy, the `speaker` column changes on 17 rows (`Ryan` and `Conrad` become `UI`) and 10 `UI` rows swap places.  
 That is because the working copy does not carry the `speaker` of rows that are not in the playback order.  
 No translation is lost, so it does not stop here.
+
+#### publish does not write a file with a shape it would misread
+
+`publish` reads the whole file at once, the same way as the upstream `tools/hash-strings.ps1`.  
+A quoted value is read as one value even when it spans lines.  
+Line breaks inside a value are written back exactly as they were read.  
+The published file is byte for byte the same as the upstream tool writes.
+
+This way of reading, however, cannot tell a forgotten closing quote from a valid multi-line value.  
+From a working copy with a forgotten closing quote, the upstream tool writes the English source text or the keys of other rows into the published file as translations.  
+The check above finds translations that disappear, but not English text that gets added.
+
+So before writing, it checks the shape of the input, of the current published file and of the published file on the game side.  
+If any of the following applies, it stops without writing any locale (exit code `1`).  
+The checks run in this order: this shape check, the check of the translation in the game, and the check for lost translations.  
+`--dry-run` makes the same judgement.
+
+| Shape | Written as it is |
+| ---- | ---- |
+| The header has neither a `key` nor a `source_en` column, has no `translation` column, or its first column name starts with `#` | Every row is dropped |
+| A quote is opened and never closed before the end of the file | Everything after it (including the English source text) becomes one translation |
+| A quote seems to be closed on another line, swallowing the lines after it into a value | The English source text or the keys of other rows are published as translations |
+| A value contains a lone `CR` (a `CR` not followed by `LF`) | The upstream tool drops that row when the file goes through it |
+| An unquoted value is cut by a lone `CR` at the end of a line | Only the first half is published and the rest is dropped |
+| The file has non-empty lines, yet not a single row can be read | Every row is dropped |
+
+When it stops, it prints each case with the file, the line number, what would happen, and how to fix it.  
+It does not print the translations.  
+A working copy with only the two columns `source_en,translation` is valid input and passes.  
+When it hits the published file on the game side, copying the repository's `Translations/<locale>/strings.csv` to the same place fixes it.
+
+The play order data (`data/script_order.csv` and `data/level_flow.csv`) is checked before it is read, too.  
+It stops in the same way when a quote is opened and never closed before the end of the file, and when a value that `publish` writes as it is contains a line break.  
+The values written as they are are the columns used for heading lines, and the `order` column.  
+The columns used for heading lines are `section`, `phase`, `node` and `condition` in `script_order.csv`, and `dragon`, `weather`, `set_flags` and `end_flags` in `level_flow.csv`.  
+With a line break there, a heading line of the published file splits in two, and the second line is read as a data line the next time.  
+The upstream tool breaks in the same way.
+
+A swallowed line is spotted by whether a continuation line of a value that spans lines looks like a record on its own.  
+If it starts with a key, or has as many separators as the header has columns, a forgotten closing quote is suspected.  
+To fix it, check where the quotes close, and add the `"` that closes the value if it is missing.  
+Write a `"` inside a value as two, `""`.
+
+A valid multi-line value can hit this check too.  
+That happens when the second line of the source text has many commas, or when the source text spans lines in a two-column working copy.  
+After checking the reported lines and making sure the value is correct, run it again with the option printed in the fix when it stopped.  
+The option names one record, in the form `<locale>:<key>`.  
+The fix prints it in a form you can copy as it is.
+
+```bash
+dwloc publish --accept-multiline ja:0123456789abcdef
+```
+
+`<key>` is the value of the `key` column of that record.  
+When there is no `key` column or it is empty, it is the key made from the source text (for example in a two-column `source_en,translation` working copy).  
+Upper and lower case letters are not told apart.  
+A line ID (starting with `line:`), though, is compared exactly as written.
+
+It lets through only the shapes whose continuation lines look like records, and only in the given record.  
+It does not let through other records of the same locale.  
+The option applies to the record with that `key` in any of the input, the current published file, and the published file on the game side of that locale.  
+The lines it lets through, and the option that let each of them through, are printed on standard error.  
+To let through several records, give the option once for each.  
+When you run it with `--path`, write the file you passed to `--path` instead of a locale (`<file>:<key>`).  
+When the path has spaces, parentheses, or the like (such as `Program Files (x86)` or `Drag'n Wash`), the fix puts the option in double quotes.  
+You can then paste it as it is into PowerShell, the Command Prompt, or bash.  
+When it has a character that some shells still read specially inside double quotes, such as `$`, the fix adds that you should rewrite it for your shell.  
+A locale alone (a file alone with `--path`) is not accepted.  
+Given one, it stops and asks you to name a record (exit code `2`).  
+An option that matches no line it can let through stops it with exit code `2` too.
+
+A closing quote followed right away by text, a quote that is never closed, a lone `CR`, and the shapes of the play order data are never let through, even with this option.  
+None of them appear in files written by the tools, and fixing them gets you through.  
+For a lone `CR` in the source text (the `source_en` column), though, whether you may fix it depends on the key of the row (see the table below).  
+A record with a line where text follows a closing quote right away is never let through, even when its continuation lines look like records.  
+It cannot be a valid value, and letting it through would publish the English source text or keys as translations.
+
+The following records cannot be let through with the option either.  
+The fix printed when it stops does not offer the option for them.
+
+- A record without a key (when the header is what swallows the lines, and a record whose `key` column and source text are both empty)
+- A record whose `key` column holds a character other than ASCII letters, digits, `.`, `_`, `:` and `-` (a space, a quote, a line break, and so on)
+- A record whose `key` is shared with another record in the same file
+
+`publish` does not write the first two kinds as they are.  
+This also keeps a key that would break apart in a shell out of the printed option.  
+For the third kind, the option cannot tell which record you checked.  
+`publish` writes only the first of them that has a translation.  
+Remove the records you do not need, then run it again.  
+Keys never repeat in the game's working copy or in the published files `publish` writes.
+
+Once a value of this shape is published, the check of the current published file hits it every time.  
+So every run that writes that record needs the same option.  
+A forgotten closing quote that later gets into the working copy is in another record, so that option does not let it through.  
+One that later gets into a value of the same record, though, is let through by the same option.  
+Each time you run it, check the list of lines it lets through.  
+Exporting from the screen has no such option.  
+When it stops on a valid multi-line value, write it with `dwloc publish`.
+
+When it stops on a lone `CR` in the source text (the `source_en` column), how to fix it depends on the key of the row.  
+The fix printed for each row when it stops follows this table too.
+
+| Key of the row | How to fix | Why |
+| ---- | ---- | ---- |
+| A line ID (starting with `line:`) | Change the `CR` in the source text to `LF`, or remove it | The key is not made from the source text, so the translation is published after the fix |
+| The key in the `key` column matches the one made from the current source text | Leave the source text as it is, and empty the translation of that row | Fixing it makes the key no longer match, and the row is silently left out of the published file (the upstream tool does not publish this row either) |
+| The `key` column is missing or empty | Leave the source text as it is, and empty the translation of that row | The key is made from the current source text, so fixing it changes the key, and the row is published under a key the game does not look up |
+| The key in the `key` column matches once the line breaks in the source text are made `LF` | Make the line breaks in the source text `LF` (do not remove them) | The key was made from the source text with `LF`; for now it does not match, and the row is not published |
+| The key in the `key` column matches neither way | Empty the translation of that row | Fixing it does not get the row published |
+
+A row whose translation is emptied is not published, but the other rows can be written.
+
+A translation that spans lines does not stop it by itself.  
+The earlier `dwloc` read one line at a time, so it cut a translation that spans lines short at its first line.  
+It therefore stopped on a published file with a value that spans lines, and on a working copy with a translated row whose value spans lines.  
+Now both are written as valid values.  
+The row in the game-side working copy whose source text spans lines and whose translation is empty is read as an untranslated row.
+
+When a working copy is saved again in a spreadsheet application, the line breaks inside the source text can change from `LF` to `CRLF`.  
+A row whose key no longer matches is not published (the same as the upstream tool).  
+If a row's key would match once the `CRLF` in its source text became `LF`, it prints that row and key without stopping.  
+Exporting the working copy again in the game fixes it.
+
+A file whose line breaks are `CR` only does not stop it.  
+`dwloc` also splits lines at a lone `CR`, so it reads the file correctly (it writes `LF` back).  
+The upstream `tools/hash-strings.ps1` drops every translation in such a file.
+
+Blank lines, whitespace-only lines and comment lines above the header are skipped before the header is chosen.  
+This is how the upstream `tools/hash-strings.ps1` reads it too.  
+Before, a whitespace-only line became the header and every translation of that locale was lost.
 
 #### It stops when the translation in the game is older
 
@@ -713,6 +908,10 @@ There is no switch inside the screen, so restart it with `--ui-lang ja`.
 ./dwloc edit --root ../dragnwash-localization --locale ja --ui-lang ja
 ```
 
+`--ui-lang` accepts `ja` and `en` (it also accepts forms such as `EN` or `en-US`).  
+Any other value (`eng`, `fr` and so on) stops with `--ui-lang は ja か en です` ("--ui-lang is ja or en") and exit code `2`.  
+Falling back to Japanese without a word would show guidance someone cannot read when they meant to choose English.
+
 The colour scheme follows the OS setting (light or dark).
 Even in the dark scheme, the meaningful colours (needs work, needs checking, informational, save state) keep the same hues, and the name is always shown as well.
 The meaningful colours are separated in both hue and lightness so that they can be told apart with colour vision differences (protan, deutan and tritan).
@@ -726,7 +925,23 @@ You can fix a translation that does not fit the column while seeing all of it, w
 
 A translation cannot contain a line break.  
 `Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
-The published file reads one line as one record, so a translation containing a line break cannot be saved in the first place.
+Saving from the screen rewrites the file one line at a time, so a translation containing a line break cannot be saved yet.
+
+Rows whose quoted value spans lines (one record over several lines) cannot be edited on any of their lines.  
+`publish` reads such a record as one, so rewriting only its first line would leave the rest behind and break it.  
+Those rows show a lock icon and "This line belongs to a record that spans lines N to M, which cannot be edited yet".  
+The source column of the first line shows the whole source text.  
+The continuation lines are shown as they are in the file.  
+A line inside a value that starts with `#` is not made a heading.  
+The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row cannot be translated yet.
+
+A file where a quote is opened and never closed before the end of the file cannot be edited at all.  
+Read as a whole, everything after it becomes one value.  
+The "This file is read-only" note says on which line the quote was opened.  
+From the line where the quote was opened on, the lines are listed as they are in the file.  
+Close or remove the quote, then reload.  
+The screen still opens.  
+In the counts, the categories that depend on that file are "not judged".
 
 The controls on the screen are as follows.
 
@@ -740,6 +955,7 @@ The controls on the screen are as follows.
 | `Escape` | Closes the input box. What you typed is kept |
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
+| Locale box | Loads a moment (0.4 seconds) after you choose. Moving through it with the arrow keys only loads the locale you stop on. To open the list before choosing, press `Alt+Down` |
 
 "Save a copy" in the bar at the top saves the CSV of the locale you have open to wherever you like.  
 Pressing it opens a menu where you choose the form.  
@@ -767,21 +983,22 @@ There are two forms you can export.
 | The file being edited, as it is | Copies the file it is currently writing to, as it is. The working copy if there is one, otherwise the published file itself |
 
 "The form of the published file" goes through the same guards `publish` applies before it writes, in the same order and to the same extent.  
-If either one trips, it refuses without writing a single byte.  
+If any one trips, it refuses without writing a single byte.  
 Which rows are involved is printed by `dwloc publish`.
 
 | Reason for refusing | When it happens | How to fix it |
 | ---- | ---- | ---- |
+| A file with a shape it would misread | The header lacks a key or translation column (it has neither `key` nor `source_en`, it has no `translation`, or its first column name starts with `#`), a quote is never closed, a quote is closed on another line and swallows the lines after it, a value contains a lone `CR`, an unquoted value is cut by a lone `CR`, the line breaks are misread so that not a single row can be read, or a value of the play order data that is written as it is, such as into a heading, contains a line break | Run `dwloc publish` and fix the rows it reports, as it describes. If it stops on a valid multi-line value, check it and write it with the `--accept-multiline <locale>:<key>` that `dwloc publish` prints in the fix, once per record |
 | The translation in the game is older | The published file on the game side has different translations from what is committed. The working copy carries those old translations too, so exporting would roll a new commit back | Put the latest translations back into the game |
 | A committed translation would not survive in the new output | A row that exists in the committed file is missing from the working copy | Open the screen containing the missing rows once inside the game, then rebuild the working copy with `F1 → Translation → Export working copy` |
 
 Only rows whose text the game has loaded at least once appear in the working copy.  
 Text on the mod and settings screens is not loaded until you open that screen, so exporting without opening it leaves those rows out of the working copy.  
-If the committed file has a translation for them, the second case above applies.
+If the committed file has a translation for them, the third case above applies.
 
 "Rows dropped by publish" on the screen counts something different.  
 That one counts rows in the working copy whose key is broken and which `publish` therefore drops.  
-"Rows present in the committed file but missing from the working copy" are not counted, so the two cases above can apply even while it still reads 0 rows.
+"Rows present in the committed file but missing from the working copy" are not counted, so the second and third cases above can apply even while it still reads 0 rows.
 
 The "Save as" dialog only appears in browsers that support it.  
 In browsers that do not, it goes to your usual download folder.
@@ -817,9 +1034,17 @@ On a wide screen the column sticks under the top bar, and on a narrow screen (90
 They are not put in the top bar.  
 Putting them there would push the buttons for deciding a conflict out of the bar, where they could no longer be clicked.
 
+While the drawer is open on a narrow screen, the top bar and the list cannot be touched.  
+`Tab` only moves inside the drawer.  
+If the focus slipped out to a row hidden behind the drawer, what you type would go into a translation cell you cannot see, and be saved.  
+To close it, press the close button, press the dark area outside the drawer, or press `Escape`.  
+When it closes, the focus goes back to the three-line button in the top bar.
+
 How many rows are currently listed appears in the top bar as the "showing" count.  
 When no row matches the conditions or the search, the list area says so.  
-When there is text in the search box, it first tells you to clear the search box.
+When there is text in the search box, it first tells you to clear the search box.  
+Both are set up to be announced by screen readers.  
+While the drawer is open on a narrow screen, the top bar and the list are left out of what screen readers see, so the same text is announced from a region inside the drawer instead.
 
 The list of key controls, the notes on the filter, and the band showing the state at startup are folded away.  
 All three are closed by default.  
@@ -842,9 +1067,16 @@ Conditions chosen for the previous locale are not carried over.
 They are only cleared when the load succeeded.  
 When the load fails, the conditions, the search box and the list are all left as they were.
 
+When you reload or switch locale, the translation column does not open until the load has finished.  
+The two buttons of the conflict prompt cannot be pressed either.  
+While it loads, the bar says "Loading...".  
+Anything typed during the load, or kept with `Put my translations on top`, would be dropped unsaved the moment the load succeeded.  
+When the load fails, the previous list stays and can be edited again.  
+If you moved the focus onto a translation cell during the load (with `Tab`, for example), its input box opens right away.
+
 A row in conflict (the file changed underneath you) cannot be edited until you choose which side to keep.  
 Pressing the translation column on that row does not open the input box; the row says that you can edit it once you have chosen which side to keep.  
-Typing into an undecided row could mean either "put my translation on top" or "take the translation from the file".  
+Typing into an undecided row could mean either `Put my translations on top` or `Take what is in the file`.  
 Rows that are not in conflict can still be edited as usual while the prompt is up.
 
 ![The conflict prompt. Two buttons appear at the top of the bar, and the row in conflict shows the translation in the file and yours side by side](docs/images/edit-conflict-en.png)
@@ -860,6 +1092,18 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
+
+Saving also stops when the screen cannot reach the server, and when the server does not accept saves from this screen.
+
+| What the screen says | What happened | Retrying |
+| ---- | ---- | ---- |
+| Cannot reach the server | `dwloc` has stopped (no activity for a while, or the black window was closed) | Keeps retrying. If it gets through, the translation goes in |
+| The server does not accept saves from this screen (404) | `dwloc` was restarted and this screen has an old `Cookie` (400 and 415 mean the screen and the server are different versions) | Stops. Typing the translation again sends it once |
+
+In both cases, the top bar lists the translations that are not in the file yet.  
+It shows the line number, the key and the translation, so copy them down before you restart.  
+After a restart the `URL` changes, and the old tab can no longer send them.  
+On the new screen, typing the key into the search box brings up the row.
 
 Rows with an unsaved translation, rows that could not be saved, and the row whose input box is currently open are not hidden even when they do not match the conditions.  
 Hiding them would make the row you need to fix, and the row you are touching, vanish from the screen.
@@ -933,9 +1177,37 @@ If you run it before committing the updated playback order, it can read it strai
 What `diff` shows are candidates, not certainties.  
 It does not rewrite translations, so check the content before you move anything.
 
+`diff` reads the whole file at once, the same way as `publish`.  
+The number of working copy rows and the count of each category are counted in records, not in lines of the file.  
+A quoted value that spans lines still counts as one.  
+The earlier `dwloc` read one line at a time, so the numbers for the game-side ja working copy changed as follows (September 24, 2026, against upstream `main`).
+
+- Working copy rows went from 1770 to 1769
+- "Rows dropped by publish" went from 2 to 0
+- Untranslated went from 29 to 30, and carry-over sources from 8 to 9
+- Rows that need checking went from 10 to 9
+
+This is because one row has source text that spans three lines with a blank line in between.  
+Read one line at a time, the first line and the continuation line of this row were counted as rows dropped because their keys did not match.  
+Now it counts as one untranslated row with an empty translation.
+
+When a quote is opened and never closed before the end of a published file, a working copy, `layout_risks.csv` or `data/script_order.csv`, it goes on without reading that file.  
+The categories that depend on that file appear as "not judged (the quote on line N of the working copy is never closed)".  
+Which file and which line are printed on standard error.  
+For a published file, no category of that locale is judged, nor are "Missing here but present in another locale" and "No locale has a translation" of the other locales.  
+For `data/script_order.csv`, no category is judged at all.  
+Until it is fixed, the exit code is `1`.  
+The closing line of the `text` format does not say that nothing needs review either; it says that some categories are not judged.
+
+A quote never closed in `data/level_flow.csv` does not stop any judgement.  
+This is because `diff` does not use the heading texts, and the exit code does not change either.  
+`publish` and exporting from the screen do stop on that file, though.  
+So it prints the line where the quote opens on standard error, in a single line.
+
 `publish` assembles everything it targets before writing anything out.  
 If even one of them fails to assemble, it writes nothing.  
 If even one translation would be lost, it also stops without writing.  
+If a file has a shape it would misread, it also stops without writing.  
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
@@ -950,15 +1222,17 @@ With `--path` it stops scanning `Translations` and converts only the file you na
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these four cases.
+1 comes back in these six cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
+- When `diff` cannot read a file because a quote is never closed, and so leaves categories unjudged
 - When `publish` judges that writing would lose translations and stops
+- When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
 
-The last two are separate checks.  
-The difference and the way out are in "It stops when the translation in the game is older" above.
+The last three are separate checks.  
+The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.
 
 #### Committing and opening a pull request
 
@@ -966,7 +1240,16 @@ Once `publish` goes through, `Translations/<locale>/strings.csv` in the reposito
 From there on it is not `dwloc`'s job but the procedure of the translation repository.
 
 `dwloc validate` is a replacement for `tools/check-translations.py`, which runs on pull requests.  
+Besides the shape of `strings.csv`, it checks the status word in `credits.txt` (the first line that is not a comment or blank) and the pictures in `textures/`.  
+Pictures must be lowercase `.png` files of at most 8 MB and at most 4096 pixels on each side.  
+`textures/credits.csv` needs one row per picture (`file,author,note`).  
 Running it locally before you send anything lets you fix things before the automated check stops you.
+
+The checks follow the version on the `dev` branch of the translation repository.  
+Upstream has so far merged `dev` into `main` as a whole, so that version is expected to go into `main` with the next release.  
+Pull requests go to `main`, so for now the automated check runs the version on `main`.  
+The only difference between the versions on `main` and `dev` is the `credits.txt` check, and `dwloc validate` is stricter by that much.  
+Apart from that, `dwloc validate` alone may report a problem for inputs where it does not copy an upstream bug (such as a quote in a comment line).
 
 | What to do | Where it is written |
 | ---- | ---- |
@@ -997,17 +1280,39 @@ One file per day.
 However many times you run it on the same day, it appends to the same file.  
 When you report something that did not work, please attach that day's file.
 
+In the log, your home folder path (`C:\Users\<name>` or `/home/<name>`) is replaced with `~`.  
+This is because the path contains your user name.  
+The screen shows it as it is.
+
+The list and CSV from `diff`, and the translation heads and mismatch samples that `publish` shows, are printed on screen only.  
+The log keeps only the counts, keys, line numbers, reasons and headings, plus how many lines were left out.  
+A line such as `dwloc: 原文や訳を含む 23 行は記録しません（画面には出しました）。` in the log marks where lines were left out.  
+It means "23 lines containing source text or translations are not logged (they were shown on screen)".
+
+> [!WARNING]
+> **Do not paste the `diff` output from your screen into a public place such as an issue.**  
+> It contains the source text (the game's script) and translations.  
+> When you report something, attach that day's log file instead of the screen output.
+>
+> **Logs from versions up to `0.10.0` may contain source text and translations.**  
+> Check the contents of the log for any day you ran `diff` or `publish` with such a version before you paste it.
+
 `dwloc edit` records each request on its own line in the file.  
 With `--verbose`, the same thing is printed on screen as well.
 
 ```text
-10:30:45 === dwloc 0.6.0 edit (windows/amd64) ===
+10:30:45 === dwloc 0.6.0 edit --ui-lang en（windows/amd64）===
 10:30:45 Listening. Open this URL in your browser.
-10:30:52 dwloc edit: GET /api/lines 200 12ms locale=ja lines=1721
-10:31:03 dwloc edit: POST /api/rows 200 31ms locale=ja rows=1
+10:30:45 URL: http://127.0.0.1:52341/?t=***
+10:30:52 dwloc edit: GET "/api/lines" 200 12ms locale=ja lines=1721
+10:31:03 dwloc edit: POST "/api/rows" 200 31ms locale=ja edits=1 saved=1
 ```
 
 It writes only the method, path, status code, duration, locale name and count.  
+The counts are such things as the number of lines read (`lines`), translations sent (`edits`) and translations actually saved (`saved`).  
+The path is wrapped in `"`, with line breaks and the like written as `\n`. Anything past 200 bytes is cut off.  
+The method is written as it is when it is a standard name such as `GET` or `POST`; anything else is wrapped in `"` and cut off past 32 bytes.  
+Requests that were turned away (`404`) are logged too, so this keeps their paths and methods from adding fake lines or bloating the log.  
 **It does not write the source text or the translation.**  
 The token that appears in the URL the first time is replaced with `***` too.  
 You can paste a log file as it is without the game's script leaving with it.
@@ -1105,6 +1410,14 @@ go vet ./cmd/... ./internal/...
 go test ./cmd/... ./internal/... -count=1
 ```
 
+Some Go tests use repositories created with `git`.  
+When `git` is not on the PATH, those tests are skipped.  
+When `git` is there but fails, they fail instead of being skipped.  
+A skipped test prints nothing in `go test` without `-v`, so nobody would notice that it did not run.  
+The repositories the tests create set `core.longpaths`, so they pass on Windows even when the temporary directory (`TMP`) is deep.  
+As a rough guide, `TMP` can be up to 180 characters long.  
+Deeper than that, `git` cannot create the repository itself, and the tests fail.
+
 To see whether it still builds for another target, build it and throw the result away.  
 The name of the bit bucket differs by OS, so the line you type differs too.
 
@@ -1124,7 +1437,7 @@ A Windows program called from Git Bash writes to `C:\dev\null` in the same way w
 The name of the bit bucket Go knows about on Windows is `NUL`.  
 Running it with `-o NUL` exits with code 0 and leaves no file behind.
 
-CI's [ci.yml](.github/workflows/ci.yml) runs on `ubuntu-latest`, so there `/dev/null` does throw the result away correctly.  
+CI's [ci.yml](.github/workflows/ci.yml) runs this build on `ubuntu-latest`, so there `/dev/null` does throw the result away correctly.  
 This is the only place where the same line means something different locally and in CI.  
 CI builds all six targets, so writing anything that uses `CGO` will pass locally and fail in CI.
 
@@ -1160,10 +1473,21 @@ When you run a narrowed set of specs with `npx playwright test -c e2e <spec>`, f
 Aggregate the results afterwards with `npm run test:e2e:report`.  
 If raw data from an earlier run is left behind, the aggregation stops without counting.
 
-Both fail when coverage falls below `coverageThresholds` in `package.json`.  
+Both `npm run test:go` and `npm run test:e2e` fail when coverage falls below `coverageThresholds` in `package.json`.  
 The thresholds are the figures measured under the same conditions as CI (Linux, no original repository), minus a small margin.  
 Locally the tests that read the original repository also run, so the Go figure comes out a little higher than in CI.  
 When you add tests and the figures go up, raise the thresholds too.
+
+CI also runs the Go tests on a Windows runner, in addition to Linux (the `go-windows` job).  
+That is to check the paths that only Windows takes (drive letters, a file system that ignores case, the default Steam location).  
+Only the Linux job checks the coverage thresholds.  
+On the Windows runner the temporary directory has a short (8.3) name, `C:\Users\RUNNER~1\...`, and it is on a different drive from the workspace (`D:\a\...`).  
+Write tests that compare temporary paths so that they pass in that form too.
+
+When the E2E tests fail in CI, Playwright's output (`test-results/`) is kept as an artifact for 7 days.  
+It is named `e2e-test-results-<attempt number>`.  
+Each failed test leaves a `trace.zip` and an `error-context.md`.  
+Open the trace with `npx playwright show-trace <trace.zip>` to follow the actions and the screen at that moment.
 
 ### Trying the screen with the sample
 
@@ -1194,8 +1518,18 @@ The English documents (`*.en.md`) are checked by `markdownlint` only.
 
 CI runs the same checks on every `push` to `main` and `develop`, and on every pull request.  
 In CI it also checks the workflow syntax with `actionlint` and the safety of the workflows with `zizmor`.  
+The actions used in the workflows are pinned to a full-length commit SHA.  
+`zizmor` in CI reports any action that is not pinned.  
+`scripts/setup.sh` (`scripts/setup.ps1` on Windows) also turns on the repository setting "Require actions to be pinned to a full-length commit SHA".  
+In a repository with that setting on, an action that is not pinned does not run.  
 CI builds all six targets as well.  
 That is to see whether the premise of shipping a single binary still holds.
+
+Known vulnerabilities in the Go standard library are checked with `govulncheck`.  
+It runs on `push` and pull requests, and also every Monday.  
+That is because the list of vulnerabilities grows even when the code does not change.  
+It fails when a function the code calls is affected, so raise the `go` line in `go.mod` by hand to a version with the fix.  
+The only dependency is the standard library, so Dependabot does not raise that line.
 
 ## Things to watch out for
 
@@ -1224,20 +1558,52 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
    However, if `main` has required checks or approval rules, it stops at the merge.  
    CI on the pull request the workflow opened stays "waiting for approval" and never runs, so the required checks cannot be satisfied.  
    When it stops, a person merging the pull request takes it through to publication
-1. The workflow branches `release/vX.Y.Z` from `develop`, brings in the content of `main`,  
+1. The workflow first confirms that CI (`ci.yml`) passed on the latest commit of `develop`.  
+   If CI is still running, it waits up to 30 minutes for it to finish.  
+   If CI failed, was cancelled, or has no run at all, it stops here.  
+   Get CI to pass, then run it again.  
+   A CI run started by hand on `develop` (Run workflow) is used only when there is no `push` run
+1. Next, it branches `release/vX.Y.Z` from the commit it confirmed, brings in the content of `main`,  
    bumps the version in `package.json`, passes the document checks and then opens a pull request against `main`.  
    If `main` and `develop` conflict, it stops here
 1. Review the pull request and merge it with a merge commit (Create a merge commit).  
    If you turned on `auto_merge` and it did not stop, you do not need this step.  
    CI on this pull request is created "waiting for approval" and does not run until `Approve workflows to run` is pressed.  
    That is because it is a pull request opened by GitHub Actions.  
-   The document check (`npm run lint`) has already been done inside the workflow, so merging without pressing it does not skip the check
+   CI on the latest commit of `develop` and the document check after the version bump (`npm run lint`) have already been confirmed inside the workflow.  
+   Merging without pressing it does not skip those two
 1. The "Publish release" workflow runs.  
    It creates the tag `vX.Y.Z`, creates a GitHub Release with the six archives attached, and merges `main` back into `develop`
+
+Before building the binaries, it runs the Go tests (`go test ./cmd/... ./internal/...`) on the `main` tree it is about to ship.  
+CI on the release pull request often stays "waiting for approval" and never runs, and when `auto_merge` merged it, CI on `main` does not run either.  
+If even one test fails, it stops without creating the tag or the GitHub Release.  
+The E2E tests of the screen are not run here.  
+The screen is checked by CI on `develop`.
 
 The binaries are built before the tag is created.  
 If even one build fails, it stops without creating the tag or the GitHub Release.  
 That is so no Release goes out carrying only some of the six.
+
+The archives are unpacked and run before the tag is created.  
+Only the archive for the runner's own target can be run, which is `linux/amd64` on GitHub-hosted runners.  
+Publishing runs on a Linux or macOS runner on amd64 or arm64.  
+On any other runner, it stops without creating the tag or the GitHub Release.  
+It checks three things.
+
+- `dwloc version` prints the version being released
+- On a copy of the sample (`samples/harbor`), `dwloc validate` ends with exit code 0
+- On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
+
+It also checks that the checksum list matches the archives.  
+For all six archives, it also checks the list of contents.  
+It checks that the folder with the same name as the archive holds exactly the four files, and that the program has the executable permission on every OS other than Windows.  
+That way the five archives it cannot run (including the `zip` files for Windows) are also checked before publication.  
+If any of these fails, it stops without creating the tag or the GitHub Release.  
+Even when the build succeeds, a version left out of the binary or a mistake in how the archive was made only shows up when it is run.  
+The sample is copied first because its working copy is committed to this repository.  
+Running `validate` on it in place reports it as a working copy that must not be committed.  
+A Go test (`cmd/dwloc/samples_test.go`) checks on each pull request that the sample still passes these checks.
 
 Seven files are attached: the six archives and `dwloc_<version>_checksums.txt`.  
 The Release is created as a draft, and the seven files are attached at that point.  
@@ -1304,13 +1670,13 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, manually | Checks the Japanese documents, Go formatting and tests, the coverage thresholds, the E2E tests of the screen, and the syntax and safety of the workflows, and sees whether it builds for all six targets |
-| `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually | Scans the safety of the workflows with CodeQL |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, every Monday (`govulncheck` only), manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, the syntax and safety of the workflows, and known vulnerabilities in the Go standard library, and sees whether it builds for all six targets |
+| `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually (the `runner` input picks the runner for that run only) | Scans the workflows, the Go code and the JavaScript (the screen's `app.js` and the `.mjs` files for tests and tools) with CodeQL. The results are not a required check |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
-| `release.yml` | Manually | Branches a release branch from `develop`, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
-| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
+| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
+| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Runs the Go tests, builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels
 

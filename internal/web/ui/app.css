@@ -430,6 +430,17 @@ button {
 }
 
 /*
+  失敗ではない案内（読み込んでいます…、ロケールを選んでください。）。失敗と同じ
+  赤い帯で出すと、ふつうに起動するたびに何かが壊れたように見える。参考のバッジと
+  同じ青の組（--info / --info-bg）にする。
+*/
+.notice.info {
+  color: var(--info);
+  background: var(--info-bg);
+  border-bottom: 1px solid var(--line);
+}
+
+/*
   中身が空の断り書きは、場所も取らない。
 
   #message と #empty は読み上げの見張り（role="status"）なので、hidden で
@@ -545,6 +556,16 @@ button {
 */
 .conflict .btn:not(.btn-primary) {
   border-color: var(--muted);
+}
+
+/*
+  読み込みの最中の引き止めのボタン（app.js の syncBusy が disabled を付ける）。
+  読み終えるまで押しても何も起きないので、押せそうな印（cursor: pointer）を下ろす。
+  一覧の訳の欄（.list[aria-busy="true"]）と同じ考え。読み込んでいることは
+  #message が言う。
+*/
+.conflict .btn:disabled {
+  cursor: progress;
 }
 
 .orphans-list {
@@ -1197,6 +1218,17 @@ button {
 }
 
 /*
+  読み込みの最中の一覧（app.js の load が aria-busy を立てる）。読み終えるまで
+  訳の欄は開かないので、cursor: text を下ろす。打てない欄に「打てそうな」印は
+  出さない（上の競合している行と同じ考え）。読み込んでいることは #message が言う。
+  .row まで書くのは、上の .row .translation[tabindex] に詳細度で勝つためである。
+  同じ詳細度だと、あとに書いたほうが勝つ。順序に頼らない。
+*/
+.list[aria-busy="true"] .row .translation[tabindex] {
+  cursor: progress;
+}
+
+/*
   差し込む入力欄。textarea なので、出ている側の欄（.row .translation[tabindex]）と
   同じ寸法・同じ折り返しにそろえる。そろえないと、打ち始めた瞬間に行の高さが
   跳ねる。高さは app.js が中身に合わせて伸ばす（fitEditor）。
@@ -1204,6 +1236,11 @@ button {
   resize を切るのは、隅を引いて伸び縮みさせられると fitEditor の測り直しと
   食い違うためである。overflow-y は hidden にしない。窓の幅が変わったのに
   測り直せていない場面で、字が切れて見えなくなる。送りの棒が出るほうがよい。
+
+  焦点の印は枠の色と box-shadow で付け、輪郭（outline）は透明にしておく。none には
+  しない。強制色モード（Windows のハイコントラスト）ではブラウザーが box-shadow を
+  消して色を系統の色へ置き換えるので、none のままだと印がほぼ消えた。透明の輪郭は
+  強制色モードでは見える色で描かれる。ふだんの配色では透明なので見た目は変わらない。
 */
 .editor {
   display: block;
@@ -1212,7 +1249,7 @@ button {
   padding: 2px 8px;
   border: 1px solid var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
-  outline: none;
+  outline: 2px solid transparent;
   resize: none;
   overflow-y: auto;
   white-space: pre-wrap;
@@ -1512,8 +1549,14 @@ button {
 /*
   広いとき。閉じるボタンと幕は引き出しのためのものなので出さない。
   #menu は列を畳んで一覧を広げる。畳んでいるあいだは列を描かない。
+
+  狭いときの指定のちょうど裏として書く。app.js の matchMedia("(max-width: 900px)")
+  とも裏表になる。(min-width: 901px) と書いていたころは、900px と 901px のあいだ
+  （拡大率や高 DPI の画面で出る小数の幅）でどちらの指定も当たらず、app.js は
+  「広い」と答えるのに、引き出しの閉じるボタンと幕が広い画面に出た。
+  (width > 900px) でも同じ裏になるが、古いブラウザーでも通るこちらを採る。
 */
-@media (min-width: 901px) {
+@media not all and (max-width: 900px) {
   .backdrop {
     display: none !important;
   }

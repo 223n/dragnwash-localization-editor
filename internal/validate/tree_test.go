@@ -146,14 +146,24 @@ func TestGitTracked(t *testing.T) {
 	writeFile(t, tracked, "ひとつ\n")
 	writeFile(t, untracked, "ふたつ\n")
 
+	// core.longpaths をリポジトリの設定に書くのは、internal/diff の試験の
+	// initGitRepo（oldorder_test.go）と同じ理由。Git for Windows は既定では
+	// 260 字を超えるパスを扱えず、TMP が深いと add が失敗する。GitTracked が
+	// 起動する git にも効かせるため、-c ではなくリポジトリに書く。init にだけは
+	// -c でも渡す。init は設定を書く前に .git/hooks の見本などを書くので、TMP が
+	// 深いとそこで落ちる。
+	//
+	// git が PATH にあるのに失敗したら、飛ばさずに落とす。環境の不具合を
+	// SKIP に変えると、go test は -v なしでは何も出さず、誰も気付けない。
 	for _, args := range [][]string{
-		{"init"},
+		{"-c", "core.longpaths=true", "init"},
+		{"config", "core.longpaths", "true"},
 		{"add", "tracked.txt"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v が失敗したので飛ばす: %v (%s)", args, err, out)
+			t.Fatalf("git %v が失敗した: %v (%s)", args, err, out)
 		}
 	}
 
@@ -186,6 +196,9 @@ func TestGitTrackedOutsideRepository(t *testing.T) {
 
 // TestDisplayPath は報告に出すパスの整形を見る。
 func TestDisplayPath(t *testing.T) {
+	// root はリンクを解かずに渡す。下の inside はまだ無いパスだが、of は解ける祖先
+	// （root）まで遡って解くので、TMP が 8.3 形式の短い名前だったり、リンクを
+	// 含んでいたり（macOS の /var）しても、配下と判定される。
 	root := t.TempDir()
 	show := newDisplay(root)
 
@@ -198,6 +211,30 @@ func TestDisplayPath(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(root), "よそ", "f.csv")
 	if got := show.of(outside); got != outside {
 		t.Errorf("of(外) = %q, want %q", got, outside)
+	}
+}
+
+// TestDisplayPathDanglingLinkUnderLinkedRoot は、リンクを含むルートの下にある
+// 行き先の無いリンクを、ルートからの相対で出すことを見る。
+//
+// 行き先の無いリンクは EvalSymlinks で解けない。解ける祖先まで遡らずに絶対パスの
+// まま相対化すると、解いたルートと綴りが食い違い、絶対パスが報告に出る（Windows の
+// ランナーの 8.3 形式の TMP で、TestCheckTreeUnreadableTextures が落ちた形）。
+func TestDisplayPathDanglingLinkUnderLinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "real")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(base, "linked")
+	if err := os.Symlink(target, linked); err != nil {
+		t.Skipf("シンボリックリンクを作れないので飛ばす: %v", err)
+	}
+	dangling := filepath.Join(target, "a.png")
+	danglingLink(t, dangling)
+
+	if got, want := newDisplay(linked).of(filepath.Join(linked, "a.png")), "a.png"; got != want {
+		t.Errorf("of(リンクのルートの下の行き先の無いリンク) = %q, want %q", got, want)
 	}
 }
 
@@ -263,6 +300,191 @@ func TestCheckTreeUnreadablePublished(t *testing.T) {
 	// どれが読めなかったかを、報告と同じリポジトリ相対のパスで言う。
 	if want := "Translations/ja/strings.csv"; !strings.Contains(err.Error(), want) {
 		t.Errorf("エラー = %q, want %q を含む", err, want)
+	}
+}
+
+// TestCheckTreeUnreadableExtras は、credits.txt や textures/credits.csv があるのに
+// 読めないとき、問題の一覧ではなくエラーを返すことを見る。
+//
+// 上流はどちらも exists() で「ある」と見てから開き、開けずに異常終了する。
+// 黙って飛ばすと、検査していないファイルがCIを通る。フォルダーになったファイルは
+// どの OS でも作れる「Stat では在るが中身は読めない」形。
+func TestCheckTreeUnreadableExtras(t *testing.T) {
+	tests := []struct {
+		name string
+		// dir はフォルダーとして作るパス（Translations/ja からの相対）。
+		dir  string
+		want string
+	}{
+		{name: "credits.txt がフォルダー", dir: CreditsFile, want: "Translations/ja/credits.txt"},
+		{
+			name: "textures/credits.csv がフォルダー",
+			dir:  TexturesDir + "/" + TexturesCredits,
+			want: "Translations/ja/textures/credits.csv",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			locale := filepath.Join(root, TranslationsDir, "ja")
+			writeFile(t, filepath.Join(locale, PublishedFile), "key,translation\n"+keyA+",やあ\n")
+			if err := os.MkdirAll(filepath.Join(locale, filepath.FromSlash(tt.dir)), 0o755); err != nil {
+				t.Fatalf("%s が作れない: %v", tt.dir, err)
+			}
+
+			got, err := CheckTree(root, trackedSet())
+			if err == nil {
+				t.Fatalf("エラーにならなかった（問題 = %#v）", problemStrings(got))
+			}
+			if got != nil {
+				t.Errorf("エラーと一緒に問題を返した: %#v", problemStrings(got))
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("エラー = %q, want %q を含む", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckTreeUnreadableTextures は、textures/ の中が読めないとき、黙って飛ばさずに
+// エラーを返すことを見る。上流はどれも例外を捕まえずに異常終了する。
+//
+// 読めない形は、chmod で権限を外すか、行き先の無いシンボリックリンクで作る。
+// chmod は Windows と root では効かず、リンクは Windows では権限が要るので、
+// 作れなければ飛ばす。
+func TestCheckTreeUnreadableTextures(t *testing.T) {
+	tests := []struct {
+		name string
+		// prepare は textures/ の中に読めないものを作る。作れなければ t.Skip する。
+		prepare func(t *testing.T, textures string)
+		want    string
+	}{
+		{
+			name:    "textures が読めない",
+			prepare: func(t *testing.T, textures string) { unreadable(t, textures) },
+			want:    "Translations/ja/textures",
+		},
+		{
+			name: "絵が読めない",
+			prepare: func(t *testing.T, textures string) {
+				path := filepath.Join(textures, "a.png")
+				writeFile(t, path, "中身")
+				unreadable(t, path)
+			},
+			want: "Translations/ja/textures/a.png",
+		},
+		{
+			name:    "絵が行き先の無いリンク",
+			prepare: func(t *testing.T, textures string) { danglingLink(t, filepath.Join(textures, "a.png")) },
+			want:    "Translations/ja/textures/a.png",
+		},
+		{
+			name: "fallback.txt が行き先の無いリンク",
+			prepare: func(t *testing.T, textures string) {
+				danglingLink(t, filepath.Join(textures, TexturesFallback))
+			},
+			want: "Translations/ja/textures/fallback.txt",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			locale := filepath.Join(root, TranslationsDir, "ja")
+			writeFile(t, filepath.Join(locale, PublishedFile), "key,translation\n"+keyA+",やあ\n")
+			textures := filepath.Join(locale, TexturesDir)
+			if err := os.MkdirAll(textures, 0o755); err != nil {
+				t.Fatalf("%s が作れない: %v", textures, err)
+			}
+			tt.prepare(t, textures)
+
+			got, err := CheckTree(root, trackedSet())
+			if err == nil {
+				t.Fatalf("エラーにならなかった（問題 = %#v）", problemStrings(got))
+			}
+			if got != nil {
+				t.Errorf("エラーと一緒に問題を返した: %#v", problemStrings(got))
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("エラー = %q, want %q を含む", err, tt.want)
+			}
+		})
+	}
+}
+
+// unreadable は path の権限を外して読めなくする。できなければテストを飛ばす。
+func unreadable(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows では chmod で読めなくできない")
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("%s の権限を変えられない: %v", path, err)
+	}
+	// 後始末で消せるように戻す。t.Cleanup は後入れ先出しなので、
+	// t.TempDir の削除より先に走る。
+	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+	if f, err := os.Open(path); err == nil {
+		_ = f.Close()
+		t.Skip("読めない状態にできなかったので飛ばす。root で走っていると効かない")
+	}
+}
+
+// danglingLink は行き先の無いシンボリックリンクを作る。作れなければテストを飛ばす。
+func danglingLink(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Symlink(filepath.Join(filepath.Dir(path), "無い"), path); err != nil {
+		t.Skipf("シンボリックリンクを作れないので飛ばす: %v", err)
+	}
+}
+
+// TestPythonSplitLines は fallback.txt の行の分け方を Python の str.splitlines() と
+// 突き合わせる。期待値は Python 3.12 と 3.14 で実測した結果。
+func TestPythonSplitLines(t *testing.T) {
+	tests := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"a", []string{"a"}},
+		{"a\n", []string{"a"}},
+		{"\n", []string{""}},
+		{"a\r\nb\rc\nd", []string{"a", "b", "c", "d"}},
+		{"a\r\r\nb", []string{"a", "", "b"}},
+		{"a\vb\fc\x1cd\x1de\x1ef\u0085g\u2028h\u2029i", []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}},
+		// U+001F は str.isspace() では空白だが、行の区切りではない。
+		{"a\x1fb", []string{"a\x1fb"}},
+	}
+	for _, tt := range tests {
+		if got := pythonSplitLines(tt.in); !slices.Equal(got, tt.want) {
+			t.Errorf("pythonSplitLines(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestPythonSuffix は pathlib の PurePath.suffix と同じ切り出しになることを見る。
+// 期待値は上流の CI と同じ Python 3.12 で実測した結果。
+func TestPythonSuffix(t *testing.T) {
+	tests := map[string]string{
+		"a.png":   ".png",
+		"a.b.PNG": ".PNG",
+		".png":    "",
+		// Python 3.14 は "." を返す。どちらでも ".png" ではないので判定は変わらない。
+		"a.":        "",
+		"a":         "",
+		"archive.z": ".z",
+		// Python 3.14 は先頭に続く '.' を飛ばすので、次の3つに "" を返す。
+		// "..png" では判定が割れる（3.14 で走らせた上流だけが問題にする）。
+		// CI の 3.12 に合わせる。
+		"..png":  ".png",
+		"...png": ".png",
+		"..PNG":  ".PNG",
+		// 先頭に続く '.' より後ろに、末尾でない '.' があれば、3.12 と 3.14 で同じ。
+		".a.png": ".png",
+	}
+	for name, want := range tests {
+		if got := pythonSuffix(name); got != want {
+			t.Errorf("pythonSuffix(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 

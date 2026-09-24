@@ -3,6 +3,7 @@ package logfile
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -429,6 +430,112 @@ func TestHideReplacesSecret(t *testing.T) {
 	want := "10:30:45 開きます http://127.0.0.1:8123/?t=***\n"
 	if got != want {
 		t.Errorf("中身が違う\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestShortenPathReplacesTheHome は、覚えたパスを記録へ書く前に短くすることを見る。
+//
+// 利用者のホームのパスには利用者名が入る。区切りが \ でも / でも置き換える。
+// dwloc は同じパスをスラッシュ区切りに直して出すことがあるためである。
+func TestShortenPathReplacesTheHome(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+	w := newWriter(t, dir, c)
+
+	sep := string(filepath.Separator)
+	home := filepath.Join(sep+"home", "al")
+	w.ShortenPath(home+sep, "~")
+	lines := "=== dwloc dev --root " + home + sep + "repo publish ===\n" +
+		"探した場所: " + filepath.ToSlash(home) + "/repo\n" +
+		"別の人: " + home + "ice" + sep + "repo\n"
+	if _, err := w.Write([]byte(lines)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	want := "10:30:45 === dwloc dev --root ~" + sep + "repo publish ===\n" +
+		"10:30:45 探した場所: ~/repo\n" +
+		"10:30:45 別の人: " + home + "ice" + sep + "repo\n"
+	if got := read(t, dir, "dwloc_20260921.log"); got != want {
+		t.Errorf("中身が違う\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestShortenPathReplacesTheQuotedForm は、\ を重ねた形のパスも置き換えることを見る。
+//
+// %q や JSON でパスを書くと、Windows の \ は \\ になる。区切りが \ と / の形しか
+// 探さないと、そう書いた行にだけ利用者名入りのパスが残る。ホームは Windows の形で
+// 渡す。ShortenPath は OS で区切りを変えないので、どの OS でも同じに確かめられる。
+func TestShortenPathReplacesTheQuotedForm(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+	w := newWriter(t, dir, c)
+
+	home := `C:\Users\al`
+	w.ShortenPath(home, "~")
+	lines := "dwloc: --limit の値 " + strconv.Quote(home+`\repo`) + " を読めません\n" +
+		"そのまま: " + home + `\repo` + "\n" +
+		"別の人: " + strconv.Quote(`C:\Users\alice\repo`) + "\n"
+	if _, err := w.Write([]byte(lines)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	want := `10:30:45 dwloc: --limit の値 "~\\repo" を読めません` + "\n" +
+		`10:30:45 そのまま: ~\repo` + "\n" +
+		`10:30:45 別の人: "C:\\Users\\alice\\repo"` + "\n"
+	if got := read(t, dir, "dwloc_20260921.log"); got != want {
+		t.Errorf("中身が違う\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestShortenPathIgnoresRoots は、空のパスとルートそのものを覚えないことを見る。
+// 覚えると、ほかのパスまで書き換わって読めなくなる。
+func TestShortenPathIgnoresRoots(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+	w := newWriter(t, dir, c)
+
+	for _, root := range []string{"", "/", `\`, `C:\`, "C:"} {
+		w.ShortenPath(root, "~")
+	}
+	if len(w.shortened) != 0 {
+		t.Errorf("ルートを覚えている: %q", w.shortened)
+	}
+}
+
+func TestReplacePath(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		from string
+		fold bool
+		want string
+	}{
+		{name: "下のパス", line: "--root /home/al/repo", from: "/home/al", want: "--root ~/repo"},
+		{name: "行の終わり", line: "探した場所: /home/al", from: "/home/al", want: "探した場所: ~"},
+		{name: "引用符の中", line: `"/home/al/x"`, from: "/home/al", want: `"~/x"`},
+		{name: "全角の閉じ括弧が続く", line: "（/home/al）", from: "/home/al", want: "（~）"},
+		{name: "2か所", line: "/home/al/a と /home/al/b", from: "/home/al", want: "~/a と ~/b"},
+		{name: "別の名前の途中では置き換えない", line: "/home/alice/repo", from: "/home/al", want: "/home/alice/repo"},
+		{name: "日本語の名前の途中でも置き換えない", line: "/home/田中太郎/x", from: "/home/田中", want: "/home/田中太郎/x"},
+		{name: "長いパスの途中では置き換えない", line: "/mnt/home/al/repo", from: "/home/al", want: "/mnt/home/al/repo"},
+		{name: "途中で外れても後ろは置き換える", line: "/home/alice と /home/al", from: "/home/al", want: "/home/alice と ~"},
+		{name: "大文字と小文字を区別しないとき", line: `c:\users\al\repo`, from: `C:\Users\Al`, fold: true, want: `~\repo`},
+		{name: "大文字と小文字を区別するとき", line: `c:\users\al\repo`, from: `C:\Users\Al`, want: `c:\users\al\repo`},
+		{name: "見つからない", line: "何もない", from: "/home/al", want: "何もない"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(replacePath([]byte(tt.line), []byte(tt.from), []byte("~"), tt.fold))
+			if got != tt.want {
+				t.Errorf("replacePath = %q, 期待 %q", got, tt.want)
+			}
+		})
 	}
 }
 

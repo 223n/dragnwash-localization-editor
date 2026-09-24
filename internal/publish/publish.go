@@ -14,7 +14,7 @@ const (
 	HeaderLine = "key,section,node,order,speaker,translation"
 
 	// CommentPrefix は公開CSVのコメント行の先頭文字。この文字で始まる行は
-	// 読み込み時に落とされる（csvfile.ReadPowerShellRows）。
+	// 読み込み時に落とされる（csvfile.ReadPowerShell）。
 	CommentPrefix = "#"
 
 	// SectionMarker はセクション見出しの印。行は "# ===== 文言 =====" の形になる。
@@ -79,12 +79,18 @@ type collected struct {
 // 重複判定と空判定がカウンタ加算より後ろにあるため、出力されない行も
 // Converted / Kept に数えられる（R18 の goNote）。また空の訳の行は rows に
 // 入らないので、同じキーで「空が先、訳ありが後」でも後の行が採用される（R20）。
+//
+// 読み方は上流 main と同じく全体を解釈する（[csvfile.ReadPowerShell]）。引用符で
+// 囲んだ値は物理行をまたいで1つの値になり、値の中の改行は読んだとおりに書く
+// （CRLF も LF も直さない。上流とバイト一致させるため）。閉じない引用符は誤りに
+// なるが、呼び出し側（cmd/dwloc と画面の書き出し）は組み立てより前に形の確かめ
+// （[CheckTargetShape]）を通すので、ふつうはここまで来ない。
 func collect(inputCSV []byte) (*collected, error) {
-	records, err := csvfile.ReadPowerShellRows(inputCSV)
+	f, err := csvfile.ReadPowerShell(inputCSV)
 	if err != nil {
 		return nil, err
 	}
-
+	records := f.Rows()
 	c := &collected{
 		rows:  make(map[string]inputRow, len(records)),
 		lines: newLineTable(),
@@ -191,8 +197,9 @@ func rowKey(rec csvfile.Row) (string, keyOutcome) {
 // 無いときは nil を渡す。入力と出力が同じファイルのときは、同じバイト列を
 // 両方に渡してよい（元実装も同じファイルを2回読む）。
 //
-// エラーを返すのは入力のヘッダー列名が重複しているときだけ。元実装も
-// ConvertFrom-Csv の例外で処理全体が止まる（R29）。
+// エラーを返すのは、入力のヘッダー列名が重複しているとき（元実装も
+// ConvertFrom-Csv の例外で処理全体が止まる。R29）と、入力に閉じない引用符が
+// あるとき（[csvfile.UnclosedQuoteError]。元実装は後ろを飲み込んで書く）だけ。
 func Build(data *order.Data, inputCSV, existingCSV []byte) ([]byte, Stats, error) {
 	c, err := collect(inputCSV)
 	if err != nil {

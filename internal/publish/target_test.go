@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -313,6 +314,83 @@ func TestLoadOrderFailsOnUnreadableFiles(t *testing.T) {
 			var dup *csvfile.DuplicateColumnError
 			if got := errors.As(err, &dup); got != tt.wantDup {
 				t.Errorf("列名の重複として返ったか = %v、期待 %v（err = %v）", got, tt.wantDup, err)
+			}
+
+			// diff の入口も、閉じない引用符のほかは同じ誤りを返す。
+			marked, unclosed, err := LoadOrderMarked(root)
+			if err == nil || marked != nil || unclosed != nil {
+				t.Fatalf("LoadOrderMarked が誤りを返していない: %+v %+v %v", marked, unclosed, err)
+			}
+			if got := errors.As(err, &dup); got != tt.wantDup {
+				t.Errorf("LoadOrderMarked: 列名の重複として返ったか = %v、期待 %v（err = %v）", got, tt.wantDup, err)
+			}
+		})
+	}
+}
+
+// TestLoadOrderMarked は、閉じない引用符のあるファイルを誤りにせず、そのファイルを
+// 行の無いファイルとして読み、どのファイルの何行目かを返すことを見る。
+// LoadOrder は同じファイルで型付きの誤りを返す。
+func TestLoadOrderMarked(t *testing.T) {
+	const orderRows = "L01 Ryan,intro,N1,1,line:aa,0000000000000001,Ryan,\n"
+	tests := []struct {
+		name          string
+		order, flow   string
+		wantEntries   int
+		wantLevels    int
+		wantUnclosed  []string // ファイル名と行（"script_order.csv:2" の形）
+		wantErrInLoad string
+	}{
+		{
+			name: "script_order.csv", order: orderHeader + "L01 Ryan,intro,N1,1,line:aa,\"0000000000000001,Ryan,\n",
+			flow: flowHeader + "0,Ryan,Sunny,,\n", wantLevels: 1,
+			wantUnclosed: []string{"script_order.csv:2"}, wantErrInLoad: "script_order.csv",
+		},
+		{
+			name: "level_flow.csv", order: orderHeader + orderRows,
+			flow: flowHeader + "0,\"Ryan,Sunny,,\n", wantEntries: 1,
+			wantUnclosed: []string{"level_flow.csv:2"}, wantErrInLoad: "level_flow.csv",
+		},
+		{
+			name: "両方", order: orderHeader + "\"x\n", flow: "\"level\n",
+			wantUnclosed: []string{"script_order.csv:2", "level_flow.csv:1"}, wantErrInLoad: "script_order.csv",
+		},
+		{
+			name: "どちらも閉じている", order: orderHeader + orderRows, flow: flowHeader + "0,Ryan,Sunny,,\n",
+			wantEntries: 1, wantLevels: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "data", "script_order.csv"), tt.order)
+			writeFile(t, filepath.Join(root, "data", "level_flow.csv"), tt.flow)
+
+			data, unclosed, err := LoadOrderMarked(root)
+			if err != nil {
+				t.Fatalf("LoadOrderMarked: %v", err)
+			}
+			if len(data.Entries) != tt.wantEntries || len(data.Levels) != tt.wantLevels {
+				t.Errorf("entries %d levels %d、%d と %d を期待", len(data.Entries), len(data.Levels), tt.wantEntries, tt.wantLevels)
+			}
+			if data.Source != ScriptOrderPath(root) {
+				t.Errorf("Source = %q", data.Source)
+			}
+			var got []string
+			for _, u := range unclosed {
+				got = append(got, filepath.Base(u.Path)+":"+strconv.Itoa(u.Line))
+			}
+			if !slices.Equal(got, tt.wantUnclosed) {
+				t.Errorf("閉じないファイル = %v、%v を期待", got, tt.wantUnclosed)
+			}
+
+			_, err = LoadOrder(root)
+			var quote *csvfile.UnclosedQuoteError
+			switch {
+			case tt.wantErrInLoad == "" && err != nil:
+				t.Errorf("LoadOrder: %v", err)
+			case tt.wantErrInLoad != "" && (!errors.As(err, &quote) || !strings.Contains(err.Error(), tt.wantErrInLoad)):
+				t.Errorf("LoadOrder の誤り = %v、%s の閉じない引用符を期待", err, tt.wantErrInLoad)
 			}
 		})
 	}

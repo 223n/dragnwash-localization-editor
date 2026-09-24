@@ -122,7 +122,10 @@ func TestRealDataHeaderIsCurrent(t *testing.T) {
 				t.Fatalf("%s が読めない: %v", path, err)
 			}
 
-			records := csvfile.ParsePythonRecords(csvfile.ReadPythonLines(data))
+			records, err := csvfile.ReadPythonRecords(data)
+			if err != nil {
+				t.Fatalf("CSV として読めない: %v", err)
+			}
 			if len(records) == 0 {
 				t.Fatal("レコードが1つも無い")
 			}

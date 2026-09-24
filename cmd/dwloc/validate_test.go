@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,45 @@ func TestRunValidate(t *testing.T) {
 			},
 			wantCode:       exitProblems,
 			containsStdout: []string{"empty translation", "key is not 16 lowercase hex digits or a line ID", "2 problem(s)."},
+		},
+		{
+			// 上流 dev の 912f519。最初の行は状態語でなければならない。
+			name: "credits.txt の状態語が違えば問題にする",
+			files: map[string]string{
+				"Translations/ja/strings.csv": validFile,
+				"Translations/ja/credits.txt": "done\n",
+			},
+			wantCode: exitProblems,
+			containsStdout: []string{
+				`Translations/ja/credits.txt:1: "done" is not a status`,
+				"1 problem(s).",
+			},
+		},
+		{
+			// 上流の cc01bfc。置いてはいけないファイルと、出典の無い絵。
+			name: "textures の中身を検査する",
+			files: map[string]string{
+				"Translations/ja/strings.csv":         validFile,
+				"Translations/ja/textures/readme.txt": "メモ",
+				"Translations/ja/textures/title.png":  "PNG ではない",
+			},
+			wantCode: exitProblems,
+			containsStdout: []string{
+				"Translations/ja/textures/readme.txt: only .png files",
+				"Translations/ja/textures/title.png: not a PNG file",
+				"Translations/ja/textures: credits.csv is missing",
+				"3 problem(s).",
+			},
+		},
+		{
+			// 上流は csv.Error で異常終了する。dwloc は検査できなかったとして2で終える。
+			name: "textures/credits.csv を CSV として読めなければ終了コード2",
+			files: map[string]string{
+				"Translations/ja/strings.csv":          validFile,
+				"Translations/ja/textures/credits.csv": "file,author,note\na.png,me," + strings.Repeat("x", 131073) + "\n",
+			},
+			wantCode:       exitError,
+			containsStderr: []string{"Translations/ja/textures/credits.csv", "field larger than field limit (131072)"},
 		},
 		{
 			name: "Translations が無ければ検査できないので終了コード2",

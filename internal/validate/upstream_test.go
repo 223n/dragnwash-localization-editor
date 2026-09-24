@@ -1,0 +1,608 @@
+package validate
+
+import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// upstreamCheckerEnv は上流の tools/check-translations.py の場所を渡す環境変数。
+//
+// 設定されていて Python が見つかれば、表の入力ごとに上流を実際に走らせ、
+// 報告が表の upstream（無ければ want）と一致するかも確かめる。設定されていなければ
+// dwloc の側だけを確かめる。CI には上流のリポジトリも Python も無いので、
+// 飛ばせることが必須。dwloc は上流の dev の版に合わせてあるので、dev の版を渡す。
+// 翻訳者の PR の CI が走る main の版とは、credits.txt の検査の有無だけが違う
+// （main の版を渡すと credits.txt の入力だけが割れる）。
+//
+//	git -C <上流> show upstream/dev:tools/check-translations.py > check-translations.py
+//	DWLOC_UPSTREAM_CHECKER=$PWD/check-translations.py go test ./internal/validate -run Upstream
+const upstreamCheckerEnv = "DWLOC_UPSTREAM_CHECKER"
+
+// upstreamPythonEnv は上流を走らせる Python の実行ファイル。無ければ python3、
+// python の順に探す。
+const upstreamPythonEnv = "DWLOC_PYTHON"
+
+// 見本の行。値はすべて架空のもので、ゲームの台本は使わない。
+const (
+	upHeader = "key,section,node,order,speaker,translation\n"
+	upRowA   = keyA + ",UI,,,UI,あ\n"
+	upKeyB   = "fedcba9876543210"
+	upPath   = "Translations/xx/strings.csv"
+)
+
+// upstreamCase は上流と突き合わせる入力1つ。
+type upstreamCase struct {
+	name string
+	// files はルート相対のパスと中身。
+	files map[string]string
+	// want は dwloc の報告（Problem.String() の並び）。nil なら translations OK。
+	want []string
+	// why は、上流の不具合を写さないと決めた入力にだけ書く理由。空でなければ、
+	// 上流は want ではなく upstream を出す（nil なら translations OK）。
+	why      string
+	upstream []string
+	// wantErr が空でなければ、dwloc は報告ではなくこの文字列を含むエラーを返す。
+	// 上流はそこで異常終了するので、upstreamCrash を標準エラーに含めて終わること。
+	wantErr       string
+	upstreamCrash string
+}
+
+// fakePNG は PNG のシグネチャと IHDR の見出しだけを持つ見本を作る。上流も dwloc も
+// 先頭24バイトしか見ないので、画素のデータは要らない。pad は後ろに足すバイト数で、
+// ファイルの大きさの上限を試すのに使う。
+func fakePNG(width, height uint32, pad int) string {
+	var b bytes.Buffer
+	b.Write(pngSignature)
+	b.Write([]byte{0, 0, 0, 13})
+	b.WriteString("IHDR")
+	_ = binary.Write(&b, binary.BigEndian, width)
+	_ = binary.Write(&b, binary.BigEndian, height)
+	b.Write([]byte{8, 6, 0, 0, 0})
+	b.Write(make([]byte, pad))
+	return b.String()
+}
+
+// upstreamCases は、上流の調査（f816618、c8fda90、cc01bfc、912f519）で dwloc と
+// 判定が割れた入力と、その周りの境目。
+func upstreamCases() []upstreamCase {
+	long := strings.Repeat
+	withStrings := func(files map[string]string) map[string]string {
+		files[upPath] = upHeader + upRowA
+		return files
+	}
+	credits := func(body string) map[string]string {
+		return withStrings(map[string]string{"Translations/xx/credits.txt": body})
+	}
+	// 絵の大きさの上限（8MB）と、fakePNG が作る見本の長さ（画素のデータ無し）。
+	// 実装の定数は使わず、上流の値をここに書く。
+	const eightMB = 8 * 1024 * 1024
+	pngLen := len(fakePNG(1, 1, 0))
+	const (
+		tex        = "Translations/xx/textures/"
+		texCredits = tex + "credits.csv"
+		notStatus  = `" is not a status; use one of supervised, proofread, converted, provisional, fun`
+		parseError = "could not be parsed as CSV (field larger than field limit (131072))"
+		onlyPNG    = ": only .png files, credits.csv and fallback.txt belong in textures/"
+	)
+
+	return []upstreamCase{
+		// #1（f816618）: 空白だけの行を落とさない。
+		{
+			name:  "空白だけの行は1フィールドのレコード",
+			files: map[string]string{upPath: upHeader + upRowA + "   \n" + upKeyB + ",UI,,,UI,い\n"},
+			want:  []string{upPath + ":3: expected 6 fields, got 1"},
+		},
+		{
+			name:  "タブだけの行も同じ",
+			files: map[string]string{upPath: upHeader + upRowA + "\t\n"},
+			want:  []string{upPath + ":3: expected 6 fields, got 1"},
+		},
+		{
+			name:  "ヘッダーの上の空白だけの行がヘッダーになる",
+			files: map[string]string{upPath: "   \n" + upHeader + upRowA},
+			want:  []string{upPath + ": header is ['   ']" + headerSuffix},
+		},
+		{
+			name:  "完全な空行だけならempty file",
+			files: map[string]string{upPath: "\n\r\n\n"},
+			want:  []string{upPath + ": empty file"},
+		},
+		{
+			name:  "ヘッダーの前後の完全な空行は飛ばす",
+			files: map[string]string{upPath: "\n\n" + upHeader + "\n" + upRowA + "\n"},
+		},
+
+		// #2（f816618）: フィールドの長さの上限。ほかの検査は止める。
+		{
+			name:  "131073文字のフィールド",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI," + long("x", 131073) + "\n" + upKeyB + ",UI,,,UI,\n"},
+			want:  []string{upPath + ":2: " + parseError},
+		},
+		{
+			name:  "131072文字のフィールドは通る",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI," + long("x", 131072) + "\n"},
+		},
+		{
+			name:  "上限は文字数で数える",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI," + long("あ", 131073) + "\n"},
+			want:  []string{upPath + ":2: " + parseError},
+		},
+		{
+			name:  "多バイト文字でちょうど上限なら通る",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI," + long("あ", 131072) + "\n"},
+		},
+		{
+			name:  "複数行の引用値は超えた行を指す",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI,\"a\n" + long("x", 131071) + "\nb\"\n"},
+			want:  []string{upPath + ":3: " + parseError},
+		},
+		{
+			name:  "長すぎるコメント行",
+			files: map[string]string{upPath: upHeader + "# " + long("x", 131073) + "\n" + upRowA},
+			want:  []string{upPath + ":2: " + parseError},
+		},
+		{
+			// Python 3.11 から NUL で csv.Error にならない。上流の CI は 3.12。
+			name:  "NULはただの文字",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI,a\x00b\n"},
+		},
+
+		// #3（c8fda90）: コメントかどうかを偶奇で決める。
+		{
+			name:  "引用値の途中の'#'行は値の一部",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI,\"ひとつ\n#ふたつ\"\n" + upKeyB + ",UI,,,UI,\n"},
+			want:  []string{upPath + ":4: empty translation"},
+		},
+		{
+			name: "引用値の途中の'#'行はCRLFでも値の一部",
+			files: map[string]string{upPath: strings.ReplaceAll(
+				upHeader+keyA+",UI,,,UI,\"ひとつ\n#ふたつ\"\n"+upKeyB+",UI,,,UI,\n", "\n", "\r\n")},
+			want: []string{upPath + ":4: empty translation"},
+		},
+		{
+			name:  "引用値の途中の空行も値の一部",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI,\"ひとつ\n\nふたつ\"\n" + upKeyB + ",UI,,,UI,い\n"},
+		},
+		{
+			name:  "引用符で囲んだ'#'始まりのキーはコメントではない",
+			files: map[string]string{upPath: upHeader + "\"#1 路地\",UI,,,UI,あ\n"},
+			want:  []string{upPath + ":2: key is not 16 lowercase hex digits or a line ID"},
+		},
+		{
+			// #4b: 偶奇は裸の '"' も数えるので、後ろの '#' 行がデータになる。
+			name:  "裸の引用符のあとの'#'行はデータ",
+			files: map[string]string{upPath: upHeader + keyA + ",UI,,,UI,5\" 画面\n\n# ===== 見出し =====\n" + upKeyB + ",UI,,,UI,い\n"},
+			want:  []string{upPath + ":4: expected 6 fields, got 1"},
+		},
+		{
+			// 偶奇の上ではコメントでも、パーサーが引用値を読んでいる途中なら値に入る。
+			name:  "引用値の途中に来た偶奇上のコメント行",
+			files: map[string]string{upPath: upHeader + keyA + ",x\"y,UI,,UI,\"c\n#z\"\n" + upKeyB + ",UI,,,UI,\n"},
+			want: []string{
+				upPath + ":2: section does not look like an identifier",
+				upPath + ":4: empty translation",
+			},
+		},
+		{
+			name:  "引用符が閉じているコメント行",
+			files: map[string]string{upPath: upHeader + "# a,\"b,c\",d\n" + keyA + ",UI,,,UI,\n"},
+			want:  []string{upPath + ":3: empty translation"},
+		},
+		{
+			name:  "CRだけの改行",
+			files: map[string]string{upPath: strings.ReplaceAll(upHeader+"# メモ\n"+upRowA+upKeyB+",UI,,,UI,\n", "\n", "\r")},
+			want:  []string{upPath + ":4: empty translation"},
+		},
+
+		// 上流の不具合を写さない入力。
+		{
+			name:  "コメント行の引用符はレコードを開かない",
+			files: map[string]string{upPath: upHeader + "# メモ,\"開いたまま\n" + keyA + ",UI,,,UI,\n" + upKeyB + ",UI,,,UI,い\n"},
+			want:  []string{upPath + ":3: empty translation"},
+			why: "上流はコメント行も csv.reader に通すので、開いた引用符が後ろの行を" +
+				"コメントのレコードに飲み込み、空の訳を見逃す。ゲームはコメント行をレコードにしない",
+			upstream: nil,
+		},
+		{
+			// 4行目の裸の '"' が、上流ではコメント行の開いた引用を閉じる。
+			name: "コメント行が開いた引用が後ろで閉じる",
+			files: map[string]string{upPath: upHeader + "# メモ,\"開いたまま\n" + keyA + ",UI,,,UI,\n" +
+				upKeyB + ",UI,,,UI,5\" 画面\n" + keyA + ",UI,,,UI,い\n"},
+			want: []string{
+				upPath + ":3: empty translation",
+				upPath + ":5: duplicate key (see line 3)",
+			},
+			why:      "同上。閉じるまでの行がまとめて検査から漏れる",
+			upstream: nil,
+		},
+		{
+			// #4a: 上流の comment_lines は splitlines() で行を数えるので、U+2028 で
+			// 行番号がずれる。
+			name:     "値の中のU+2028で行番号をずらさない",
+			files:    map[string]string{upPath: upHeader + keyA + ",UI,,,UI,あ\u2028い\n# --- 見出し ---\n" + upKeyB + ",UI,,,UI,う\n"},
+			want:     nil,
+			why:      "上流はコメント行をデータとして誤報する",
+			upstream: []string{upPath + ":3: expected 6 fields, got 1"},
+		},
+		{
+			name:     "値の中のU+2028のあとの本物の問題を見逃さない",
+			files:    map[string]string{upPath: upHeader + keyA + ",UI,,,UI,あ\u2028い\n# --- 見出し ---\n" + upKeyB + ",UI,,,UI,\n"},
+			want:     []string{upPath + ":4: empty translation"},
+			why:      "上流は誤報を出し、4行目をコメントと取り違えて空の訳を見逃す",
+			upstream: []string{upPath + ":3: expected 6 fields, got 1"},
+		},
+
+		// credits.txt（912f519）。
+		{
+			name:  "credits.txtの状態語が違う",
+			files: credits("done\n名前\n"),
+			want:  []string{"Translations/xx/credits.txt:1: \"done" + notStatus},
+		},
+		{
+			name:  "credits.txtがコメントと空行だけ",
+			files: credits("# メモ\n\n  \n"),
+			want: []string{"Translations/xx/credits.txt: empty; the first line is the status " +
+				"(supervised, proofread, converted, provisional, fun)"},
+		},
+		{
+			name:  "credits.txtは前後の空白と大文字小文字を問わない",
+			files: credits("\ufeff# メモ\n  Supervised  \n名前\n"),
+		},
+		{
+			name:  "credits.txtの空白始まりの'#'もコメント",
+			files: credits("\n  # メモ\nnope\n"),
+			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
+		},
+		{
+			// Python の lower() は 'İ' を2文字にするので状態語にならない。
+			name:  "credits.txtの大文字小文字はASCIIだけ",
+			files: credits("prov\u0130sional\n"),
+			want:  []string{"Translations/xx/credits.txt:1: \"prov\u0130sional" + notStatus},
+		},
+		{
+			name:  "credits.txtはCRでも行を分ける",
+			files: credits("\r\rnope\r"),
+			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
+		},
+		{
+			// str.strip() は \x1c〜\x1f も空白として落とす。Go の strings.TrimSpace は
+			// 落とさないので、それを使うと割れる。ファイルを行で読むときは \x1c で
+			// 行を割らない（splitlines() と違う）。
+			name:  "credits.txtの前後の\\x1cは空白として落とす",
+			files: credits("\x1cfun\x1c\n"),
+		},
+		{
+			name:  "credits.txtの前後の全角空白も落とす",
+			files: credits("\u3000Proofread\u3000\n"),
+		},
+		{
+			name:  "credits.txtの空白と見なす文字だけの行は飛ばす",
+			files: credits("\x1c\n\u3000\nnope\n"),
+			want:  []string{"Translations/xx/credits.txt:3: \"nope" + notStatus},
+		},
+		{
+			name: "strings.csvが無くてもcredits.txtとtexturesを見る",
+			files: map[string]string{
+				"Translations/xx/credits.txt": "done\n",
+				tex + "a.txt":                 "",
+			},
+			want: []string{
+				"Translations/xx: no strings.csv",
+				"Translations/xx/credits.txt:1: \"done" + notStatus,
+				tex + "a.txt" + onlyPNG,
+			},
+		},
+
+		// textures（cc01bfc）。
+		{
+			name: "PNGでない絵と置いてはいけないファイル",
+			files: withStrings(map[string]string{
+				tex + "title.png":  "not a png",
+				tex + "readme.txt": "x",
+			}),
+			want: []string{
+				tex + "readme.txt" + onlyPNG,
+				tex + "title.png: not a PNG file",
+				"Translations/xx/textures: credits.csv is missing (file,author,note - one row per picture)",
+			},
+		},
+		{
+			name: "texturesの検査をひととおり",
+			files: withStrings(map[string]string{
+				"Translations/yy/strings.csv":      upHeader + upRowA,
+				"Translations/_hidden/strings.csv": upHeader,
+				tex + "a.png":                      fakePNG(16, 16, 0),
+				tex + "b.PNG":                      fakePNG(4097, 10, 0),
+				tex + "c.png":                      fakePNG(10, 5000, 0),
+				tex + "d.png":                      string(pngSignature),
+				tex + "e.png":                      fakePNG(1, 1, 0),
+				tex + "sub/x.png":                  fakePNG(1, 1, 0),
+				tex + "fallback.txt":               "# メモ\n\nyy\nxx\nzz\n_hidden\na/b\n  yy  \r\n..\n",
+				texCredits: "\ufeff file , author ,note\na.png,me,drawn\n\n , \nb.PNG,,\nc.png,me\n" +
+					"a.png,me,x\nnothere.png,me,x\n\"d.png\",\"me\",\"ふた\nつの行\"\nf.png,me,x\n",
+			}),
+			want: []string{
+				tex + "fallback.txt:4: xx is this language itself",
+				tex + "fallback.txt:5: zz is not a language in Translations/",
+				tex + "fallback.txt:6: _hidden is not a language in Translations/",
+				tex + "fallback.txt:7: a/b is not a language in Translations/",
+				tex + "fallback.txt:9: .. is not a language in Translations/",
+				tex + "sub: no folders inside textures/",
+				tex + "b.PNG: use a lowercase .png extension",
+				tex + "b.PNG: 4097x10, larger than 4096x4096",
+				tex + "c.png: 10x5000, larger than 4096x4096",
+				tex + "d.png: not a PNG file",
+				texCredits + ":5: who made b.PNG? (author is empty)",
+				texCredits + ":5: say what was done for b.PNG (note is empty), for example: drawn from scratch, or game texture repainted",
+				texCredits + ":6: expected 3 columns (file,author,note), found 2",
+				texCredits + ":7: a.png is listed twice",
+				texCredits + ":8: nothere.png is not in textures/",
+				// 上流はレコードの番号で数えるので、複数行の d.png の次は物理行の11ではなく10。
+				texCredits + ":10: f.png is not in textures/",
+				tex + "c.png: no row in credits.csv",
+				tex + "e.png: no row in credits.csv",
+			},
+		},
+		{
+			name: "credits.csvの見出しが違うと行を見ない",
+			files: withStrings(map[string]string{
+				tex + "a.png": fakePNG(1, 1, 0),
+				texCredits:    "file,author\n",
+			}),
+			want: []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			name:  "credits.csvが空",
+			files: withStrings(map[string]string{texCredits: ""}),
+			want:  []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			name:  "credits.csvの1行目が空行",
+			files: withStrings(map[string]string{texCredits: "\nfile,author,note\n"}),
+			want:  []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			name:  "絵が無くcredits.csvだけ",
+			files: withStrings(map[string]string{texCredits: "file,author,note\n"}),
+		},
+		{
+			// フォルダーかどうかを名前より先に見る。
+			name:  "fallback.txtという名前のフォルダー",
+			files: withStrings(map[string]string{tex + "fallback.txt/yy": ""}),
+			want:  []string{tex + "fallback.txt: no folders inside textures/"},
+		},
+		{
+			name:  "texturesという名前のファイルは見ない",
+			files: withStrings(map[string]string{"Translations/xx/textures": "メモ"}),
+		},
+		{
+			name:  "隠しファイルも置いてはいけないもの",
+			files: withStrings(map[string]string{tex + ".keep": ""}),
+			want:  []string{tex + ".keep" + onlyPNG},
+		},
+		{
+			name:  "名前が.pngだけのファイルは絵ではない",
+			files: withStrings(map[string]string{tex + ".png": fakePNG(1, 1, 0)}),
+			want:  []string{tex + ".png" + onlyPNG},
+		},
+		{
+			name: "8MBを超える絵",
+			files: withStrings(map[string]string{
+				tex + "big.png": fakePNG(10, 10, 8*1024*1024),
+				texCredits:      "file,author,note\nbig.png,me,x\n",
+			}),
+			want: []string{tex + "big.png: 8192 KB, more than 8 MB"},
+		},
+		{
+			name: "8MBを超えてPNGでもない",
+			files: withStrings(map[string]string{
+				tex + "big.png": string(make([]byte, 8*1024*1024+1)),
+				texCredits:      "file,author,note\nbig.png,me,x\n",
+			}),
+			want: []string{
+				tex + "big.png: 8192 KB, more than 8 MB",
+				tex + "big.png: not a PNG file",
+			},
+		},
+		{
+			// 上限は「超えたら」。ちょうどの絵は通る。
+			name: "4096x4096と8388608バイトちょうどの絵は通る",
+			files: withStrings(map[string]string{
+				tex + "side.png": fakePNG(4096, 4096, 0),
+				tex + "size.png": fakePNG(1, 1, eightMB-pngLen),
+				texCredits:       "file,author,note\nside.png,me,x\nsize.png,me,x\n",
+			}),
+		},
+		{
+			name: "境目を1つ超えた絵",
+			files: withStrings(map[string]string{
+				tex + "side.png": fakePNG(4096, 4097, 0),
+				tex + "size.png": fakePNG(1, 1, eightMB-pngLen+1),
+				texCredits:       "file,author,note\nside.png,me,x\nsize.png,me,x\n",
+			}),
+			want: []string{
+				tex + "side.png: 4096x4097, larger than 4096x4096",
+				tex + "size.png: 8192 KB, more than 8 MB",
+			},
+		},
+		{
+			// 上流は「PNG でない」でその絵を終える。24バイト以上あって幅と高さの位置に
+			// 上限を超える数があっても、大きさの問題は出さない。
+			name: "PNGでない24バイト以上のファイルは幅と高さを見ない",
+			files: withStrings(map[string]string{
+				tex + "chunk.png": strings.Replace(fakePNG(5000, 5000, 0), "IHDR", "IDAT", 1),
+				tex + "gif.png":   "GIF89a" + fakePNG(5000, 5000, 0)[len("GIF89a"):],
+				texCredits:        "file,author,note\nchunk.png,me,x\ngif.png,me,x\n",
+			}),
+			want: []string{
+				tex + "chunk.png: not a PNG file",
+				tex + "gif.png: not a PNG file",
+			},
+		},
+		{
+			// 1回目の行で覚えるのは「行があった」ことで、絵があるかどうかではない。
+			name: "textures/に無い名前の2回目の行",
+			files: withStrings(map[string]string{
+				texCredits: "file,author,note\nnothere.png,me,x\nnothere.png,me,x\n",
+			}),
+			want: []string{
+				texCredits + ":2: nothere.png is not in textures/",
+				texCredits + ":3: nothere.png is listed twice",
+				texCredits + ":3: nothere.png is not in textures/",
+			},
+		},
+		{
+			// 上流は credits.csv を csv.reader でそのまま読み、コメントを扱わない。
+			name: "credits.csvの'#'始まりの行はデータ",
+			files: withStrings(map[string]string{
+				texCredits: "file,author,note\n#x,me,y\n",
+			}),
+			want: []string{texCredits + ":2: #x is not in textures/"},
+		},
+		{
+			name: "credits.csvの見出しの前の'#'行も見出しとして比べる",
+			files: withStrings(map[string]string{
+				texCredits: "# メモ\nfile,author,note\n",
+			}),
+			want: []string{texCredits + ":1: the header must be file,author,note"},
+		},
+		{
+			// fallback.txt は splitlines() で分けるので、\x1c や U+2028 でも行が割れる。
+			name: "fallback.txtはsplitlinesの区切りで分ける",
+			files: withStrings(map[string]string{
+				"Translations/yy/strings.csv": upHeader + upRowA,
+				tex + "fallback.txt":          "yy\x1cqq\u2028xx\vzz\n",
+			}),
+			want: []string{
+				tex + "fallback.txt:2: qq is not a language in Translations/",
+				tex + "fallback.txt:3: xx is this language itself",
+				tex + "fallback.txt:4: zz is not a language in Translations/",
+			},
+		},
+		{
+			name: "credits.csvのフィールドが長すぎる",
+			files: withStrings(map[string]string{
+				texCredits: "file,author,note\na.png,me," + long("x", 131073) + "\n",
+			}),
+			wantErr:       "field larger than field limit (131072)",
+			upstreamCrash: "_csv.Error: field larger than field limit (131072)",
+		},
+	}
+}
+
+// TestUpstreamCases は、上流 dev と判定が割れていた入力で dwloc の報告を確かめる。
+// 上流の場所が渡されていれば、上流を実際に走らせた結果とも突き合わせる。
+func TestUpstreamCases(t *testing.T) {
+	checker, python := upstreamChecker(t)
+
+	for _, tt := range upstreamCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			for path, content := range tt.files {
+				writeFile(t, filepath.Join(root, filepath.FromSlash(path)), content)
+			}
+
+			got, err := CheckTree(root, trackedSet())
+			switch {
+			case tt.wantErr != "":
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("エラー = %v, want %q を含む（報告 = %#v）", err, tt.wantErr, problemStrings(got))
+				}
+			case err != nil:
+				t.Fatalf("CheckTree が失敗した: %v", err)
+			default:
+				if lines := problemStrings(got); !slices.Equal(lines, tt.want) {
+					t.Errorf("dwloc の報告が違う\n got = %#v\nwant = %#v", lines, tt.want)
+				}
+			}
+
+			if checker == "" {
+				return
+			}
+			stdout, stderr, code := runUpstream(t, python, checker, root)
+			if tt.upstreamCrash != "" {
+				if code == 0 || !strings.Contains(stderr, tt.upstreamCrash) {
+					t.Errorf("上流が異常終了しなかった（終了コード %d）\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+				}
+				return
+			}
+			want := tt.want
+			if tt.why != "" {
+				want = tt.upstream
+			}
+			if expected := reportOf(want); stdout != expected {
+				t.Errorf("上流の報告が表と違う（%s）\n got:\n%s\nwant:\n%s\nstderr:\n%s", tt.why, stdout, expected, stderr)
+			}
+		})
+	}
+}
+
+// upstreamChecker は上流のスクリプトと Python の場所を返す。
+// どちらかが無ければ空文字を返し、突き合わせは飛ばす。
+func upstreamChecker(t *testing.T) (checker, python string) {
+	t.Helper()
+	checker = os.Getenv(upstreamCheckerEnv)
+	if checker == "" {
+		t.Logf("%s が無いので、上流との突き合わせは飛ばす", upstreamCheckerEnv)
+		return "", ""
+	}
+	if _, err := os.Stat(checker); err != nil {
+		t.Fatalf("%s=%s が読めない: %v", upstreamCheckerEnv, checker, err)
+	}
+	candidates := []string{"python3", "python"}
+	if env := os.Getenv(upstreamPythonEnv); env != "" {
+		candidates = []string{env}
+	}
+	for _, name := range candidates {
+		if path, err := exec.LookPath(name); err == nil {
+			return checker, path
+		}
+	}
+	t.Fatalf("%s が指定されているのに Python が見つからない", upstreamCheckerEnv)
+	return "", ""
+}
+
+// runUpstream は root/tools/ に上流のスクリプトを置いて走らせる。上流はスクリプトの
+// 2階層上をリポジトリのルートにするため。
+func runUpstream(t *testing.T, python, checker, root string) (stdout, stderr string, code int) {
+	t.Helper()
+	script, err := os.ReadFile(checker)
+	if err != nil {
+		t.Fatalf("%s が読めない: %v", checker, err)
+	}
+	path := filepath.Join(root, "tools", "check-translations.py")
+	writeFile(t, path, string(script))
+
+	cmd := exec.Command(python, path)
+	cmd.Dir = root
+	// Windows でも UTF-8 で出させる。既定のままだと非 ASCII の報告で
+	// UnicodeEncodeError になる（移植仕様「形式検証 / 敵対検証」[low]）。
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("上流を起動できない: %v", err)
+		}
+		code = exitErr.ExitCode()
+	}
+	// Windows の Python は print の改行を CRLF にする。
+	return strings.ReplaceAll(out.String(), "\r\n", "\n"), errOut.String(), code
+}
+
+// reportOf は報告の行の並びを、上流が標準出力へ書く形にする。[Report] と同じ形。
+func reportOf(lines []string) string {
+	if len(lines) == 0 {
+		return "translations OK\n"
+	}
+	return strings.Join(lines, "\n") + "\n\n" + strconv.Itoa(len(lines)) + " problem(s).\n"
+}

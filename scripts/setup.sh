@@ -113,6 +113,33 @@ else
   warn "Actions の許可を変えられなかった。組織の設定で禁止されているときは、先に組織の Settings > Actions > General で許可する"
 fi
 
+# ワークフローの uses はすべてコミットの SHA で固定してある。固定していないアクションが
+# 入ったときに、実行の時点で止まるようにする。zizmor の検査は必須のチェックではないため、
+# それだけではマージを止められない
+info "アクションを完全なコミットの SHA で固定したものだけを動かす（Require actions to be pinned to a full-length commit SHA）"
+# PUT は enabled を必ず求め、allowed_actions も同じ呼び出しで書き換わる。いまの値を読んで渡し直す。
+# Actions を止めているリポジトリを、この設定のついでに動かし始めないためである
+if ! actions_perm="$(gh api "repos/${repo}/actions/permissions" \
+  --jq '[.enabled, (.allowed_actions // "-"), (.sha_pinning_required // false)] | map(tostring) | join(" ")' 2>/dev/null)" \
+  || [ -z "$actions_perm" ]; then
+  warn "Actions の設定を読めず、SHA での固定を求められなかった"
+else
+  read -r actions_enabled allowed_actions sha_pinning <<<"$actions_perm"
+  if [ "$sha_pinning" = 'true' ]; then
+    ok "すでに求めている"
+  else
+    pin_args=(api --method PUT "repos/${repo}/actions/permissions" -F "enabled=${actions_enabled}" -F sha_pinning_required=true --silent)
+    if [ "$allowed_actions" != '-' ]; then
+      pin_args+=(-f "allowed_actions=${allowed_actions}")
+    fi
+    if run gh "${pin_args[@]}"; then
+      ok "求めるようにした"
+    else
+      warn "SHA での固定を求められなかった。組織の設定で決まっているときは、組織の Settings > Actions > General で設定する"
+    fi
+  fi
+fi
+
 # ---- 3. セキュリティ機能
 info "Private vulnerability reporting を有効にする（SECURITY.md と Issue の選択画面が使う）"
 if run gh api --method PUT "repos/${repo}/private-vulnerability-reporting" --silent; then
@@ -248,7 +275,9 @@ info "テンプレート由来の名前を、このリポジトリのものに�
 changed=()
 if ! command -v node >/dev/null 2>&1; then
   warn "node が見つからないため、名前の書き換えは飛ばした。Node 22 以上を入れて再実行する"
-elif [ -d .git ] && [ -f package.json ]; then
+# .git はディレクトリとは限らない。git worktree で作った作業木では、.git は本体の場所を書いたファイルになる。
+# setup.ps1 の Test-Path と同じく、あるかどうかだけを見る
+elif [ -e .git ] && [ -f package.json ]; then
   # 作業木がきれいなことを確かめる。書き換えを他の変更と混ぜない
   if [ -n "$(git status --porcelain)" ]; then
     warn "作業木に未コミットの変更があるため、名前の書き換えは飛ばした。コミットしてから再実行する"
@@ -274,11 +303,19 @@ elif [ -d .git ] && [ -f package.json ]; then
       ok "書き換えるものは無い"
     elif $open_pr; then
       branch="feature/setup-repository"
-      run git switch --create "$branch"
-      run git add "${changed[@]}"
-      run git commit --quiet --message "テンプレート由来の名前をこのリポジトリのものに書き換える"
-      run git push --set-upstream origin "$branch"
-      if run gh pr create --repo "$repo" --base "$DEVELOP_BRANCH" --head "$branch" \
+      # git の段が1つでも失敗したら、そこで書き換えの段を抜け、最後のまとめに出す。
+      # 先へ進むと、ブランチを作れないまま今のブランチへコミットしたり、押せていないブランチの
+      # Pull Request を開こうとしたりする。途中で止めても、書き換えたファイルは作業木に残る。
+      # set -e でスクリプトごと止めることもしない。まとめが出ず、ほかの項目の結果が分からなくなる
+      if ! run git switch --create "$branch"; then
+        warn "ブランチ ${branch} を作れなかった。同じ名前のブランチが残っていないか確かめる。書き換えは作業木に残っている"
+      elif ! run git add "${changed[@]}"; then
+        warn "書き換えたファイルを git add できなかった。書き換えは作業木に残っている"
+      elif ! run git commit --quiet --message "テンプレート由来の名前をこのリポジトリのものに書き換える"; then
+        warn "書き換えをコミットできなかった。書き換えはブランチ ${branch} の作業木に残っている"
+      elif ! run git push --set-upstream origin "$branch"; then
+        warn "ブランチ ${branch} を push できなかった。コミットは手元の ${branch} にある"
+      elif run gh pr create --repo "$repo" --base "$DEVELOP_BRANCH" --head "$branch" \
         --title "テンプレート由来の名前を書き換える" \
         --body "scripts/setup.sh が CODEOWNERS、Issue の選択画面の URL、package.json の名前を書き換えました。"; then
         ok "Pull Request を開いた。確かめてマージする"
@@ -304,7 +341,8 @@ fi
 cat <<MSG
 
 残りは GitHub の画面で行います。
-  - main と develop のルール（Pull Request 必須、Code scanning の結果）: Settings > Rules
+  - main と develop のルール（Pull Request 必須）: Settings > Rules
+  - CodeQL の指摘を仕分ける（結果は必須のチェックにしない）: Security > Code scanning
   - SECURITY.md に非公開の連絡先を書く
   - package.json の description と README を書き換える
 MSG

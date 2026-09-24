@@ -150,6 +150,9 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	for _, why := range publishBaseReasons(t) {
 		check("publish", why)
 	}
+	for _, why := range publishShapeReasons(t) {
+		check("publish", why)
+	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
 	for _, id := range reason.All() {
@@ -247,6 +250,24 @@ func diffReasons(t *testing.T) []reason.Reason {
 	stale := newStaleSummary(t, root)
 	out = append(out, stale.JudgeBlockReason(diff.CatCarryover))
 
+	// 原文の改行が CRLF になって key と合わない行。表計算ソフトなどで保存し直すと起きる。
+	out = append(out, droppedSourceCRLFReasons(t)...)
+
+	// 閉じない引用符で読めなかったファイルのせいで止めたとき。ファイルごとに理由が
+	// 分かれる。ほかのロケールの公開ファイルでは、置換にロケールの名前が入る。
+	unclosed := []func(*diff.Summary) diff.Category{
+		func(s *diff.Summary) diff.Category { s.OrderUnclosed = 3; return diff.CatVanished },
+		func(s *diff.Summary) diff.Category { s.PublishedUnclosed = 3; return diff.CatVanished },
+		func(s *diff.Summary) diff.Category { s.WorkingUnclosed = 3; return diff.CatUntranslated },
+		func(s *diff.Summary) diff.Category { s.LayoutRisksUnclosed = 3; return diff.CatLayoutRisk },
+		func(s *diff.Summary) diff.Category { s.OthersUnclosed = []string{"de", "fr"}; return diff.CatLocaleGap },
+	}
+	for _, set := range unclosed {
+		sum := ready
+		c := set(&sum)
+		out = append(out, sum.JudgeBlockReason(c))
+	}
+
 	return out
 }
 
@@ -324,6 +345,48 @@ func carryFromReasons(t *testing.T) []reason.Reason {
 	}
 	if len(out) != 2 {
 		t.Fatalf("引き継ぎ元の候補が %d 件。2件（文字の一致と指紋）を期待", len(out))
+	}
+	return out
+}
+
+// droppedSourceCRLFReasons は、原文の CRLF のせいで publish に捨てられる行の理由を、
+// 判定を走らせて集める。
+//
+// [newReasonRoot] の作業コピーへ足さないのは、あの一式の件数を見ている試験が
+// ほかにあるためである。
+func droppedSourceCRLFReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	const source = "The gate opens.\nThe crest is clean."
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("data/script_order.csv", "section,phase,node,order,line_id,key,speaker,condition\n")
+	write("Translations/ja/strings.csv", "key,section,node,order,speaker,translation\n")
+	write("Translations/_discovered/ja.working.csv",
+		"key,section,node,order,speaker,source_en,translation\r\n"+
+			key.For(source)+",UI,,,UI,\""+strings.ReplaceAll(source, "\n", "\r\n")+"\",ゲートが開きます\r\n")
+
+	repo, err := diff.LoadWith(root, diff.Options{Working: true})
+	if err != nil {
+		t.Fatalf("LoadWith: %v", err)
+	}
+	var out []reason.Reason
+	for _, f := range diff.Compare(repo, nil).Findings {
+		if f.Category == diff.CatDropped {
+			out = append(out, f.NoteReason)
+		}
+	}
+	if len(out) != 1 || out[0].ID != reason.NoteDroppedSourceCRLF {
+		t.Fatalf("捨てられる行の理由 = %+v、原文の CRLF の理由1件を期待", out)
 	}
 	return out
 }
@@ -456,6 +519,15 @@ func editReasons(t *testing.T) []reason.Reason {
 		out = append(out, causeOf(t, err))
 	}
 
+	// 行をまたぐレコードの行と、閉じない引用符のファイル。
+	multi := edit.Parse([]byte("key,translation\nk,\"い\nち\"\n"))
+	if err := multi.SetTranslation(2, "x"); err == nil {
+		t.Error("行をまたぐレコードの行が書けてしまった")
+	} else {
+		out = append(out, causeOf(t, err))
+	}
+	out = append(out, edit.Parse([]byte("key,translation\nk,\"い\n")).ReadOnlyCause())
+
 	return out
 }
 
@@ -496,6 +568,61 @@ func publishLossReasons(t *testing.T) []reason.Reason {
 		out = append(out, l.Why)
 	}
 	return out
+}
+
+// publishShapeReasons は「読み違える形」の理由の見本を集める。
+//
+// どれも形の確かめを実際に走らせて出させる。入力・いまの公開ファイル・ゲーム側の
+// 公開ファイルは同じ確かめ（publish.CheckShape）を通る。
+func publishShapeReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	const hashKey = "bbbbbbbbbbbbbbbb"
+	inputs := []string{
+		// ヘッダーに key 列も source_en 列も translation 列も無い。
+		"foo,bar\nx,y\n",
+		// ヘッダーの最初の列名が '#' で始まる。
+		"\"#key\",source_en,translation\n" + key.For("x") + ",x,y\n",
+		// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
+		"key,source_en,translation\n" + key.For("x") + ",x,\"y\n" + hashKey + ",,z\"\n",
+		// 閉じ忘れた引用符が、ヘッダーと同じ列の数の次の行を飲み込む。
+		"source_en,translation\nx,\"y\nw,z\"\n",
+		// 飲み込まれた行が自分の値を引用符で開く。
+		"source_en,translation\nx,\"y\n\"w\nv\",z\n",
+		// 値の中の単独の CR。
+		"key,translation\naaaaaaaaaaaaaaaa,\"a\rb\"\n",
+		// 引用符で囲まない値が単独の CR で切れる。
+		"key,translation\naaaaaaaaaaaaaaaa,a\rb\n",
+		// 行の区切りが LF・CRLF・CR のどれでもない。
+		"key,translation aaaaaaaaaaaaaaaa,t ",
+		// 引用符が閉じない。
+		"key,translation\naaaaaaaaaaaaaaaa,\"a\n",
+	}
+	var out []reason.Reason
+	for _, input := range inputs {
+		found := publish.CheckShape([]byte(input))
+		if len(found) == 0 {
+			t.Fatalf("CheckShape(%q) が何も見つけない", input)
+		}
+		for _, h := range found {
+			out = append(out, h.Why)
+		}
+	}
+
+	// 再生順のデータの、見出しの行へそのまま書く値の改行。
+	root := t.TempDir()
+	orderPath := publish.ScriptOrderPath(root)
+	if err := os.MkdirAll(filepath.Dir(orderPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orderPath, []byte("section,node,key\nL01,\"N\n1\","+hashKey+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found, err := publish.CheckOrderShape(root)
+	if err != nil || len(found) != 1 {
+		t.Fatalf("CheckOrderShape = %+v, %v。1件を期待", found, err)
+	}
+	return append(out, found[0].Why)
 }
 
 // causeOf は internal/edit の誤りから理由を取り出す。

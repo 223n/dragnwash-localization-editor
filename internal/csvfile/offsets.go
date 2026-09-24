@@ -24,12 +24,16 @@ package csvfile
 // 位置は返す。空文字の行には [0] を返す。
 //
 // 返り値は必ず1個以上で、昇順、先頭は常に 0。すべての位置は len(line) 以下。
+//
+// レコード単位の位置（ファイルの先頭から数えた位置）は、区切りの関数が
+// [Segment] の Offsets に持つ。レコードの本体には引用の外の改行が無いので、
+// 改行を含む本体にこの関数を掛けても同じ位置になる（試験で確かめてある）。
 func FieldOffsets(line string) []int {
 	offsets := []int{0}
 	i := 0
 	for {
 		// 値は使わない。欲しいのは「このフィールドがどこで終わるか」だけ。
-		_, _, end := parsePowerShellField(line, i)
+		end := parsePowerShellField(line, i, false).end
 		if end >= len(line) {
 			// 行末に達した。末尾が空でもフィールドは1つ数えたままにする
 			// （offsets には既にこのフィールドの開始位置が入っている）。

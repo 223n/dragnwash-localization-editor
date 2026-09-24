@@ -293,6 +293,55 @@ func TestReadPowerShellRowsNumbered(t *testing.T) {
 	}
 }
 
+// TestReadPowerShellTableHeader は、データ行が無いときもヘッダーを返すことを見る。
+//
+// internal/publish の守りは「key 列や translation 列を引けるヘッダーか」を、
+// データ行が0件のファイルでも確かめる。行が無いからといってヘッダーまで
+// 捨てると、ヘッダーの無いファイル（データ行が1行だけ）を見分けられない。
+// 行が無いときに列名の重複を問わないのは元実装のままである。
+func TestReadPowerShellTableHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		header   []string
+		line     int
+		wantRows int
+	}{
+		{name: "ヘッダーだけ", text: "key,translation\n", header: []string{"key", "translation"}, line: 1},
+		{name: "コメントと空白の後ろのヘッダーだけ", text: "# a\n \nkey,translation", header: []string{"key", "translation"}, line: 3},
+		{name: "行が無ければ列名の重複を問わない", text: "a,A\n", header: []string{"a", "A"}, line: 1},
+		{name: "空のファイル", text: ""},
+		{name: "空白だけのファイル", text: "  \n\t\n"},
+		{name: "コメントだけのファイル", text: "# a\n# b\n"},
+		{name: "データ行がある", text: "\n key ,translation\nabc,あ\n", header: []string{"key ", "translation"}, line: 2, wantRows: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			table, err := ReadPowerShellTable([]byte(tt.text))
+			if err != nil {
+				t.Fatalf("ReadPowerShellTable が失敗した: %v", err)
+			}
+			if !slices.Equal(table.Header, tt.header) || table.HeaderLine != tt.line {
+				t.Errorf("ヘッダー = %q（%d行目）, want %q（%d行目）", table.Header, table.HeaderLine, tt.header, tt.line)
+			}
+			if len(table.Rows) != tt.wantRows {
+				t.Errorf("行数 = %d, want %d", len(table.Rows), tt.wantRows)
+			}
+		})
+	}
+
+	t.Run("行があれば列名の重複は誤り", func(t *testing.T) {
+		table, err := ReadPowerShellTable([]byte("a,A\n1,2\n"))
+		var dup *DuplicateColumnError
+		if !errors.As(err, &dup) {
+			t.Fatalf("err = %v, want *DuplicateColumnError", err)
+		}
+		if table.Header != nil || table.Rows != nil {
+			t.Errorf("誤りと一緒に結果を返している: %+v", table)
+		}
+	})
+}
+
 // TestDuplicateColumnErrorMessage は、重複した列名が文言に引用符つきで出ることを見る。
 // 利用者は文言だけを頼りにヘッダーを直す。空白だけの列名も見分けられるよう、
 // 名前は %q で囲む。

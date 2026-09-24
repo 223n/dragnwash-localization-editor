@@ -47,8 +47,8 @@ jobs:
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
     # 無ければ GitHub がホストする ubuntu-latest で動く
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    # 6つの対象をクロスビルドする分、タグと Release だけを作っていた頃より長くかかる
-    timeout-minutes: 25
+    # 6つの対象をクロスビルドする分と、Go のテストを通す分、タグと Release だけを作っていた頃より長くかかる
+    timeout-minutes: 35
     permissions:
       contents: write        # タグを打ち、Release を作り、書庫を添付する
       pull-requests: write   # main を develop へ戻す PR を開く
@@ -57,7 +57,8 @@ jobs:
     steps:
       - name: 要る道具があることを確かめる
         # GitHub がホストするランナーには入っている。セルフホストのランナーでは自分で入れる。
-        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない
+        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない。
+        # unzip は、作った zip の中身の一覧を取るのに使う
         run: |
           if ! command -v gh >/dev/null 2>&1; then
             echo "::error::gh（GitHub CLI）が無い。ランナーに入れてから実行する: https://cli.github.com/"
@@ -65,6 +66,10 @@ jobs:
           fi
           if ! command -v zip >/dev/null 2>&1; then
             echo "::error::zip が無い。Windows 向けの書庫を作れない。ランナーに入れてから実行する（例: apt-get install zip）"
+            exit 1
+          fi
+          if ! command -v unzip >/dev/null 2>&1; then
+            echo "::error::unzip が無い。Windows 向けの書庫の中身を確かめられない。ランナーに入れてから実行する（例: apt-get install unzip）"
             exit 1
           fi
 
@@ -137,6 +142,18 @@ jobs:
           # 依存は標準ライブラリだけなので、キャッシュを切っても伸びるのは1分ほどで済む
           cache: false
 
+      - name: Goのテストを通す
+        # 配る木（main）そのものでテストを通してから作る。1つでも落ちたら、タグも Release も作らない。
+        # リリースの PR の CI は承認待ちのまま動かないことが多く、auto_merge の経路では main への push の
+        # CI も起きない（GITHUB_TOKEN のマージはワークフローを起こさない）。develop の CI は「リリース」が
+        # 確かめているが、main には release ブランチで取り込んだ main の中身と版の上げが加わっている。
+        # E2E は含めない。ブラウザーを入れる分、公開までが長くなるためで、画面は develop の CI で見ている。
+        # 元リポジトリを読む試験は、ここには元リポジトリが無いので飛ぶ
+        env:
+          # テストはプロジェクトのコードを走らせる。書き込み権限つきのトークンを、要らない段には渡さない
+          GH_TOKEN: ''
+        run: go test ./cmd/... ./internal/... -count=1
+
       - name: バイナリと書庫を作る
         # タグを打つ前に作る。1つでもビルドに失敗したら、ここで止まってタグも Release も作らない。
         # 6種のうち5種だけが載った Release は、足りない対象の利用者から見れば壊れた配布になる
@@ -144,9 +161,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           # CGO を切ると、1台のランナーから6つの対象すべてを作れる（docs/research.md 5.4節）
           CGO_ENABLED: '0'
-          # ジョブ全体の GH_TOKEN を、この段だけ空にする。ここはビルドした実行ファイルを
-          # 実際に走らせる唯一の段で、gh は使わない。書き込み権限つきのトークンを
-          # プロジェクト由来のコードから読める場所に置かない
+          # ジョブ全体の GH_TOKEN を、この段だけ空にする。ここは gh を使わない。
+          # 書き込み権限つきのトークンは、要らない段には渡さない
           GH_TOKEN: ''
         run: |
           if [ -z "${VERSION}" ]; then
@@ -161,9 +177,18 @@ jobs:
           rm -rf dist
           mkdir -p dist
 
-          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする
+          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする。
+          # 日本語と英語を並べて書く。dwloc の出力は日本語だけなので、英語の読者には、そのことと
+          # 止まったときの主な文の英訳を、書庫を開いた時点で渡しておく（詳しくは README.en.md）
           cat > dist/README.txt <<TXT
           dwloc ${VERSION}
+
+          日本語の説明のあとに、英語の説明があります。
+          The English version follows the Japanese one.
+
+          ================================================================
+          日本語
+          ================================================================
 
           Drag'n Wash の翻訳リポジトリを扱うコマンドです。
           この書庫には、実行ファイルと LICENSE と THIRD_PARTY_NOTICES.md とこの説明が入っています。
@@ -193,11 +218,60 @@ jobs:
 
           詳しい手順とチェックサムの確かめ方は、次のページにあります。
           https://github.com/223n/dragnwash-localization-editor
-          TXT
 
-          host_os="$(go env GOOS)"
-          host_arch="$(go env GOARCH)"
-          ran_one=false
+          ================================================================
+          English
+          ================================================================
+
+          dwloc is a command for working with the Drag'n Wash translation repository.
+          This archive contains the program, LICENSE, THIRD_PARTY_NOTICES.md and this file.
+
+          What dwloc prints is in Japanese:
+            Everything dwloc prints in the terminal is in Japanese only.
+            The screen of dwloc edit follows the language of your browser.
+            The messages dwloc edit prints in the window are in English
+            only when you start it with --ui-lang en.
+            The first line it prints tells you what happened. The most common ones:
+              ここは翻訳リポジトリではないようです。
+                This does not look like a translation repository.
+              ゲームのフォルダーを探しましたが、見つかりませんでした。
+                It looked for the game folder and did not find it.
+                It carries on without the game (the source text column stays empty).
+              訳が失われるので、1バイトも書きませんでした。
+                Translations would be lost, so not a single byte was written.
+              ゲームに入っている翻訳が古いので、1バイトも書きませんでした。
+                The translation in the game is older, so not a single byte was written.
+              操作がないまま 30m0s たちました。待ち受けを終えます。
+                No activity for 30m0s. Stopping.
+            More translations are in "What dwloc prints is in Japanese" of the English README:
+            https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md#what-dwloc-prints-is-in-japanese
+
+          The simplest way to start:
+            Put dwloc in the folder of the translation repository (the same place as Translations)
+            and double-click it. The screen for editing translations opens in your browser.
+            To stop it, press Ctrl+C or close the window that opened.
+            This is verified on Windows. On macOS and Linux, use the commands below.
+
+          From the command line:
+            dwloc edit     --root <path to the translation repository>   edit translations in the browser
+            dwloc diff     --root <path to the translation repository>   list what to do next
+            dwloc validate --root <path to the translation repository>   validate the published files
+            dwloc publish  --root <path to the translation repository>   rebuild the CSV for publication
+            dwloc version
+
+          This binary is not signed.
+          On macOS, Gatekeeper may stop it the first time. This line removes the quarantine mark:
+            xattr -d com.apple.quarantine ./dwloc
+          On Windows, a SmartScreen warning may appear.
+          Click "More info" and then "Run anyway".
+          If dwloc.exe is missing, suspect that Microsoft Defender quarantined it.
+          Check "Protection history" in Windows Security and allow it from there.
+          If macOS or Linux says Permission denied, add the execute permission:
+            chmod +x ./dwloc
+
+          The detailed steps and how to verify the checksums are on this page:
+          https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md
+          TXT
 
           for target in ${targets}; do
             goos="${target%/*}"
@@ -213,7 +287,8 @@ jobs:
             # -trimpath         作った人のパスをバイナリに残さない
             # -s -w             記号表とデバッグ情報を落とす。落とすと1つあたり3割ほど小さくなる
             # -X main.version   dwloc version が出す版。入れないと dev のままになり、
-            #                   不具合報告でどの版か分からなくなる
+            #                   不具合報告でどの版か分からなくなる。
+            #                   埋め込めたかは、次の段で書庫を展開して確かめる
             GOOS="${goos}" GOARCH="${goarch}" go build \
               -trimpath \
               -ldflags "-s -w -X main.version=${VERSION}" \
@@ -231,20 +306,6 @@ jobs:
               chmod 755 "${dir}/${bin}"
             fi
 
-            # ランナーと同じ対象のものは、実際に動かして版が埋め込めたかを確かめる。
-            # 6つとも同じ ldflags で作っているので、1つ動けば埋め込み自体は効いている。
-            # -trimpath を付けると go version -m に ldflags が残らないため、
-            # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）
-            if [ "${goos}" = "${host_os}" ] && [ "${goarch}" = "${host_arch}" ]; then
-              got="$("${dir}/${bin}" version)"
-              if [ "${got}" != "dwloc ${VERSION}" ]; then
-                echo "::error::版が埋め込めていない。dwloc version が「${got}」と出た（期待: dwloc ${VERSION}）"
-                exit 1
-              fi
-              echo "版を確かめた: ${got}（${goos}/${goarch}）"
-              ran_one=true
-            fi
-
             # Windows は zip、それ以外は tar.gz。展開の道具がその環境の標準で足りるようにする。
             # 書庫の中は name のディレクトリ1つにまとめ、展開先に中身が散らばらないようにする
             if [ "${goos}" = 'windows' ]; then
@@ -258,14 +319,164 @@ jobs:
 
           rm -f dist/README.txt
 
-          if [ "${ran_one}" != 'true' ]; then
-            echo "::warning::ランナーが ${host_os}/${host_arch} のため、作ったバイナリを動かして版を確かめられなかった"
-          fi
-
           # 添付するのは6つの書庫と、この1ファイルだけ。
           # sha256sum -c と shasum -a 256 -c がそのまま読める形式にする
           (cd dist && sha256sum dwloc_*.tar.gz dwloc_*.zip > "dwloc_${VERSION}_checksums.txt")
           cat "dist/dwloc_${VERSION}_checksums.txt"
+
+      - name: 6つの書庫の中身を確かめる
+        # 次の段で展開して動かせるのは、ランナーと同じ対象の書庫1つだけである。
+        # 残りの5つ（主な利用先の Windows 向けの zip を含む）は、ここで見ないと公開の前に一度も開かれない。
+        # 不変のリリースは公開したあとで直せないので、実行はせずに中身の一覧だけを取り、6つすべてで次を見る。
+        #   - 書庫と同じ名前のフォルダー1つの下に、本体・LICENSE・THIRD_PARTY_NOTICES.md・README.txt の4つだけがある
+        #   - Windows 以外の本体に実行権限（755）が付いている。tar.gz の一覧の権限の欄で見る。
+        #     zip は Windows 向けだけで、Windows は実行権限を使わないので見ない
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ''
+        run: |
+          # 対象は「バイナリと書庫を作る」と同じ6種
+          targets='linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64'
+          for target in ${targets}; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="dwloc_${VERSION}_${goos}_${goarch}"
+            if [ "${goos}" = 'windows' ]; then
+              bin='dwloc.exe'
+              archive="dist/${name}.zip"
+            else
+              bin='dwloc'
+              archive="dist/${name}.tar.gz"
+            fi
+            if [ ! -f "${archive}" ]; then
+              echo "::error::書庫が無い: ${archive}"
+              exit 1
+            fi
+
+            # フォルダーの項目（末尾が /）を除き、並べ替えて期待と比べる。足りないものも余計なものも見つける
+            if [ "${goos}" = 'windows' ]; then
+              listing="$(unzip -Z1 "${archive}")"
+            else
+              listing="$(tar -tzf "${archive}")"
+            fi
+            got="$(printf '%s\n' "${listing}" | { grep -v '/$' || true; } | LC_ALL=C sort)"
+            want="$(printf '%s\n' "${name}/${bin}" "${name}/LICENSE" "${name}/THIRD_PARTY_NOTICES.md" "${name}/README.txt" | LC_ALL=C sort)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::書庫 ${archive#dist/} の中身が期待と違う（- が期待、+ が実際）"
+              diff <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") || true
+              exit 1
+            fi
+
+            if [ "${goos}" != 'windows' ]; then
+              # tar -tv の1列目が権限（例: -rwxr-xr-x）。持ち主・グループ・ほかの実行権限を見る
+              mode="$(tar -tvzf "${archive}" "${name}/${bin}" | awk '{ print $1 }')"
+              case "${mode}" in
+                -??x??x??x) ;;
+                *)
+                  echo "::error::書庫 ${archive#dist/} の ${bin} に実行権限が無い（${mode}）。展開した翻訳者の手元で Permission denied になる"
+                  exit 1
+                  ;;
+              esac
+            fi
+            echo "中身を確かめた: ${archive#dist/}"
+          done
+          echo "- 6つの書庫の中身を確かめた（4つのファイルと、Windows 以外の本体の実行権限）" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 作った書庫を展開して動かす
+        # タグを打つ前に、配る書庫そのものを展開して動かす。1つでも失敗したら、ここで止まって
+        # タグも Release も作らない。前の段と同じく、壊れた配布を公開しないためである。
+        # ビルドが通っても、版の埋め込み漏れや書庫の作り方の誤り（実行権限が落ちる、中身が足りない）は
+        # 動かすまで分からない。不変のリリースは公開したあとで直せないので、その前に確かめる。
+        #
+        # 動かせるのはランナーと同じ対象の書庫だけで、GitHub がホストするランナーでは linux/amd64 になる。
+        # 書庫の中身と実行権限は、前の段で6つとも一覧で確かめてある。ここでは展開した結果でも同じことを見る。
+        # 6つとも同じ ldflags と同じ手順で作っているので、1つ動けば版の埋め込みは効いている。
+        # -trimpath を付けると go version -m に ldflags が残らないため、
+        # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）。
+        #
+        # ubuntu-latest は 2026年10月から Ubuntu 26.04 へ移り、sha256sum や mktemp が Rust 版の coreutils になる。
+        # この段と前の段は、ubuntu:24.04 と ubuntu:26.04 のコンテナで同じように動くことを確かめてある
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          # 作った実行ファイルを走らせる段なので、ジョブ全体の GH_TOKEN を空にする。
+          # 書き込み権限つきのトークンを、プロジェクト由来のコードから読める場所に置かない
+          GH_TOKEN: ''
+        run: |
+          host_os="$(go env GOOS)"
+          host_arch="$(go env GOARCH)"
+          name="dwloc_${VERSION}_${host_os}_${host_arch}"
+          archive="dist/${name}.tar.gz"
+          if [ ! -f "${archive}" ]; then
+            echo "::error::ランナー（${host_os}/${host_arch}）で動かせる書庫が無い: ${archive}。Linux か macOS の、amd64 か arm64 のランナーで実行する"
+            exit 1
+          fi
+
+          # 利用者が README の手順（sha256sum -c）で確かめるのと同じ形で、一覧と書庫が合うかを見る
+          if ! (cd dist && sha256sum --check --strict "dwloc_${VERSION}_checksums.txt"); then
+            echo "::error::dwloc_${VERSION}_checksums.txt が書庫と合わない"
+            exit 1
+          fi
+
+          # 展開も実行もリポジトリの外で行う。dwloc は記録（logs/）をカレントディレクトリに書く
+          work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/dwloc-verify.XXXXXX")"
+          tar -xzf "${archive}" -C "${work}"
+          dir="${work}/${name}"
+          for f in dwloc LICENSE THIRD_PARTY_NOTICES.md README.txt; do
+            if [ ! -f "${dir}/${f}" ]; then
+              echo "::error::書庫 ${name}.tar.gz に ${f} が無い"
+              exit 1
+            fi
+          done
+          # 書庫に実行権限が残っていないと、展開した翻訳者の手元で Permission denied になる
+          if [ ! -x "${dir}/dwloc" ]; then
+            echo "::error::書庫 ${name}.tar.gz の dwloc に実行権限が無い"
+            exit 1
+          fi
+          cd "${work}"
+
+          got="$("${dir}/dwloc" version)"
+          if [ "${got}" != "dwloc ${VERSION}" ]; then
+            echo "::error::版が埋め込めていない。dwloc version が「${got}」と出た（期待: dwloc ${VERSION}）"
+            exit 1
+          fi
+          echo "版を確かめた: ${got}（${host_os}/${host_arch}）"
+
+          # 残りの2つは見本（samples/harbor）の写しで行う。
+          # 見本の作業コピー（Translations/_discovered/ja.working.csv）はこのリポジトリにコミットしてあるので、
+          # その場で validate を掛けると「コミットしてはいけない作業コピー」として終了コード1になる。
+          # git の外へ写せば、翻訳者の手元の翻訳リポジトリと同じに見える。
+          # 見本がこの確認を通る形を保っているかは、Go のテスト（cmd/dwloc/samples_test.go）が
+          # Pull Request のうちに見る。ここで初めて落ちると、main へマージしたあとで公開が止まる
+          if [ ! -d "${GITHUB_WORKSPACE}/samples/harbor" ]; then
+            echo "::error::見本（samples/harbor）が無い。書庫を動かして確かめられない"
+            exit 1
+          fi
+          sample="${work}/harbor"
+          cp -R "${GITHUB_WORKSPACE}/samples/harbor" "${sample}"
+
+          if ! "${dir}/dwloc" validate --root "${sample}"; then
+            echo "::error::dwloc validate が見本で問題を出した"
+            exit 1
+          fi
+
+          # 変更なしかどうかは出力の文言で見る。文言は samples_test.go が同じものを確かめている
+          if ! out="$("${dir}/dwloc" publish --root "${sample}" --no-game --dry-run)"; then
+            printf '%s\n' "${out}"
+            echo "::error::dwloc publish --no-game --dry-run が見本で失敗した"
+            exit 1
+          fi
+          printf '%s\n' "${out}"
+          if [[ "${out}" == *'[変更あり'* || "${out}" != *'件中 0 件が変わります'* ]]; then
+            echo "::error::dwloc publish --no-game --dry-run が見本で「変更なし」にならなかった"
+            exit 1
+          fi
+          # --dry-run は書かない約束。写しが見本と同じままかも見る
+          if ! diff -r "${GITHUB_WORKSPACE}/samples/harbor" "${sample}"; then
+            echo "::error::dwloc publish --dry-run が見本の写しを書き換えた"
+            exit 1
+          fi
+
+          echo "- 書庫を展開して動かした: ${name}.tar.gz（version、validate、publish --dry-run）" >> "$GITHUB_STEP_SUMMARY"
 
       - name: タグを打つ
         env:

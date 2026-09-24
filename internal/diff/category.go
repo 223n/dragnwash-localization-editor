@@ -50,7 +50,7 @@ func (s Status) id() string {
 
 // Category は報告の種別。
 //
-// 表示順は [categories] が決める。要作業2つ → 要確認6つ → 参考4つ。
+// 表示順は [categories] が決める。要作業2つ → 要確認7つ → 参考4つ。
 // この const の並びは値の割り当てだけで、後ろに足しても表示順は変わらない。
 type Category int
 
@@ -124,6 +124,12 @@ type categoryInfo struct {
 	// git から取り出せない環境（git が無い、リポジトリでない、履歴が1版しかない）
 	// でも道具そのものは動くので、ここも「0 件」ではなく理由を書く印として立てる。
 	needsOldOrder bool
+	// comparesLocales はほかのロケールの公開ファイルと比べて決めるかどうか。
+	//
+	// ほかのロケールの公開ファイルが閉じない引用符で読めないと、比べる相手の
+	// キーが欠ける。「他のロケールにあって無い行」は少なく、「どのロケールにも
+	// 訳が無い行」は多く出るので、どちらも「判定していません」にする。
+	comparesLocales bool
 	// note は Finding.Note の既定値。CSV の note 列に入る。
 	note string
 	// noteID は note に対応する安定した識別子（internal/reason）。
@@ -145,6 +151,8 @@ const (
 	noteUnknownOrigin   = "再生順にありませんが、UI 文言かもしれません"
 	noteDroppedBroken   = "key が16桁hexでも line: でもありません"
 	noteDroppedMismatch = "source_en のハッシュが key と一致しません"
+	// noteDroppedSourceCRLF は、原文の CRLF のせいで key と合わないときの注記。
+	noteDroppedSourceCRLF = "source_en の改行が CRLF です。LF に戻すと key と一致します"
 )
 
 // categoryTable はカテゴリの定義表。Category の値を添字にする。
@@ -157,7 +165,7 @@ var categoryTable = map[Category]categoryInfo{
 		},
 	},
 	CatLocaleGap: {
-		name: "他のロケールにあって無い行", id: "locale_gap", status: StatusTodo,
+		name: "他のロケールにあって無い行", id: "locale_gap", status: StatusTodo, comparesLocales: true,
 		detail: []string{
 			"他のロケールには訳がありますが、このロケールにはありません。",
 		},
@@ -215,7 +223,8 @@ var categoryTable = map[Category]categoryInfo{
 		// 「他のロケールにあって無い行」へ回る）。キーを読めていなければ1件も
 		// 見つけられないのに、0 件と書くと訳の無い行は無いと読まれる。引き継ぎ
 		// 候補に台詞IDを要るものとして足したのと同じ理由で、0 件と書かずに止める。
-		name: "どのロケールにも訳が無い行", id: "not_published", status: StatusInfo, needsOrderKeys: true,
+		name: "どのロケールにも訳が無い行", id: "not_published", status: StatusInfo,
+		needsOrderKeys: true, comparesLocales: true,
 		note: noteNotPublished, noteID: reason.NoteNotPublished,
 	},
 	CatScriptGap: {
@@ -321,6 +330,11 @@ func (c Category) needsLayoutRisks() bool {
 // needsOldOrder は1つ前の版の再生順が無いと判定できないカテゴリかを返す。
 func (c Category) needsOldOrder() bool {
 	return categoryTable[c].needsOldOrder
+}
+
+// comparesLocales はほかのロケールの公開ファイルと比べて決めるカテゴリかを返す。
+func (c Category) comparesLocales() bool {
+	return categoryTable[c].comparesLocales
 }
 
 // note は Finding.Note の既定値を返す。

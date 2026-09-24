@@ -42,7 +42,7 @@ const s = SAMPLE;
 const L = SAMPLE_LINES;
 const typed = "さようなら。";
 
-// 画面の幅。900px 以下が引き出し、901px からが左の列（app.js の narrow と app.css の @media）。
+// 画面の幅。900px 以下が引き出し、900px を超えると左の列（app.js の narrow と app.css の @media）。
 const WIDE = { width: 1280, height: 720 };
 const NARROW = { width: 375, height: 812 };
 
@@ -227,6 +227,25 @@ function reachable(page, selector) {
     const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
     return hit !== null && (hit === target || target.contains(hit));
   }, selector);
+}
+
+// axState は selector の要素が読み上げの木でどう見えているかを、Chromium の DevTools
+// Protocol（Accessibility.getPartialAXTree）で読む。ignored は木から外れているか、live は
+// 告知の仕方（aria-live や role="status" から決まる。無ければ null）。
+//
+// Playwright の getByRole や toBeVisible は inert を見ないので、inert の中の要素も引けて
+// しまう。読み上げに出るかどうかは、ブラウザーが作った木で直に見る。
+async function axState(page, selector) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+    const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+    const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+    const live = nodes[0].properties?.find((p) => p.name === "live");
+    return { ignored: nodes[0].ignored, live: live ? live.value.value : null };
+  } finally {
+    await cdp.detach();
+  }
 }
 
 // failLines は次の /api/lines を 500 にし、読み直しを押して失敗の理由を帯に出す。
@@ -430,9 +449,11 @@ test.describe("狭い画面の引き出し", () => {
     await menu(app).click();
     await expectDrawerOpen(app);
 
-    // 幕のうち、引き出しに隠れていない右側を押す。
+    // 幕のうち、引き出しに隠れていない右側を押す。閉じたら、焦点は開いたボタンへ戻る
+    // （閉じるボタンと Escape と同じ）。以前は幕で閉じたときだけ戻さず、body へ落ちた。
     await backdrop(app).click({ position: { x: NARROW.width - 10, y: NARROW.height / 2 } });
     await expectDrawerClosed(app);
+    await expect(menu(app)).toBeFocused();
   });
 
   test("閉じるボタンで引き出しを閉じ、焦点を #menu へ戻す", async ({ app }) => {
@@ -482,16 +503,20 @@ test.describe("狭い画面の引き出し", () => {
     await expect(sidebar(app)).toHaveAttribute("inert", "");
     await editor(app).press("Escape");
 
-    // 開けば入れる。#menu から #locale、#reload、#export-open と進み、その次が引き出しの
-    // 閉じるボタン。
+    // 開けば入れる。開いたら焦点は引き出しの閉じるボタンへ移り（#menu は帯ごと inert になる）、
+    // Tab で検索の欄へ進む。以前は焦点が #menu に残り、Tab で #locale・#reload・#export-open
+    // （幕の向こうの帯）を通ってから引き出しへ入った。
     await menu(app).click();
     await expectDrawerOpen(app);
     await expect(sidebar(app)).not.toHaveAttribute("inert");
-    await menu(app).focus();
-    for (const id of ["#locale", "#reload", "#export-open"]) {
-      await app.keyboard.press("Tab");
-      await expect(app.locator(id)).toBeFocused();
-    }
+    await expect(app.locator("#sidebar-close")).toBeFocused();
+    await app.keyboard.press("Tab");
+    await expect(search(app)).toBeFocused();
+    // 引き出しの手前へ戻っても、帯（#export-open など）には入らない。
+    await app.keyboard.press("Shift+Tab");
+    await expect(app.locator("#sidebar-close")).toBeFocused();
+    await app.keyboard.press("Shift+Tab");
+    expect(await app.evaluate(() => document.querySelector(".top").contains(document.activeElement))).toBe(false);
     await app.keyboard.press("Tab");
     await expect(app.locator("#sidebar-close")).toBeFocused();
     await app.keyboard.press("Tab");
@@ -518,6 +543,97 @@ test.describe("狭い画面の引き出し", () => {
     await waitForDiskChange(server, before);
     await waitForSaved(page);
     await expectOnlyTranslation(server, before, L.goodbye, typed);
+  });
+});
+
+// 狭い画面の引き出しは一覧の上に被さる。開いているあいだに焦点が帯や一覧へ抜けると、
+// 引き出しに覆われて見えない訳の欄に入力欄が開き、打った字がその行の訳に足されて自動で
+// 保存される（375x700 で Tab を25回押すと、一覧の1行目の訳の欄に入った。elementFromPoint は
+// #sidebar を返し、打った字はその行の訳の後ろに付いてファイルに入った）。開いているあいだは
+// 帯（.top）と一覧（main）を inert にし、焦点を引き出しの中に閉じ込める（app.js の syncInert）。
+test.describe("狭い画面で引き出しを開いているあいだ", () => {
+  test.use({ viewport: { width: 375, height: 700 } });
+
+  test("Tab を進めても焦点は引き出しの外へ出ず、隠れた行の訳を書き換えない", async ({ page, server }) => {
+    await openPaused(page, server);
+    const before = await server.readRoot(workingRel);
+    await menu(page).click();
+    await expectDrawerOpen(page);
+
+    const escaped = [];
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press("Tab");
+      const where = await page.evaluate(() => {
+        const active = document.activeElement;
+        if (!active || active === document.body || document.querySelector("#sidebar").contains(active)) {
+          return null;
+        }
+        return active.id || active.className || active.tagName;
+      });
+      if (where !== null) {
+        escaped.push(`${i + 1}回目: ${where}`);
+      }
+    }
+    expect(escaped).toEqual([]);
+    await expect(editor(page)).toHaveCount(0);
+
+    // 焦点の先がどこであれ、打った字は一覧の訳に入らない。自動保存の時計を切らせても送らない。
+    await page.keyboard.type("hidden typing");
+    await page.clock.runFor(5_000);
+    await expect(editor(page)).toHaveCount(0);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_clean"));
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+  });
+
+  // 開いているあいだ、帯と一覧は読み上げの木からも外れる（inert）。閉じれば戻る。
+  test("開いているあいだは帯と一覧を inert にし、閉じれば戻す", async ({ app }) => {
+    const top = app.locator(".top");
+    const main = app.locator("main.content");
+    await expect(top).not.toHaveAttribute("inert");
+    await expect(main).not.toHaveAttribute("inert");
+
+    await menu(app).click();
+    await expectDrawerOpen(app);
+    await expect(top).toHaveAttribute("inert", "");
+    await expect(main).toHaveAttribute("inert", "");
+    await expect(sidebar(app)).not.toHaveAttribute("inert");
+
+    await app.keyboard.press("Escape");
+    await expectDrawerClosed(app);
+    await expect(top).not.toHaveAttribute("inert");
+    await expect(main).not.toHaveAttribute("inert");
+    await expect(menu(app)).toBeFocused();
+  });
+
+  // 帯と一覧を inert にすると、帯の「表示中 N 行」（#shown）と一覧の「当たる行がありません」
+  // （#empty）も読み上げの木から外れる。引き出しの主な用途は絞り込みと検索なのに、その結果が
+  // 告知されなくなっていた（inert にする前は、引き出しの中で検索すると行数が告知された）。
+  // 開いているあいだは、同じ文を引き出しの中の見張り（#finder-status）へ写す（app.js の
+  // applyView）。閉じれば空に戻す。帯の #shown がまた告知するので、2か所で同じ文を読ませない。
+  test("開いているあいだは、表示中の行数と当たる行が無いことを引き出しの中で告知する", async ({ app }) => {
+    const status = app.locator("#finder-status");
+    await expect(status).toBeEmpty();
+    await menu(app).click();
+    await expectDrawerOpen(app);
+    // 開いただけでは写さない。開くたびに行数を読ませない。
+    await expect(status).toBeEmpty();
+
+    await search(app).fill("Hello");
+    await expect(status).toHaveText(msg("ja", "ui.shown", { count: 1 }));
+    await search(app).fill("zzzz");
+    await expect(status).toHaveText(`${msg("ja", "ui.shown", { count: 0 })} ${msg("ja", "ui.no_rows_search")}`);
+
+    // 帯と一覧の見張りは木から外れていて、写した先は木に居て告知する形である。
+    expect(await axState(app, "#shown")).toMatchObject({ ignored: true });
+    expect(await axState(app, "#empty")).toMatchObject({ ignored: true });
+    expect(await axState(app, "#finder-status")).toEqual({ ignored: false, live: "polite" });
+
+    await app.keyboard.press("Escape");
+    await expectDrawerClosed(app);
+    await expect(status).toBeEmpty();
+    await expect(app.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 0 }));
+    expect(await axState(app, "#shown")).toEqual({ ignored: false, live: "polite" });
+    expect(await axState(app, "#empty")).toEqual({ ignored: false, live: "polite" });
   });
 });
 
@@ -550,6 +666,23 @@ test.describe("広い画面の左の列", () => {
     await app.locator("#export-open").focus();
     await app.keyboard.press("Tab");
     await expect(search(app)).toBeFocused();
+  });
+
+  // 左の列（aside）は読み上げの目印（complementary）になる。名前が無いと、目印の一覧に
+  // 「補足」とだけ並び、何の列かが分からない（以前は、AX の木で名前の無い目印はこれだけ
+  // だった）。名前は開閉ボタン（#menu）と同じ目録の文で、画面は文言を持たない。
+  test("左の列は、目録の名前を持つ読み上げの目印になる", async ({ app }) => {
+    await expect(app.getByRole("complementary", { name: msg("ja", "ui.sidebar"), exact: true })).toBeVisible();
+  });
+
+  // 広い画面の列は何にも被さらず、帯も一覧も inert にならない。行数は帯の #shown が告知する
+  // ので、引き出しの見張り（#finder-status）へは写さない。写すと同じ行数を2か所で読ませる。
+  test("列で検索したときの行数は、帯の #shown だけが告知する", async ({ app }) => {
+    await search(app).fill("zzzz");
+    await expect(app.locator("#shown")).toHaveText(msg("ja", "ui.shown", { count: 0 }));
+    await expect(app.locator("#empty")).toHaveText(msg("ja", "ui.no_rows_search"));
+    await expect(app.locator("#finder-status")).toBeEmpty();
+    expect(await axState(app, "#shown")).toEqual({ ignored: false, live: "polite" });
   });
 });
 
@@ -875,18 +1008,32 @@ async function walkThrough(page, server) {
   await expect(rows).toHaveText(msg("ja", "ui.rows", { count: 1 }));
   await page.locator("#locale").selectOption("ja");
   await expect(rows).toHaveText(msg("ja", "ui.rows", { count: 3 }));
+  // 読み直しは、応答が返って描き終えるまで待つ。押した直後の一覧はまだ前のままで、訳の欄も
+  // 行の数も同じなので、それを見ても読み直しが済んだことにはならない。#list の aria-busy も、
+  // 押した直後は読みにいく前（送り終えるのを待っている askDiscard の最中）なので "false" の
+  // まま成り立ってしまう。先に応答の待ちを仕掛け、返ったあとで aria-busy が下りるのを待つ。
+  const reloaded = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/lines");
   await page.locator("#reload").click();
+  await reloaded;
+  await expect(page.locator("#list")).toHaveAttribute("aria-busy", "false");
   await expect(translationCell(page, L.goodbye)).toHaveText(typed);
   await expect(dataRows(page)).toHaveCount(3);
 
   // 狭い画面で引き出しを開けて閉じ、広い画面へ戻す。
+  //
+  // 幅を変えたあと、画面が幅の変わり目（app.js の narrow の change）を受け終えるまで待つ。
+  // 受ける前にスラッシュを押すと、開いた引き出しをあとから届いた change が閉じ、焦点を
+  // #menu へ移してしまう（develop の CI で1回落ちた）。受け終えると、閉じた引き出しに
+  // inert が付く（「900px をまたいで幅が変わると…」の試験と同じ見方）。
   await page.setViewportSize(NARROW);
+  await expect(sidebar(page)).toHaveAttribute("inert", "");
   await pressOutside(page, "/");
   await expect(search(page)).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu(page)).toBeFocused();
   await page.setViewportSize(WIDE);
   await expect(sidebar(page)).toBeVisible();
+  await expect(sidebar(page)).not.toHaveAttribute("inert");
 }
 
 test.describe("外へ出さない守り", () => {

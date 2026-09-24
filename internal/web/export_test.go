@@ -184,7 +184,7 @@ func TestExportIsRecorded(t *testing.T) {
 	do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
 
 	text := file.String()
-	for _, want := range []string{"GET /api/export 200", "locale=ja", "form=published", "bytes="} {
+	for _, want := range []string{`GET "/api/export" 200`, "locale=ja", "form=published", "bytes="} {
 		if !strings.Contains(text, want) {
 			t.Errorf("記録に %q が無い:\n%s", want, text)
 		}
@@ -292,6 +292,147 @@ func TestExportChecksTheBaseBeforeTheLosses(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "巻き戻") {
 		t.Errorf("土台の食い違いより先に、失われる訳を出している: %q", rec.Body.String())
+	}
+}
+
+func TestExportRefusesUnsafeShapes(t *testing.T) {
+	// publish は、読むと訳や原文を取り違える形のファイルを書く前に止める。画面の
+	// 書き出しも同じところで止めないと、英語の原文を飲み込んだ訳や黙って落ちた行を、
+	// 翻訳者が自分の手でリポジトリへ写せてしまう。この形は失われる訳の確かめ
+	// （CheckLoss）では捕まらない。いまの公開ファイルの訳は消えないからである。
+	//
+	// 画面の書き出しには、確かめたうえで通す指定（dwloc publish --accept-multiline
+	// <ロケール>:<key>）が無い。正しい複数行の値で止まったときは、dwloc publish で
+	// レコードごとに指定して書く（文面で案内する）。
+	for _, tc := range []struct {
+		name string
+		// working はリポジトリの作業コピー。空なら置かない。
+		working string
+		// published は置き換える公開ファイル。空なら newTestRoot のまま。
+		published string
+		// order は置き換える再生順（data/script_order.csv）。空なら newTestRoot のまま。
+		order string
+	}{
+		{
+			// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
+			name: "作業コピーで引用符が別の行で閉じる",
+			working: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"ながい",
+				keyVanished + ",L01 Ryan,Ryan_1_intro,3,Ryan," + jaVanished + "\"",
+				"",
+			}, "\n"),
+		},
+		{
+			// 作業コピー（組み立ての入力）の閉じない引用符。形の確かめを組み立てより前に
+			// 置くので、組み立ての読み方の誤り（書き出しの失敗、500）ではなく、形の崩れ
+			// として断る（publish の終了コード1と直し方に当たる）。
+			name: "作業コピーの引用符が閉じない",
+			working: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？",
+				keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,\"ながい",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "いまの公開ファイルの訳に単独の CR がある",
+			published: strings.Join([]string{
+				"key,section,node,order,speaker,translation",
+				keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"ながい\rやく\"",
+				"",
+			}, "\n"),
+		},
+		{
+			// 再生順の見出しに使う値の改行。書き出すと、公開ファイルの見出しの2行目が
+			// '#' で始まらない行になり、次に読むときデータの行になる（publish と同じく
+			// 再生順のデータの形を最初に見る）。
+			name: "再生順の見出しに使う値に改行がある",
+			order: strings.Join([]string{
+				"section,phase,node,order,line_id,key,speaker,condition",
+				"L01 Ryan,intro,\"Ryan_1\nintro\",1,line:aaaaaaaa," + keyKept + ",Ryan,",
+				"",
+			}, "\n"),
+		},
+		{
+			// 再生順の閉じない引用符。読み込みの誤り（500）ではなく、形の崩れとして断る。
+			name: "再生順の引用符が閉じない",
+			order: strings.Join([]string{
+				"section,phase,node,order,line_id,key,speaker,condition",
+				"L01 Ryan,intro,Ryan_1_intro,1,line:aaaaaaaa," + keyKept + ",\"Ryan,",
+				"",
+			}, "\n"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newTestRoot(t)
+			for rel, body := range map[string]string{
+				filepath.Join("Translations", "_discovered", "ja.working.csv"): tc.working,
+				filepath.Join("Translations", "ja", "strings.csv"):             tc.published,
+				filepath.Join("data", "script_order.csv"):                      tc.order,
+			} {
+				if body == "" {
+					continue
+				}
+				path := filepath.Join(root, rel)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := newTestServer(t, Options{Root: root, UILang: "ja"})
+
+			rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("状態コードが %d、409 を期待:\n%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if want := s.cat.T(s.cat.lookup("ja"), "error.export_unsafe_shape", "count", "1"); !strings.Contains(body, want) {
+				t.Errorf("形の文面になっていない: %q", body)
+			}
+			// どのファイルの何行目かはパスを含むので出さない。訳の中身も出さない。
+			for _, leak := range []string{root, filepath.ToSlash(root), ".csv", "ながい"} {
+				if strings.Contains(body, leak) {
+					t.Errorf("誤りの文面に %q が出ている: %q", leak, body)
+				}
+			}
+			// 編集中のファイルはそのまま出せる。止めるのは publish の形だけである。
+			rec = do(t, s, http.MethodGet, "/api/export?locale=ja&form=working", true, nil)
+			if rec.Code != http.StatusOK {
+				t.Errorf("編集中のファイルの書き出しまで止めている: %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestExportChecksTheShapeBeforeTheBase(t *testing.T) {
+	// 守りの順番は publish と同じ（形 → 土台の食い違い → 失われる訳）。
+	// 形の崩れたファイルは、あとの2つの確かめも読み違えるので、先に止める。
+	base := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		// 土台はコミット済みより古い訳を持つ（repo は「もしもし？」）。
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし",
+		"",
+	}, "\n")
+	// 閉じ忘れた引用符が、キーの形で始まる次の行を飲み込む。
+	working := strings.Join([]string{
+		"key,section,node,order,speaker,translation",
+		keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし",
+		keyKept2 + ",L01 Ryan,Ryan_1_intro,2,Kobold,こんにちは！\"",
+		"",
+	}, "\n")
+	game := newGameWithBase(t, base, working)
+	s := newTestServer(t, Options{Game: game, UILang: "ja"})
+
+	rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("状態コードが %d、409 を期待:\n%s", rec.Code, rec.Body.String())
+	}
+	if want := s.cat.T(s.cat.lookup("ja"), "error.export_unsafe_shape", "count", "1"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("土台の食い違いより先に形を見ていない: %q", rec.Body.String())
 	}
 }
 
@@ -421,6 +562,16 @@ func TestExportFailsWithoutLeakingThePath(t *testing.T) {
 		}},
 		{"公開の形: ゲーム側の土台を読めない", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
 			breakWith(t, s.target("ja").GameBase, true)
+		}},
+		// 読めるが、列名が重複していてどの列が訳かを決められない。入力が作業
+		// コピーなら組み立ては通る（書き出し先はコメントを写すためにしか読まない）
+		// ので、形の確かめで止まる。確かめられないまま出すと、失われる訳を見落とす。
+		{"公開の形: コミット済みの公開ファイルの列名が重複している", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
+			dup := "key,Key,section,node,order,speaker,translation\n" +
+				keyKept + "," + keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n"
+			if err := os.WriteFile(s.target("ja").Output, []byte(dup), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	}
 	for _, tc := range cases {

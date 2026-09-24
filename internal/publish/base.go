@@ -28,9 +28,10 @@ type BaseDrift struct {
 	// 畳んだ形（[csvfile.FoldASCII]）では返さない。人はこの値をファイルから
 	// 探すので、綴りが変わっていると引き当てられない。
 	Key string
-	// Repo はコミット済みの訳の先頭だけ（[lossHeadRunes] 文字）。
+	// Repo はコミット済みの訳の先頭だけ（[lossHeadRunes] 文字）。制御文字は見える
+	// 印に置き換えてある（[Visible]）。
 	Repo string
-	// Game はゲームに入っている訳の先頭だけ。
+	// Game はゲームに入っている訳の先頭だけ。Repo と同じく印に置き換えてある。
 	Game string
 }
 
@@ -65,6 +66,10 @@ type BaseResult struct {
 //
 // 見るのは訳だけである。section や order の食い違いは見ない。ゲーム側の
 // 再生順はリポジトリのものを使うので、そこがずれていても書き出す中身は変わらない。
+// 訳は値の中の CRLF を LF にそろえてから比べる（[sameTranslation]）。
+//
+// 読み方は publish と同じく全体を解釈する。ゲーム側の公開ファイルの形の崩れ
+// （閉じない引用符など）は、呼び出し側が先に形の確かめ（[CheckTargetShape]）で止める。
 //
 // ゲーム側に公開ファイルが無いときは、そろっているともいないとも言えないので
 // 何も返さない。そのロケールで訳が実際に消えるなら [CheckLoss] が捕まえる。
@@ -98,7 +103,7 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 	// 見本に入る5件とその並びが実行のたびに変わる。
 	for _, mine := range repo.order {
 		theirs, both := game.at[mine.folded]
-		if !both || mine.text == theirs.text {
+		if !both || sameTranslation(mine.text, theirs.text) {
 			continue
 		}
 		res.Count++
@@ -111,6 +116,18 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// sameTranslation は、コミット済みの訳とゲーム側の訳が同じかを返す。値の中の
+// CRLF は LF にそろえてから比べる（決まったことのそのほか 1）。
+//
+// 翻訳リポジトリの .gitattributes は `*.csv text eol=lf` なので、コミットで値の中の
+// CRLF も LF になる。一方ゲーム側の公開ファイルは Mod や翻訳者が書いたままで、CRLF の
+// ことがある。改行コードだけの違いで「ゲームが古い」と止めると、同じ訳なのに publish が
+// 通らない。単独の CR はそろえない。git も変えず、上流の道具はその行を落とすので、
+// 同じ訳とは言えない（形の確かめが止める）。台詞ID の行も同じ規則で比べる。
+func sameTranslation(repo, game string) bool {
+	return repo == game || strings.ReplaceAll(repo, "\r\n", "\n") == strings.ReplaceAll(game, "\r\n", "\n")
 }
 
 // driftHeads は、2つの訳の「違っているところが見える」切り出しを返す。
@@ -147,7 +164,9 @@ func window(runes []rune, start int) string {
 	if cut {
 		runes = runes[:end]
 	}
-	out := string(runes[start:])
+	// 制御文字（値の中の改行など）は見える印に置き換える（[Visible]）。改行が入ったまま
+	// 並べると、コミット済みとゲーム側の2行の見本が何行にも割れて読めない。
+	out := Visible(string(runes[start:]))
 	if start > 0 {
 		out = lossHeadEllipsis + out
 	}
@@ -182,12 +201,14 @@ type translations struct {
 // readTranslations は公開ファイルから [translations] を作る。
 //
 // 引き当ては [survivors] と同じく [csvfile.FoldASCII] で畳む。訳の入っていない
-// 行は入れない。土台がそろっているかは、訳のある行だけで決まる。
+// 行は入れない。土台がそろっているかは、訳のある行だけで決まる。読み方は publish が
+// 入力を読むときと同じ（全体を解釈する [csvfile.ReadPowerShell]）。
 func readTranslations(data []byte) (translations, error) {
-	rows, err := csvfile.ReadPowerShellRows(data)
+	file, err := csvfile.ReadPowerShell(data)
 	if err != nil {
 		return translations{}, err
 	}
+	rows := file.Rows()
 	out := translations{
 		order: make([]keyedText, 0, len(rows)),
 		at:    make(map[string]keyedText, len(rows)),
