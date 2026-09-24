@@ -875,18 +875,32 @@ async function walkThrough(page, server) {
   await expect(rows).toHaveText(msg("ja", "ui.rows", { count: 1 }));
   await page.locator("#locale").selectOption("ja");
   await expect(rows).toHaveText(msg("ja", "ui.rows", { count: 3 }));
+  // 読み直しは、応答が返って描き終えるまで待つ。押した直後の一覧はまだ前のままで、訳の欄も
+  // 行の数も同じなので、それを見ても読み直しが済んだことにはならない。#list の aria-busy も、
+  // 押した直後は読みにいく前（送り終えるのを待っている askDiscard の最中）なので "false" の
+  // まま成り立ってしまう。先に応答の待ちを仕掛け、返ったあとで aria-busy が下りるのを待つ。
+  const reloaded = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/lines");
   await page.locator("#reload").click();
+  await reloaded;
+  await expect(page.locator("#list")).toHaveAttribute("aria-busy", "false");
   await expect(translationCell(page, L.goodbye)).toHaveText(typed);
   await expect(dataRows(page)).toHaveCount(3);
 
   // 狭い画面で引き出しを開けて閉じ、広い画面へ戻す。
+  //
+  // 幅を変えたあと、画面が幅の変わり目（app.js の narrow の change）を受け終えるまで待つ。
+  // 受ける前にスラッシュを押すと、開いた引き出しをあとから届いた change が閉じ、焦点を
+  // #menu へ移してしまう（develop の CI で1回落ちた）。受け終えると、閉じた引き出しに
+  // inert が付く（「900px をまたいで幅が変わると…」の試験と同じ見方）。
   await page.setViewportSize(NARROW);
+  await expect(sidebar(page)).toHaveAttribute("inert", "");
   await pressOutside(page, "/");
   await expect(search(page)).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu(page)).toBeFocused();
   await page.setViewportSize(WIDE);
   await expect(sidebar(page)).toBeVisible();
+  await expect(sidebar(page)).not.toHaveAttribute("inert");
 }
 
 test.describe("外へ出さない守り", () => {
