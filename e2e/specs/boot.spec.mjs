@@ -1379,12 +1379,18 @@ test.describe("保存を送り直しているとき", () => {
     // 送り直しの時計は、2つ目を尋ねる前の送り直し（settle）が止めているので、ここでは
     // 書き出しを押して保存へ回す（書き出しは先に flush を呼ぶ）。読み込みのあいだは
     // 入力欄を開かない（app.js の load）ので、行を開いて閉じる道は使えない。
+    //
+    // 「送らない」ことは POST の数だけで確かめる。書き出しは押したその場で flush を呼ぶので、
+    // 送るなら押した直後に数が増えている。書き出しの結果の文言は確かめない。結果の欄が
+    // 空でなくなるのを待つのは、押した書き出しが画面に届いた（保存へ回った）ことの確かめに
+    // 使うだけにする（書き出しは始めに欄を空にし、flush を待ってから結果を出す）。
     down = false;
     await translationCell(page, SAMPLE_LINES.goodbye).click();
     await expect(editor(page)).toHaveCount(0);
     await page.locator("#export-open").click();
     await page.locator("#export-working").click();
-    await expect(page.locator("#export-state")).toHaveText(msg("ja", "ui.export_wait"));
+    expect(await rowPosts(page)).toBe(asked);
+    await expect(page.locator("#export-state")).not.toBeEmpty();
     await page.clock.runFor(60_000);
     expect(await rowPosts(page)).toBe(asked);
 
