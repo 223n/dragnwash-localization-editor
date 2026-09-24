@@ -89,6 +89,12 @@ func TestArgumentErrorsAreOneLineInJapanese(t *testing.T) {
 			args: []string{"frobnicate"},
 			want: []string{"dwloc: 知らないサブコマンドです: frobnicate", "使い方は dwloc help で表示します。"},
 		},
+		{
+			// help の後ろの - で始まる値は、サブコマンドの名前ではなくオプションとして断る。
+			name: "help の知らないオプション",
+			args: []string{"help", "--nope"},
+			want: []string{"dwloc: 知らないオプションです: --nope", "使い方は dwloc help --help で表示します。"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -228,6 +234,18 @@ func TestHelpShowsTheSubcommandUsage(t *testing.T) {
 		t.Errorf("help diff extra の終了コード = %d", code)
 	}
 	checkContains(t, "help diff extra の標準エラー", stderr, []string{"余分な引数です: extra"})
+
+	// help --help と help -h は、使い方を求めたものとして全体の使い方を出す。
+	// 以前は「知らないサブコマンドです: --help」で終了コード2になっていた。
+	for _, arg := range []string{"--help", "-help", "-h", "--h"} {
+		code, stdout, stderr := runCLI("help", arg)
+		if code != exitOK {
+			t.Errorf("help %s の終了コード = %d\n%s", arg, code, stderr)
+		}
+		if stdout != usageText {
+			t.Errorf("help %s が、全体の使い方を出していない:\n%s", arg, stdout)
+		}
+	}
 }
 
 // TestUsageMentionsVersionAndHelp は、全体の使い方に --version と

@@ -242,7 +242,17 @@ var subcommandUsage = map[string]string{
 //
 // 後ろの名前を黙って捨てて全体の使い方を出すと、打ち間違いに気づけません。
 // 知らない名前と余分な引数は、ほかの入口と同じく断ります。
+//
+// 名前より前は、ほかのサブコマンドと同じく FlagSet で読みます。help --help と
+// help -h は使い方を求めたものなので、全体の使い方を出します。名前として引くと
+// 「知らないサブコマンドです: --help」になり、求めた人に実際と合わない理由を
+// 返します。ほかの - で始まる値は「知らないオプションです」で断ります。
 func runHelp(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("dwloc help")
+	if code, ok := parseFlags(fs, args, usageText, stdout, stderr); !ok {
+		return code
+	}
+	args = fs.Args()
 	if len(args) == 0 {
 		fmt.Fprint(stdout, usageText)
 		return exitOK
