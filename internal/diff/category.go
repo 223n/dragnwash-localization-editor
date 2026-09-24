@@ -50,7 +50,7 @@ func (s Status) id() string {
 
 // Category は報告の種別。
 //
-// 表示順は [categories] が決める。要作業2つ → 要確認6つ → 参考4つ。
+// 表示順は [categories] が決める。要作業2つ → 要確認7つ → 参考4つ。
 // この const の並びは値の割り当てだけで、後ろに足しても表示順は変わらない。
 type Category int
 

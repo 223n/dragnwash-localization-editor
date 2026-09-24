@@ -292,7 +292,7 @@ The options you will use most are these.
 | `--dry-run` | `publish` | Only shows what it would do and writes no file. The safety checks are the same |
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
-| `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet |
+| `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |

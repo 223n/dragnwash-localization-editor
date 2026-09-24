@@ -340,11 +340,21 @@ func TestGameSaveLogHasNoRowContent(t *testing.T) {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
 	// 書けなかったときの記録にも中身を出さない。
+	//
+	// 1回目と違う訳を送る。同じ訳だと中身が保存先と一致して書きに行かない
+	// （edit.File.Save は一致すれば書かずに成功を返す）ので、書けない状態でも
+	// 保存が通り、失敗の記録が1行も出ないまま下の確かめが通っていた。
+	const retyped = "打ち直した訳。"
 	makeReadOnly(t, workingCopyPath(game))
 	version = currentVersion(t, s)
-	save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: jaTyped})
+	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: retyped})
+	// 前提: 保存が失敗し、その記録が書かれていること。通ってしまうと、下の確かめは
+	// 書けなかったときの記録を1行も見ないまま通る。
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(log.String(), "save failed locale=ja") {
+		t.Fatalf("前提が崩れている: 保存が失敗していない（状態コード %d）\n%s", rec.Code, log.String())
+	}
 
-	for _, secret := range []string{jaTyped, "Hello?", "Hi there!", "もしもし？"} {
+	for _, secret := range []string{jaTyped, retyped, "Hello?", "Hi there!", "もしもし？"} {
 		if strings.Contains(log.String(), secret) {
 			t.Errorf("記録に行の中身が出ている（%q）:\n%s", secret, log.String())
 		}
@@ -419,8 +429,23 @@ func keyOf(t *testing.T, s *server, line int) string {
 // 落ちたのは保存が失敗しなかったからで、製品側は正しく保存できていた。
 // 「書けない状態」を作れていないのに、書けなかったときの振る舞いを見ていた。
 //
-// 実際に書けなくなったことを確かめてから返す。root で走るとどちらの手も効かず、
-// 同じことがまた起きるためである。効かないときは試験を飛ばす。
+// 実際に書けなくなったことを、2段で確かめてから返す。
+//
+//  1. 閉じたことが効いているかを、製品と関係の無い手で見る。POSIX では
+//     ディレクトリに新しいファイルを作れないこと、Windows ではファイルを
+//     書き込み用に開けないことである。作れた・開けたなら、root で走っているなど
+//     閉じても効かない環境なので、試験を飛ばす。
+//  2. 製品が保存に使う経路そのもの（[publish.WriteBytes]）でも書いてみる。
+//     1段目が通ったのにこちらが通るなら、製品の書き方が変わって、ここで閉じた
+//     相手が効かなくなっている（一時ファイルを経ずに直接書き換える形に戻ると、
+//     POSIX では 0o555 のディレクトリの中でも上書きが通る）。飛ばさずに落とす。
+//
+// 2段目だけで確かめていたころは、通ったら飛ばしていた。環境のせいなのか製品が
+// 変わったのかを見分けられず、製品が変わったときも「root で走っている」と読んで
+// 飛ばす。go test は飛ばした試験を成功として数えるので、書けなかったときの
+// 振る舞いを誰も見ていない状態が、CI を緑のまま続く。製品の経路で確かめるのは、
+// 判定を書き写すと書き方が変わったときにここだけ古いままになるからで、その変化を
+// 落ちて知らせるのが2段目の役目である。
 func makeReadOnly(t *testing.T, path string) {
 	t.Helper()
 
@@ -441,12 +466,37 @@ func makeReadOnly(t *testing.T, path string) {
 	// t.Cleanup は後入れ先出しなので、ここは TempDir の削除より先に走る。
 	t.Cleanup(func() { _ = os.Chmod(target, open) })
 
-	// 確かめ方は、製品が保存に使う経路そのものである。判定を書き写すと、
-	// 書き方が変わったときにここだけ古いままになる。
+	if stillWritable(target, path) {
+		t.Skipf("%s を閉じても書けてしまう。root で走っていると効かない", target)
+	}
 	// 書くのはいま入っている中身なので、通ってしまってもファイルは変わらない。
 	if err := publish.WriteBytes(path, before); err == nil {
-		t.Skipf("%s を書けない状態にできない。root で走っていると効かない", target)
+		t.Fatalf("%s を閉じたのに、製品の書き込みの経路が通った。一時ファイルを経ずに"+
+			"直接書き換える形になっていないか。書き方を変えたなら、ここで閉じる相手も合わせる", target)
 	}
+}
+
+// stillWritable は、[makeReadOnly] が target を閉じたあとも path を書き換えられる
+// 環境かを返す。製品のコードは通さない。
+//
+// POSIX はディレクトリに新しいファイルを作れるか、Windows は path を書き込み用に
+// 開けるかを見る。どちらも中身は書かない。
+func stillWritable(target, path string) bool {
+	if runtime.GOOS == "windows" {
+		probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return false
+		}
+		_ = probe.Close()
+		return true
+	}
+	probe, err := os.CreateTemp(target, "probe*")
+	if err != nil {
+		return false
+	}
+	_ = probe.Close()
+	_ = os.Remove(probe.Name())
+	return true
 }
 
 // newEditGame は [newEditRoot] と同じ形の作業コピーをゲーム側に作る。
