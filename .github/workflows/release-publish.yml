@@ -47,8 +47,8 @@ jobs:
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
     # 無ければ GitHub がホストする ubuntu-latest で動く
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    # 6つの対象をクロスビルドする分、タグと Release だけを作っていた頃より長くかかる
-    timeout-minutes: 25
+    # 6つの対象をクロスビルドする分と、Go のテストを通す分、タグと Release だけを作っていた頃より長くかかる
+    timeout-minutes: 35
     permissions:
       contents: write        # タグを打ち、Release を作り、書庫を添付する
       pull-requests: write   # main を develop へ戻す PR を開く
@@ -136,6 +136,18 @@ jobs:
           # ここで作るものは配布物になる。他のブランチの実行が書き込めるキャッシュは持ち込まない。
           # 依存は標準ライブラリだけなので、キャッシュを切っても伸びるのは1分ほどで済む
           cache: false
+
+      - name: Goのテストを通す
+        # 配る木（main）そのものでテストを通してから作る。1つでも落ちたら、タグも Release も作らない。
+        # リリースの PR の CI は承認待ちのまま動かないことが多く、auto_merge の経路では main への push の
+        # CI も起きない（GITHUB_TOKEN のマージはワークフローを起こさない）。develop の CI は「リリース」が
+        # 確かめているが、main には release ブランチで取り込んだ main の中身と版の上げが加わっている。
+        # E2E は含めない。ブラウザーを入れる分、公開までが長くなるためで、画面は develop の CI で見ている。
+        # 元リポジトリを読む試験は、ここには元リポジトリが無いので飛ぶ
+        env:
+          # テストはプロジェクトのコードを走らせる。書き込み権限つきのトークンを、要らない段には渡さない
+          GH_TOKEN: ''
+        run: go test ./cmd/... ./internal/... -count=1
 
       - name: バイナリと書庫を作る
         # タグを打つ前に作る。1つでもビルドに失敗したら、ここで止まってタグも Release も作らない。

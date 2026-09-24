@@ -1345,6 +1345,12 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 1. 「リリースを公開する」ワークフローが動きます。  
    タグ`vX.Y.Z`を打ち、6種類の書庫を添えたGitHub Releaseを作り、`main`を`develop`に戻します
 
+バイナリを作る前に、配る`main`の木でGoのテスト（`go test ./cmd/... ./internal/...`）を通します。  
+リリースのPull RequestのCIは「承認待ち」のまま動かないことが多く、`auto_merge`でマージしたときは`main`へのCIも動かないためです。  
+1つでも落ちた場合は、タグとGitHub Releaseを作らずに止まります。  
+画面のE2Eはここでは走らせません。  
+画面は`develop`のCIで確かめています。
+
 バイナリはタグを打つ前に作ります。  
 1つでもビルドに失敗した場合は、タグとGitHub Releaseを作らずに止まります。  
 6種類のうち一部だけが載ったReleaseを出さないためです。
@@ -1438,7 +1444,7 @@ git push
 | `labeler.yml`         | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | 変えたファイルとブランチ名からラベルを付けます                                                                                                                                                     |
 | `branch-guard.yml`    | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | headブランチが`main`か`develop`なら失敗します。マージは止めません                                                                                                                                  |
 | `release.yml`         | 手動                                                                                                                                    | `develop`の先端でCIが通ったことを確かめてから、リリースブランチを切り、版を上げ、`main`へのPull Requestを開きます。`auto_merge`を指定したときは、そのままマージして公開まで進めます                |
-| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます | 6種類のバイナリを作り、書庫を展開して動かしてから、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                                                                     |
+| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます | Goのテストを通し、6種類のバイナリを作り、書庫を展開して動かしてから、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                                                   |
 
 ## ラベル
 

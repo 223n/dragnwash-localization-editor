@@ -1345,6 +1345,12 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
 1. The "Publish release" workflow runs.  
    It creates the tag `vX.Y.Z`, creates a GitHub Release with the six archives attached, and merges `main` back into `develop`
 
+Before building the binaries, it runs the Go tests (`go test ./cmd/... ./internal/...`) on the `main` tree it is about to ship.  
+CI on the release pull request often stays "waiting for approval" and never runs, and when `auto_merge` merged it, CI on `main` does not run either.  
+If even one test fails, it stops without creating the tag or the GitHub Release.  
+The E2E tests of the screen are not run here.  
+The screen is checked by CI on `develop`.
+
 The binaries are built before the tag is created.  
 If even one build fails, it stops without creating the tag or the GitHub Release.  
 That is so no Release goes out carrying only some of the six.
@@ -1438,7 +1444,7 @@ That is because the "Publish release" workflow has the same check.
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
 | `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
-| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
+| `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Runs the Go tests, builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels
 
