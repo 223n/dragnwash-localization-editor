@@ -1328,14 +1328,20 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
    However, if `main` has required checks or approval rules, it stops at the merge.  
    CI on the pull request the workflow opened stays "waiting for approval" and never runs, so the required checks cannot be satisfied.  
    When it stops, a person merging the pull request takes it through to publication
-1. The workflow branches `release/vX.Y.Z` from `develop`, brings in the content of `main`,  
+1. The workflow first confirms that CI (`ci.yml`) passed on the latest commit of `develop`.  
+   If CI is still running, it waits up to 30 minutes for it to finish.  
+   If CI failed, was cancelled, or has no run at all, it stops here.  
+   Get CI to pass, then run it again.  
+   A CI run started by hand on `develop` (Run workflow) is used only when there is no `push` run
+1. Next, it branches `release/vX.Y.Z` from the commit it confirmed, brings in the content of `main`,  
    bumps the version in `package.json`, passes the document checks and then opens a pull request against `main`.  
    If `main` and `develop` conflict, it stops here
 1. Review the pull request and merge it with a merge commit (Create a merge commit).  
    If you turned on `auto_merge` and it did not stop, you do not need this step.  
    CI on this pull request is created "waiting for approval" and does not run until `Approve workflows to run` is pressed.  
    That is because it is a pull request opened by GitHub Actions.  
-   The document check (`npm run lint`) has already been done inside the workflow, so merging without pressing it does not skip the check
+   CI on the latest commit of `develop` and the document check after the version bump (`npm run lint`) have already been confirmed inside the workflow.  
+   Merging without pressing it does not skip those two
 1. The "Publish release" workflow runs.  
    It creates the tag `vX.Y.Z`, creates a GitHub Release with the six archives attached, and merges `main` back into `develop`
 
@@ -1431,7 +1437,7 @@ That is because the "Publish release" workflow has the same check.
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
-| `release.yml` | Manually | Branches a release branch from `develop`, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
+| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
 | `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels

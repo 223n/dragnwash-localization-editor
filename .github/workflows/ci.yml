@@ -37,7 +37,8 @@ on:
 
 # 同じブランチに続けて push したとき、古い実行を止める。
 # 別のランナーで試す実行は、いつもの実行と止め合わないよう、ランナーの名前でも分ける。
-# 分けないと、develop で試した実行が develop の push の CI を止めてしまう
+# 分けないと、develop で試した実行が develop の push の CI を止め、リリース（release.yml）が
+# 「止められた CI」を見て止まる
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}
   cancel-in-progress: true

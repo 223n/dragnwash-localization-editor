@@ -1328,14 +1328,20 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
    ただし`main`に必須のチェックや承認のルールがあると、マージで止まります。  
    ワークフローが開いたPull RequestのCIは「承認待ち」のまま動かず、必須チェックを満たせないためです。  
    止まったときは、人がPull Requestをマージすれば公開まで進みます
-1. ワークフローが`develop`から`release/vX.Y.Z`ブランチを切り、`main`の内容を取り込み、  
+1. ワークフローは、まず`develop`の先端のコミットでCI（`ci.yml`）が通ったことを確かめます。  
+   CIが走っている途中なら、終わるまで最大30分待ちます。  
+   CIが落ちていたり、止められていたり（cancelled）、実行が無かったりすると、ここで止まります。  
+   CIを通してから、もう一度実行してください。  
+   `develop`を手で動かしたCI（Run workflow）は、`push`の実行が無いときだけ使います
+1. 続いて、確かめたコミットから`release/vX.Y.Z`ブランチを切り、`main`の内容を取り込み、  
    `package.json`の版を上げ、文書の検査を通してから`main`へのPull Requestを開きます。  
    `main`と`develop`が衝突する場合は、ここで止まります
 1. Pull Requestの内容を確かめ、マージコミット（Create a merge commit）でマージします。  
    `auto_merge`を有効にして止まらなかったときは、この段は要りません。  
    このPull RequestのCIは「承認待ち」で作られ、`Approve workflows to run`を押すまで動きません。  
    GitHub Actionsが開いたPull Requestだからです。  
-   文書の検査（`npm run lint`）はワークフローの中で済ませてあるので、押さずにマージしても検査は抜けません
+   `develop`の先端でのCIと、版を上げたあとの文書の検査（`npm run lint`）は、ワークフローの中で確かめてあります。  
+   押さずにマージしても、この2つは抜けません
 1. 「リリースを公開する」ワークフローが動きます。  
    タグ`vX.Y.Z`を打ち、6種類の書庫を添えたGitHub Releaseを作り、`main`を`develop`に戻します
 
@@ -1431,7 +1437,7 @@ git push
 | `labels.yml`          | `.github/labels.yml`の変更、Pull Request（確認だけ）、手動                                                                              | リポジトリのラベルを定義に揃えます。Pull Requestでは何が変わるかを見せるだけです。`main`からの同期では、ファイルに無いラベルを消しません                                                           |
 | `labeler.yml`         | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | 変えたファイルとブランチ名からラベルを付けます                                                                                                                                                     |
 | `branch-guard.yml`    | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | headブランチが`main`か`develop`なら失敗します。マージは止めません                                                                                                                                  |
-| `release.yml`         | 手動                                                                                                                                    | `develop`からリリースブランチを切り、版を上げ、`main`へのPull Requestを開きます。`auto_merge`を指定したときは、そのままマージして公開まで進めます                                                  |
+| `release.yml`         | 手動                                                                                                                                    | `develop`の先端でCIが通ったことを確かめてから、リリースブランチを切り、版を上げ、`main`へのPull Requestを開きます。`auto_merge`を指定したときは、そのままマージして公開まで進めます                |
 | `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます | 6種類のバイナリを作り、書庫を展開して動かしてから、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                                                                     |
 
 ## ラベル
