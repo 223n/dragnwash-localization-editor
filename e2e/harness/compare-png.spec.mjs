@@ -2,11 +2,13 @@
 // （samples/compare-png.mjs）を見る。
 //
 // 画面の試験ではないが、node で動く台本の試験を置ける場所がここしかないので、試験の
-// 仕組みの試験と一緒に置く。画面は開かず、生データも書かない。
+// 仕組みの試験と一緒に置く。dwloc の画面は開かず、カバレッジの生データも書かない。
+// ブラウザーを使うのは、コミット済みの画像の読み取りを Chromium と比べる試験だけで、
+// 空の頁で画像を読ませる。
 //
 // 見本の画像は、揺れの形（線が1画素下がって白い行が消える、文字の列が1画素上がる、
 // 色が1だけ違う）を小さく写して作る。撮り直しで実際に見た形である。
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
@@ -131,6 +133,12 @@ function encodePng(image, { colorType = 6, filters = [], bitDepth = 8, interlace
     }
     raw.push(line);
   });
+  return pngFromScanlines({ width, height, colorType, bitDepth, interlace }, raw);
+}
+
+// pngFromScanlines は、フィルターを掛け終えた行（先頭の1バイトがフィルターの種類）を
+// そのまま PNG の塊に包む。フィルターの計算を試験の側で持たずに、読む側を確かめるのに使う。
+function pngFromScanlines({ width, height, colorType, bitDepth = 8, interlace = 0 }, scanlines) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -140,18 +148,98 @@ function encodePng(image, { colorType = 6, filters = [], bitDepth = 8, interlace
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr),
-    chunk("IDAT", deflateSync(Buffer.concat(raw))),
+    chunk("IDAT", deflateSync(Buffer.concat(scanlines.map((line) => Uint8Array.from(line))))),
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
 
+// decodeInChromium は PNG を Chromium に読ませ、RGBA の並びを返す。
+//
+// 色の変換はさせない（colorSpaceConversion: "none"）。PNG に色の情報の塊があっても、
+// decodePng と同じく値をそのまま読む。画面の例は不透明なので、canvas の乗算済みの
+// 透明度で値が丸まることも無い。
+async function decodeInChromium(page, bytes) {
+  const { width, height, base64 } = await page.evaluate(async (input) => {
+    const png = Uint8Array.from(atob(input), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([png], { type: "image/png" }), {
+      colorSpaceConversion: "none",
+      premultiplyAlpha: "none",
+    });
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0);
+    const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    // btoa は文字列しか受けないので、少しずつ文字にする。一度に広げると引数が多すぎる。
+    let text = "";
+    for (let i = 0; i < data.length; i += 0x8000) {
+      text += String.fromCharCode(...data.subarray(i, i + 0x8000));
+    }
+    return { width: bitmap.width, height: bitmap.height, base64: btoa(text) };
+  }, bytes.toString("base64"));
+  return { width, height, data: Buffer.from(base64, "base64") };
+}
+
+// differentBytes は2つのバイト列で値の違う位置の数を返す。4MB の画素を toEqual で
+// 比べると、落ちたときの差分の表示が大きすぎて読めないので、数だけを見る。
+function differentBytes(a, b) {
+  let count = Math.abs(a.length - b.length);
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) {
+      count++;
+    }
+  }
+  return count;
+}
+
 test.describe("PNG を読む", () => {
-  test("コミット済みの画面の例を読める", () => {
-    const image = decodePng(readFileSync(join(root, "docs", "images", "edit-overview-ja.png")));
-    expect([image.width, image.height]).toEqual([1280, 800]);
-    expect(image.data.length).toBe(1280 * 800 * 4);
-    expect(comparePictures(image, image)).toMatchObject({ jitterOnly: true, changed: 0, shifted: 0 });
+  // 実物の画像は、撮り直しの比べる相手そのものである。読み取りが化けると、化けた画素
+  // どうしを比べて揺れかどうかを決めてしまう。下の往復の試験は試験の側の符号器と
+  // 組なので、両方が同じ誤りを持つと気付けない。そこで、別の読み手である Chromium と
+  // 画素まで同じに読めることを確かめる。決まったハッシュと比べる形にしないのは、画面を
+  // 変えて撮り直すたびに、この試験まで直すことになるからである。
+  const imagesDir = join(root, "docs", "images");
+  const images = readdirSync(imagesDir).filter((name) => name.endsWith(".png"));
+
+  test("画面の例の画像がある", () => {
+    // 画像が無いと下の試験が1つも作られず、何も確かめないまま通ってしまう。
+    expect(images.length).toBeGreaterThan(0);
   });
+
+  for (const name of images) {
+    test(`コミット済みの画面の例（${name}）を、Chromium と同じ画素に読む`, async ({ page }) => {
+      const bytes = readFileSync(join(imagesDir, name));
+      const ours = decodePng(bytes);
+      const theirs = await decodeInChromium(page, bytes);
+      expect([ours.width, ours.height]).toEqual([theirs.width, theirs.height]);
+      expect(ours.data.length).toBe(ours.width * ours.height * 4);
+      expect(differentBytes(ours.data, theirs.data), "Chromium の読み取りと値の違うバイトの数").toBe(0);
+      expect(comparePictures(ours, ours)).toMatchObject({ jitterOnly: true, changed: 0, shifted: 0 });
+    });
+  }
+
+  // Paeth の予測（PNG の仕様の 9.4）は、p = a + b - c に最も近いものを、左 a、上 b、
+  // 左上 c から選ぶ。同点なら a、b、c の順に取る。同点の扱いを誤っても、同点の起きない
+  // 見本では往復の試験が通る。誤った読み手で実物の画面の例を読むと、バイトの数%から
+  // 十数%が化けた。そこで、フィルターを掛け終えた行を手で書き、試験の側の符号器を
+  // 通さずに読ませる。
+  //
+  // 画像は 2×2 のグレー。右下の画素（値は 40）の予測だけが同点になる。2行目の左の
+  // 画素は、左と左上が無い（0 とみなす）ので予測は上の c になり、a - c を書く。
+  for (const [name, [c, b, a], predictor] of [
+    // p = 10 + 25 - 20 = 15。pa = 5、pb = 10、pc = 5 で、a と c が同点なので a を取る。
+    ["左と左上", [20, 25, 10], 10],
+    // p = 25 + 10 - 20 = 15。pa = 10、pb = 5、pc = 5 で、b と c が同点なので b を取る。
+    ["上と左上", [20, 10, 25], 10],
+  ]) {
+    test(`Paeth で${name}が同点なら、仕様の順に選ぶ`, () => {
+      const png = pngFromScanlines({ width: 2, height: 2, colorType: 0 }, [
+        [0, c, b],
+        [4, (a - c) & 0xff, (40 - predictor) & 0xff],
+      ]);
+      const gray = (v) => [v, v, v, 255];
+      expect(decodePng(png).data).toEqual(picture(2, [[gray(c), gray(b)], [gray(a), gray(40)]]).data);
+    });
+  }
 
   test("5つのフィルターと4つの色の種類を読み戻せる", () => {
     // 色が行と列で変わる画像にして、どのフィルターも前の画素と上の画素を使うようにする。
