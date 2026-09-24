@@ -566,6 +566,46 @@ func TestMainWithRecordHidesTheToken(t *testing.T) {
 	}
 }
 
+// TestMainWithRecordShortensTheHome は、記録にだけ、利用者のホームのパスを ~ に
+// 置き換えて書くことを見る。
+//
+// ホームのパスには利用者名が入る。記録は不具合の報告に添えて手元の外へ出るので、
+// そのまま書くと利用者名も一緒に出ていく。画面には全文を出す。書けないファイルの
+// 案内などは、権限の話が読めないと直し方に手が届かないためである。
+func TestMainWithRecordShortensTheHome(t *testing.T) {
+	resetRecord(t)
+	home := t.TempDir()
+	// os.UserHomeDir が見る変数は OS で違う（Windows は USERPROFILE、ほかは HOME）。
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	notRepo := filepath.Join(home, "somewhere")
+	if err := os.MkdirAll(notRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	t.Chdir(dir)
+	setArgs(t, "--root", notRepo)
+
+	read := captureStd(t)
+	code := mainWithRecord()
+	_, stderr := read()
+	if code != exitError {
+		t.Fatalf("終了コード = %d\n%s", code, stderr)
+	}
+	// 画面には全文が出ている。出ていなければ、この試験は何も確かめていない。
+	checkContains(t, "標準エラー", stderr, []string{notRepo})
+
+	_, log := readLogs(t, dir)
+	if strings.Contains(log, home) {
+		t.Errorf("記録にホームのパスが残っている:\n%s", log)
+	}
+	// 見出し（引数）と、画面に出した案内の両方で置き換わっている。
+	short := "~" + string(filepath.Separator) + "somewhere"
+	if got := strings.Count(log, short); got < 2 {
+		t.Errorf("記録に %q が %d 回、2 回以上を期待:\n%s", short, got, log)
+	}
+}
+
 // TestDefaultStartsTheEditor は、サブコマンドを省くと画面が始まることを見る。
 //
 // 翻訳者はコマンドプロンプトに慣れていないことが多い。翻訳リポジトリへ dwloc を

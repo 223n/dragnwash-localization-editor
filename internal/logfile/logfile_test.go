@@ -432,6 +432,82 @@ func TestHideReplacesSecret(t *testing.T) {
 	}
 }
 
+// TestShortenPathReplacesTheHome は、覚えたパスを記録へ書く前に短くすることを見る。
+//
+// 利用者のホームのパスには利用者名が入る。区切りが \ でも / でも置き換える。
+// dwloc は同じパスをスラッシュ区切りに直して出すことがあるためである。
+func TestShortenPathReplacesTheHome(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+	w := newWriter(t, dir, c)
+
+	sep := string(filepath.Separator)
+	home := filepath.Join(sep+"home", "al")
+	w.ShortenPath(home+sep, "~")
+	lines := "=== dwloc dev --root " + home + sep + "repo publish ===\n" +
+		"探した場所: " + filepath.ToSlash(home) + "/repo\n" +
+		"別の人: " + home + "ice" + sep + "repo\n"
+	if _, err := w.Write([]byte(lines)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	want := "10:30:45 === dwloc dev --root ~" + sep + "repo publish ===\n" +
+		"10:30:45 探した場所: ~/repo\n" +
+		"10:30:45 別の人: " + home + "ice" + sep + "repo\n"
+	if got := read(t, dir, "dwloc_20260921.log"); got != want {
+		t.Errorf("中身が違う\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestShortenPathIgnoresRoots は、空のパスとルートそのものを覚えないことを見る。
+// 覚えると、ほかのパスまで書き換わって読めなくなる。
+func TestShortenPathIgnoresRoots(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{at(2026, 9, 21, 10, 30, 45)}
+	w := newWriter(t, dir, c)
+
+	for _, root := range []string{"", "/", `\`, `C:\`, "C:"} {
+		w.ShortenPath(root, "~")
+	}
+	if len(w.shortened) != 0 {
+		t.Errorf("ルートを覚えている: %q", w.shortened)
+	}
+}
+
+func TestReplacePath(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		from string
+		fold bool
+		want string
+	}{
+		{name: "下のパス", line: "--root /home/al/repo", from: "/home/al", want: "--root ~/repo"},
+		{name: "行の終わり", line: "探した場所: /home/al", from: "/home/al", want: "探した場所: ~"},
+		{name: "引用符の中", line: `"/home/al/x"`, from: "/home/al", want: `"~/x"`},
+		{name: "全角の閉じ括弧が続く", line: "（/home/al）", from: "/home/al", want: "（~）"},
+		{name: "2か所", line: "/home/al/a と /home/al/b", from: "/home/al", want: "~/a と ~/b"},
+		{name: "別の名前の途中では置き換えない", line: "/home/alice/repo", from: "/home/al", want: "/home/alice/repo"},
+		{name: "日本語の名前の途中でも置き換えない", line: "/home/田中太郎/x", from: "/home/田中", want: "/home/田中太郎/x"},
+		{name: "長いパスの途中では置き換えない", line: "/mnt/home/al/repo", from: "/home/al", want: "/mnt/home/al/repo"},
+		{name: "途中で外れても後ろは置き換える", line: "/home/alice と /home/al", from: "/home/al", want: "/home/alice と ~"},
+		{name: "大文字と小文字を区別しないとき", line: `c:\users\al\repo`, from: `C:\Users\Al`, fold: true, want: `~\repo`},
+		{name: "大文字と小文字を区別するとき", line: `c:\users\al\repo`, from: `C:\Users\Al`, want: `c:\users\al\repo`},
+		{name: "見つからない", line: "何もない", from: "/home/al", want: "何もない"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(replacePath([]byte(tt.line), []byte(tt.from), []byte("~"), tt.fold))
+			if got != tt.want {
+				t.Errorf("replacePath = %q, 期待 %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHideIgnoresEmpty(t *testing.T) {
 	// 空文字列を覚えると、どの行も全部が伏せ字になる。
 	dir := t.TempDir()

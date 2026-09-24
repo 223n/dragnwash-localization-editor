@@ -31,8 +31,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -77,6 +81,123 @@ type Writer struct {
 	err error
 	// hidden は書く前に伏せる文字列です。[Writer.Hide] が足します。
 	hidden []string
+	// shortened は書く前に短くするパスです。[Writer.ShortenPath] が足します。
+	shortened []shortPath
+	// foldCase はパスの大文字と小文字を区別せずに探すかです。Windows だけ真です。
+	foldCase bool
+}
+
+// shortPath は、記録へ書く前に置き換えるパスと、置き換える先の組です。
+type shortPath struct {
+	from []byte
+	to   []byte
+}
+
+// ShortenPath は、記録へ書く前に dir を short に置き換えるよう覚えます。
+//
+// 利用者のホームのパス（C:\Users\<名前>、/home/<名前>）を ~ にするためにあります。
+// ホームのパスには利用者名が入り、記録は不具合の報告に添えて手元の外へ出ます。
+// 画面には全文を出したままにします。書けないファイルの案内などは、権限の話が
+// 読めないと直し方に手が届かないためです（internal/web の rows.go）。
+//
+// 区切りが \ と / のどちらで書かれていても置き換えます。dwloc は同じパスを
+// スラッシュ区切りに直して出すことがあるためです（displayPath など）。
+// Windows では大文字と小文字を区別しません。打たれた --root の綴りが、
+// ホームの綴りとそろっているとは限らないためです。
+//
+// 置き換えるのは、パスの切れ目で始まって終わるところだけです。/home/al を覚えても、
+// /home/alice や /mnt/home/al は置き換えません。
+//
+// 空のパスとルートそのもの（/ や C:\）は覚えません。覚えると、ほかのパスまで
+// 書き換わって読めなくなります。
+func (w *Writer) ShortenPath(dir, short string) {
+	dir = strings.TrimRight(dir, `/\`)
+	if dir == "" || filepath.Dir(dir) == dir || strings.HasSuffix(dir, ":") {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, form := range []string{dir, filepath.ToSlash(dir)} {
+		dup := false
+		for _, s := range w.shortened {
+			if string(s.from) == form {
+				dup = true
+			}
+		}
+		if !dup {
+			w.shortened = append(w.shortened, shortPath{from: []byte(form), to: []byte(short)})
+		}
+	}
+}
+
+// replacePath は line の中の from を to に置き換えます。前後がパスの切れ目の
+// ところだけを置き換えます（[Writer.ShortenPath]）。fold が真なら、ASCII の
+// 大文字と小文字を区別せずに探します。
+func replacePath(line, from, to []byte, fold bool) []byte {
+	haystack, needle := line, from
+	if fold {
+		// 長さを変えずに小文字へそろえます。ASCII だけを畳むので、位置は元の
+		// line と同じまま使えます。
+		haystack, needle = asciiLower(line), asciiLower(from)
+	}
+	var out []byte
+	copied, at := 0, 0
+	for {
+		i := bytes.Index(haystack[at:], needle)
+		if i < 0 {
+			break
+		}
+		start := at + i
+		end := start + len(needle)
+		if !pathBoundaryBefore(line[:start]) || !pathBoundaryAfter(line[end:]) {
+			at = start + 1
+			continue
+		}
+		out = append(out, line[copied:start]...)
+		out = append(out, to...)
+		copied, at = end, end
+	}
+	if out == nil {
+		return line
+	}
+	return append(out, line[copied:]...)
+}
+
+// asciiLower は ASCII の大文字だけを小文字にした写しを返します。
+func asciiLower(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// pathBoundaryBefore は、before の直後でパスが始まってよいかを返します。
+// 直前がパスの一部（名前の文字か区切り）なら、もっと長いパスの途中です。
+func pathBoundaryBefore(before []byte) bool {
+	if len(before) == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRune(before)
+	return r != '/' && r != '\\' && !isNameRune(r)
+}
+
+// pathBoundaryAfter は、after の直前でパスの一部が終わってよいかを返します。
+// 続きが区切りなら、その下のパスです。名前の文字なら、別の名前の途中です。
+func pathBoundaryAfter(after []byte) bool {
+	if len(after) == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeRune(after)
+	return r == '/' || r == '\\' || !isNameRune(r)
+}
+
+// isNameRune は、ファイル名の中に続けて現れうる文字かを返します。
+func isNameRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '-' || r == '_'
 }
 
 // Hide は記録へ書く前に伏せる文字列を1つ覚えます。
@@ -115,7 +236,7 @@ func open(dir string, now func() time.Time) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Writer{dir: dir, now: now, day: day, file: f}, nil
+	return &Writer{dir: dir, now: now, day: day, file: f, foldCase: runtime.GOOS == "windows"}, nil
 }
 
 // Name は日付に対するファイル名を返します。
@@ -222,6 +343,9 @@ func (w *Writer) flushLine(now time.Time) {
 	line := bytes.TrimSuffix(w.line, []byte("\r"))
 	for _, secret := range w.hidden {
 		line = bytes.ReplaceAll(line, []byte(secret), []byte(hiddenMark))
+	}
+	for _, s := range w.shortened {
+		line = replacePath(line, s.from, s.to, w.foldCase)
 	}
 	var err error
 	if len(line) == 0 {

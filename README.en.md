@@ -1081,6 +1081,10 @@ One file per day.
 However many times you run it on the same day, it appends to the same file.  
 When you report something that did not work, please attach that day's file.
 
+In the log, your home folder path (`C:\Users\<name>` or `/home/<name>`) is replaced with `~`.  
+This is because the path contains your user name.  
+The screen shows it as it is.
+
 The list and CSV from `diff`, and the translation heads and mismatch samples that `publish` shows, are printed on screen only.  
 The log keeps only the counts, keys, line numbers, reasons and headings, plus how many lines were left out.  
 A line such as `dwloc: 原文や訳を含む 23 行は記録しません（画面には出しました）。` in the log marks where lines were left out.  
