@@ -26,15 +26,18 @@ func gitRepo(t *testing.T) string {
 
 // initGitRepo は root を git リポジトリにする。
 //
-// core.longpaths を、-c ではなくリポジトリの設定として書く。Git for Windows は
-// 既定では 260 字を超えるパスを扱えず、TMP が深いと add や show が
-// 「Filename too long」で失敗する（長さの目安は longRootLen にある）。-c は
-// ここで走らせる git にしか効かず、試験の対象（GitOldOrder）が起動する git には
-// 届かない。リポジトリの設定なら、どちらの git も読む。Windows 以外の git は
-// この設定を使わないので、書いても害は無い。
+// core.longpaths を、リポジトリの設定として書く。Git for Windows は既定では
+// 260 字を超えるパスを扱えず、TMP が深いと add や show が「Filename too long」で
+// 失敗する（長さの目安は longRootLen にある）。-c はここで走らせる git にしか
+// 効かず、試験の対象（GitOldOrder）が起動する git には届かない。リポジトリの
+// 設定なら、どちらの git も読む。Windows 以外の git はこの設定を使わないので、
+// 書いても害は無い。
+//
+// init にだけは -c でも渡す。init はリポジトリの設定を書く前に .git/hooks の
+// 見本などを書くので、ルートが約 220 字を超えると、そこで 260 字を超えて落ちる。
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
-	runGit(t, root, "init")
+	runGit(t, root, "-c", "core.longpaths=true", "init")
 	runGit(t, root, "config", "core.longpaths", "true")
 }
 
@@ -149,19 +152,26 @@ func TestGitOldOrderUsesPreviousCommitWhenClean(t *testing.T) {
 
 // longRootLen は TestGitOldOrderUnderLongRoot がルートを伸ばす長さ。
 //
-// Windows の git は、既定では 260 字（MAX_PATH）を超えるパスを扱えない。ルートが
-// 約 204 字を超えると、git add がオブジェクト（.git/objects/xx/<38桁>）を書けない。
-// 約 194 字を超えると、製品が渡す `git show <rev>^:./data/script_order.csv` が、
-// 引数がファイル名でないかを確かめる stat で落ちる。どちらも超える長さにしつつ、
-// git init が作るいちばん長いファイル（.git/hooks/sendemail-validate.sample など、
-// ルート＋37字）が 260 字に収まる長さにする。init は core.longpaths を書く前に走る。
-const longRootLen = 215
+// Windows の git は、既定では 260 字（MAX_PATH）を超えるパスを扱えない。
+// core.longpaths が無いと、ルートの長さに応じて次の所で落ちる。
+//   - 約 194 字を超えると、製品が渡す `git show <rev>^:./data/script_order.csv` が、
+//     引数がファイル名でないかを確かめる stat で落ちる
+//   - 約 204 字を超えると、git add がオブジェクト（.git/objects/xx/<38桁>）を書けない
+//   - 約 220 字を超えると、git init が .git/hooks の見本（ルート＋37字）を書けない
+//
+// どれも超える長さにする。initGitRepo の設定が、init を含むどの段にも効いていることを
+// 確かめるためである。
+//
+// core.longpaths を入れても、上限は残る。ルートが約 240 字を超えると、git は
+// .git/config のようなルート直下の短いパスさえ扱えず、リポジトリを作る段で落ちる。
+// その上限には届かない長さにする。
+const longRootLen = 230
 
 // TestGitOldOrderUnderLongRoot は、ルートの深いリポジトリでも1つ前の再生順を
 // 取り出せることを確かめる。
 //
-// 試験のリポジトリは initGitRepo が core.longpaths を入れるので、上の2つの壁を
-// どちらも越えるはず。TMP の長さに頼ると、乱数の桁数しだいで通ったり落ちたり
+// 試験のリポジトリは initGitRepo が core.longpaths を入れるので、上の3つの壁を
+// どれも越えるはず。TMP の長さに頼ると、乱数の桁数しだいで通ったり落ちたり
 // するので、ルートを longRootLen まで伸ばしてから確かめる。
 func TestGitOldOrderUnderLongRoot(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

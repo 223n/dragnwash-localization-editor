@@ -149,12 +149,14 @@ func TestGitTracked(t *testing.T) {
 	// core.longpaths をリポジトリの設定に書くのは、internal/diff の試験の
 	// initGitRepo（oldorder_test.go）と同じ理由。Git for Windows は既定では
 	// 260 字を超えるパスを扱えず、TMP が深いと add が失敗する。GitTracked が
-	// 起動する git にも効かせるため、-c ではなくリポジトリに書く。
+	// 起動する git にも効かせるため、-c ではなくリポジトリに書く。init にだけは
+	// -c でも渡す。init は設定を書く前に .git/hooks の見本などを書くので、TMP が
+	// 深いとそこで落ちる。
 	//
 	// git が PATH にあるのに失敗したら、飛ばさずに落とす。環境の不具合を
 	// SKIP に変えると、go test は -v なしでは何も出さず、誰も気付けない。
 	for _, args := range [][]string{
-		{"init"},
+		{"-c", "core.longpaths=true", "init"},
 		{"config", "core.longpaths", "true"},
 		{"add", "tracked.txt"},
 	} {

@@ -86,14 +86,15 @@ func gitTestOpts() []string {
 // core.longpaths をリポジトリの設定として書く理由は、internal/diff の試験の
 // initGitRepo（oldorder_test.go）と同じ。Git for Windows は既定では 260 字を
 // 超えるパスを扱えず、TMP が深いと add や show が失敗する。dwloc が起動する git にも
-// 効かせるには、-c ではなくリポジトリの設定に書く必要がある。
+// 効かせるには、-c ではなくリポジトリの設定に書く必要がある。init にだけは -c でも
+// 渡す。init は設定を書く前に .git/hooks の見本などを書くので、TMP が深いとそこで落ちる。
 //
 // 飛ばさずに落とすのも同じ理由で、git が PATH にあるのに失敗するのは環境の不具合である。
 // git が無い環境は、呼び出し側が先に LookPath で見分けて飛ばす。
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
 	for _, args := range [][]string{
-		{"init"},
+		{"-c", "core.longpaths=true", "init"},
 		{"config", "core.longpaths", "true"},
 	} {
 		cmd := exec.Command("git", args...)
