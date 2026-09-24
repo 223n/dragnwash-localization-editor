@@ -85,6 +85,8 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 **Goでの注意**: (a) .NET の ReadAllLines(path, Encoding) は detectEncodingFromByteOrderMarks:true なので UTF-8 BOM を自動で取り除く（level_flow.csv は実際にBOM付きで、検証したところ先頭文字は 'f'=102 だった）。Go では手動で \xEF\xBB\xBF を剥がすこと。(b) 空行は ConvertFrom-Csv が読み飛ばす（検証済み：4データ行中1行が空なら3レコード）。(c) '#' 判定は行の生の先頭文字に対する前方一致で、トリムしない。(d) この方式なので、引用フィールド内で改行して次行が '#' で始まる場合は壊れる。
 
+**上流の変更への追従（ヘッダーの選び方）**: 上流の hash-strings.ps1 は 55d2e09（2026-09-16）で、ヘッダーより上の空行とコメント行を落としてからヘッダーを選ぶようになり、c8fda90（同日）でそれを Remove-NonRecords に置き換えた。Remove-NonRecords は、引用の外にある物理行のうち `$body.Trim().Length -eq 0`（空行と空白だけの行）と `$body.StartsWith('#')` を落とす。003ed1e の ConvertFrom-Csv は完全な空行しか読み飛ばさないので、ファイルの先頭に空白だけの行があると、それが列0個のヘッダーになり、全行が malformed として捨てられていた（公開ファイルがヘッダーだけになり、終了コードは0）。移植（csvfile.ReadPowerShellTable）は、ヘッダーを選ぶ前に空行と空白だけの行を飛ばすように合わせた（上流の報告 #8）。空白の判定は .NET の Trim と同じ集合（Go の strings.TrimSpace）で、全角空白だけの行も飛ばす。"," や `""` の行は上流でも Trim で空にならないので、これまでどおりヘッダーになる。1物理行を1レコードとして読む点（f816618 で上流は全文の解釈へ移った）は変えていない。その代わり、行単位では読み違える形のファイルは publish が書く前に止める（「上流の変更への守り（dwloc の独自）」）。
+
 #### R5. 再生順データは data/script_order.csv、存在しなければ空配列。
 
 `$orderFile = Join-Path $root 'data/script_order.csv'` / `if (Test-Path $orderFile) { $order = @(Read-Csv $orderFile) }`。初期値 `$order = @()`。
@@ -221,7 +223,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 
 `[System.IO.File]::WriteAllText($t.Output, $out.ToString(), (New-Object System.Text.UTF8Encoding $false))`。組み立ては全て `$out.AppendLine(...)`。
 
-**Goでの注意**: (a) `UTF8Encoding $false` ＝ BOM を出力しない（実ファイルもBOM無しを確認）。(b) AppendLine は Environment.NewLine を使うので Windows では "\r\n"。ただしリポジトリの blob は LF（`git config core.autocrlf` が `input` で、コミット時に正規化されている）。Go で「作業ツリー上のファイルとバイト一致」を狙うなら CRLF、「git の中身と一致」を狙うなら LF。どちらを正とするかは要確認（openQuestions参照）。(c) 最後の行も AppendLine なので必ず末尾改行が付く。
+**Goでの注意**: (a) `UTF8Encoding $false` ＝ BOM を出力しない（実ファイルもBOM無しを確認）。(b) AppendLine は Environment.NewLine を使うので Windows では "\r\n"。ただしリポジトリの blob は LF（`git config core.autocrlf` が `input` で、コミット時に正規化されている）。Go で「作業ツリー上のファイルとバイト一致」を狙うなら CRLF、「git の中身と一致」を狙うなら LF。どちらを正とするかは要確認（openQuestions参照）。(c) 最後の行も AppendLine なので必ず末尾改行が付く。(d) 上流は f816618 で StringWriter（NewLine は LF）に変え、どの環境でも LF で書くようになった。(b) の「要確認」は LF で確定した（「未決の点」の1つ目）。
 
 #### R28. ターゲットごとに1行の集計ログを出す。
 
@@ -256,7 +258,7 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 - level 番号のゼロ埋め有無が2箇所で異なる：セクションキー側は `{0:00}` で2桁ゼロ埋め（L01）、見出し文言側は `{0}` でゼロ埋めなし（Level 1）。
 - $e.order と $lid はエスケープされず素のまま連結される。現行データは数値と `line:xxxxxxxx` なので問題ないが、カンマや引用符を含む値が来ると出力CSVが壊れる。
 - ハッシュ行と台詞ID行が同じ script_order 行に両方該当した場合、同じ order 番号を持つ2行が連続して出力される（ja/strings.csv 13〜14行目が実例）。
-- 改行コード：スクリプトが書き出すのは Environment.NewLine（Windows では CRLF）だが、リポジトリに入っている strings.csv は LF（core.autocrlf=input による正規化）。バイト一致検証をする際はこの差を考慮する必要がある。
+- 改行コード：スクリプトが書き出すのは Environment.NewLine（Windows では CRLF）だが、リポジトリに入っている strings.csv は LF（core.autocrlf=input による正規化）。バイト一致検証をする際はこの差を考慮する必要がある。上流は f816618 から LF で書くので、上流 main と比べるときはこの差が無い。
 
 ### 敵対検証で見つかった食い違い
 
@@ -315,9 +317,28 @@ rows/speakers/levels は PowerShell の既定 Hashtable（大文字小文字を�
 - Write-Host は情報ストリームへの出力であって標準出力ではないこと（PS5.1）。Go で stdout に出すとリダイレクト挙動が変わる。
 - -Path 指定時は必ず Input == Output になるため、変換対象そのものをコメント引き継ぎ用にも読むこと（140行）。R8(e) は既定モードについてのみ述べているが、-Path 指定時は常にこの形になる。
 
+### 上流の変更への守り（dwloc の独自）
+
+上流の hash-strings.ps1 は f816618（2026-09-16）で Read-Csv をファイル全体の解釈へ移し、c8fda90（同日）で Remove-NonRecords を足した。この移植は、publish の読み手を1物理行=1レコードのまま据え置いている（同じ読み方を diff・order・edit も前提にしているため。上流の報告 #7 の本体は未着手）。行単位の読み方には訳を黙って失う入力があり、しかも失われる訳の確かめ（CheckLoss）はいまの公開ファイルを同じ読み方で読むので、その食い違いに気づけない。そこで publish は、書き出す前にファイルの形そのものを見て止める（internal/publish の shape.go、CheckTargetShape）。画面の書き出し（公開の形）も同じ確かめを同じ順で通る。
+
+対象は、入力（作業コピー）と、いまの公開ファイル（書き出し先）である。入力と書き出し先が同じファイルなら、書き出し先として1回だけ確かめる。どれかに当たれば、どのロケールも書かず、どのファイルの何行目か・何が起きるか・どう直すかを出して終了コード1で止まる（失われる訳の確かめと同じ。読めなくて確かめられなかったときだけが2）。確かめる順は、組み立て → 形 → ゲーム側の土台の食い違い → 失われる訳。
+
+- (a) 1行ずつ読んだヘッダーに、key 列も source_en 列も無い、または translation 列が無い。どの行もキーか訳を引けず、すべて捨てられる。source_en,translation だけの作業コピー（上流の .DESCRIPTION が認める形）は通す。データ行が無いファイルでもヘッダーは確かめる（ヘッダーの無い、データ行1行だけのファイルを見分けるため）。
+- (b) いまの公開ファイルに、行をまたぐレコードがある。1行ずつ読むと値が最初の行で切れ、訳が切り詰められる（上流の報告 #7 の p-multiline-published / p-hash-in-quotes。守りを入れる前は終了コード0で切り詰めたまま書いていた）。訳の有無によらず止める。上流は f816618 から複数行の訳を正しい訳として読み書きするので、ほかの翻訳者がコミットした正しい訳でも止まり、全文を解釈する読み手が入るまでそのロケールは塞がったままになる（--locale を付けなければ全ロケールが書かれない）。そのため直し方は改行を消させず、ほかのロケールは --locale で書けること、そのロケールは tools/hash-strings.ps1 かゲーム内の Hash for commit で書けることを先に出し（どちらもゲーム側の作業コピーをそのまま公開ファイルへ届けないので、hash-strings.ps1 の前にはリポジトリの Translations/_discovered へ写すこと、Hash for commit のあとにはゲーム側の公開ファイルをリポジトリへ写すことも添える）、改行を取り除く案内は「誤って入った改行なら」に留める。(c) の訳が入っている場合も同じ考えで、訳を空に戻す案内を条件付きにする。
+- (c) 入力に行をまたぐレコードがあり、(1) そのレコード（全体として読んだもの）に空でない訳が入っているか、(2) 行単位で読んで集めた訳（キーと台詞IDごとの訳）と、全体を読んで集めた訳が食い違う。訳の空のレコードで食い違いも無ければ止めない。ゲーム側の作業コピーの実物に、原文が行をまたいで（区切りは CRLF、値の中は LF、空行を挟む）訳が空のレコードが1件あり、それで止めると ja の publish が常に塞がるためである（検証の指摘）。このレコードは行単位では2件の malformed dropped になり、全体では訳の空の行になるので、出力はどちらでも同じ。
+- (d) 空でない行があるのに、1行ずつ読むと1行も読めない、またはヘッダーが無い。Python の str.splitlines と同じ広さ（U+2028 や U+0085 を含む）で行を分けてレコードになる行が2行以上あるのに、読み手がデータ行を1行も読めないときに止める。CR だけの改行のファイルは止めない。読み手は単独の CR でも行を分けるので正しく読める（上流 main はここで訳をすべて消す。検証の指摘「単独の CR」）。
+- (e) 開いた引用符がファイルの終わりまで閉じない（上流の報告 #11）。上流の全文の読み方は、そこから後ろ（英語の原文を含む）を1つの値に飲み込み、公開ファイルへ漏らす。
+
+「行をまたぐ」と「閉じない」は、行ごとの引用符の偶奇ではなく、ConvertFrom-Csv の全文の読み方で決める（csvfile.ReadPowerShellWhole）。pwsh 7.6.6 で実測した規則は、引用の中の LF・CRLF・単独の CR は値に残る、フィールドの途中の '"' と閉じ引用符の後ろの '"' は引用を開かない、先頭の空白の後ろの '"' は引用を開く、閉じない引用符はファイルの終わりまでを値にする、の4つ。引用符なしのフィールドの途中の '"'（5" screen のような値）は、行単位で読んでも全体を読んでも値が同じなので止めない（上流の報告 #4b の入力 p-bare-quote）。行の区切りは上流の Remove-NonRecords の正規表現ではなく、行単位の読み手と同じ \r\n / \n / \r にした。こうしておくと「行をまたぐ」が「行単位の読み手が値を切る」とちょうど重なる。
+
+コメント行と空行の落とし方も上流と違える。上流の Remove-NonRecords は、物理行が引用の外かどうかを行ごとの '"' の数の偶奇で決める。dwloc の全文の読み方（csvfile.ReadPowerShellWhole）は、フィールドの先頭で開いた引用だけで決める（ConvertFrom-Csv と同じ規則）。そのため、引用符なしのフィールドの途中に裸の '"' がある行（5" screen のような値）の後ろでは、上流は引用の中にいると見なし、次に '"' の数が奇数の行が来るまで、コメント行と空行を落とさずに残す。残ったコメント行は ConvertFrom-Csv がレコードとして読むので、列の多いコメント行は公開ファイルに不正な行として出ることがある（検証が上流 main で再現した。入力「K1,UI,,,UI,5" screen」「# note,b,c,d,e,COMMENT-TAIL」「K2,UI,,,UI,b」で、上流は `fa515818c52bd108,,,,e,COMMENT-TAIL` を公開した）。dwloc はこれらの行を引用の外として落とす。上流の不具合として扱い、写さない。publish の出力は行単位の読み手で作り、行単位の読み手も '#' の行と空行を落とすので、dwloc の中では2つの読み方がそろう。p-bare-quote で出力が上流と同じになるのは、その入力のコメント行が訳の列まで届かない（列が1つしか無い）ためで、この違いが無いことを示すものではない。
+
+残る隙間: 引用符で囲まない値の中の単独の CR（手で書いた `a\rb` など）は、行単位の読み手が行の区切りとして値を切るが、引用が無いのでどの確かめにも当たらない。ゲームは引用の外の CR を捨てて ab と読む（R8）。書き手（Escape-Csv）は CR を含む値を必ず引用するので、道具が書いたファイルには現れない。
+
 ### 未決の点
 
 - 出力の改行コードを CRLF と LF のどちらに固定すべきか。スクリプトは Environment.NewLine 依存（Windows で CRLF）だが、リポジトリの blob は LF（core.autocrlf=input）。Go は環境非依存なので、どちらかに決め打つ必要がある。仕様としてどちらが「正」なのかはコードからは判断できない。
+  - **確定（LF）**: 上流の hash-strings.ps1 は f816618（2026-09-16）で、出力を StringBuilder.AppendLine から StringWriter（`` $out.NewLine = "`n" ``）に変え、Windows でも LF で書くようになった。コメントは「the file is LF on every platform, matching the repository (see .gitattributes)」としている。移植の LF 固定（csvfile.LineTerminator）と一致するので、この点は未決ではなくなった。上流の調査（上流の報告 #12）で、上流 main の16ロケールを上流の pwsh 版と dwloc publish で一括変換し、どちらもコミット済みとバイト単位で一致した（冪等）。以前の食い違い（003ed1e 版は Windows で CRLF を書く）は、上流の側で解消した。
 - Translations/_discovered/<locale>.working.csv の正確な列構成。ディレクトリが現リポジトリに存在せず実例を確認できなかった。ドキュメンテーションコメントには "a working copy from the in-game menu, or plain source_en,translation rows" とあるので、少なくとも source_en と translation、おそらく key と speaker も持ちうる、と読めるが未検証。
 - PowerShell 由来の大文字小文字の扱い（Section-Title の switch、$levels.ContainsKey、$rows.ContainsKey、lineRows.Contains、$e.section -ne $lastSection、-notlike '_*'）が意図的な仕様なのか、単に PowerShell の既定を使った結果なのか。Go に移す際に case-sensitive にすると挙動が変わりうるが、現行データでは差が出ない。厳密移植なら case-insensitive、意図なら case-sensitive のどちらを選ぶか要判断。
 - speakers の重複判定 List<string>.Contains が case-sensitive である一方、他のマップが case-insensitive である点が意図的かどうか。`Ryan` と `ryan` が両方 script_order にあれば `Ryan/ryan` と連結されるが、現行データでは発生しない。

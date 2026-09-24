@@ -253,6 +253,33 @@ const (
 	PublishBaseDrift = "publish_base_drift"
 )
 
+// 1行ずつ読むと訳を黙って失う形（internal/publish の shape.go）。
+//
+// publish は1物理行を1レコードとして読む。この読み方で読み違えるファイルは、
+// 読み違えた結果どうしを突き合わせても気づけない（いまの公開ファイルも同じ
+// 読み方で読むため）。そうした形を、書く前にファイルの形そのものから見つける。
+// どれも置換を持たない。どのファイルの何行目かは、理由の外に持つ。
+const (
+	// PublishNoKeyColumn は、ヘッダーに key 列も source_en 列も無いこと。
+	// どの行もキーを決められず、すべて捨てられる。
+	PublishNoKeyColumn = "publish_no_key_column"
+	// PublishNoTranslationColumn は、ヘッダーに translation 列が無いこと。
+	// すべての行が訳の無い行として読まれる。
+	PublishNoTranslationColumn = "publish_no_translation_column"
+	// PublishMultilineCurrent は、いまの公開ファイルに行をまたぐ値があること。
+	// 1行ずつ読むと、その訳は切り詰められる。
+	PublishMultilineCurrent = "publish_multiline_current"
+	// PublishMultilineTranslated は、入力の行をまたぐレコードに訳が入っていること。
+	PublishMultilineTranslated = "publish_multiline_translated"
+	// PublishMultilineDiverges は、入力の行をまたぐレコードのせいで、1行ずつ
+	// 読んだ訳と全体を読んだ訳が食い違うこと。
+	PublishMultilineDiverges = "publish_multiline_diverges"
+	// PublishRowsUnread は、空でない行があるのに1行ずつ読むと1行も読めないこと。
+	PublishRowsUnread = "publish_rows_unread"
+	// PublishUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
+	PublishUnclosedQuote = "publish_unclosed_quote"
+)
+
 // all は [All] が返す並び。定義した順のまま持つ。
 var all = []string{
 	JudgeWorkingNotRead, JudgeWorkingMissing, JudgeOrderUnreadable, JudgeOrderNoLineIDs,
@@ -283,6 +310,10 @@ var all = []string{
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
+
+	PublishNoKeyColumn, PublishNoTranslationColumn, PublishMultilineCurrent,
+	PublishMultilineTranslated, PublishMultilineDiverges, PublishRowsUnread,
+	PublishUnclosedQuote,
 }
 
 // All はこのパッケージが名前を付けた識別子を全部返す。

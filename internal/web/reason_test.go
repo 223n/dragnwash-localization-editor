@@ -150,6 +150,9 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	for _, why := range publishBaseReasons(t) {
 		check("publish", why)
 	}
+	for _, why := range publishShapeReasons(t) {
+		check("publish", why)
+	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
 	for _, id := range reason.All() {
@@ -494,6 +497,49 @@ func publishLossReasons(t *testing.T) []reason.Reason {
 			continue
 		}
 		out = append(out, l.Why)
+	}
+	return out
+}
+
+// publishShapeReasons は「1行ずつ読むと訳を失う形」の理由の見本を集める。
+//
+// どれも形の確かめを実際に走らせて出させる。入力（作業コピー）の確かめと、
+// いまの公開ファイルの確かめで出る理由が違うので、両方を通す。
+func publishShapeReasons(t *testing.T) []reason.Reason {
+	t.Helper()
+
+	const hashKey = "bbbbbbbbbbbbbbbb"
+	inputs := []string{
+		// ヘッダーに key 列も source_en 列も translation 列も無い。
+		"foo,bar\nx,y\n",
+		// 行をまたぐ値に訳が入っている。
+		"key,translation\naaaaaaaaaaaaaaaa,\"a\nb\"\n",
+		// 原文が行をまたぎ、続きの行が1行ずつ読むと別のキーの訳になる。
+		"key,source_en,translation\n" + key.For("x") + ",\"x\n" + hashKey + ",,y\",\n",
+		// 行の区切りが LF・CRLF・CR のどれでもない。
+		"key,translation aaaaaaaaaaaaaaaa,t ",
+		// 引用符が閉じない。
+		"key,translation\naaaaaaaaaaaaaaaa,\"a\n",
+	}
+	var out []reason.Reason
+	for _, input := range inputs {
+		found, err := publish.CheckInputShape([]byte(input))
+		if err != nil {
+			t.Fatalf("CheckInputShape(%q): %v", input, err)
+		}
+		if len(found) == 0 {
+			t.Fatalf("CheckInputShape(%q) が何も見つけない", input)
+		}
+		for _, h := range found {
+			out = append(out, h.Why)
+		}
+	}
+	found, err := publish.CheckCurrentShape([]byte("key,translation\naaaaaaaaaaaaaaaa,\"a\nb\"\n"))
+	if err != nil {
+		t.Fatalf("CheckCurrentShape: %v", err)
+	}
+	for _, h := range found {
+		out = append(out, h.Why)
 	}
 	return out
 }

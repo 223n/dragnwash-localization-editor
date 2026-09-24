@@ -84,7 +84,15 @@ func collect(inputCSV []byte) (*collected, error) {
 	if err != nil {
 		return nil, err
 	}
+	return collectRows(records), nil
+}
 
+// collectRows は読み終えた行から [collect] と同じ材料を集める。
+//
+// 読み方と集め方を分けてあるのは、守り（[CheckInputShape]）が同じ入力を
+// 行単位と全文の2通りで読み、集めた訳を突き合わせるためである。集め方を
+// 2か所に書くと、守りが見ている訳と publish が書く訳が別の規則で決まる。
+func collectRows(records []csvfile.Row) *collected {
 	c := &collected{
 		rows:  make(map[string]inputRow, len(records)),
 		lines: newLineTable(),
@@ -125,7 +133,7 @@ func collect(inputCSV []byte) (*collected, error) {
 		c.rows[k] = inputRow{Speaker: who, Translation: tr} // R21
 		c.inputOrder = append(c.inputOrder, k)
 	}
-	return c, nil
+	return c
 }
 
 // keyOutcome は入力の1行のキーをどう決めたか。集計の加算はこの値で分ける。

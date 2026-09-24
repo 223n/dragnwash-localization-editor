@@ -432,10 +432,13 @@ func (f *File) markReadOnly(why reason.Reason) {
 // isRecord は行本体（改行を除いたもの）がレコードになるかを返す。
 // 空行相当の判定は csvfile.ParsePowerShellRecord の第2戻り値をそのまま使う。
 //
-// csvfile.ReadPowerShellRows はヘッダーを探すときだけ「完全な空行」だけを
-// 飛ばす（" " もヘッダーとして採る）。ここではヘッダーの前後で判定を変えず、
-// 一貫してこちらを使う。差が出るのはヘッダーの前に空白だけの行があるファイル
-// だけで、そのときこちらは次の行をヘッダーとして探しにいく。実データには無い形。
+// csvfile.ReadPowerShellRows はヘッダーを探すときだけ別の判定を使う。飛ばすのは
+// 空行と空白だけの行（.NET の Trim で空になる行）で、"," や '""' はヘッダーとして
+// 採る（上流の hash-strings.ps1 の Remove-NonRecords に合わせたもの）。ここでは
+// ヘッダーの前後で判定を変えず、一貫してこちらを使う。差が出るのはヘッダーの前に
+// "," や '""' の行があるファイルと、全角空白だけの行があるファイルだけである。
+// 前者ではこちらが次の行をヘッダーとして探しにいき、後者ではこちらが全角空白の行を
+// ヘッダーにして読み取り専用で開く。どちらも実データには無い形。
 func isRecord(body string) bool {
 	_, ok := csvfile.ParsePowerShellRecord(body)
 	return ok

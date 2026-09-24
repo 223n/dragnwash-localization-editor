@@ -29,7 +29,7 @@ func FieldOffsets(line string) []int {
 	i := 0
 	for {
 		// 値は使わない。欲しいのは「このフィールドがどこで終わるか」だけ。
-		_, _, end := parsePowerShellField(line, i)
+		end := parsePowerShellField(line, i, false).end
 		if end >= len(line) {
 			// 行末に達した。末尾が空でもフィールドは1つ数えたままにする
 			// （offsets には既にこのフィールドの開始位置が入っている）。

@@ -72,13 +72,23 @@ func TestBuildAgainstMeasuredPowerShell(t *testing.T) {
 			wantStats: Stats{Kept: 1, InPlayOrder: 1},
 		},
 		{
-			// 1行目が空白だけだと、ConvertFrom-Csv はその行をヘッダーにする。
-			// 列が0個になるので、後続の2行は key を引けず malformed 扱いになる。
-			name:        "入力の1行目が空白だけなら全行が捨てられる",
+			// 1行目が空白だけでも、ヘッダーは次の行になる。上流の hash-strings.ps1 は
+			// 55d2e09 / c8fda90（Remove-NonRecords）でヘッダーより上の空白だけの行を
+			// 落とすようになった。上流 main で同じ形の入力（上流の報告 #8、
+			// p-ws-above-header）を走らせると、行は残って「1 already hashed」になる。
+			//
+			// 003ed1e の ConvertFrom-Csv はこの行をヘッダーにし、列が0個になるので
+			// 後続の2行が malformed 扱いで捨てられていた（公開ファイルがヘッダーだけに
+			// なる）。この移植も以前はそれを写していた。
+			name:        "入力の1行目が空白だけでもヘッダーは次の行になる",
 			scriptOrder: orderHeader + "Reaction,,N9,1,line:ddd,9999999999999999,Ryan,\n",
 			input:       "   \nkey,translation\n9999999999999999,blank-first\n",
-			want:        "key,section,node,order,speaker,translation\n",
-			wantStats:   Stats{Dropped: 2},
+			want: "key,section,node,order,speaker,translation\n" +
+				"\n" +
+				"# ===== Dragon reactions (started by game code) =====\n" +
+				"# --- N9 ---\n" +
+				"9999999999999999,Reaction,N9,1,Ryan,blank-first\n",
+			wantStats: Stats{Kept: 1, InPlayOrder: 1},
 		},
 	}
 
