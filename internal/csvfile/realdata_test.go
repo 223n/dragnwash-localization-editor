@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -269,4 +270,137 @@ func TestRealDataScriptOrder(t *testing.T) {
 	if got := len(ReadCSharpRows(data)); got != scriptOrderRows {
 		t.Errorf("C#方式の行数 = %d, want %d", got, scriptOrderRows)
 	}
+}
+
+// TestRealDataWholeReaderAgrees は、元リポジトリの全ロケールの公開ファイルと
+// 再生順の2ファイルを、主の読み手と行単位の読み手で読み、同じ行を返すことを
+// 確かめる。
+//
+// 実データには行をまたぐレコードが無い。そのため、PR2 で publish・diff・order を
+// 主の読み手へ切り替えても、これらのファイルでは結果が変わらないはずである。
+// あわせて、飲み込み・単独の CR・改行・ゲームの読み方との食い違いの検出が、
+// 実データで1件も当たらないことを見る。当たれば、正当なファイルの publish が塞がる。
+//
+// 落ちたときに出すのは件数と物理行の番号とキーと列名だけにする。値は出さない。
+func TestRealDataWholeReaderAgrees(t *testing.T) {
+	root := sourceRepo(t)
+	entries, err := os.ReadDir(filepath.Join(root, "Translations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := [][]string{{"data", "script_order.csv"}, {"data", "level_flow.csv"}}
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), "_") {
+			files = append(files, []string{"Translations", e.Name(), "strings.csv"})
+		}
+	}
+	// 13 は、元リポジトリのどのチェックアウトにもあったロケールの数（internal/edit の
+	// minPublishedLocales と同じ）。0 どうしで一致してしまうのを防ぐ。
+	if locales := len(files) - 2; locales < 13 {
+		t.Fatalf("公開ファイルが %d しか無い", locales)
+	}
+	for _, parts := range files {
+		t.Run(strings.Join(parts, "/"), func(t *testing.T) {
+			data := readSourceFile(t, parts...)
+			f, err := ReadPowerShell(data)
+			if err != nil {
+				t.Fatalf("主の読み手が失敗した: %v", err)
+			}
+			rows, err := ReadPowerShellRows(data)
+			if err != nil {
+				t.Fatalf("行単位の読み手が失敗した: %v", err)
+			}
+			if len(f.Records) != len(rows) {
+				t.Fatalf("件数: 主の読み手 %d、行単位 %d", len(f.Records), len(rows))
+			}
+			for i, r := range f.Records {
+				if r.MultiLine() {
+					t.Errorf("行をまたぐレコードがある: %d〜%d行目", r.Line, r.EndLine)
+				}
+				for _, col := range r.Columns() {
+					if r.Get(col) != rows[i].Get(col) {
+						t.Errorf("%d行目（key %s）の %s が行単位の読み手と違う", r.Line, r.Get("key"), col)
+					}
+				}
+			}
+			checkSegmentInvariants(t, string(data), f.Segments)
+			if got := FindSwallows(f.Segments); got != nil {
+				t.Errorf("飲み込みと見なされた: %+v", got)
+			}
+			if got := FindCRCuts(f.Segments); got != nil {
+				t.Errorf("単独の CR で切れた値と見なされた: %+v", got)
+			}
+			if got := LoneCRValues(f); got != nil {
+				t.Errorf("単独の CR を含む値がある: %+v", got)
+			}
+			if got := LineBreakValues(f); got != nil {
+				t.Errorf("改行を含む値がある: %+v", got)
+			}
+			if got := CSharpDisagreements(f); got != nil {
+				t.Errorf("ゲームの読み方と割れる: %+v", got)
+			}
+			t.Logf("%d 件", len(f.Records))
+		})
+	}
+}
+
+// workingCopyEnv は、実物の作業コピー（ゲーム側の
+// Translations/_discovered/<ロケール>.working.csv）を渡す環境変数。
+const workingCopyEnv = "DWLOC_WORKING_COPY"
+
+// TestRealWorkingCopy は、実物の作業コピーを全体を解釈する読み手で読み、区切りの
+// 関数と検出の関数が約束どおりに振る舞うかを確かめる。
+//
+// 作業コピーはゲームのフォルダーにしか無く（元リポジトリでは .gitignore で外して
+// ある）、ゲームの英語の原文を含む。CI には無いので、DWLOC_WORKING_COPY で渡した
+// ときだけ走る。ファイルは読むだけで、出すのは件数・物理行の番号・キーだけにする。
+//
+//	DWLOC_WORKING_COPY=<ゲーム>/BepInEx/plugins/DragNWashLocalization/Translations/_discovered/ja.working.csv \
+//	  go test ./internal/csvfile -run RealWorkingCopy -v
+//
+// 実物には、原文が行をまたぐ（空行で段落を分けた）レコードがある。行単位の読み方では
+// そのレコードが2件の行に割れるので、行単位の件数は1件多くなる。
+func TestRealWorkingCopy(t *testing.T) {
+	path := os.Getenv(workingCopyEnv)
+	if path == "" {
+		t.Skipf("%s が無いので、実物の作業コピーの確かめは飛ばす", workingCopyEnv)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s が読めない: %v", path, err)
+	}
+	f, err := ReadPowerShell(data)
+	if err != nil {
+		t.Fatalf("主の読み手が失敗した: %v", err)
+	}
+	checkSegmentInvariants(t, string(data), f.Segments)
+
+	multi := 0
+	for _, r := range f.Records {
+		if r.MultiLine() {
+			multi++
+			t.Logf("行をまたぐレコード: %d〜%d行目（key %s、ID %d）", r.Line, r.EndLine, r.Get("key"), r.ID)
+		}
+	}
+	if got := FindSwallows(f.Segments); got != nil {
+		t.Errorf("飲み込みと見なされた: %+v", got)
+	}
+	if got := FindCRCuts(f.Segments); got != nil {
+		t.Errorf("単独の CR で切れた値と見なされた: %+v", got)
+	}
+	if got := LoneCRValues(f); got != nil {
+		t.Errorf("単独の CR を含む値がある: %+v", got)
+	}
+	if got := CSharpDisagreements(f); got != nil {
+		t.Errorf("ゲームの読み方と割れる: %+v", got)
+	}
+	if game := ReadCSharpRows(data); len(game) != len(f.Records) {
+		t.Errorf("件数: 主の読み手 %d、ゲームの読み方 %d", len(f.Records), len(game))
+	}
+	rows, err := ReadPowerShellRows(data)
+	if err != nil {
+		t.Fatalf("行単位の読み手が失敗した: %v", err)
+	}
+	t.Logf("物理行 %d、セグメント %d、レコード %d（行をまたぐもの %d）、行単位の読み手の行 %d",
+		f.Segments.Lines, len(f.Segments.List), len(f.Records), multi, len(rows))
 }

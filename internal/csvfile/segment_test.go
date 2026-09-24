@@ -263,6 +263,9 @@ func TestSplitSegmentsInvariantsOnFixture(t *testing.T) {
 //     差し替える保存が、行単位のときと同じ関数で位置を出せることの裏付けである
 //   - 閉じない引用符は最後のセグメントにしか無い
 //   - 物理行を順につなぐと BOM の後ろのバイト列に戻る
+//
+// 実物の作業コピー（[TestRealWorkingCopy]）にも使うので、落ちたときに出すのは
+// 位置と数だけにする。ゲームの台本を試験の出力に書き写さない。
 func checkSegmentInvariants(t *testing.T, text string, segs Segments) {
 	t.Helper()
 	if segs.Text != text {
@@ -321,8 +324,12 @@ func checkSegmentInvariants(t *testing.T, text string, segs Segments) {
 		body, term := segs.PhysicalLine(n)
 		joined.WriteString(body + string(term))
 	}
-	if joined.String() != text[segs.BOM:] {
-		t.Errorf("物理行をつないでも元に戻らない\n got %q\nwant %q", joined.String(), text[segs.BOM:])
+	if got, want := joined.String(), text[segs.BOM:]; got != want {
+		at := 0
+		for at < min(len(got), len(want)) && got[at] == want[at] {
+			at++
+		}
+		t.Errorf("物理行をつないでも元に戻らない（%d バイト目から違う。長さ %d、元は %d）", at, len(got), len(want))
 	}
 }
 
