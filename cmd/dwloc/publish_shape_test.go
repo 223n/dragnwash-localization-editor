@@ -502,18 +502,72 @@ func TestPublishAcceptMultiline(t *testing.T) {
 		}
 	})
 
-	t.Run("閉じ引用符の後ろに文字が続く形は通さない", func(t *testing.T) {
-		root := makeTree(t, map[string]string{
-			"data/script_order.csv": scriptOrderCSV,
-			"Translations/ja/strings.csv": "key,section,node,order,speaker,translation\n" +
-				helloKey + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n\"Alpha\nBeta\",UI,,,UI,訳\n",
+	// 通せない形は、指定しても形の確かめで止まる。どの見本も、形の確かめを通して
+	// しまえば、組み立てと失われる訳の確かめは止めない（書くか、閉じない引用符は
+	// 組み立ての誤りで終了コード2になる）。ほかの確かめで止まる見本では、通す指定が
+	// 形を通してしまっても試験が通るので、守りを確かめたことにならない。
+	for _, tc := range []struct {
+		name string
+		// published は ja の公開ファイル（入力と書き出し先が同じ経路）。1行目は
+		// lossRepo と同じヘッダー。
+		published string
+		// want は、形の確かめが出す理由の一部。
+		want string
+	}{
+		{
+			// 飲み込まれた行が自分の値を引用符で開く形。4行目は正しいレコードなので、
+			// 通してしまうと「もし↵Alpha」を訳として書く。
+			name: "閉じ引用符の後ろに文字が続く",
+			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\n" +
+				"\"Alpha\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\n",
+			want: "2〜3行目: 3行目で、行をまたいだ引用が閉じたすぐ後ろに文字が続く。",
+		},
+		{
+			name:      "値の中の単独の CR",
+			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もし\rもし？\"\n",
+			want:      "2〜3行目: translation 列の値に単独の CR（後ろに LF の続かない CR）がある。",
+		},
+		{
+			name: "引用符で囲まない値が単独の CR で切れる",
+			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もし\rもし？\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\n",
+			want: "2行目: 引用符で囲まない値が行の終わりの単独の CR で切れ、3行目にある続きが別の行として読まれる。",
+		},
+		{
+			name: "閉じない引用符",
+			published: keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"もしもし？\n" +
+				keyHiThere + ",L01 Ryan,Ryan_1_intro,2,Kobold,やあ！\n",
+			want: "2〜3行目: 開いた引用符がファイルの終わりまで閉じない",
+		},
+	} {
+		t.Run("通さない: "+tc.name, func(t *testing.T) {
+			root := lossRepo(t)
+			published := "key,section,node,order,speaker,translation\n" + tc.published
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(jaPublishedPath)), []byte(published), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			code, stdout, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
+			if code != exitProblems {
+				t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
+			}
+			// 止めたのが形の確かめで、通す指定が1件も通していないこと。
+			checkContains(t, "標準エラー", stderr, []string{
+				shapeStopText, tc.want, "直し方: ", "読み違える形が 1 か所あります。直すまでは書きません。",
+			})
+			for _, s := range []string{"として通します", "--accept-multiline ja を付けると書けます", "訳が失われるので"} {
+				if strings.Contains(stderr, s) {
+					t.Errorf("標準エラーに %q が出ている:\n%s", s, stderr)
+				}
+			}
+			if stdout != "" {
+				t.Errorf("止めたのに標準出力へ書いている:\n%s", stdout)
+			}
+			if got := readFile(t, root, jaPublishedPath); got != published {
+				t.Errorf("公開ファイルが変わっている\n--- 前 ---\n%q\n--- 後 ---\n%q", published, got)
+			}
 		})
-		code, _, stderr := runCLI("publish", "--root", root, "--no-game", "--accept-multiline", "ja")
-		if code != exitProblems {
-			t.Fatalf("終了コード = %d、1 を期待\n%s", code, stderr)
-		}
-		checkContains(t, "標準エラー", stderr, []string{"行をまたいだ引用が閉じたすぐ後ろに文字が続く"})
-	})
+	}
 
 	t.Run("当たらない指定は誤りにする", func(t *testing.T) {
 		root := makeTree(t, files)
