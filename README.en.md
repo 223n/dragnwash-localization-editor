@@ -293,6 +293,7 @@ The options you will use most are these.
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
+| `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and the messages |
@@ -301,6 +302,13 @@ The options you will use most are these.
 `--no-working` and `--no-game` have different jobs.  
 `--no-game` does not look for the game folder at all.  
 `--no-working` looks for it, and even when it finds one, does not read the working copy.
+
+With `--format csv`, a value that starts with `=`, `+`, `-`, `@`, a tab or a CR gets `'` added in front.  
+This keeps a spreadsheet from reading it as a formula when you paste it.  
+Translations come from the published files, so a translation someone else added could run as a formula on the screen of whoever opens it.  
+Even without bad intent, a line of dialogue starting with `-` turns into `#NAME?` or the like.  
+When you do not want the `'` (when comparing against a machine), add `--raw-csv`.  
+The published files that `publish` writes and the exports from the screen do not get it, because they need the same bytes as the upstream tools.
 
 ### The two buttons inside the game
 

@@ -13,7 +13,7 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--raw-csv] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
@@ -63,6 +63,12 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         判定しなかったカテゴリ（作業コピーが無いときの未翻訳など）は
         行が無いだけになるので、そのカテゴリと理由を標準エラーへ
         理由ごとに1行で書きます。
+        先頭が = + - @ タブ CR の値は、表計算が式として読まないように
+        頭に ' を付けます（-では、また → '-では、また）。
+  --raw-csv
+        --format csv の値に ' を付けず、そのまま書きます。機械と
+        突き合わせるときに使います。表計算で開くと式として読まれる
+        ことがあります。--format csv と一緒に使います。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
@@ -122,6 +128,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	all := fs.Bool("all", false, "参考のカテゴリも一覧にする")
 	limit := fs.Int("limit", diffLimitDefault, "1カテゴリに並べる上限（0 で全件）")
 	format := fs.String("format", diffFormatText, "出力の形式（text または csv）")
+	rawCSV := fs.Bool("raw-csv", false, "csv の値に ' を付けずにそのまま書く")
 	strict := fs.Bool("strict", false, "要作業があるときも終了コードを1にする")
 	if code, ok := parseFlags(fs, args, diffUsage, stdout, stderr); !ok {
 		return code
@@ -131,6 +138,12 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	}
 	if *format != diffFormatText && *format != diffFormatCSV {
 		fmt.Fprintf(stderr, "dwloc: --format は %s か %s です: %s\n", diffFormatText, diffFormatCSV, *format)
+		return exitError
+	}
+	if *rawCSV && *format != diffFormatCSV {
+		// text 形式には効かない指定です。黙って受けると、付けたつもりで効いて
+		// いない事故になります。
+		fmt.Fprintln(stderr, "dwloc: --raw-csv は --format csv と一緒に使います")
 		return exitError
 	}
 	if *limit < 0 {
@@ -200,7 +213,11 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	if *format == diffFormatCSV {
 		body := newUnrecorded(stdout, nil)
 		defer body.Close()
-		if err := report.WriteCSV(body); err != nil {
+		write := report.WriteCSV
+		if *rawCSV {
+			write = report.WriteCSVRaw
+		}
+		if err := write(body); err != nil {
 			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
 			return exitError
 		}
