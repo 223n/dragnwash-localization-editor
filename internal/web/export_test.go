@@ -523,6 +523,16 @@ func TestExportFailsWithoutLeakingThePath(t *testing.T) {
 		{"公開の形: ゲーム側の土台を読めない", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
 			breakWith(t, s.target("ja").GameBase, true)
 		}},
+		// 読めるが、列名が重複していてどの列が訳かを決められない。入力が作業
+		// コピーなら組み立ては通る（書き出し先はコメントを写すためにしか読まない）
+		// ので、形の確かめで止まる。確かめられないまま出すと、失われる訳を見落とす。
+		{"公開の形: コミット済みの公開ファイルの列名が重複している", exportFormPublished, true, func(t *testing.T, s *server, _ string) {
+			dup := "key,Key,section,node,order,speaker,translation\n" +
+				keyKept + "," + keyKept + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？\n"
+			if err := os.WriteFile(s.target("ja").Output, []byte(dup), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

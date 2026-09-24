@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -245,6 +246,25 @@ func TestLineRange(t *testing.T) {
 			t.Errorf("lineRange(%d, %d) = %q, want %q", tc.line, tc.end, got, tc.want)
 		}
 	}
+}
+
+// TestReportLossesStillRefusesWhatItCannotRead は、失われる訳の確認が、読めない
+// ファイルを「失われない」と扱わないことを見る。
+//
+// 読めないファイルは、ふつうは先に走る形の確認（reportShape）が終了コード 2 で
+// 止める（TestPublishReportsWhenTheCurrentFileCannotBeChecked）。それでも
+// こちらの確認も同じ扱いを保つ。2つの確認のあいだにファイルが書き換わることは
+// あり、そのときに素通りさせないためである。
+func TestReportLossesStillRefusesWhatItCannotRead(t *testing.T) {
+	root := t.TempDir()
+	// 書き出し先がディレクトリ。あるのに読めない、という形になる。
+	target := publish.Target{Locale: "ja", Input: filepath.Join(root, "in.csv"), Output: root}
+	var stderr strings.Builder
+	code := reportLosses(root, []publish.Target{target}, [][]byte{[]byte(publish.HeaderLine + "\n")}, &stderr)
+	if code != exitError {
+		t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr.String())
+	}
+	checkContains(t, "標準エラー", stderr.String(), []string{"訳が失われないことを確かめられません"})
 }
 
 // TestPublishShapeReportsWholeFile は、行の区切りを読み違えたファイルで
