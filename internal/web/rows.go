@@ -346,6 +346,17 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	if err := file.Save(); err != nil {
+		var recheck *edit.RecheckError
+		if errors.As(err, &recheck) {
+			// 書く直前にファイル全体を読み直すと、編集モデルと同じに読めなかった
+			// （書く前の事後確認の後半）。1バイトも書いていない。
+			s.logf("save check failed locale=%s line=%d", target.Locale, recheck.Line)
+			return saveOutcome{
+				results: s.recheckResults(cat, results, recheck),
+				status:  http.StatusUnprocessableEntity,
+				errKey:  "error.save_check_failed",
+			}
+		}
 		if errors.Is(err, edit.ErrConflict) {
 			// Save は書く直前にもう一度版を照合する。ここで弾かれたときも
 			// このファイルには1バイトも書いていない。手元の File はもう古いので
@@ -390,6 +401,27 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	return saveOutcome{file: file, results: results, applied: applied}
+}
+
+// recheckResults は、書く前の事後確認が外れたときの行ごとの結果を作る。
+//
+// ファイルには1バイトも書いていないので、どの行の Saved も倒す（倒さずに返すと、
+// 画面が「保存できた行」と読んで未保存の控えを捨てる）。外れた行（recheck が指す ID）
+// にだけ理由を付ける。画面はその行を保存できない行にして送り直しを止め、理由の無い
+// ほかの行は未保存のまま送り直す（422 は送り直す状態コード）。次の要求には外れた行が
+// 入らないので、ほかの行は書ける。
+func (s *server) recheckResults(cat *Catalog, results []rowResult, recheck *edit.RecheckError) []rowResult {
+	why := s.cat.T(cat, "error.not_editable",
+		"line", itoa(recheck.Line), "reason", s.reasonText(cat, recheck.Cause))
+	for i := range results {
+		results[i].Saved = false
+		results[i].Translation = ""
+		results[i].Warning = ""
+		if results[i].ID == recheck.ID && results[i].Error == "" {
+			results[i].Error = why
+		}
+	}
+	return results
 }
 
 // addWarning は行の断りを1つ足す。既にあれば後ろに連ねる。

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/edit"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
@@ -180,6 +181,36 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 	}
 	if got := getLines(t, s, "ja").ReadOnlyReason; got != s.cat.T(ja, "reason."+reason.EditCROnly) {
 		t.Errorf("読み取り専用の理由 = %q", got)
+	}
+}
+
+// TestSaveCheckFailureNamesTheRow は、書く直前のファイル全体の確かめ（書く前の事後確認の
+// 後半）が外れたときの行ごとの結果を見る。どの行の saved も倒し、外れた行にだけ理由を
+// 付ける。画面はその行を保存できない行にして送り直しを止め、理由の無い行は送り直す。
+//
+// 確かめは正しく組み立てたファイルでは外れないので、誤りは試験の中で作る（外れること
+// そのものは internal/edit の TestSaveRechecksTheWholeFile が見ている）。
+func TestSaveCheckFailureNamesTheRow(t *testing.T) {
+	s := newTestServer(t, Options{UILang: "en"})
+	en := s.cat.lookup("en")
+	why := reason.New(reason.EditRecheckFailed, "読み直すと合わない", "line", "7")
+	results := []rowResult{
+		{ID: 3, Number: 3, Saved: true, Translation: "a", Warning: "w"},
+		{ID: 5, Number: 7, Saved: true, Translation: "b"},
+		{ID: 6, Number: 8, Error: "もとからの理由"},
+	}
+	got := s.recheckResults(en, results, &edit.RecheckError{ID: 5, Line: 7, Cause: why})
+	want := s.cat.T(en, "error.not_editable", "line", "7", "reason", s.reasonText(en, why))
+	if hasJapanese(want) {
+		t.Errorf("英語の画面に日本語が出る: %q", want)
+	}
+	for i, r := range got {
+		if r.Saved || r.Translation != "" || r.Warning != "" {
+			t.Errorf("%d番目が保存したことになっている: %+v", i, r)
+		}
+	}
+	if got[0].Error != "" || got[1].Error != want || got[2].Error != "もとからの理由" {
+		t.Errorf("理由 = %q / %q / %q", got[0].Error, got[1].Error, got[2].Error)
 	}
 }
 

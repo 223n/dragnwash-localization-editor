@@ -155,6 +155,12 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
+	//
+	// 書く前の事後確認の理由（reason.EditRecheckFailed）だけは除く。正しく組み立てた
+	// ファイルでは立たない（編集モデルに誤りがあるときにだけ立つ）ので、実際の判定から
+	// 見本を取れない。文面が目録と同じことは、internal/edit の
+	// TestRecheckReasonMatchesTheCatalog が見ている。
+	seen[reason.EditRecheckFailed] = struct{}{}
 	for _, id := range reason.All() {
 		if _, ok := seen[id]; !ok {
 			t.Errorf("reason.%s を1度も通していない", id)

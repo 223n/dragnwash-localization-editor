@@ -278,6 +278,10 @@ const (
 	// EditGameMissesRecord は、ゲームの読み方でそのレコードが見つからないこと
 	// （csvfile.CSharpDisagreements の Column が空）。
 	EditGameMissesRecord = "edit_game_misses_record"
+	// EditRecheckFailed は、書く前の事後確認（決まったことのそのほか 4）が外れたこと。
+	// 書き換えたレコードを読み直すと、書いた訳のほかの値や、ほかの行まで変わって
+	// 読める。置換は line（そのレコードの最初の物理行）。
+	EditRecheckFailed = "edit_recheck_failed"
 )
 
 // 書き出すと訳が失われる理由（internal/publish の guard.go）。
@@ -374,7 +378,7 @@ var all = []string{
 	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
 	EditMultilineTranslation, EditUnclosedQuote, EditCROnly, EditSwallow,
-	EditGameDisagrees, EditGameMissesRecord,
+	EditGameDisagrees, EditGameMissesRecord, EditRecheckFailed,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 

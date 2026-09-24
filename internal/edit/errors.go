@@ -54,6 +54,31 @@ func (e *ConflictError) Unwrap() []error {
 	return []error{ErrConflict}
 }
 
+// ErrRecheck は、書く前の事後確認が外れたことを表す番兵。この誤りが返ったときは
+// 1バイトも書いていない。詳細が要るなら errors.As で [RecheckError] を取る。
+var ErrRecheck = errors.New("書く前に読み直して確かめると合わない")
+
+// RecheckError は、保存の直前にファイル全体を読み直したとき、編集モデルと同じに
+// 読めなかったことを表す（書く前の事後確認の後半。決まったことのそのほか 4）。
+//
+// 行を特定できるように、外れたところに最も近い、書き換えたレコードを指す。画面は
+// その行を保存できない行にして、送り直しを止める。ほかの行は送り直せば書ける。
+type RecheckError struct {
+	// ID は書き換えたレコードの ID（[Line.ID]）。
+	ID int
+	// Line はそのレコードの最初の物理行（1始まり）。
+	Line int
+	// Cause は理由（reason.EditRecheckFailed）。文面は Cause.Text。
+	Cause reason.Reason
+}
+
+func (e *RecheckError) Error() string {
+	return "保存しない: " + e.Cause.Text
+}
+
+// Unwrap は [ErrRecheck] を返す。
+func (e *RecheckError) Unwrap() error { return ErrRecheck }
+
 // NotEditableError はその行を編集できないことを表す。
 // 行が存在しない、データ行でない、編集できない行（列数がヘッダーと合わない、など）の
 // いずれか。

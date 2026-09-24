@@ -30,6 +30,10 @@ var saveRetryDelays = []time.Duration{10 * time.Millisecond, 30 * time.Milliseco
 //
 // 中身が保存先と完全に一致しているときは書かない。ファイルの更新時刻も変えない。
 //
+// 書き換えたレコードがあれば、書く前に、書こうとしているバイト列をファイル全体として
+// 読み直して確かめる（書く前の事後確認の後半。[File.verify]）。外れたら1バイトも
+// 書かずに [RecheckError] を返す（errors.Is(err, [ErrRecheck]) で判定できる）。
+//
 // 保存に成功すると版が更新され、[File.Dirty] は false に戻る。続けてもう一度
 // 呼んでよい。
 func (f *File) Save() error {
@@ -41,6 +45,11 @@ func (f *File) Save() error {
 	}
 
 	out := f.Bytes()
+	if len(f.touched) > 0 {
+		if err := f.verify(out); err != nil {
+			return err
+		}
+	}
 	for attempt := 0; ; attempt++ {
 		// 版の照合は試行のたびに行う。1回目の前だけで済ませてはいけない。
 		// 再試行が起きるのは「ほかのプロセスがこのファイルを掴んでいる」ときで、
@@ -60,6 +69,7 @@ func (f *File) Save() error {
 			// 中身が同じなら書かない。ファイルを見張っているゲームを
 			// 無駄に起こさないため。
 			f.dirty = false
+			f.saved()
 			return nil
 		}
 
@@ -75,5 +85,15 @@ func (f *File) Save() error {
 
 	f.version = hashBytes(out)
 	f.dirty = false
+	f.saved()
 	return nil
+}
+
+// saved は、いまの中身を保存したものとして覚える。書き換えた印を下ろし、どの行も
+// いまのバイト列を「読み込んだときのバイト列」にする（[File.verify] が比べる相手）。
+func (f *File) saved() {
+	for i := range f.touched {
+		f.lines[i].orig = f.lines[i].Text
+	}
+	f.touched = nil
 }
