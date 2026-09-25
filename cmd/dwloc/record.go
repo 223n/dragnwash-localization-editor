@@ -43,6 +43,10 @@ func (t *teeWriter) Write(p []byte) (int, error) {
 // 報告が空だったのか省いたのかが見分けられません。
 const unrecordedText = "dwloc: 原文や訳を含む %d 行は記録しません（画面には出しました）。\n"
 
+// unrecordedFileText は、diff --output のファイルへ書いた本文のうち、記録へ写さなかった
+// 行の数を残す1行です。本文は画面に出していないので、[unrecordedText] と書き分けます。
+const unrecordedFileText = "dwloc: 原文や訳を含む %d 行は記録しません（--output のファイルに書きました）。\n"
+
 // unrecorded は、原文や訳を含む出力を画面にだけ書く行き先です。
 //
 // 記録は不具合の報告に添えて手元の外へ出ます。README と Issue の雛形は、
@@ -66,6 +70,8 @@ type unrecorded struct {
 	pending []byte
 	// omitted は記録へ写さなかった行の数です。
 	omitted int
+	// omittedText は、写さなかった行の数を残す1行の書式です。空なら [unrecordedText] です。
+	omittedText string
 }
 
 // newUnrecorded は、w へ書くはずだった出力のうち、keep が選んだ行だけを記録へ写す
@@ -79,6 +85,16 @@ func newUnrecorded(w io.Writer, keep func(line []byte) bool) *unrecorded {
 		return &unrecorded{screen: t.screen, record: t.record, keep: keep}
 	}
 	return &unrecorded{screen: w}
+}
+
+// newUnrecordedTo は [newUnrecorded] と同じく、via が記録へも書く行き先なら、keep が
+// 選んだ行だけを記録へ写す行き先を返します。本文は画面ではなく dst へ書きます
+// （diff --output）。記録へ写さなかった行の数は [unrecordedFileText] で残します。
+func newUnrecordedTo(dst, via io.Writer, keep func(line []byte) bool) *unrecorded {
+	u := newUnrecorded(via, keep)
+	u.screen = dst
+	u.omittedText = unrecordedFileText
+	return u
 }
 
 // Write は画面へ全部書き、記録へは keep が選んだ行だけを写します。
@@ -135,7 +151,11 @@ func (u *unrecorded) Close() {
 		u.route(line)
 	}
 	if u.omitted > 0 {
-		fmt.Fprintf(u.record, unrecordedText, u.omitted)
+		text := unrecordedText
+		if u.omittedText != "" {
+			text = u.omittedText
+		}
+		fmt.Fprintf(u.record, text, u.omitted)
 		u.omitted = 0
 	}
 }

@@ -313,6 +313,7 @@ The options you will use most are these.
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
 | `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
+| `--output <file>` | `diff` | Writes the result to a file instead of standard output. Characters do not get garbled. `csv` gets a BOM |
 | `--strict` | `diff` | Returns exit code `1` even when there is only work to do. A locale with no translation at all counts as work to do too. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and of the messages `edit` prints in the black window |
@@ -328,6 +329,16 @@ Translations come from the published files, so a translation someone else added 
 Even without bad intent, a line of dialogue starting with `-` turns into `#NAME?` or the like.  
 When you do not want the `'` (when comparing against a machine), add `--raw-csv`.  
 The published files that `publish` writes and the exports from the screen do not get it, because they need the same bytes as the upstream tools.
+
+To keep the result of `diff` in a file, use `--output <file>`.  
+If you send it to a file with `>` in Windows PowerShell 5.1, which comes with Windows, the Japanese gets garbled.  
+The garbled characters swallow line breaks, so CSV rows run together as well.  
+`--output` writes the bytes as they are, so nothing is garbled.  
+With `--format csv` it adds a BOM so that spreadsheet software can tell the file is UTF-8. `text` does not get one.  
+`>` in PowerShell 7 and in the Command Prompt does not garble the text, but the CSV gets no BOM.  
+The path is relative to the current directory.  
+It does not create the folder to write into.  
+It cannot write inside `Translations` or `data` of the translation repository, or inside `Translations` of the game, so as not to overwrite files that `diff`, `publish` and `edit` read.
 
 ### What dwloc prints is in Japanese
 

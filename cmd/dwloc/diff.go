@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,7 +14,7 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--raw-csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--raw-csv] [--output <ファイル>] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
@@ -68,6 +70,17 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         --format csv の値に ' を付けず、そのまま書きます。機械と
         突き合わせるときに使います。表計算で開くと式として読まれる
         ことがあります。--format csv と一緒に使います。
+  --output <ファイル>
+        結果を標準出力の代わりにファイルへ書きます。バイト列をそのまま
+        書くので、リダイレクト（>）と違って文字が化けません。
+        Windows PowerShell 5.1 の > は日本語を化けさせ、化けた字が改行を
+        飲み込んで csv の行がつながります。ファイルに残すときはこちらを
+        使ってください。csv には BOM を付け（表計算ソフトが UTF-8 と
+        見分けられるように）、text には付けません。パスはカレント
+        ディレクトリからの相対です。書き出し先のフォルダーは作りません。
+        翻訳リポジトリの Translations と data、ゲームの Translations の
+        中には書けません（diff・publish・edit が読むファイルを上書き
+        しないためです）。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
@@ -148,6 +161,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	format := fs.String("format", diffFormatText, "出力の形式（text または csv）")
 	rawCSV := fs.Bool("raw-csv", false, "csv の値に ' を付けずにそのまま書く")
 	strict := fs.Bool("strict", false, "要作業があるときも終了コードを1にする")
+	output := fs.String("output", "", "結果を標準出力の代わりに書くファイル")
 	if code, ok := parseFlags(fs, args, diffUsage, stdout, stderr); !ok {
 		return code
 	}
@@ -174,6 +188,13 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	gamePath, ok := resolveGameAuto(*game, *noGame, false, stderr)
 	if !ok {
 		return exitError
+	}
+	if *output != "" {
+		// 読む前に確かめます。書き出し先が誤っていると分かっているのに、読んで
+		// 報告を組み立ててから止めると、止まった理由の前に警告が並びます。
+		if code := checkDiffOutput(*root, gamePath, *output, stderr); code != exitOK {
+			return code
+		}
 	}
 
 	repo, err := diff.LoadWith(*root, diff.Options{Working: !*noWorking, Game: gamePath})
@@ -250,28 +271,118 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 	// 報告の本文は原文と訳を含むので、記録（logs/dwloc_<日付>.log）へは写しません。
 	// csv は1行も写さず、text は見出しと件数と理由の行だけを写します（record.go）。
+	//
+	// --output のときは、本文を標準出力の代わりにファイルへ書きます（改善の決定 8）。
+	// いったん全部を組み立ててから書くので、途中で失敗しても半端なファイルは
+	// 残りません（publish.WriteBytes は一時ファイルから置き換えます）。
+	keep := diffHeadingLine
 	if *format == diffFormatCSV {
-		body := newUnrecorded(stdout, nil)
-		defer body.Close()
+		keep = nil
+	}
+	var file bytes.Buffer
+	var body *unrecorded
+	if *output != "" {
+		if *format == diffFormatCSV {
+			// 表計算ソフトが UTF-8 と見分けられるよう、csv には BOM を付けます。
+			// 付けないと、Excel はダブルクリックで開いたときに Shift_JIS として
+			// 読むことがあります。text は付けません（ほかの道具で読むときに、
+			// 1行目の頭に見えない3バイトが残らないように）。
+			file.WriteString(utf8BOMText)
+		}
+		body = newUnrecordedTo(&file, stdout, keep)
+	} else {
+		body = newUnrecorded(stdout, keep)
+	}
+	defer body.Close()
+	var werr error
+	if *format == diffFormatCSV {
 		write := report.WriteCSV
 		if *rawCSV {
 			write = report.WriteCSVRaw
 		}
-		if err := write(body); err != nil {
-			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
-			return exitError
-		}
+		werr = write(body)
 	} else {
-		body := newUnrecorded(stdout, diffHeadingLine)
-		defer body.Close()
-		opt := diff.TextOptions{Root: *root, All: *all, Limit: *limit}
-		if err := report.WriteText(body, opt); err != nil {
-			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
+		werr = report.WriteText(body, diff.TextOptions{Root: *root, All: *all, Limit: *limit})
+	}
+	if werr != nil {
+		fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", werr)
+		return exitError
+	}
+	if *output != "" {
+		if err := publish.WriteBytes(*output, file.Bytes()); err != nil {
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "結果を %s に書き出せません: %w", filepath.ToSlash(*output), err))
 			return exitError
 		}
+		fmt.Fprintf(stderr, "dwloc: 結果を %s に書きました。\n", filepath.ToSlash(*output))
 	}
 
 	return diffExitCode(report, *strict)
+}
+
+// utf8BOMText は UTF-8 の BOM です。diff --output が csv の頭に付けます。
+const utf8BOMText = "\xef\xbb\xbf"
+
+// checkDiffOutput は、diff --output の書き出し先を確かめます。書いてよければ exitOK です。
+//
+// 翻訳リポジトリの Translations と data、ゲームの Translations の中には書きません。
+// そこは diff・publish・edit が読む場所で、公開ファイルや作業コピーを報告で
+// 上書きすると訳を失います。まだ無い名前でも、書くと次の実行から公開ファイルや
+// 作業コピーとして読まれます（Translations/<新しい名前>/strings.csv なら新しい
+// ロケールになります）。フォルダーの照合はファイルの同一性（os.SameFile）で見るので、
+// 大文字小文字の違い、リンク、8.3 形式の短い名前で書いても当たります。
+//
+// 書き出し先のフォルダーが無いときも止めます。作ると、打ち間違えた名前の
+// フォルダーへ黙って書くことになります。
+func checkDiffOutput(root, game, out string, stderr io.Writer) int {
+	abs, err := filepath.Abs(out)
+	if err != nil {
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "--output のパスを解けません: %w", err))
+		return exitError
+	}
+	guarded := []string{
+		filepath.Join(root, publish.TranslationsDir),
+		filepath.Dir(publish.ScriptOrderPath(root)),
+	}
+	if game != "" {
+		guarded = append(guarded, filepath.Join(game, publish.TranslationsDir))
+	}
+	if within(abs, guarded) {
+		fmt.Fprintf(stderr,
+			"dwloc: --output には、diff が読むフォルダーの中を指定できません（翻訳リポジトリの Translations と data、ゲームの Translations）: %s\n",
+			filepath.ToSlash(out))
+		return exitError
+	}
+	if !isDir(filepath.Dir(abs)) {
+		fmt.Fprintf(stderr, "dwloc: --output の書き出し先のフォルダーがありません: %s\n", filepath.ToSlash(filepath.Dir(out)))
+		return exitError
+	}
+	return exitOK
+}
+
+// within は、path の親をたどったどれかが、dirs のどれかと同じフォルダーかを返します。
+// 無いフォルダーは比べません（path の親のうちまだ無いものと、dirs のうち無いもの）。
+func within(path string, dirs []string) bool {
+	var guards []os.FileInfo
+	for _, d := range dirs {
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			guards = append(guards, info)
+		}
+	}
+	for cur := filepath.Dir(path); len(guards) > 0; {
+		if info, err := os.Stat(cur); err == nil {
+			for _, g := range guards {
+				if os.SameFile(info, g) {
+					return true
+				}
+			}
+		}
+		next := filepath.Dir(cur)
+		if next == cur {
+			break
+		}
+		cur = next
+	}
+	return false
 }
 
 // diffExitCode は報告から終了コードを決めます。
