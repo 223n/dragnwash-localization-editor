@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -176,7 +175,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 	repo, err := diff.LoadWith(*root, diff.Options{Working: !*noWorking, Game: gamePath})
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: %s\n", diffErrorText(*root, err))
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorText(*root, err))
 		return exitError
 	}
 	if len(repo.EmptyLocales) > 0 {
@@ -326,19 +325,6 @@ func hasOrderKeys(repo *diff.Repo) bool {
 		}
 	}
 	return false
-}
-
-// diffErrorText は読み込みの失敗を、ルートからの相対パスで書き直します。
-//
-// internal/diff は表示の基準になるルートを知らないので、パスを持ったまま
-// エラーを返します（diff.FileError）。手元の絶対パスには利用者名が入ることが
-// あり、CIのログや不具合報告へ貼られるとそのまま漏れます。
-func diffErrorText(root string, err error) string {
-	var fileErr *diff.FileError
-	if errors.As(err, &fileErr) {
-		return fmt.Sprintf("%s: %v", displayPath(root, fileErr.Path), fileErr.Err)
-	}
-	return err.Error()
 }
 
 // warnUnclosed は、閉じない引用符で読めなかったファイルを、どの行で開いたかと

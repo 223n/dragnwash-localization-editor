@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/web"
@@ -176,7 +177,7 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	if *locale != "" {
 		targets, err := publish.DiscoverTargetsWithGame(*root, gamePath)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: Translations を読めません: %v\n", err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めません: %w", publish.TranslationsDir, err))
 			return exitError
 		}
 		found, err := selectLocales(targets, []string{*locale})
@@ -210,8 +211,24 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		HideFromRecord: hideFromRecord,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", editErrorText(*root, *uiLang, err))
 		return exitError
 	}
 	return exitOK
+}
+
+// editErrorText は、待ち受けを始められなかった誤りを文にします。
+//
+// パスは、ほかのサブコマンドと同じくルートからの相対にします（[errorText]）。
+// OS の理由を日本語に言い換えるのは、黒い窓の文が日本語のとき（--ui-lang を省いたか
+// ja を指定したとき）だけです。待ち受けの側（internal/web）の誤りの文は --ui-lang の
+// 言語に従うので、英語を選んだ人には OS の文のまま出します。--ui-lang の値は、
+// ここへ来る前に web.CheckUILang が ja か en（大文字小文字と地域の付いた形を含む）に
+// 絞っています。
+func editErrorText(root, uiLang string, err error) string {
+	lang := strings.ToLower(strings.TrimSpace(uiLang))
+	if lang == "" || lang == "ja" || strings.HasPrefix(lang, "ja-") {
+		return errorText(root, err)
+	}
+	return errorTextKeepingReason(root, err)
 }

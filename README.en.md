@@ -356,6 +356,16 @@ The table below gives English translations of the first lines you are most likel
 | `dwloc: 記録を残せません（…）。このまま続けます。` | It cannot keep a log (…). It carries on without one. | [Logs](#logs) |
 | `操作がないまま 30m0s たちました。待ち受けを終えます。` | No activity for 30m0s. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
 
+When a file cannot be read or written, the line ends with the path and one of these reasons.  
+Other reasons are the English text from the OS.
+
+| Reason it prints | In English |
+| ---- | ---- |
+| `見つかりません` | Not found |
+| `権限がありません` | No permission |
+| `フォルダーではありません` | Not a folder |
+| `フォルダーです（ファイルを指定してください）` | It is a folder (give a file) |
+
 The exit code tells you the same thing without reading the text.  
 `0` means it succeeded.  
 `1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, or `publish` stopped without writing).  
@@ -1396,6 +1406,12 @@ When you report something that did not work, please attach that day's file.
 In the log, your home folder path (`C:\Users\<name>` or `/home/<name>`) is replaced with `~`.  
 This is because the path contains your user name.  
 The screen shows it as it is.
+
+When a file cannot be read or written, the error names a path inside the translation repository relative to `--root`.  
+Common reasons from the OS (not found, no permission, pointed at a folder, and so on) are given in Japanese.  
+For example, a mistyped `--root` stops with `dwloc: Translations を読めません: 見つかりません` ("cannot read Translations: not found").  
+A path outside the translation repository (the game folder, for instance) is shown as it is.  
+With `--ui-lang en`, `edit` leaves the reason from the OS in English.
 
 The list and CSV from `diff`, and the translation heads and mismatch samples that `publish` shows, are printed on screen only.  
 The log keeps only the counts, keys, line numbers, reasons and headings, plus how many lines were left out.  

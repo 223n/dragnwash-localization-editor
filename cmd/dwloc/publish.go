@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -459,15 +458,8 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 再生順は全ロケールで共通なので1回だけ読む。
 	data, err := publish.LoadOrder(*root)
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: 再生順のデータを読めません: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "再生順のデータを読めません: %w", err))
 		return exitError
-	}
-	if len(data.Entries) == 0 {
-		// 再生順が空でも生成はできるが、見出しが全て消えて全行が UI 見出しの下へ
-		// 回るため、差分が全面的になる。黙って進めると事故になるので必ず伝える。
-		fmt.Fprintf(stderr,
-			"dwloc: 警告: %s に再生順の行がありません。見出しは出ず、すべての行が UI の下に並びます。\n",
-			displayPath(*root, data.Source))
 	}
 
 	var targets []publish.Target
@@ -480,7 +472,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	} else {
 		found, err := publish.DiscoverTargetsWithGame(*root, gamePath)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: Translations を読めません: %v\n", err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めません: %w", publish.TranslationsDir, err))
 			return exitError
 		}
 		found, err = selectLocales(found, locales)
@@ -513,11 +505,23 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	for i, t := range targets {
 		f, err := publish.ReadFiles(t)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
-				displayPath(*root, shapeErrorPath(err, t.Output)), shapeErrorCause(err))
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めないので、訳が失われないことを確かめられません: %w",
+				displayPath(*root, shapeErrorPath(err, t.Output)), err))
 			return exitError
 		}
 		files[i] = f
+	}
+
+	if len(data.Entries) == 0 {
+		// 再生順が空でも生成はできるが、見出しが全て消えて全行が UI 見出しの下へ
+		// 回るため、差分が全面的になる。黙って進めると事故になるので必ず伝える。
+		//
+		// 対象を決めて読んだあとで出します。Translations を読めないとき（--root の
+		// 打ち間違いなど）は再生順も無いので、先に出すと、止まった本当の理由の前に
+		// 的外れな警告が並びます。
+		fmt.Fprintf(stderr,
+			"dwloc: 警告: %s に再生順の行がありません。見出しは出ず、すべての行が UI の下に並びます。\n",
+			displayPath(*root, data.Source))
 	}
 
 	// 入力・いまの公開ファイル・ゲーム側の公開ファイルが、読むと訳や原文を取り違える
@@ -545,7 +549,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	for i, t := range targets {
 		out, st, err := publish.Build(data, files[i].Input, files[i].Output)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を変換できません: %v\n", displayPath(*root, t.Input), err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を変換できません: %w", displayPath(*root, t.Input), err))
 			return exitError
 		}
 		built[i], stats[i] = out, st
@@ -604,7 +608,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	beforePublishWrite()
 	unlock, err := lockTargets(targets)
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: 入力と書き出し先の錠を取れないので、1バイトも書きませんでした: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "入力と書き出し先の錠を取れないので、1バイトも書きませんでした: %w", err))
 		return exitError
 	}
 	defer unlock()
@@ -615,7 +619,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	for i, t := range targets {
 		out := displayPath(*root, t.Output)
 		if err := publish.WriteBytes(t.Output, built[i]); err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を書き出せません: %v\n", out, err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を書き出せません: %w", out, err))
 			return exitError
 		}
 		// 元実装の Write-Host と同じ1行。数値の並びも同じなので、
@@ -929,12 +933,8 @@ func reportShape(root string, targets []publish.Target, files []publish.Files, a
 func reportOrderShape(root string, stderr io.Writer) int {
 	hazards, err := publish.CheckOrderShape(root)
 	if err != nil {
-		path := root
-		var shapeErr *publish.ShapeError
-		if errors.As(err, &shapeErr) {
-			path, err = shapeErr.Path, shapeErr.Err
-		}
-		fmt.Fprintf(stderr, "dwloc: 再生順のデータを読めません: %s: %v\n", displayPath(root, path), err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "再生順のデータを読めません: %s: %w",
+			displayPath(root, shapeErrorPath(err, root)), err))
 		return exitError
 	}
 	if len(hazards) == 0 {
@@ -1023,9 +1023,9 @@ func reportBaseDrift(root string, targets []publish.Target, files []publish.File
 		}
 		res, err := publish.CheckBaseBytes(t.Locale, files[i].Output, files[i].GameBase)
 		if err != nil {
-			fmt.Fprintf(stderr,
-				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
-				t.GameBase, err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root,
+				"%s を読めないので、ゲーム側とそろっているか確かめられません: %w",
+				displayPath(root, t.GameBase), err))
 			return exitError
 		}
 		if res.Count > 0 {
@@ -1071,7 +1071,7 @@ func reportSourceLineEnds(root string, targets []publish.Target, files []publish
 	for i, t := range targets {
 		hints, err := publish.SourceLineEndHintsIn(files[i].Input)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を読めません: %v\n", displayPath(root, t.Input), err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "%s を読めません: %w", displayPath(root, t.Input), err))
 			return exitError
 		}
 		if len(hints) == 0 {
@@ -1117,9 +1117,9 @@ func reportLosses(root string, targets []publish.Target, files []publish.Files, 
 		if err != nil {
 			// いまの公開ファイルを解釈できない。失われないことを確かめられていないので、
 			// 書かずに終わります。
-			fmt.Fprintf(stderr,
-				"dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
-				displayPath(root, t.Output), err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root,
+				"%s を読めないので、訳が失われないことを確かめられません: %w",
+				displayPath(root, t.Output), err))
 			return exitError
 		}
 		found[i] = losses

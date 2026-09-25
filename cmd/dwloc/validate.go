@@ -76,7 +76,9 @@ func runValidate(args []string, defaultRoot string, stdout, stderr io.Writer) in
 	if err != nil {
 		// ここに来るのは「検査できなかった」場合だけ。中身の問題は err ではなく
 		// problems として返るので、区別して終了コード2にする。
-		fmt.Fprintf(stderr, "dwloc: 検証できません: %v\n", err)
+		// 誤りの中のパス（*fs.PathError）は、internal/validate が前置きを相対にしても
+		// 渡されたままの絶対パスを持っているので、ここで言い換える（errorText）。
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "検証できません: %w", err))
 		return exitError
 	}
 
