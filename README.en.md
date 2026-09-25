@@ -1212,11 +1212,14 @@ After a restart the `URL` changes, and the old tab can no longer send them.
 On the new screen, typing the key into the search box brings up the row.
 
 Rows with an unsaved translation, rows that could not be saved, and the row whose input box is currently open are not hidden even when they do not match the conditions.  
+Nor is the row you closed with `Escape` while the focus stays on its translation column.  
 Hiding them would make the row you need to fix, and the row you are touching, vanish from the screen.
 
 When you close the input box, the row is hidden there and then if it does not match the conditions.  
 It is not hidden while you work down the rows with `Enter`.  
-At the moment you close it, it is still unsaved, so it stays as a "row with an unsaved translation".
+At the moment you close it, it is still unsaved, so it stays as a "row with an unsaved translation".  
+When you close it with `Escape`, the row is hidden once the focus leaves its translation column.  
+Hiding the column the focus stays on would leave the focus nowhere to go, and `Enter` could no longer open the row again.
 
 For the filter conditions built from the counts at startup, each carries how many rows of that condition are in the list currently shown.  
 If "dialogue rows not in the script" says 17, then 17 rows in this list carry that badge.  
