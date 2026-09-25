@@ -211,6 +211,16 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			blame: 2,
 		},
 		{
+			// 触っていない後ろの行の行番号だけがモデルでずれる形。バイト列と値は同じ。
+			// 訳の改行で行番号をずらすとき（File.shift）の誤りを、書く前に見つける。
+			name: "モデルの行番号だけがずれる",
+			breakModel: func(f *File) {
+				f.lines[3].Number++
+				f.lines[3].EndNumber++
+			},
+			blame: 2,
+		},
+		{
 			// 触っていない行の種類だけがモデルで変わる形。バイト列は同じ。
 			name: "種類だけが違う",
 			breakModel: func(f *File) {

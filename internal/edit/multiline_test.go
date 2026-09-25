@@ -121,6 +121,24 @@ func TestParseMultilineRecords(t *testing.T) {
 	}
 }
 
+// TestLineBreaks は、改行を "\r\n" / "\n" / "\r" のどれも1つと数えることを見る
+// （csvfile.SplitSegments の物理行の区切りと同じ）。
+func TestLineBreaks(t *testing.T) {
+	for s, want := range map[string]int{
+		"":           0,
+		"a":          0,
+		"a\nb":       1,
+		"a\r\nb":     1,
+		"a\rb":       1,
+		"\r\r\n\n\r": 4,
+		"a,\"b\r\n":  1,
+	} {
+		if got := lineBreaks(s); got != want {
+			t.Errorf("lineBreaks(%q) = %d、%d を期待", s, got, want)
+		}
+	}
+}
+
 // lineNumbers は、ID ごとの最初と最後の物理行を並べる。
 func lineNumbers(f *File) [][3]int {
 	var out [][3]int
