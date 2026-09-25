@@ -243,6 +243,48 @@ func TestRunDiffOutputRefusesALocaleLinkedFromElsewhere(t *testing.T) {
 	}
 }
 
+// TestWithin は、within が守りのフォルダーの中かどうかを、フォルダーの同一性で
+// 見分けることを見る。無い守りのフォルダーは飛ばし、守りのフォルダーそのものが
+// リンクでも、たどった先の中を守る。
+func TestWithin(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real-translations")
+	if err := os.MkdirAll(filepath.Join(real, "ja"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(base, "missing")
+	tests := []struct {
+		name string
+		path string
+		dirs []string
+		want bool
+	}{
+		{"中", filepath.Join(real, "ja", "report.csv"), []string{missing, real}, true},
+		{"外", filepath.Join(base, "report.csv"), []string{missing, real}, false},
+		{"守りが無い", filepath.Join(real, "ja", "report.csv"), []string{missing}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := within(tt.path, tt.dirs); got != tt.want {
+				t.Errorf("within(%s) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("守りのフォルダーがリンク", func(t *testing.T) {
+		// 守りのフォルダー（Translations）がリンクで、書き出し先は、その中の ja を
+		// 指す別のリンクの下にある。守りのリンクをたどって中まで集めないと、
+		// 書き出し先の親（ja）がどの守りとも同じにならない。
+		guard := filepath.Join(base, "Translations")
+		linkDir(t, real, guard)
+		other := filepath.Join(base, "jja")
+		linkDir(t, filepath.Join(real, "ja"), other)
+		if !within(filepath.Join(other, "report.csv"), []string{guard}) {
+			t.Error("リンクで置いた守りのフォルダーの中を、別のリンクから指したのに通った")
+		}
+	})
+}
+
 // TestRunDiffOutputRefusesAHardLink は、ほかの名前（ハードリンク）があるファイルへ
 // 書かないことを見る。
 //
