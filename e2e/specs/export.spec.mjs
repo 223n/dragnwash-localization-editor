@@ -547,7 +547,7 @@ test.describe("未保存の訳があるとき", () => {
     expect((await pickerLog(page)).calls).toHaveLength(0);
 
     // 訳は画面に残り、保存できていないことも出たまま。ファイルは1バイトも変わらない。
-    await expect(page.locator(`#list .cell.translation[data-line="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
+    await expect(page.locator(`#list .cell.translation[data-id="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
@@ -619,7 +619,7 @@ test.describe("未保存の訳があるとき", () => {
     expect(exportsOf(seen)).toHaveLength(0);
     expect((await pickerLog(page)).calls).toHaveLength(0);
     // 訳は画面に残り、ファイルは1バイトも変わっていない。
-    await expect(page.locator(`#list .cell.translation[data-line="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
+    await expect(page.locator(`#list .cell.translation[data-id="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
 
     // 元の訳（空）へ戻すと、保存できない行ではなくなる。そうすれば書き出せる。

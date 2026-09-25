@@ -489,7 +489,7 @@ test("打つたびに自動保存の時計を引き直し、止まってから 1
 
   await page.clock.runFor(1);
   await expect.poll(() => saves.length).toBe(1);
-  expect(saves[0].edits).toEqual([{ line: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "Bye" }]);
+  expect(saves[0].edits).toEqual([{ id: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "Bye" }]);
   await expect.poll(() => lineOnDisk(server, SAMPLE_LINES.goodbye)).toBe(`${dataText(ROW.goodbye, "Bye")}\n`);
   await waitForSaved(page);
   // 送ったあとに時計を進めても、同じ訳をもう一度は送らない。
@@ -848,7 +848,7 @@ test("保存の要求は行番号にキーと読んだときの版を添えて�
   expect(sent.postDataJSON()).toEqual({
     locale: "ja",
     baseVersion: v1,
-    edits: [{ line: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "さようなら。" }],
+    edits: [{ id: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "さようなら。" }],
   });
   await waitForSaved(app);
 
@@ -859,7 +859,7 @@ test("保存の要求は行番号にキーと読んだときの版を添えて�
   await waitForSaved(app);
   expect(saves[1].baseVersion).toBe(v2);
   expect(saves[1].edits).toEqual([
-    { line: SAMPLE_LINES.hello, key: keyFor(SAMPLE.hello.source), translation: "もしもし。" },
+    { id: SAMPLE_LINES.hello, key: keyFor(SAMPLE.hello.source), translation: "もしもし。" },
   ]);
 });
 
@@ -874,7 +874,7 @@ test("保存の応答が値を変えたと言ったら、その値を行に出�
     const response = await route.fetch();
     const body = await response.json();
     for (const r of body.results) {
-      if (r.line === SAMPLE_LINES.goodbye) {
+      if (r.id === SAMPLE_LINES.goodbye) {
         r.translation = shown;
         r.warning = warning;
       }
@@ -988,7 +988,7 @@ test.describe("キーの欄が空の行がある作業コピー", () => {
     await expect.poll(() => lineOnDisk(server, 6)).toBe(line);
     await waitForSaved(app);
     expect(saves).toHaveLength(1);
-    expect(saves[0].edits).toEqual([{ line: 6, key: "", translation: typed }]);
+    expect(saves[0].edits).toEqual([{ id: 6, key: "", translation: typed }]);
     await expect(rowByLine(app, 6)).not.toHaveClass(/(^|\s)save-failed(\s|$)/);
     await expect(translationCell(app, 6)).toHaveText(typed);
     expectOnlyLines(before, await server.readRoot(workingRel), { 6: line });

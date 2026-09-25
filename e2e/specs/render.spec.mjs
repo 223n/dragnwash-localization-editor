@@ -280,7 +280,7 @@ test("列数がヘッダーと合わない行は、生の行を読めるまま�
   // 生の行は左から右に固定する。列がずれているので、訳の向きで読ませない。
   await expect(raw).toHaveAttribute("dir", "ltr");
   // 焦点を受けない。Tab の行き先にもクリックの的にもならない。
-  await expect(row.locator("[data-line]")).toHaveCount(0);
+  await expect(row.locator(".cell.translation[data-id]")).toHaveCount(0);
   await expect(row.locator("[tabindex]")).toHaveCount(0);
   await expect(row.locator(".cell.translation")).toHaveCount(0);
 

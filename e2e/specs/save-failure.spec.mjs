@@ -177,12 +177,12 @@ async function expectNoNewPost(page, posts, count) {
   expect(posts).toHaveLength(count);
 }
 
-// misplace は本文の中の line 行のキーを別のものに書き換える。待ち受けは
-// 「同じ行番号にいま別のキーの行がある」と見て、その行を書かずに断る（error.row_moved）。
+// misplace は本文の中の ID が line の行のキーを別のものに書き換える。待ち受けは
+// 「同じ位置にいま別のキーの行がある」と見て、その行を書かずに断る（error.row_moved）。
 function misplace(route, line) {
   const body = route.request().postDataJSON();
   for (const edit of body.edits) {
-    if (edit.line === line) {
+    if (edit.id === line) {
       edit.key = keyFor("この行はここに無い");
     }
   }
@@ -278,7 +278,7 @@ test.describe("要求そのものが落ちたとき", () => {
     await expect.poll(async () => (await server.readRoot(workingRel)).equals(before), { timeout: 10_000 }).toBe(false);
     await waitForSaved(page);
     expect(posts).toHaveLength(2);
-    expect(posts[1].edits).toEqual([expect.objectContaining({ line: n, translation: typed })]);
+    expect(posts[1].edits).toEqual([expect.objectContaining({ id: n, translation: typed })]);
     expectOnlyChanged(before, await server.readRoot(workingRel), {
       [n]: withTranslation(splitLines(before)[n - 1], typed),
     });
@@ -320,7 +320,7 @@ test.describe("要求そのものが落ちたとき", () => {
       // 送り直しの時計がまだ無い。
       await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
       // 送り直すのは抱えている訳そのもの。
-      expect(posts.at(-1).edits).toEqual([expect.objectContaining({ line: n, translation: typed })]);
+      expect(posts.at(-1).edits).toEqual([expect.objectContaining({ id: n, translation: typed })]);
     }
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
 
@@ -358,7 +358,7 @@ test.describe("要求そのものが落ちたとき", () => {
     await typeTranslation(page, n, "さようなら。");
     await closeEditor(page);
     await expect.poll(() => posts.length).toBe(4);
-    expect(posts[3].edits).toEqual([expect.objectContaining({ line: n, translation: "さようなら。" })]);
+    expect(posts[3].edits).toEqual([expect.objectContaining({ id: n, translation: "さようなら。" })]);
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
 
     // 次の送り直しは最初の間隔で来る。
@@ -385,7 +385,7 @@ test.describe("要求そのものが落ちたとき", () => {
         contentType: "application/json",
         body: JSON.stringify({
           message: msg("ja", "error.save_failed"),
-          results: [{ line: n, saved: true, translation: typed, badges: [] }],
+          results: [{ id: n, n, saved: true, translation: typed, badges: [] }],
         }),
       });
     });
@@ -440,7 +440,7 @@ test.describe("要求そのものが落ちたとき", () => {
     // 最初の送り直しで、2行とも送る。
     await page.clock.runFor(retryDelays[0]);
     await expect.poll(() => posts.length).toBe(2);
-    expect(posts[1].edits.map((edit) => edit.line)).toEqual([goodbye, wonderful]);
+    expect(posts[1].edits.map((edit) => edit.id)).toEqual([goodbye, wonderful]);
     await waitForSaved(page);
     const was = splitLines(before);
     expectOnlyChanged(before, await server.readRoot(workingRel), {
@@ -766,7 +766,7 @@ test.describe("要求そのものが落ちたとき", () => {
     await page.clock.runFor(autosaveDelay);
     await expect.poll(() => posts.length).toBe(2);
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
-    expect(posts[1].edits).toEqual([expect.objectContaining({ line: n, translation: "さようなら。" })]);
+    expect(posts[1].edits).toEqual([expect.objectContaining({ id: n, translation: "さようなら。" })]);
     await expect(rowByLine(page, n)).toHaveClass(UNSAVED);
     await expect(translationCell(page, n)).toHaveText("さようなら。");
   });
@@ -822,7 +822,7 @@ test.describe("行ごとに断られたとき", () => {
     await typeTranslation(app, other, "すごい！");
     await closeEditor(app);
     await expect.poll(() => posts.length).toBe(2);
-    expect(posts[1].edits.map((edit) => edit.line)).toEqual([other]);
+    expect(posts[1].edits.map((edit) => edit.id)).toEqual([other]);
     await expect(rowByLine(app, other)).not.toHaveClass(UNSAVED);
     expectOnlyChanged(before, await server.readRoot(workingRel), {
       [other]: withTranslation(splitLines(before)[other - 1], "すごい！"),
@@ -859,7 +859,7 @@ test.describe("行ごとに断られたとき", () => {
     await typeTranslation(page, goodbye, "さようなら。");
     await closeEditor(page);
     await expect.poll(() => posts.length).toBe(2);
-    expect(posts[1].edits.map((edit) => edit.line)).toEqual([hello, goodbye]);
+    expect(posts[1].edits.map((edit) => edit.id)).toEqual([hello, goodbye]);
 
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_failed"));
     await expect(rowByLine(page, hello)).not.toHaveClass(UNSAVED);

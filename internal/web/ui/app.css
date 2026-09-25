@@ -1077,6 +1077,22 @@ button {
   padding-top: 0.25em;
 }
 
+/*
+  行番号は最初の物理行を主にし、行をまたぐレコードだけ、下に小さく最後の物理行
+  （「〜M」）を添える（app.js の rowNode）。1行に並べると 6ch の欄に収まらず、
+  「1865〜」と「1867」のように割れて読みにくい。2段に分けておけば、割れても
+  どちらが始まりかが分かる。
+*/
+.num-start,
+.num-end {
+  display: block;
+}
+
+.num-end {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 .speaker {
   color: var(--muted);
   font-weight: 600;
@@ -1084,10 +1100,18 @@ button {
   padding-top: 0.15em;
 }
 
-/* 原文は常に英語なので左から右に固定する（app.js が dir を入れる）。 */
+/*
+  原文は常に英語なので左から右に固定する（app.js が dir を入れる）。
+
+  空白と改行は詰めずに出す（pre-wrap）。原文には段落の間の空行を含む値がある
+  （引用符で囲んだ値の中の改行）。既定の white-space: normal のままだと、
+  段落を2つ持つ原文が1段に詰めて描かれ、間の空行も消える（Chromium で
+  確かめた）。訳の欄（.row .translation）と同じ折り返しになる。
+*/
 .source {
   color: var(--muted);
   padding-top: 0.15em;
+  white-space: pre-wrap;
 }
 
 .badges {

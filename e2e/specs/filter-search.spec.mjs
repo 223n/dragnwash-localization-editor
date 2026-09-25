@@ -247,16 +247,16 @@ async function openPaused(page, server) {
   await page.clock.pauseAt(now + 1000);
 }
 
-// tamperKey は、行 line の保存の要求だけキーを書き換えて待ち受けへ流す。
+// tamperKey は、ID が line の行の保存の要求だけキーを書き換えて待ち受けへ流す。
 //
-// 待ち受けは行番号とキーが食い違う行を書かずに断る（error.row_moved）。1行も書けないので
+// 待ち受けは ID とキーが食い違う行を書かずに断る（error.row_moved）。1行も書けないので
 // 422 が返り、画面はその行を「保存できなかった行」にする。応答は待ち受けが作ったもので、
 // 試験がこしらえた本文ではない。
 function tamperKey(line) {
   return async (route) => {
     const body = route.request().postDataJSON();
     for (const edit of body.edits) {
-      if (edit.line === line) {
+      if (edit.id === line) {
         edit.key = "0000000000000000";
       }
     }

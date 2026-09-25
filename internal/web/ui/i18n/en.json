@@ -107,6 +107,7 @@
     "ui.sidebar_close": "Close",
     "ui.finder_title": "Filter and search",
     "ui.col_line": "Line",
+    "ui.line_end": "–{line}",
     "ui.col_speaker": "Speaker",
     "ui.col_source": "Source",
 

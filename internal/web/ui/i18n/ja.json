@@ -107,6 +107,7 @@
     "ui.sidebar_close": "閉じる",
     "ui.finder_title": "絞り込みと検索",
     "ui.col_line": "行",
+    "ui.line_end": "〜{line}",
     "ui.col_speaker": "speaker",
     "ui.col_source": "原文",
 
