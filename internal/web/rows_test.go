@@ -730,7 +730,7 @@ func TestReadOnlyFileCannotBeSaved(t *testing.T) {
 }
 
 // TestMultilineRecordIsOneRow は、複数の物理行にまたがるレコードを1行として並べ、
-// 訳が1行に収まるかぎり書けることを見る。
+// 訳を書けることを見る（訳の改行も書ける。PR4）。
 //
 // PR2 までは保存が物理行の単位だったので、行をまたぐレコードのどの物理行も編集
 // させていなかった（TestMultilineRecordIsReadOnly）。いまはレコードの最終フィールドを
