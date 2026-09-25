@@ -723,6 +723,64 @@ func TestSaveAgainOnTheSameFile(t *testing.T) {
 	}
 }
 
+// TestSaveAgainAfterLineBreaks は、同じ File で、訳に改行を足して保存したあと、後ろの
+// レコードを書いて保存し、さらに改行を減らして保存できることを見る（Save の「続けてもう
+// 一度呼んでよい」）。
+//
+// 書く直前の確かめは、触っていないレコードが「読み込んだとき（または最後に保存したとき）」の
+// 物理行の数を占めるとして、行番号を見積もる（[File.numbers] の origSpan）。保存のあとに
+// その数を覚え直さないと、2回目の保存で、1回目に改行を足したレコードを1物理行と見積もり、
+// 後ろのレコードの行番号が1つ合わず、RecheckError で1バイトも書けなくなる（検証の指摘。
+// 画面の待ち受けは要求のたびにファイルを開き直すので表には出ない）。
+func TestSaveAgainAfterLineBreaks(t *testing.T) {
+	path := writeTemp(t, recheckWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := key.For("one") + ",UI,,,UI,one,"
+	three := key.For("three") + ",UI,,,UI,three,"
+	steps := []struct {
+		name  string
+		id    int
+		value string
+		// from と to は、その保存でファイルの中で置き換わるもの。
+		from, to string
+		// numbers は、保存のあとの ID ごとの最初と最後の物理行。
+		numbers [][3]int
+	}{
+		{"ID 2 に改行を足す", 2, "い\nち", one + "いち\r\n", one + "\"い\nち\"\r\n",
+			[][3]int{{1, 1, 1}, {2, 2, 3}, {3, 4, 5}, {4, 6, 6}}},
+		{"後ろの ID 4 を書く", 4, "さん。", three + "さん\r\n", three + "さん。\r\n",
+			[][3]int{{1, 1, 1}, {2, 2, 3}, {3, 4, 5}, {4, 6, 6}}},
+		{"ID 2 の改行を減らす", 2, "いち。", one + "\"い\nち\"\r\n", one + "いち。\r\n",
+			[][3]int{{1, 1, 1}, {2, 2, 2}, {3, 3, 4}, {4, 5, 5}}},
+	}
+	want := recheckWorking
+	for _, step := range steps {
+		if err := f.SetTranslation(step.id, step.value); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if err := f.Save(); err != nil {
+			t.Fatalf("%s: 保存に失敗した: %v", step.name, err)
+		}
+		want = strings.Replace(want, step.from, step.to, 1)
+		if got := readFile(t, path); got != want {
+			t.Fatalf("%s: 保存した中身 = %q、%q を期待", step.name, got, want)
+		}
+		again, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := lineNumbers(f); !slices.Equal(got, step.numbers) || !slices.Equal(lineNumbers(again), step.numbers) {
+			t.Errorf("%s: 行番号 = %v、読み直すと %v、%v を期待", step.name, got, lineNumbers(again), step.numbers)
+		}
+		if f.PhysicalLines() != again.PhysicalLines() {
+			t.Errorf("%s: 物理行の数 = %d、読み直すと %d", step.name, f.PhysicalLines(), again.PhysicalLines())
+		}
+	}
+}
+
 // TestSaveKeepsIDsAcrossSaves は、保存の前後で ID が変わらないことを、実物と同じ形の
 // 作業コピーで見る。書いたあとに読み直しても、どの ID も同じレコード（同じ行番号の
 // 範囲）を指す。
