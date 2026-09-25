@@ -78,6 +78,7 @@ func TestPublishStopsWhenTheInputCannotBeReadAgain(t *testing.T) {
 // あいだ、publish が入力を読み直さずに待ち、放されたら書くことを見る。
 //
 // 錠を持つのは publish.LockFile を呼んだこの試験で、画面の保存の代わりである。
+// 読み直しが錠の中にあることは TestPublishRereadsTheInputInsideTheLock が見る。
 func TestPublishWaitsForTheInputLock(t *testing.T) {
 	root := publishTree(t, "ja")
 	path := filepath.Join(root, "Translations", "ja", "strings.csv")
@@ -110,6 +111,54 @@ func TestPublishWaitsForTheInputLock(t *testing.T) {
 		t.Fatalf("放したあとの終了コード = %d\nstdout:\n%s\nstderr:\n%s", r.code, r.stdout, r.stderr)
 	}
 	checkContains(t, "stdout", r.stdout, []string{"1 件を書き出しました。"})
+}
+
+// TestPublishRereadsTheInputInsideTheLock は、書く直前の入力の読み直しを錠の中で
+// 行うことを見る。
+//
+// 試験が入力の錠を持っているあいだに入力を書き換えてから放す。錠を持つ画面の保存
+// （dwloc edit）が訳を書いた場面である。読み直しが錠を取る前にあると、書き換える前の
+// 中身と比べて通り、錠を待ったあとで、画面が保存した訳を消して書く。錠の中で読み
+// 直せば、書き換えたあとの中身と比べるので、1バイトも書かずに止まる。
+func TestPublishRereadsTheInputInsideTheLock(t *testing.T) {
+	root := publishTree(t, "ja")
+	path := filepath.Join(root, "Translations", "ja", "strings.csv")
+	unlock, err := publish.LockFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		code           int
+		stdout, stderr string
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, stdout, stderr := runCLI("publish", "--root", root)
+		done <- result{code, stdout, stderr}
+	}()
+	select {
+	case r := <-done:
+		unlock()
+		t.Fatalf("錠を持っているあいだに publish が終わった: %d\n%s", r.code, r.stderr)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// 錠を持つ側（画面の保存）が、訳を1行足す。
+	edited := workingCSV + ",Bye,さよなら\n"
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+
+	r := <-done
+	if r.code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", r.code, exitProblems, r.stdout, r.stderr)
+	}
+	checkContains(t, "stderr", r.stderr, []string{publishInputChangedText})
+	if got := readFile(t, root, "Translations/ja/strings.csv"); got != edited {
+		t.Errorf("画面が保存した訳を消した:\n%s", got)
+	}
 }
 
 // TestPublishLocksTheSameInputOnce は、--path に同じファイルを2度渡しても、錠を
