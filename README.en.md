@@ -1030,7 +1030,7 @@ The controls on the screen are as follows.
 | Left column | The button at the top (the three lines) folds the filter and explanation column away and brings it back. On a narrow screen it becomes a drawer |
 | Clear conditions | Clears the filter and the search together |
 | `Enter` | Commits the translation and opens the input box on the next (currently listed) row. On the last listed row it stays there without closing |
-| `Shift+Enter` | Puts a line break into the translation. It does not move to another row. It adds nothing right after you commit a composition |
+| `Shift+Enter` | Puts a line break into the translation. It does not move to another row. It adds nothing right after you commit a composition. With `Ctrl` or `Alt` held as well, it adds no line break and moves to the next row like `Enter` |
 | `Escape` | Closes the input box and stays on that row's translation column. What you typed is kept. Press `Enter` there to open it again |
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
