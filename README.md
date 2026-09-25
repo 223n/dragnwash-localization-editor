@@ -1513,6 +1513,7 @@ Goの標準ライブラリの既知の脆弱性は、`govulncheck`で調べま�
 | ブランチ名         | `release/`と`hotfix/`は公開のワークフローが拾います。`merge/`は「リリース」ラベルが付き、そのPull Requestはリリースノートから外れます                         | 作業ブランチには`feature/`を使います                                       |
 | Pull Requestのhead | `main`や`develop`をheadにすると、「PRのheadブランチを確かめる」が失敗します。フォークからのPull Requestは、このリポジトリのブランチが消えないので落としません | リリースはワークフローに任せます。詳しくは[CLAUDE.md](CLAUDE.md)にあります |
 | マージの方法       | squashやrebaseだと、リリースノートにPull Requestが載らず、次の版で衝突します                                                                                  | マージコミット（Create a merge commit）でマージします                      |
+| 承認待ちの実行     | ワークフローが開いたPull Requestでは、CIなどの実行は承認待ちで作られます。承認せずにマージすると、期限切れの失敗としてActionsに残ります                       | `Approve workflows to run`を押し、CIが通ってからマージします               |
 | 改行コード         | `.gitattributes`が全ファイルをLFに固定します                                                                                                                  | CRLFのファイルを持ち込むと、最初のコミットで全行が差分になります           |
 
 ## ブランチとリリース
@@ -1530,9 +1531,17 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 1. `version`にリリースする版を入れます。  
    `v`は付けません（例: `1.2.0`、`1.2.0-rc.1`）
 1. `auto_merge`を有効にすると、Pull Requestの確認を挟まずにマージし、公開まで一気に進みます。  
-   ただし`main`に必須のチェックや承認のルールがあると、マージで止まります。  
-   ワークフローが開いたPull RequestのCIは「承認待ち」のまま動かず、必須チェックを満たせないためです。  
-   止まったときは、人がPull Requestをマージすれば公開まで進みます
+   人がCIを承認しない代わりに、ワークフローが`release/vX.Y.Z`ブランチでCI（`ci.yml`）を動かし、通るのを最大30分待ちます。  
+   通ったら、Pull Requestの承認待ちの実行を取り消してからマージします。  
+   ただし`main`に必須のチェックや承認のルールがあると、マージの前で止まることがあります。  
+   Pull Requestの実行は承認されないままなので、必須チェックを満たせないためです。  
+   マージが塞がれていると分かったときは、承認待ちの実行を取り消さずに止まります。  
+   CIが落ちたときや、30分で終わらないときも、Pull Requestを開いたまま止まります。  
+   止まったときは、人が`Approve workflows to run`を押し、CIが通ってからマージすれば公開まで進みます。  
+   承認せずにマージすると、承認待ちの実行が期限切れの失敗として残ります。  
+   CIの揺れで止まったときは、「リリース」の実行で`Re-run failed jobs`を押しても進められます。  
+   CIを動かし直し、通れば承認待ちの実行を取り消して、マージと公開まで進みます。  
+   `Re-run all jobs`は、`release/vX.Y.Z`ブランチが残っているため、ブランチを切る前の確かめで止まります
 1. ワークフローは、まず`develop`の先端のコミットでCI（`ci.yml`）が通ったことを確かめます。  
    CIが走っている途中なら、終わるまで最大30分待ちます。  
    CIが落ちていたり、止められていたり（cancelled）、実行が無かったりすると、ここで止まります。  
@@ -1541,17 +1550,20 @@ develop ──▶ release/vX.Y.Z ──(Pull Request)──▶ main ──▶ �
 1. 続いて、確かめたコミットから`release/vX.Y.Z`ブランチを切り、`main`の内容を取り込み、  
    `package.json`の版を上げ、文書の検査を通してから`main`へのPull Requestを開きます。  
    `main`と`develop`が衝突する場合は、ここで止まります
-1. Pull Requestの内容を確かめ、マージコミット（Create a merge commit）でマージします。  
+1. Pull Requestの内容を確かめ、`Approve workflows to run`を押します。  
+   CIが通ってから、マージコミット（Create a merge commit）でマージします。  
    `auto_merge`を有効にして止まらなかったときは、この段は要りません。  
-   このPull RequestのCIは「承認待ち」で作られ、`Approve workflows to run`を押すまで動きません。  
-   GitHub Actionsが開いたPull Requestだからです。  
-   `develop`の先端でのCIと、版を上げたあとの文書の検査（`npm run lint`）は、ワークフローの中で確かめてあります。  
-   押さずにマージしても、この2つは抜けません
+   GitHub Actionsが開いたPull Requestなので、CIなどの実行は「承認待ち」で作られ、押すまで動きません。  
+   CIは、リリースする木そのもの（`develop`の先端に`main`を取り込み、版を上げたもの）で走ります。  
+   ワークフローの中では走らない画面のE2EとWindowsのテストも、ここで通ります。  
+   承認せずにマージすると、承認待ちの実行はPull Requestを閉じたときに期限切れになり、失敗としてActionsに残ります。  
+   詳しくは「ワークフローが開いたPull RequestのCI」にあります
 1. 「リリースを公開する」ワークフローが動きます。  
    タグ`vX.Y.Z`を打ち、6種類の書庫を添えたGitHub Releaseを作り、`main`を`develop`に戻します
 
 バイナリを作る前に、配る`main`の木でGoのテスト（`go test ./cmd/... ./internal/...`）を通します。  
-リリースのPull RequestのCIは「承認待ち」のまま動かないことが多く、`auto_merge`でマージしたときは`main`へのCIも動かないためです。  
+公開の前の最後の確かめです。  
+リリースのPull RequestのCIは承認しないと動かず、`auto_merge`でマージしたときは`main`への`push`のCIも動かないためです。  
 1つでも落ちた場合は、タグとGitHub Releaseを作らずに止まります。  
 画面のE2Eはここでは走らせません。  
 画面は`develop`のCIで確かめています。
@@ -1598,15 +1610,66 @@ v0.4.0では、Releaseを作ってから書庫を載せる順だったため、2
 すでにあるタグや、開いたままの`release/*`ブランチがあると止まります。  
 `-rc.1`のようなプレリリースの版は、GitHub Releaseでもプレリリースになります。
 
+そうした規則が無く`develop`へ直接戻せたときは、あわせて`develop`でCIを手で動かします（`workflow_dispatch`）。  
+GitHub Actionsが押したコミットでは`push`のCIが動かず、次のリリースの「`develop`のCIが通ったことを確かめる」段が止まるためです。
+
 `develop`にPull Requestを必須にする規則がある場合、`main`から`develop`への戻しは毎回Pull Requestになります。  
 ブランチ名は`merge/vX.Y.Z-into-develop`です。  
-リリースのあとに、このPull Requestもマージコミットでマージしてください。
+このPull RequestもGitHub Actionsが開くので、CIなどの実行は「承認待ち」で作られます。  
+リリースのあとに`Approve workflows to run`を押し、CIが通ってから、マージコミットでマージしてください。
 
 GitHub Releaseの本文は、マージしたPull Requestのタイトルとラベルから自動で作られます。  
 分類は`.github/release.yml`にあります。  
 本文の頭には`.github/release-notes-header.md`が入ります。  
 Releaseの画面にはファイル名しか並ばず、`darwin`がmacOSのことだと分からないためです。  
 どれを落とせばよいかを、そこへ置いてあります。
+
+### ワークフローが開いたPull RequestのCI
+
+GitHub Actions（`GITHUB_TOKEN`）が開いたPull Requestでは、`pull_request`の実行が「承認待ち」で作られます。  
+2026年6月からのGitHubの動きです（[GitHubの告知](https://github.blog/changelog/2026-06-11-bot-created-pull-requests-can-run-workflows-if-approved/)）。  
+書き込み権限のある人がPull Requestの`Approve workflows to run`を押すまで、CI、CodeQL、「PRのheadブランチを確かめる」は動きません。  
+リリースのPull Requestと、`develop`へ戻すPull Requestがこれにあたります。
+
+| 経路           | すること                                                                                                     |
+|----------------|--------------------------------------------------------------------------------------------------------------|
+| 人がマージする | `Approve workflows to run`を押し、CIが通ってからマージします                                                 |
+| `auto_merge`   | ワークフローが`release/vX.Y.Z`ブランチでCIを動かして通るのを待ち、承認待ちの実行を取り消してからマージします |
+
+承認せずにマージすると、承認待ちの実行はPull Requestを閉じた時点で期限が切れます。  
+Actionsには、ジョブが1つも無い失敗の実行として残ります。  
+注記は「This workflow run required approval but was not approved before it expired.」です。  
+v0.10.0とv0.11.0がこうなりました。  
+`main`のコミットの判定には響きませんが、Actionsの一覧に赤い実行が残ります。  
+`auto_merge`の経路が取り消すのは、期限切れの失敗ではなく、取り消しとして残すためです。
+
+承認待ちの実行をAPIで承認や取り消しできるかは、GitHubの文書に書かれていません。  
+承認のAPIは、公開のフォークから初めて貢献する人のPull Request向けと書かれています。  
+`auto_merge`の経路は、取り消しを拒まれても止まらずに、警告を出して進みます。  
+結果は、その実行の要約に、取り消しを受け付けた件数と拒まれた件数として出ます。  
+手で確かめるときは、次のコマンドを使います。
+
+```bash
+# Pull Requestの先端のSHA
+sha="$(gh pr view <番号> --json headRefOid --jq .headRefOid)"
+
+# そのSHAの実行を並べる。承認待ちがstatusとconclusionのどちらに出るかも見る
+gh api "repos/{owner}/{repo}/actions/runs?head_sha=${sha}" \
+  --jq '.workflow_runs[] | [.id, .event, .status, .conclusion, .name] | @tsv'
+
+# 1件を承認する。画面のボタンと同じく動き出すかを見る
+gh api --method POST "repos/{owner}/{repo}/actions/runs/<実行のid>/approve"
+
+# 1件を取り消す。conclusionがcancelledになるかを見る
+gh api --method POST "repos/{owner}/{repo}/actions/runs/<実行のid>/cancel"
+
+# 状態を見る
+gh api "repos/{owner}/{repo}/actions/runs/<実行のid>" --jq '[.status, .conclusion] | @tsv'
+```
+
+`{owner}`と`{repo}`は、`gh`がカレントディレクトリのリポジトリに置き換えます。  
+取り消しを試すのは、要らない実行にしてください（例: `develop`へ戻すPull Requestの「PRのheadブランチを確かめる」）。  
+取り消した実行は、そのPull Requestでは動かないままになります。
 
 ### 緊急の修正
 
@@ -1643,15 +1706,15 @@ git push
 
 ## ワークフローの一覧
 
-| ファイル              | いつ動くか                                                                                                                              | 何をするか                                                                                                                                                                                         |
-|-----------------------|-----------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ci.yml`              | `main`と`develop`への`push`、Pull Request、毎週月曜（`govulncheck`だけ）、手動（入力`runner`で、その実行だけランナーを選べます）        | 日本語の文書、Goの書式とテスト（LinuxとWindows）、カバレッジの閾値、画面のE2E、ワークフローの構文と安全性、Goの標準ライブラリの既知の脆弱性を検査し、6種類すべての対象向けにビルドが通るかを見ます |
-| `codeql.yml`          | `main`と`develop`への`push`、Pull Request、毎週月曜、手動（入力`runner`で、その実行だけランナーを選べます）                             | ワークフロー、Goのコード、JavaScript（画面の`app.js`と、試験や道具の`.mjs`）をCodeQLで走査します。結果は必須のチェックにしていません                                                               |
-| `labels.yml`          | `.github/labels.yml`の変更、Pull Request（確認だけ）、手動                                                                              | リポジトリのラベルを定義に揃えます。Pull Requestでは何が変わるかを見せるだけです。`main`からの同期では、ファイルに無いラベルを消しません                                                           |
-| `labeler.yml`         | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | 変えたファイルとブランチ名からラベルを付けます                                                                                                                                                     |
-| `branch-guard.yml`    | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                  | headブランチが`main`か`develop`なら失敗します。マージは止めません                                                                                                                                  |
-| `release.yml`         | 手動                                                                                                                                    | `develop`の先端でCIが通ったことを確かめてから、リリースブランチを切り、版を上げ、`main`へのPull Requestを開きます。`auto_merge`を指定したときは、そのままマージして公開まで進めます                |
-| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます | Goのテストを通し、6種類のバイナリを作り、書庫を展開して動かしてから、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                                                   |
+| ファイル              | いつ動くか                                                                                                                                                                                                      | 何をするか                                                                                                                                                                                                                                                            |
+|-----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ci.yml`              | `main`と`develop`への`push`、Pull Request、毎週月曜（`govulncheck`だけ）、手動（入力`runner`で、その実行だけランナーを選べます）。「リリース」の`auto_merge`も、手動と同じ入口で`release/*`ブランチに動かします | 日本語の文書、Goの書式とテスト（LinuxとWindows）、カバレッジの閾値、画面のE2E、ワークフローの構文と安全性、Goの標準ライブラリの既知の脆弱性を検査し、6種類すべての対象向けにビルドが通るかを見ます                                                                    |
+| `codeql.yml`          | `main`と`develop`への`push`、Pull Request、毎週月曜、手動（入力`runner`で、その実行だけランナーを選べます）                                                                                                     | ワークフロー、Goのコード、JavaScript（画面の`app.js`と、試験や道具の`.mjs`）をCodeQLで走査します。結果は必須のチェックにしていません                                                                                                                                  |
+| `labels.yml`          | `.github/labels.yml`の変更、Pull Request（確認だけ）、手動                                                                                                                                                      | リポジトリのラベルを定義に揃えます。Pull Requestでは何が変わるかを見せるだけです。`main`からの同期では、ファイルに無いラベルを消しません                                                                                                                              |
+| `labeler.yml`         | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                                                                                          | 変えたファイルとブランチ名からラベルを付けます                                                                                                                                                                                                                        |
+| `branch-guard.yml`    | Pull Requestを開いたとき、更新したとき、開き直したとき                                                                                                                                                          | headブランチが`main`か`develop`なら失敗します。マージは止めません                                                                                                                                                                                                     |
+| `release.yml`         | 手動                                                                                                                                                                                                            | `develop`の先端でCIが通ったことを確かめてから、リリースブランチを切り、版を上げ、`main`へのPull Requestを開きます。`auto_merge`を指定したときは、リリースブランチでCIを動かして通るのを待ち、Pull Requestの承認待ちの実行を取り消してから、マージして公開まで進めます |
+| `release-publish.yml` | `release/*`か`hotfix/*`のPull Requestが`main`にマージされたとき。「リリース」が`auto_merge`でマージしたときは、そちらから直接呼ばれます                                                                         | Goのテストを通し、6種類のバイナリを作り、書庫を展開して動かしてから、タグを打ち、GitHub Releaseを作って書庫を添付し、`main`を`develop`に戻します                                                                                                                      |
 
 ## ラベル
 
