@@ -420,6 +420,33 @@ func TestSaveWritesLineBreaks(t *testing.T) {
 		t.Fatalf("書いた結果が違う\n got %q\nwant %q", after, want)
 	}
 
+	// 1回の要求で、前の行の改行を減らし、後ろの行の改行も減らす。後ろの行は ID で引くので、
+	// 前の行の書き換えで行番号がずれても、正しいレコードに入る。
+	rec = save(t, s, "ja", got.Version,
+		rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし。"},
+		rowEdit{ID: 6, Key: key.For(srcBye), Translation: "さよう\nなら"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	got = decode[rowsResponse](t, rec.Body.Bytes())
+	if want := []lineNumber{{ID: 5, Number: 5}, {ID: 6, Number: 6, End: 7}}; !slices.Equal(got.Numbers, want) {
+		t.Errorf("1回の要求の行番号 = %+v、%+v を期待", got.Numbers, want)
+	}
+	if n := fileLines(got); n != 7 {
+		t.Errorf("ファイルの物理行の数 = %d、7 を期待", n)
+	}
+	want = strings.Replace(before, hello+jaHello+"\n", hello+"もしもし。\n", 1)
+	want = strings.Replace(want, bye+"\n", bye+"\"さよう\nなら\"\n", 1)
+	if after := readFile(t, path); after != want {
+		t.Fatalf("1回の要求で書いた結果が違う\n got %q\nwant %q", after, want)
+	}
+	rec = save(t, s, "ja", got.Version,
+		rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし\nもしもし"},
+		rowEdit{ID: 6, Key: key.For(srcBye), Translation: "さよう\nなら\nです"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+
 	// 読み直すと、どちらも改行ごと訳として並び、後ろの行の行番号がずれている。
 	lines = getLines(t, s, "ja")
 	var data []lineView
