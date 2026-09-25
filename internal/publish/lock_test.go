@@ -387,6 +387,21 @@ func TestLockDirFallsBackToTheTempDir(t *testing.T) {
 	}
 }
 
+// TestLockDirFallsBackWithoutACacheDir は、利用者のキャッシュのフォルダーが決まらない
+// 環境（HOME も XDG_CACHE_HOME も無い、LocalAppData が無い）でも、一時フォルダーに
+// 錠のファイルを置くことを見る。
+func TestLockDirFallsBackWithoutACacheDir(t *testing.T) {
+	t.Setenv(LockDirEnv, "")
+	setCacheDir(t, "")
+	if _, err := os.UserCacheDir(); err == nil {
+		t.Skip("キャッシュのフォルダーが環境変数のほかから決まる環境なので飛ばす")
+	}
+	setTempDir(t, t.TempDir())
+	if dir, err := lockDirOf(); err != nil || dir != tempLockDir() {
+		t.Errorf("置き場 = %s, %v、%s を期待", dir, err, tempLockDir())
+	}
+}
+
 // TestLockDirSaysHowToFixIt は、キャッシュのフォルダーも一時フォルダーも作れないとき、
 // 試した置き場と直し方を添えた誤りを返すことを見る。
 func TestLockDirSaysHowToFixIt(t *testing.T) {
@@ -577,31 +592,53 @@ func TestLockDirSaysHowToFixItWhenNothingCanBeWritten(t *testing.T) {
 }
 
 // TestLockDirDoesNotMoveOnOtherErrors は、錠のファイルを開けない誤りが、書けないこと
-// （権限、読み取り専用）でなければ、一時フォルダーへ移らずにその誤りを返すことを見る。
+// （権限、読み取り専用）でなければ、次の置き場へ移らずにその誤りを返すことを見る。
 // そのときだけの誤りで移ると、同じ書き出し先を書くほかの dwloc と別の錠のファイルを
 // 使い、直列にならない。ここでは錠のファイルの名前にフォルダーを置いて開けなくする。
 func TestLockDirDoesNotMoveOnOtherErrors(t *testing.T) {
 	needPermissions(t)
-	path := filepath.Join(t.TempDir(), "strings.csv")
-	base := baseOf(t, path)
-	setCacheDir(t, t.TempDir())
-	setTempDir(t, t.TempDir())
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(cache, "dwloc", "locks", base), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("キャッシュのフォルダー", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "strings.csv")
+		base := baseOf(t, path)
+		setCacheDir(t, t.TempDir())
+		setTempDir(t, t.TempDir())
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(cache, "dwloc", "locks", base), 0o700); err != nil {
+			t.Fatal(err)
+		}
 
-	_, err = LockFile(path)
-	var dirErr *LockDirError
-	if err == nil || errors.As(err, &dirErr) || cannotWrite(err) {
-		t.Fatalf("LockFile = %v、錠のファイルを開けない誤りをそのまま返すことを期待", err)
-	}
-	if _, err := os.Stat(tempLockDir()); err == nil {
-		t.Error("一時フォルダーへ移った")
-	}
+		_, err = LockFile(path)
+		var dirErr *LockDirError
+		if err == nil || errors.As(err, &dirErr) || cannotWrite(err) {
+			t.Fatalf("LockFile = %v、錠のファイルを開けない誤りをそのまま返すことを期待", err)
+		}
+		if _, err := os.Stat(tempLockDir()); err == nil {
+			t.Error("一時フォルダーへ移った")
+		}
+	})
+	t.Run("一時フォルダー", func(t *testing.T) {
+		// キャッシュのフォルダーは作れず、一時フォルダーの錠のファイルの名前にフォルダーが
+		// ある。案内（LockDirError）ではなく、開けない誤りをそのまま返す。
+		path := filepath.Join(t.TempDir(), "strings.csv")
+		base := baseOf(t, path)
+		setCacheDir(t, notADir(t))
+		setTempDir(t, t.TempDir())
+		if err := os.MkdirAll(filepath.Join(tempLockDir(), base), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(tempLockDir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := LockFile(path)
+		var dirErr *LockDirError
+		if err == nil || errors.As(err, &dirErr) || cannotWrite(err) {
+			t.Fatalf("LockFile = %v、錠のファイルを開けない誤りをそのまま返すことを期待", err)
+		}
+	})
 }
 
 // TestSameFile は、開いているファイルと、いまその名前が指すファイルが同じかを
