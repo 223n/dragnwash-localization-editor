@@ -221,18 +221,31 @@ test("訳・話者・原文・見出し・直せない行に入ったタグや�
 // 組み直すと、ファイルに無い見出しが出たり、翻訳者が書いたメモが消えたりする。
 // 深さは待ち受けが付けた印（# ===== が節、# --- が節点、それ以外が other）で分ける。
 // CRLF の行でも、見出しの字に CR が混ざらないことも見る。
-test("見出しはファイルのコメント行を書き換えずに写し、印で深さを分ける", async ({ app }) => {
+//
+// 節と節点は読み上げの見出しにもする（role="heading"。節は aria-level 2、節点は 3）。
+// 見出しで移る操作で、節から節へ飛べるようにするためである。どちらの印も無いコメント行
+// （翻訳者のメモなど）は文書の構造ではないので、見出しにしない。
+test("見出しはファイルのコメント行を書き換えずに写し、印で深さを分け、節と節点だけを読み上げの見出しにする", async ({
+  app,
+}) => {
   await expect(headings(app)).toHaveCount(4);
   const expected = [
-    [HEADS.section, "heading section"],
-    [HEADS.node, "heading node"],
-    [HEADS.memo, "heading other"],
-    [HEADS.ui, "heading section"],
+    [HEADS.section, "heading section", "2"],
+    [HEADS.node, "heading node", "3"],
+    [HEADS.memo, "heading other", null],
+    [HEADS.ui, "heading section", "2"],
   ];
-  for (const [i, [text, className]] of expected.entries()) {
+  for (const [i, [text, className, level]] of expected.entries()) {
     const head = headings(app).nth(i);
     await expect(head).toHaveClass(className);
     expect(await textOf(head)).toBe(text);
+    if (level === null) {
+      await expect(head).not.toHaveAttribute("role");
+      await expect(head).not.toHaveAttribute("aria-level");
+      continue;
+    }
+    await expect(head).toHaveRole("heading");
+    await expect(head).toHaveAttribute("aria-level", level);
   }
 });
 

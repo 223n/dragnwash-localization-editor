@@ -52,6 +52,7 @@
     "ui.load_failed": "読み込めませんでした。読み直してください。",
     "ui.edit_notice": "訳の欄を選ぶと書き換えられます。入力が止まると自動で保存します。publish は回しません。打った訳は、入力欄を閉じても残ります。",
     "ui.edit_label": "訳",
+    "ui.edit_label_line": "訳（{line}行目）",
     "ui.save_clean": "保存済み",
     "ui.save_saving": "保存しています…",
     "ui.save_pending": "未保存 {count} 件",

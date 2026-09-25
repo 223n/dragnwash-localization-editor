@@ -180,7 +180,7 @@ test("入力欄は頁に1つだけで、綴り検査・自動修正・翻訳を�
   await expect(ed).toHaveClass(/(^|\s)notranslate(\s|$)/);
   expect(await ed.evaluate((node) => node.spellcheck)).toBe(false);
   // 名前は目録から。向きは中身から決めさせ、lang はロケール名そのまま（ヘブライ語の確認用）。
-  await expect(ed).toHaveAttribute("aria-label", msg("ja", "ui.edit_label"));
+  await expect(ed).toHaveAttribute("aria-label", msg("ja", "ui.edit_label_line", { line: SAMPLE_LINES.hello }));
   await expect(ed).toHaveAttribute("lang", "ja");
   await expect(ed).toHaveAttribute("dir", "auto");
 

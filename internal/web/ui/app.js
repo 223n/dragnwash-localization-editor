@@ -1457,7 +1457,17 @@
     */
     editor.dir = "auto";
     editor.lang = state.locale;
-    editor.setAttribute("aria-label", t("ui.edit_label"));
+    /*
+      読み上げに、どの行の訳かを伝える。名前は「訳（N行目）」で、行番号は行の欄に
+      出ている最初の物理行と同じ。説明（aria-describedby）には、その行の原文と、
+      行に添えた1言（保存できない理由、値が変わった断り）を結ぶ。
+      名前が「訳」だけだったころは、Enter で次の行へ進むたびに「訳、編集」とだけ
+      読まれ、どの原文を訳しているかを知るには入力欄を出て一覧を読み戻すしか
+      なかった。訳の欄（span）は焦点が入った瞬間にこの入力欄へ差し替わるので、
+      文脈を載せられるのはここだけである。1言は空なら隠れていて、何も読まれない。
+    */
+    editor.setAttribute("aria-label", t("ui.edit_label_line", { line: entry.n }));
+    editor.setAttribute("aria-describedby", entry.source.id + " " + entry.note.id);
     /*
       差し込んでから焦点を移し、そのあとで元の欄を隠す。順番を逆にすると、
       焦点の載った欄を隠した瞬間に焦点が body へ飛び、入力欄を出した直後に
@@ -2888,11 +2898,15 @@
     row.appendChild(span("cell speaker", line.speaker));
 
     /*
-      原文は常に英語。右から左の訳に引きずられて崩れないよう ltr に固定する。
+      原文は常に英語。右から左の訳に引きずられて崩れないよう ltr に固定し、lang も
+      en にする。付けずにいたころは、日本語の画面では英文が日本語の声で読まれた。
       値の中の改行と空行はそのまま描く（app.css の .source の pre-wrap）。
+      id は、入力欄の説明（aria-describedby）から指すために振る（openEditor）。
     */
     var source = span("cell source", line.source);
     source.dir = "ltr";
+    source.lang = "en";
+    source.id = "source-" + line.id;
     row.appendChild(source);
 
     var value = span("cell translation", line.translation);
@@ -2917,14 +2931,17 @@
     var note = document.createElement("div");
     note.className = "cell row-note";
     note.hidden = true;
+    /* 原文と同じく、入力欄の説明から指すための id。 */
+    note.id = "note-" + line.id;
     row.appendChild(note);
 
     var entry = {
       id: line.id,
-      /* 最初の物理行。表示（まだファイルに入っていない訳の目印）にだけ使う。 */
+      /* 最初の物理行。表示（読み上げの名前、まだ入っていない訳の目印）にだけ使う。 */
       n: line.n,
       row: row,
       value: value,
+      source: source,
       badges: badges,
       note: note,
       /* キーは行の同定に使う。409 のあとに編集を載せ直すのはこれが頼り。 */
@@ -3012,12 +3029,25 @@
   /*
     見出し（ファイルにあるコメント行）を組む。
 
+    節（# =====）と節点（# ---）は、読み上げの見出しにする（role="heading"。節は
+    aria-level 2、節点は 3 で、頁の題の h1 の下に来る）。付けずにいたころは、
+    見出しで移る操作で節から節へ飛べず、1700行を超える一覧を1行ずつ読み進める
+    しかなかった。どちらの印も無いコメント行（翻訳者のメモなど）は見出しにしない。
+    文書の構造ではないからである。h2・h3 ではなく role にするのは、既定の字の
+    大きさと余白を打ち消さずに済むためである。深さは待ち受けが付けたもの
+    （headingLevel）をそのまま使う。
+
     引用符で囲んだ値の中の '#' の行は、待ち受けがレコードの値として返すので、
     ここへは来ない（見出しにならない）。
   */
   function headingNode(line) {
     var e = document.createElement("div");
-    e.className = "heading " + (line.heading || "other");
+    var level = headingLevel(line);
+    e.className = "heading " + level;
+    if (level !== "other") {
+      e.setAttribute("role", "heading");
+      e.setAttribute("aria-level", level === "section" ? "2" : "3");
+    }
     e.appendChild(icon("hashtag"));
     /* ファイルにあるコメント行をそのまま出す。組み直さない。 */
     e.appendChild(span(null, line.text));

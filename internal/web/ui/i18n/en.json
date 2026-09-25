@@ -52,6 +52,7 @@
     "ui.load_failed": "Could not load. Try reloading.",
     "ui.edit_notice": "Pick a translation cell to edit it. It is saved when you stop typing. publish is not run. What you typed stays even after the input closes.",
     "ui.edit_label": "Translation",
+    "ui.edit_label_line": "Translation (line {line})",
     "ui.save_clean": "Saved",
     "ui.save_saving": "Saving...",
     "ui.save_pending": "unsaved: {count}",

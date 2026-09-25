@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// この束は、画面が行を ID で引き、行をまたぐレコードを1行として描いていることを
-// 字面で見る。
+// この束は、画面が行を ID で引き、行をまたぐレコードを1行として描き、読み上げに行の
+// 文脈を渡していることを字面で見る。
 //
 // 振る舞いは E2E（e2e/specs/multiline.spec.mjs と render.spec.mjs）が見ている。ここに
 // あるのは、実際に踏んで決めた形が書き換えで消えないための見張りである。
@@ -88,12 +88,57 @@ func TestRowNumberShowsTheRange(t *testing.T) {
 	}
 }
 
-// TestSourceKeepsLineBreaks は、原文の欄が値の中の改行と空行をそのまま描くことを見る。
+// TestSourceKeepsLineBreaks は、原文の欄が値の中の改行と空行をそのまま描き、英語として
+// 読ませることを見る（改善の決定 ui-9）。
 func TestSourceKeepsLineBreaks(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
 	css := uiSource(t, "ui/app.css")
 
 	if !strings.Contains(cssRule(t, css, ".source"), "white-space: pre-wrap;") {
 		t.Error(".source に white-space: pre-wrap が無い。段落を2つ持つ原文が1段に詰まり、空行も消える")
+	}
+	if !strings.Contains(functionBody(t, js, "rowNode"), `source.lang = "en";`) {
+		t.Error("原文の欄に lang=\"en\" が無い。日本語の画面では英文が日本語の声で読まれる")
+	}
+}
+
+// TestEditorNamesItsRow は、入力欄の名前に行番号を入れ、説明に原文と行の1言を結ぶことを
+// 見る（改善の決定 20）。名前が「訳」だけだと、Enter で次の行へ進むたびに「訳、編集」と
+// だけ読まれ、どの原文を訳しているかが分からない。
+func TestEditorNamesItsRow(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	open := functionBody(t, js, "openEditor")
+	for _, want := range []string{
+		`editor.setAttribute("aria-label", t("ui.edit_label_line", { line: entry.n }));`,
+		`editor.setAttribute("aria-describedby", entry.source.id + " " + entry.note.id);`,
+	} {
+		if !strings.Contains(open, want) {
+			t.Errorf("openEditor に %q が無い", want)
+		}
+	}
+	row := functionBody(t, js, "rowNode")
+	for _, want := range []string{`source.id = "source-" + line.id;`, `note.id = "note-" + line.id;`} {
+		if !strings.Contains(row, want) {
+			t.Errorf("rowNode に %q が無い。入力欄の説明から指せない", want)
+		}
+	}
+}
+
+// TestSectionHeadingsAreHeadings は、節と節点の見出しを読み上げの見出しにし、メモは
+// 見出しにしないことを見る（改善の決定 ui-10）。
+func TestSectionHeadingsAreHeadings(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	head := functionBody(t, js, "headingNode")
+	for _, want := range []string{
+		`if (level !== "other") {`,
+		`e.setAttribute("role", "heading");`,
+		`e.setAttribute("aria-level", level === "section" ? "2" : "3");`,
+	} {
+		if !strings.Contains(head, want) {
+			t.Errorf("headingNode に %q が無い", want)
+		}
 	}
 }
 

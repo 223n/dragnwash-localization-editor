@@ -9,7 +9,8 @@
 //                        見出しにしない。訳が1行に収まるかぎり書ける。保存は最終
 //                        フィールドだけを差し替える。
 //   行は ID で指す       ID はセグメントの通し番号。行をまたぐレコードの後ろでは、ID と
-//                        物理行の番号がずれる。保存の要求も、入力欄の行き先も ID で決める。
+//                        物理行の番号がずれる。保存の要求も、入力欄の行き先も ID で決め、
+//                        読み上げの名前にだけ行番号を使う。
 //   書かせない形         飲み込みの疑い、ゲームの読み方との食い違い、閉じない引用符は、
 //                        理由を付けて読み取り専用にする。値がどれも空のレコード（,,,,,,）は
 //                        空行と同じく並べない。
@@ -137,9 +138,10 @@ test.describe("行をまたぐレコード", () => {
     await expect(rowByLine(app, 7)).toHaveCount(0);
     await expect(rowByLine(app, 10)).toHaveCount(0);
 
-    // 原文の改行と空行は、描いた字（innerText）にも残る。
+    // 原文の改行と空行は、描いた字（innerText）にも残る。原文は英語として読ませる。
     const source = rowById(app, ID.multi).locator(".cell.source");
     expect(await drawnText(source)).toBe(MULTI);
+    await expect(source).toHaveAttribute("lang", "en");
     expect(await drawnText(rowById(app, ID.hashed).locator(".cell.source"))).toBe(HASHED);
     // 値の中の '#' の行は見出しにしない。見出しはファイルのコメント行の2つだけ。
     await expect(headings(app)).toHaveCount(2);
@@ -197,6 +199,35 @@ test.describe("行をまたぐレコード", () => {
     await editor(app).press("Escape");
     await waitForSaved(app);
     expectSameBytes(await server.readRoot(workingRel), before, "作業コピー");
+  });
+
+  test("入力欄の名前は最初の物理行を言い、説明に原文と行の1言（保存できない理由）を結ぶ", async ({ app }) => {
+    const ed = editor(app);
+    await openEditor(app, ID.wonderful);
+    await expect(ed).toHaveAccessibleName(msg("ja", "ui.edit_label_line", { line: 11 }));
+    await expect(ed).toHaveAttribute("aria-describedby", `source-${ID.wonderful} note-${ID.wonderful}`);
+    await expect(ed).toHaveAccessibleDescription(SAMPLE.wonderful.source);
+    // 行をまたぐ原文も、説明に全体が入る。
+    await openEditor(app, ID.multi);
+    await expect(ed).toHaveAccessibleName(msg("ja", "ui.edit_label_line", { line: 6 }));
+    await expect(ed).toHaveAccessibleDescription(/para1\s+para2/);
+
+    // 保存できなかった行は、その理由も説明に入る。待ち受けにキーが食い違う要求を送り、
+    // その行だけ断らせる（error.row_moved）。
+    await app.route("**/api/rows", async (route) => {
+      const body = route.request().postDataJSON();
+      for (const edit of body.edits) {
+        edit.key = "0000000000000000";
+      }
+      await route.continue({ postData: JSON.stringify(body) });
+    });
+    await editor(app).fill("段落の訳");
+    await editor(app).press("Escape");
+    const why = msg("ja", "ui.row_error", { reason: msg("ja", "error.row_moved") });
+    await expect(rowById(app, ID.multi).locator(".row-note")).toHaveText(why);
+    await openEditor(app, ID.multi);
+    await expect(ed).toHaveValue("段落の訳");
+    await expect(ed).toHaveAccessibleDescription(new RegExp(`para2\\s+${escapeRegExp(why)}$`));
   });
 
   test("競合でファイルの訳が複数行でも、ファイルの訳とあなたの訳を段に分けて並べる", async ({ app, server }) => {
@@ -376,3 +407,8 @@ test.describe("閉じない引用符のある作業コピー", () => {
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
 });
+
+// escapeRegExp は文字列を正規表現の字としてそのまま当てる形にする。
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
