@@ -70,6 +70,10 @@ func (e *LockTimeoutError) Error() string {
 //
 // 錠は dwloc 同士の約束で、ゲーム（Mod の書き出し）や表計算ソフトは従わない。
 // そちらとの競り合いは、版の照合（画面）と書く直前の読み直し（publish）で見つける。
+// dwloc 同士でも、錠が効くのは同じ錠のフォルダーを使うもの（同じ利用者の同じ環境）
+// だけである。コンテナーと手元、WSL と Windows のように環境をまたいで同じファイルを
+// 同時に書くと直列にならず、守りは同じく版の照合と書く直前の読み直しだけになる
+// （[lockPath]。README にも条件として書いている）。
 func LockFile(path string) (unlock func(), err error) {
 	l, err := lockFor(path)
 	if err != nil {

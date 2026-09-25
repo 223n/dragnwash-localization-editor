@@ -1106,7 +1106,7 @@ The screen shows the reloaded list with the reason it cannot be edited, and keep
 A translation on a row whose key column is empty is put back on the row with the same sequence number.  
 If a different row that has a key now sits at that number, it is not put there; it is listed as a translation that has nowhere to go, with its line number.
 
-Saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
+As long as every `dwloc` runs in the same environment, saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
 The span from checking the version to finishing the write is wrapped in an OS lock.  
 `publish` takes the same lock on both its input and its output.  
 Even when the screen has the published file open (with `--no-game`, for example) and you run a `publish` that writes that published file from the working copy in the game, one of them waits.  
@@ -1121,6 +1121,12 @@ No file is added to the translation repository or to the game folder.
 If the `dwloc` holding the lock crashes, the OS releases the lock, so a lock file left behind never stops a save.  
 The one that writes later finds that the version no longer matches what the other wrote, which is a conflict.  
 `Export working copy` in the game does not take this lock, so there only the version check catches it.
+
+The lock only works between copies of `dwloc` that use the same lock folder.  
+Even for the same user, a container and the host, WSL and Windows, or machines with a different `HOME` each use their own lock folder.  
+When they write the same file at the same time across environments, only the version check and the re-read right before writing protect it, and a translation shown as saved can be lost.  
+The same goes for writing the same file through another name (a hard link).  
+When you work across environments, quit one `dwloc` before you start the other.
 
 Saving also stops when the screen cannot reach the server, and when the server does not accept saves from this screen.
 
