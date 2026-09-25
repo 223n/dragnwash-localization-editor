@@ -70,8 +70,9 @@ type rowsRequest struct {
 type rowResult struct {
 	// ID は要求の ID をそのまま返す。
 	ID int `json:"id"`
-	// Number は、その行のいまの最初の物理行。表示を差し替えるためだけの値で、
-	// 同定には使わない。そんな行が無ければ 0。
+	// Number は、その行の最初の物理行（その行を書き換える前のもの。同じ要求の前の行で
+	// 訳の改行が増えたり減ったりしていれば、そのぶんずれている）。同定には使わない。
+	// そんな行が無ければ 0。画面は行番号の欄を rowsResponse.Numbers で直す。
 	Number int `json:"n"`
 	// Saved はこの行が保存されたか。
 	Saved bool `json:"saved"`
@@ -95,9 +96,52 @@ type rowsResponse struct {
 	// Version は保存後のファイルの版。画面は次の保存要求にこれを載せる。
 	Version string      `json:"version"`
 	Results []rowResult `json:"results"`
+	// Numbers は、この保存で行番号（最初と最後の物理行）が変わったデータ行の、いまの
+	// 行番号。訳に改行を足したり消したりすると、そのレコードの物理行の数が変わり、後ろの
+	// 行の行番号がずれる（ID は変わらない）。画面は ID で行を引いて、行番号の欄と読み上げの
+	// 名前を直す。表示のためだけの値で、同定には使わない。変わった行が無ければ省く。
+	Numbers []lineNumber `json:"numbers,omitempty"`
 	// Counts と Notes は局所更新後のもの。画面はこれで差し替える。
 	Counts []countView `json:"counts"`
 	Notes  []string    `json:"notes"`
+	// Stats は保存後の「数えたもの」。ファイルの物理行の数は、訳の改行で変わる。
+	Stats []statView `json:"stats"`
+}
+
+// lineNumber は1行の行番号。lineView の n と end と同じ意味で、end は行をまたぐレコード
+// だけに入る。
+type lineNumber struct {
+	ID     int `json:"id"`
+	Number int `json:"n"`
+	End    int `json:"end,omitempty"`
+}
+
+// lineSpans は、データ行の ID ごとの最初と最後の物理行を控える。
+func lineSpans(file *edit.File) map[int][2]int {
+	out := make(map[int][2]int)
+	for _, l := range file.Lines() {
+		if l.Kind == edit.KindData {
+			out[l.ID] = [2]int{l.Number, l.EndNumber}
+		}
+	}
+	return out
+}
+
+// changedNumbers は、before（書き換える前の [lineSpans]）から行番号が変わったデータ行の、
+// いまの行番号を、ファイルの順に並べる。
+func changedNumbers(before map[int][2]int, file *edit.File) []lineNumber {
+	var out []lineNumber
+	for _, l := range file.Lines() {
+		if l.Kind != edit.KindData || before[l.ID] == [2]int{l.Number, l.EndNumber} {
+			continue
+		}
+		n := lineNumber{ID: l.ID, Number: l.Number}
+		if l.EndNumber > l.Number {
+			n.End = l.EndNumber
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // conflictResponse は 409 の応答。
@@ -233,17 +277,31 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	noteRequest(w, " locale=%s edits=%d saved=%d", target.Locale, len(req.Edits), out.applied)
+	lines := out.file.Lines()
 	s.writeJSON(w, rowsResponse{
 		Locale:  target.Locale,
 		Version: out.file.Version(),
 		Results: out.results,
+		Numbers: out.numbers,
 		// 行数も数え直す。件数だけ返してチップの数を置いていくと、訳を入れた
 		// 直後に「32 行」と書いたチップが31行しか出さなくなる。
 		Counts: s.buildCounts(cat, target.Locale, sum,
-			rowsByCategory(out.file.Lines(), badges)),
+			rowsByCategory(lines, badges)),
 		Notes: s.buildNotes(cat, target, sum,
 			out.file.Header() != nil && hasSourceColumn(out.file.Header())),
+		Stats: s.buildStats(cat, sum, out.file.PhysicalLines(), dataRowCount(lines)),
 	})
+}
+
+// dataRowCount はデータ行（レコード）の数を数える（linesResponse.Rows と同じ数え方）。
+func dataRowCount(lines []edit.Line) int {
+	n := 0
+	for _, l := range lines {
+		if l.Kind == edit.KindData {
+			n++
+		}
+	}
+	return n
 }
 
 // saveOutcome は [server.saveRows] の結果。
@@ -255,6 +313,8 @@ type saveOutcome struct {
 	file *edit.File
 	// results は行ごとの結果。
 	results []rowResult
+	// numbers は、保存で行番号が変わったデータ行のいまの行番号（rowsResponse.Numbers）。
+	numbers []lineNumber
 	// applied は実際にモデルへ入れた行数。
 	applied int
 	// conflict が true なら 409。ファイルには1バイトも書いていない。
@@ -309,6 +369,8 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 
 	results := make([]rowResult, 0, len(req.Edits))
 	applied := 0
+	// 書き換える前の行番号。訳の改行で変わった行を、保存のあとに拾う（changedNumbers）。
+	before := lineSpans(file)
 	for _, e := range req.Edits {
 		res := rowResult{ID: e.ID}
 		if line, ok := file.Line(e.ID); ok {
@@ -414,7 +476,7 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		}
 	}
 
-	return saveOutcome{file: file, results: results, applied: applied}
+	return saveOutcome{file: file, results: results, numbers: changedNumbers(before, file), applied: applied}
 }
 
 // recheckResults は、書く前の事後確認が外れたときの行ごとの結果を作る。

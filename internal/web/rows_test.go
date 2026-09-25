@@ -169,6 +169,10 @@ func TestSaveChangesOnlyTheTouchedLine(t *testing.T) {
 	if got.Version == "" || got.Version == lines.Version {
 		t.Errorf("版が %q（保存で変わるはず）", got.Version)
 	}
+	// 1行の訳では行番号は変わらないので、行番号の対応を返さない。
+	if got.Numbers != nil {
+		t.Errorf("行番号の対応 = %+v、無しを期待", got.Numbers)
+	}
 
 	after := readFile(t, path)
 	beforeLines := strings.Split(before, "\n")
@@ -373,6 +377,22 @@ func TestSaveWritesLineBreaks(t *testing.T) {
 	if r := got.Results[0]; !r.Saved || r.Translation != "もしもし\nもしもし" || r.Warning != "" || r.Number != 5 {
 		t.Errorf("LF の結果 = %+v", r)
 	}
+	// 行番号が変わったデータ行を、いまの行番号で返す。書いた行は2物理行になり、後ろの行は
+	// 1つ下がる。ファイルの物理行の数（数えたもの）も数え直す。
+	fileLines := func(got rowsResponse) int {
+		for _, st := range got.Stats {
+			if st.Label == s.cat.T(ja, "stats.file_lines") {
+				return st.Value
+			}
+		}
+		return -1
+	}
+	if want := []lineNumber{{ID: 5, Number: 5, End: 6}, {ID: 6, Number: 7}}; !slices.Equal(got.Numbers, want) {
+		t.Errorf("行番号 = %+v、%+v を期待", got.Numbers, want)
+	}
+	if n := fileLines(got); n != 7 {
+		t.Errorf("ファイルの物理行の数 = %d、7 を期待", n)
+	}
 	hello := key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ","
 	want := strings.Replace(before, hello+jaHello+"\n", hello+"\"もしもし\nもしもし\"\n", 1)
 	if after := readFile(t, path); after != want {
@@ -387,6 +407,12 @@ func TestSaveWritesLineBreaks(t *testing.T) {
 	if r := got.Results[0]; !r.Saved || r.Translation != "さよう\nなら\nです" ||
 		r.Warning != s.cat.T(ja, "warn.value_normalized") || r.Number != 7 {
 		t.Errorf("CRLF と CR の結果 = %+v", r)
+	}
+	if want := []lineNumber{{ID: 6, Number: 7, End: 9}}; !slices.Equal(got.Numbers, want) {
+		t.Errorf("行番号 = %+v、%+v を期待", got.Numbers, want)
+	}
+	if n := fileLines(got); n != 9 {
+		t.Errorf("ファイルの物理行の数 = %d、9 を期待", n)
 	}
 	bye := key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + ","
 	want = strings.Replace(want, bye+"\n", bye+"\"さよう\nなら\nです\"\n", 1)
