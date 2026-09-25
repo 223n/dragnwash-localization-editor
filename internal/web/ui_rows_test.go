@@ -1,6 +1,7 @@
 package web
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -142,26 +143,20 @@ func TestSectionHeadingsAreHeadings(t *testing.T) {
 	}
 }
 
-// TestOffscreenRowsAreNotDrawn は、画面の外の行を描かず、入力欄を差し込んだ行だけは
-// いつも描くことと、見出しには描かない指定を付けないことを見る（改善の決定 21）。
+// TestOffscreenRowsAreDrawn は、一覧の行と見出しに描かない指定（content-visibility と
+// 描く前の高さの見積もり）を付けないことを見る（決まったことの 23）。
 //
-// 見出しに付けると、Chromium の読み上げの木で、画面の外の見出しの名前が空になり、
-// 読み上げソフトの見出しの一覧と見出しへ移る操作が使えなくなる（改善の ui-10）。
-func TestOffscreenRowsAreNotDrawn(t *testing.T) {
-	css := uiSource(t, "ui/app.css")
-
-	rule := cssRule(t, css, ".list > .row")
-	if !strings.Contains(rule, "content-visibility: auto;") {
-		t.Error("行に content-visibility: auto が無い。全行を描き直すたびに画面が止まる")
-	}
-	if !strings.Contains(rule, "contain-intrinsic-block-size: auto ") {
-		t.Error("行に高さの見積もり（contain-intrinsic-block-size: auto …）が無い")
-	}
-	if !strings.Contains(cssRule(t, css, ".list > .row:has(> .editor)"), "content-visibility: visible;") {
-		t.Error("入力欄を差し込んだ行を描かないままにしている。入力欄の高さを測れない")
-	}
-	if strings.Contains(css, "\n.list > .heading {") || strings.Contains(cssRule(t, css, ".heading"), "content-visibility") {
-		t.Error("見出しに描かない指定がある。画面の外の見出しが読み上げの木で名前を失う")
+// 描かない指定を付けると、Chromium の読み上げの木で、画面の外の行の原文と訳が消え、
+// 画面の外の見出しの名前が空になる。読み上げソフトで行を読み進めると、画面の外の行が
+// 飛ばされ、見出しの一覧と見出しへ移る操作（改善の ui-10）も使えなくなる。読み上げの木に
+// 入ることは、E2E（render.spec の「長い一覧の読み上げの木」）が CDP で見ている。
+func TestOffscreenRowsAreDrawn(t *testing.T) {
+	// 注記は、取り下げた指定の名前を挙げて理由を書いているので、見るのは規則だけにする。
+	css := regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(uiSource(t, "ui/app.css"), "")
+	for _, rule := range []string{"content-visibility", "contain-intrinsic-"} {
+		if strings.Contains(css, rule) {
+			t.Errorf("app.css に %q がある。画面の外の行や見出しが読み上げの木から消える", rule)
+		}
 	}
 }
 

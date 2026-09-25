@@ -249,26 +249,6 @@ test("見出しはファイルのコメント行を書き換えずに写し、�
   }
 });
 
-// 一覧は1700行を超えるので、画面の外の行は描かない（app.css の content-visibility）。
-// 描く前の高さは見積もりで持つ。入力欄を差し込んだ行だけは、いつも描く（入力欄は、差し
-// 込んだ直後、画面へ送る前に高さを測る）。見出しはいつも描く（下の読み上げの木の試験）。
-test("画面の外の行は描かず、入力欄を差し込んだ行と見出しはいつも描く", async ({ app }) => {
-  const style = (locator) =>
-    locator.evaluate((e) => {
-      const s = getComputedStyle(e);
-      return { visibility: s.contentVisibility, size: s.containIntrinsicBlockSize };
-    });
-  expect((await style(rowByLine(app, LINE.hello))).visibility).toBe("auto");
-  expect((await style(rowByLine(app, LINE.hello))).size).toMatch(/^auto \d+px$/);
-  expect((await style(headings(app).first())).visibility).toBe("visible");
-
-  await openEditor(app, LINE.goodbye);
-  expect((await style(rowByLine(app, LINE.goodbye))).visibility).toBe("visible");
-  expect((await style(rowByLine(app, LINE.hello))).visibility).toBe("auto");
-  await editor(app).press("Escape");
-  expect((await style(rowByLine(app, LINE.goodbye))).visibility).toBe("auto");
-});
-
 // 画面はファイルの写しである。空行とヘッダー行は番号だけの行になるので出さないが、
 // データ行は、直せない行も含めて1行も落とさずファイルの順に並べる。
 // 空白で始まる # の行は見出しではなくデータ行として出る（internal/edit と同じ判定）。
@@ -651,33 +631,54 @@ test.describe("空白を含む訳", () => {
 
 test.describe("長い一覧の読み上げの木", () => {
   // 200 行と、20 行ごとの節点の見出し 10 個。画面（800px の高さ）に収まらない長さにする。
-  const rows = [];
+  const probes = [];
+  const items = [];
   for (let i = 1; i <= 200; i++) {
     const n = String(i).padStart(3, "0");
     if (i % 20 === 1) {
-      rows.push(`# --- block ${n} ---`);
+      items.push(`# --- block ${n} ---`);
     }
-    rows.push({ source: `Probe line ${n}.`, section: "UI", node: "", order: "", speaker: "UI", translation: `訳${i}` });
+    const probe = { source: `Probe line ${n}.`, section: "UI", node: "", order: "", speaker: "UI", translation: `訳${i}` };
+    probes.push(probe);
+    items.push(probe);
   }
   const repo = sampleRepo();
-  repo.root[workingRel] = workingCopy(rows);
+  repo.root[workingRel] = workingCopy(items);
   test.use({ repo });
 
-  // nodeHeadingNames は、Chromium の読み上げの木（アクセシビリティツリー）にある、節点の
-  // 見出し（aria-level 3）の名前を並びのまま返す。Playwright の toHaveAccessibleName は
-  // DOM から名前を計算するので、読み上げの木の欠けを見ない。CDP で木そのものを読む。
-  async function nodeHeadingNames(page) {
+  // axNodes は、Chromium の読み上げの木（アクセシビリティツリー）の節点のうち、無視されて
+  // いないものを返す。Playwright の toHaveAccessibleName や ariaSnapshot は DOM から
+  // 計算するので、読み上げの木の欠けを見ない。CDP で木そのものを読む。
+  async function axNodes(page) {
     const cdp = await page.context().newCDPSession(page);
     try {
       await cdp.send("Accessibility.enable");
       const { nodes } = await cdp.send("Accessibility.getFullAXTree");
-      const level = (n) => n.properties?.find((p) => p.name === "level")?.value?.value;
-      return nodes
-        .filter((n) => n.role?.value === "heading" && !n.ignored && level(n) === 3)
-        .map((n) => (n.name?.value ?? "").trim());
+      return nodes.filter((n) => !n.ignored);
     } finally {
       await cdp.detach();
     }
+  }
+
+  // nodeHeadingNames は、読み上げの木にある節点の見出し（aria-level 3）の名前を並びのまま返す。
+  async function nodeHeadingNames(page) {
+    const level = (n) => n.properties?.find((p) => p.name === "level")?.value?.value;
+    return (await axNodes(page))
+      .filter((n) => n.role?.value === "heading" && level(n) === 3)
+      .map((n) => (n.name?.value ?? "").trim());
+  }
+
+  // missingRowTexts は、見本の 200 行の原文と訳のうち、読み上げの木の字の節点に無いものを返す。
+  async function missingRowTexts(page) {
+    const texts = new Set(
+      (await axNodes(page)).filter((n) => n.role?.value === "StaticText").map((n) => n.name?.value ?? ""),
+    );
+    return probes.flatMap((p) => [p.source, p.translation]).filter((text) => !texts.has(text));
+  }
+
+  // afterFrames は、2つの描画を待つ。送った先を描き終えてから読み上げの木を読む。
+  function afterFrames(page) {
+    return page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   }
 
   // 読み上げソフトの見出しの一覧と見出しへ移る操作（節と節点を見出しにした改善の ui-10）は、
@@ -695,7 +696,25 @@ test.describe("長い一覧の読み上げの木", () => {
     await expect.poll(() => nodeHeadingNames(app)).toEqual(want);
 
     await headings(app).last().evaluate((e) => e.scrollIntoView());
-    await app.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await afterFrames(app);
     await expect.poll(() => nodeHeadingNames(app)).toEqual(want);
+  });
+
+  // 読み上げソフトで行を読み進めるときは、画面の外の行も読めなければならない。行にも描かない
+  // 指定を付けていたころは、画面の外の行の原文と訳が、描くまで読み上げの木に入らず、読み
+  // 進めると飛ばされるおそれがあった（決まったことの 23 で指定を取り下げた）。
+  test("画面の外の行の原文と訳も、読み上げの木に入る", async ({ app }) => {
+    const rows = app.locator("#list .row");
+    await expect(rows).toHaveCount(200);
+    // 最後の行は、はじめは画面の外にある。
+    const top = await rows.last().evaluate((e) => e.getBoundingClientRect().top);
+    expect(top).toBeGreaterThan(await app.evaluate(() => window.innerHeight));
+    await expect.poll(() => missingRowTexts(app)).toEqual([]);
+
+    // 最後まで送ると、今度は最初の行が画面の外になる。
+    await rows.last().evaluate((e) => e.scrollIntoView());
+    await afterFrames(app);
+    expect(await rows.first().evaluate((e) => e.getBoundingClientRect().bottom)).toBeLessThan(0);
+    await expect.poll(() => missingRowTexts(app)).toEqual([]);
   });
 });
