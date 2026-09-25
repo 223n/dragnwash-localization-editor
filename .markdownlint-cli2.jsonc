@@ -9,8 +9,11 @@
   },
   "globs": ["**/*.md"],
   // 試験の出力も外す。Playwright は失敗した試験ごとに error-context.md を書く。
+  // .claude/ は Claude Code の手元の置き場で、コミットしない。中の git worktree（.claude/worktrees/）に
+  // リポジトリの写しが丸ごと入るので、外さないと本体の作業木で検査したときに写しの文書まで拾う。
   "ignores": [
     "node_modules/**",
+    ".claude/**",
     "docs/port-spec.md",
     "coverage/**",
     "test-results/**",

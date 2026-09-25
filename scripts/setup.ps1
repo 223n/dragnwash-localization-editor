@@ -172,6 +172,38 @@ if (Invoke-Step 'gh' $permArgs) {
     Write-Warn 'Actions の許可を変えられなかった。組織の設定で禁止されているときは、先に組織の Settings > Actions > General で許可する'
 }
 
+# ワークフローの uses はすべてコミットの SHA で固定してある。固定していないアクションが
+# 入ったときに、実行の時点で止まるようにする。zizmor の検査は必須のチェックではないため、
+# それだけではマージを止められない
+Write-Info 'アクションを完全なコミットの SHA で固定したものだけを動かす（Require actions to be pinned to a full-length commit SHA）'
+# PUT は enabled を必ず求め、allowed_actions も同じ呼び出しで書き換わる。いまの値を読んで渡し直す。
+# Actions を止めているリポジトリを、この設定のついでに動かし始めないためである
+$actionsPerm = Get-GhValue @(
+    'api', "repos/${Repo}/actions/permissions",
+    '--jq', '[.enabled, (.allowed_actions // "-"), (.sha_pinning_required // false)] | map(tostring) | join(" ")'
+)
+if (-not $actionsPerm) {
+    Write-Warn 'Actions の設定を読めず、SHA での固定を求められなかった'
+} else {
+    $actionsEnabled, $allowedActions, $shaPinning = $actionsPerm -split ' '
+    if ($shaPinning -eq 'true') {
+        Write-Ok 'すでに求めている'
+    } else {
+        $pinArgs = @(
+            'api', '--method', 'PUT', "repos/${Repo}/actions/permissions",
+            '-F', "enabled=${actionsEnabled}",
+            '-F', 'sha_pinning_required=true',
+            '--silent'
+        )
+        if ($allowedActions -ne '-') { $pinArgs += @('-f', "allowed_actions=${allowedActions}") }
+        if (Invoke-Step 'gh' $pinArgs) {
+            Write-Ok '求めるようにした'
+        } else {
+            Write-Warn 'SHA での固定を求められなかった。組織の設定で決まっているときは、組織の Settings > Actions > General で設定する'
+        }
+    }
+}
+
 # ---- 3. セキュリティ機能
 Write-Info 'Private vulnerability reporting を有効にする（SECURITY.md と Issue の選択画面が使う）'
 if (Invoke-Step 'gh' @('api', '--method', 'PUT', "repos/${Repo}/private-vulnerability-reporting", '--silent')) {
@@ -359,19 +391,29 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
             Write-Ok '書き換えるものは無い'
         } elseif (-not $NoPr) {
             $branch = 'feature/setup-repository'
-            Invoke-Step 'git' @('switch', '--create', $branch) | Out-Null
-            Invoke-Step 'git' (@('add') + $changed) | Out-Null
-            Invoke-Step 'git' @('commit', '--quiet', '--message', 'テンプレート由来の名前をこのリポジトリのものに書き換える') | Out-Null
-            Invoke-Step 'git' @('push', '--set-upstream', 'origin', $branch) | Out-Null
-            $prArgs = @(
-                'pr', 'create', '--repo', $Repo, '--base', $DevelopBranch, '--head', $branch,
-                '--title', 'テンプレート由来の名前を書き換える',
-                '--body', 'scripts/setup.ps1 が CODEOWNERS、Issue の選択画面の URL、package.json の名前を書き換えました。'
-            )
-            if (Invoke-Step 'gh' $prArgs) {
-                Write-Ok 'Pull Request を開いた。確かめてマージする'
+            # git の段が1つでも失敗したら、そこで書き換えの段を抜け、最後のまとめに出す。
+            # 先へ進むと、ブランチを作れないまま今のブランチへコミットしたり、押せていないブランチの
+            # Pull Request を開こうとしたりする。途中で止めても、書き換えたファイルは作業木に残る。
+            # $ErrorActionPreference = 'Stop' はネイティブコマンドの失敗では止まらないので、戻り値で見る
+            if (-not (Invoke-Step 'git' @('switch', '--create', $branch))) {
+                Write-Warn "ブランチ ${branch} を作れなかった。同じ名前のブランチが残っていないか確かめる。書き換えは作業木に残っている"
+            } elseif (-not (Invoke-Step 'git' (@('add') + $changed))) {
+                Write-Warn '書き換えたファイルを git add できなかった。書き換えは作業木に残っている'
+            } elseif (-not (Invoke-Step 'git' @('commit', '--quiet', '--message', 'テンプレート由来の名前をこのリポジトリのものに書き換える'))) {
+                Write-Warn "書き換えをコミットできなかった。書き換えはブランチ ${branch} の作業木に残っている"
+            } elseif (-not (Invoke-Step 'git' @('push', '--set-upstream', 'origin', $branch))) {
+                Write-Warn "ブランチ ${branch} を push できなかった。コミットは手元の ${branch} にある"
             } else {
-                Write-Warn "Pull Request を開けなかった。ブランチ ${branch} は push 済み"
+                $prArgs = @(
+                    'pr', 'create', '--repo', $Repo, '--base', $DevelopBranch, '--head', $branch,
+                    '--title', 'テンプレート由来の名前を書き換える',
+                    '--body', 'scripts/setup.ps1 が CODEOWNERS、Issue の選択画面の URL、package.json の名前を書き換えました。'
+                )
+                if (Invoke-Step 'gh' $prArgs) {
+                    Write-Ok 'Pull Request を開いた。確かめてマージする'
+                } else {
+                    Write-Warn "Pull Request を開けなかった。ブランチ ${branch} は push 済み"
+                }
             }
         } else {
             Write-Ok "書き換えた（コミットはしていない）: $($changed -join ' ')"
@@ -392,7 +434,8 @@ if ($failures.Count -eq 0) {
 Write-Host @'
 
 残りは GitHub の画面で行います。
-  - main と develop のルール（Pull Request 必須、Code scanning の結果）: Settings > Rules
+  - main と develop のルール（Pull Request 必須）: Settings > Rules
+  - CodeQL の指摘を仕分ける（結果は必須のチェックにしない）: Security > Code scanning
   - SECURITY.md に非公開の連絡先を書く
   - package.json の description と README を書き換える
 '@

@@ -177,14 +177,32 @@ func (d display) of(path string) string {
 }
 
 // resolvePath は絶対パスにしてからシンボリックリンクを解決する。
-// どちらも失敗したらそこまでの結果を返す。存在しないパスでは
-// EvalSymlinks が失敗するので、その場合は絶対パスのままになる。
+//
+// 存在しないパス（行き先の無いリンクなど）では EvalSymlinks が失敗するので、
+// 解決できる祖先まで遡って祖先だけを解決し、残りをそのまま付け直す。元実装の
+// Path.resolve(strict=False) と同じく「解決できるところまで」解決する。祖先を
+// 解決しないと、ルート（解決ずみ）と形が食い違い、相対化に失敗する。Windows の
+// 8.3 形式の短い名前（C:\Users\RUNNER~1）や、macOS の /var → /private/var が
+// 祖先にあると、そうなる。
+//
+// どこも解決できなければ絶対パスのままを返す。
 func resolvePath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
+	rest := ""
+	for p := path; ; {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			if rest == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
 	}
-	return path
 }

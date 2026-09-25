@@ -47,17 +47,19 @@ jobs:
     # セルフホストのランナーがあれば、リポジトリの変数 RUNS_ON にそのラベル（例: self-hosted）を設定する。
     # 無ければ GitHub がホストする ubuntu-latest で動く
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    # 6つの対象をクロスビルドする分、タグと Release だけを作っていた頃より長くかかる
-    timeout-minutes: 25
+    # 6つの対象をクロスビルドする分と、Go のテストを通す分、タグと Release だけを作っていた頃より長くかかる
+    timeout-minutes: 35
     permissions:
       contents: write        # タグを打ち、Release を作り、書庫を添付する
       pull-requests: write   # main を develop へ戻す PR を開く
+      actions: write         # develop へ直接戻したとき、develop の CI を workflow_dispatch で動かす
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: 要る道具があることを確かめる
         # GitHub がホストするランナーには入っている。セルフホストのランナーでは自分で入れる。
-        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない
+        # zip は Windows 向けの書庫を作るのに使う。Linux の tar は zip を書けない。
+        # unzip は、作った zip の中身の一覧を取るのに使う
         run: |
           if ! command -v gh >/dev/null 2>&1; then
             echo "::error::gh（GitHub CLI）が無い。ランナーに入れてから実行する: https://cli.github.com/"
@@ -65,6 +67,10 @@ jobs:
           fi
           if ! command -v zip >/dev/null 2>&1; then
             echo "::error::zip が無い。Windows 向けの書庫を作れない。ランナーに入れてから実行する（例: apt-get install zip）"
+            exit 1
+          fi
+          if ! command -v unzip >/dev/null 2>&1; then
+            echo "::error::unzip が無い。Windows 向けの書庫の中身を確かめられない。ランナーに入れてから実行する（例: apt-get install unzip）"
             exit 1
           fi
 
@@ -137,6 +143,19 @@ jobs:
           # 依存は標準ライブラリだけなので、キャッシュを切っても伸びるのは1分ほどで済む
           cache: false
 
+      - name: Goのテストを通す
+        # 配る木（main）そのものでテストを通してから作る。1つでも落ちたら、タグも Release も作らない。
+        # リリースの PR の CI は人が承認するまで動かず、承認せずにマージされることもある。auto_merge の経路では
+        # 「リリース」が release ブランチで CI を走らせてからマージするが、main への push の CI は起きない
+        # （GITHUB_TOKEN のマージはワークフローを起こさない）。hotfix/* の PR は「リリース」を通らない。
+        # そのため、ここを公開の前の最後の確かめとして残す。
+        # E2E は含めない。ブラウザーを入れる分、公開までが長くなるためで、画面は develop の CI で見ている。
+        # 元リポジトリを読む試験は、ここには元リポジトリが無いので飛ぶ
+        env:
+          # テストはプロジェクトのコードを走らせる。書き込み権限つきのトークンを、要らない段には渡さない
+          GH_TOKEN: ''
+        run: go test ./cmd/... ./internal/... -count=1
+
       - name: バイナリと書庫を作る
         # タグを打つ前に作る。1つでもビルドに失敗したら、ここで止まってタグも Release も作らない。
         # 6種のうち5種だけが載った Release は、足りない対象の利用者から見れば壊れた配布になる
@@ -160,9 +179,18 @@ jobs:
           rm -rf dist
           mkdir -p dist
 
-          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする
+          # 書庫に入れる説明。詳しい手順は README.md にあるので、ここは要点と行き先だけにする。
+          # 日本語と英語を並べて書く。dwloc の出力は日本語だけなので、英語の読者には、そのことと
+          # 止まったときの主な文の英訳を、書庫を開いた時点で渡しておく（詳しくは README.en.md）
           cat > dist/README.txt <<TXT
           dwloc ${VERSION}
+
+          日本語の説明のあとに、英語の説明があります。
+          The English version follows the Japanese one.
+
+          ================================================================
+          日本語
+          ================================================================
 
           Drag'n Wash の翻訳リポジトリを扱うコマンドです。
           この書庫には、実行ファイルと LICENSE と THIRD_PARTY_NOTICES.md とこの説明が入っています。
@@ -192,6 +220,59 @@ jobs:
 
           詳しい手順とチェックサムの確かめ方は、次のページにあります。
           https://github.com/223n/dragnwash-localization-editor
+
+          ================================================================
+          English
+          ================================================================
+
+          dwloc is a command for working with the Drag'n Wash translation repository.
+          This archive contains the program, LICENSE, THIRD_PARTY_NOTICES.md and this file.
+
+          What dwloc prints is in Japanese:
+            Everything dwloc prints in the terminal is in Japanese only.
+            The screen of dwloc edit follows the language of your browser.
+            The messages dwloc edit prints in the window are in English
+            only when you start it with --ui-lang en.
+            The first line it prints tells you what happened. The most common ones:
+              ここは翻訳リポジトリではないようです。
+                This does not look like a translation repository.
+              ゲームのフォルダーを探しましたが、見つかりませんでした。
+                It looked for the game folder and did not find it.
+                It carries on without the game (the source text column stays empty).
+              訳が失われるので、1バイトも書きませんでした。
+                Translations would be lost, so not a single byte was written.
+              ゲームに入っている翻訳が古いので、1バイトも書きませんでした。
+                The translation in the game is older, so not a single byte was written.
+              操作がないまま 30m0s たちました。待ち受けを終えます。
+                No activity for 30m0s. Stopping.
+            More translations are in "What dwloc prints is in Japanese" of the English README:
+            https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md#what-dwloc-prints-is-in-japanese
+
+          The simplest way to start:
+            Put dwloc in the folder of the translation repository (the same place as Translations)
+            and double-click it. The screen for editing translations opens in your browser.
+            To stop it, press Ctrl+C or close the window that opened.
+            This is verified on Windows. On macOS and Linux, use the commands below.
+
+          From the command line:
+            dwloc edit     --root <path to the translation repository>   edit translations in the browser
+            dwloc diff     --root <path to the translation repository>   list what to do next
+            dwloc validate --root <path to the translation repository>   validate the published files
+            dwloc publish  --root <path to the translation repository>   rebuild the CSV for publication
+            dwloc version
+
+          This binary is not signed.
+          On macOS, Gatekeeper may stop it the first time. This line removes the quarantine mark:
+            xattr -d com.apple.quarantine ./dwloc
+          On Windows, a SmartScreen warning may appear.
+          Click "More info" and then "Run anyway".
+          If dwloc.exe is missing, suspect that Microsoft Defender quarantined it.
+          Check "Protection history" in Windows Security and allow it from there.
+          If macOS or Linux says Permission denied, add the execute permission:
+            chmod +x ./dwloc
+
+          The detailed steps and how to verify the checksums are on this page:
+          https://github.com/223n/dragnwash-localization-editor/blob/main/README.en.md
           TXT
 
           for target in ${targets}; do
@@ -245,6 +326,64 @@ jobs:
           (cd dist && sha256sum dwloc_*.tar.gz dwloc_*.zip > "dwloc_${VERSION}_checksums.txt")
           cat "dist/dwloc_${VERSION}_checksums.txt"
 
+      - name: 6つの書庫の中身を確かめる
+        # 次の段で展開して動かせるのは、ランナーと同じ対象の書庫1つだけである。
+        # 残りの5つ（主な利用先の Windows 向けの zip を含む）は、ここで見ないと公開の前に一度も開かれない。
+        # 不変のリリースは公開したあとで直せないので、実行はせずに中身の一覧だけを取り、6つすべてで次を見る。
+        #   - 書庫と同じ名前のフォルダー1つの下に、本体・LICENSE・THIRD_PARTY_NOTICES.md・README.txt の4つだけがある
+        #   - Windows 以外の本体に実行権限（755）が付いている。tar.gz の一覧の権限の欄で見る。
+        #     zip は Windows 向けだけで、Windows は実行権限を使わないので見ない
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ''
+        run: |
+          # 対象は「バイナリと書庫を作る」と同じ6種
+          targets='linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64'
+          for target in ${targets}; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="dwloc_${VERSION}_${goos}_${goarch}"
+            if [ "${goos}" = 'windows' ]; then
+              bin='dwloc.exe'
+              archive="dist/${name}.zip"
+            else
+              bin='dwloc'
+              archive="dist/${name}.tar.gz"
+            fi
+            if [ ! -f "${archive}" ]; then
+              echo "::error::書庫が無い: ${archive}"
+              exit 1
+            fi
+
+            # フォルダーの項目（末尾が /）を除き、並べ替えて期待と比べる。足りないものも余計なものも見つける
+            if [ "${goos}" = 'windows' ]; then
+              listing="$(unzip -Z1 "${archive}")"
+            else
+              listing="$(tar -tzf "${archive}")"
+            fi
+            got="$(printf '%s\n' "${listing}" | { grep -v '/$' || true; } | LC_ALL=C sort)"
+            want="$(printf '%s\n' "${name}/${bin}" "${name}/LICENSE" "${name}/THIRD_PARTY_NOTICES.md" "${name}/README.txt" | LC_ALL=C sort)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::書庫 ${archive#dist/} の中身が期待と違う（- が期待、+ が実際）"
+              diff <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") || true
+              exit 1
+            fi
+
+            if [ "${goos}" != 'windows' ]; then
+              # tar -tv の1列目が権限（例: -rwxr-xr-x）。持ち主・グループ・ほかの実行権限を見る
+              mode="$(tar -tvzf "${archive}" "${name}/${bin}" | awk '{ print $1 }')"
+              case "${mode}" in
+                -??x??x??x) ;;
+                *)
+                  echo "::error::書庫 ${archive#dist/} の ${bin} に実行権限が無い（${mode}）。展開した翻訳者の手元で Permission denied になる"
+                  exit 1
+                  ;;
+              esac
+            fi
+            echo "中身を確かめた: ${archive#dist/}"
+          done
+          echo "- 6つの書庫の中身を確かめた（4つのファイルと、Windows 以外の本体の実行権限）" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 作った書庫を展開して動かす
         # タグを打つ前に、配る書庫そのものを展開して動かす。1つでも失敗したら、ここで止まって
         # タグも Release も作らない。前の段と同じく、壊れた配布を公開しないためである。
@@ -252,7 +391,8 @@ jobs:
         # 動かすまで分からない。不変のリリースは公開したあとで直せないので、その前に確かめる。
         #
         # 動かせるのはランナーと同じ対象の書庫だけで、GitHub がホストするランナーでは linux/amd64 になる。
-        # 6つとも同じ ldflags と同じ手順で作っているので、1つ動けば版の埋め込みと書庫の形は効いている。
+        # 書庫の中身と実行権限は、前の段で6つとも一覧で確かめてある。ここでは展開した結果でも同じことを見る。
+        # 6つとも同じ ldflags と同じ手順で作っているので、1つ動けば版の埋め込みは効いている。
         # -trimpath を付けると go version -m に ldflags が残らないため、
         # 他の5つを実行せずに確かめる手は無い（確認済み: go 1.27.1）。
         #
@@ -434,7 +574,12 @@ jobs:
 
       - name: mainをdevelopへ戻す
         # 版の更新を develop にも届ける。まず直接押し、保護されていて押せなければ PR を開く。
-        # 再実行しても壊れないよう、同じ PR がすでにあればそれを使う
+        # 再実行しても壊れないよう、同じ PR がすでにあればそれを使う。
+        #
+        # この PR も GITHUB_TOKEN が開くので、pull_request の実行（CI、CodeQL、branch-guard）は「承認待ち」で
+        # 作られる。人が「Approve workflows to run」を押し、CI が通ってからマージするよう、本文と要約に書く。
+        # 承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残る。
+        # この PR を自動でマージする経路は無いので、取り消しの段は置かない
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -458,6 +603,16 @@ jobs:
           if git merge --no-ff --no-edit --message "${MAIN_BRANCH} を ${DEVELOP_BRANCH} に取り込む（${TAG}）" "origin/${MAIN_BRANCH}"; then
             if git push origin "HEAD:${DEVELOP_BRANCH}"; then
               echo "- ${DEVELOP_BRANCH}: ${MAIN_BRANCH} を直接取り込んだ" >> "$GITHUB_STEP_SUMMARY"
+              # GITHUB_TOKEN の push では push の CI が起きない。次のリリースの「developのCIが
+              # 通ったことを確かめる」は、push の実行が無いとき同じ SHA の workflow_dispatch の
+              # 実行を見るので、ここで動かしておく（GITHUB_TOKEN の workflow_dispatch は実行を
+              # 作れる）。動かせなくても戻しはできているので、止めずに手で動かすよう案内する
+              if gh workflow run ci.yml --ref "${DEVELOP_BRANCH}"; then
+                echo "- ${DEVELOP_BRANCH}: CI を手で動かした（GITHUB_TOKEN の push では CI が起きないため）" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::warning::${DEVELOP_BRANCH} の CI を動かせなかった。次のリリースの前に Actions の CI を ${DEVELOP_BRANCH} で手で動かす"
+                echo "- ${DEVELOP_BRANCH}: CI を動かせなかった。次のリリースの前に手で動かす" >> "$GITHUB_STEP_SUMMARY"
+              fi
               exit 0
             fi
             echo "::warning::${DEVELOP_BRANCH} に直接押せなかった。PR で取り込む"
@@ -475,15 +630,31 @@ jobs:
           else
             git switch --create "${branch}" "origin/${MAIN_BRANCH}"
             git push --set-upstream origin "${branch}"
+            # 本文は作業ツリーの外に書く。作業ツリーの中は、このあとの段も使う
+            body="${RUNNER_TEMP:-/tmp}/back-merge-body.md"
+            {
+              echo "リリース ${TAG} で上げた版を \`${DEVELOP_BRANCH}\` にも反映します。"
+              echo "衝突があれば、この PR の上で解消してください。"
+              echo
+              echo "**マージコミット（Create a merge commit）でマージしてください。**"
+              echo
+              echo "## マージの前に"
+              echo
+              echo "この PR は GitHub Actions が開いたため、CI などの実行は「承認待ち」で作られます。"
+              echo "**「Approve workflows to run」を押し、CI が通ってからマージしてください。**"
+              echo
+              echo "- CI は、\`${MAIN_BRANCH}\` を \`${DEVELOP_BRANCH}\` に取り込んだ木で走ります"
+              echo "- 承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残ります"
+            } > "${body}"
             url="$(gh pr create \
               --base "${DEVELOP_BRANCH}" \
               --head "${branch}" \
               --title "${MAIN_BRANCH} を ${DEVELOP_BRANCH} に取り込む（${TAG}）" \
-              --body "リリース ${TAG} で上げた版を \`${DEVELOP_BRANCH}\` にも反映します。衝突があれば、この PR の上で解消してください。マージコミット（Create a merge commit）でマージしてください。")"
+              --body-file "${body}")"
             gh pr edit "${url##*/}" --add-label 'リリース' \
               || echo "::warning::ラベル「リリース」を付けられなかった"
           fi
-          echo "- ${DEVELOP_BRANCH}: PR で取り込む ${url}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${DEVELOP_BRANCH}: PR で取り込む ${url}（「Approve workflows to run」を押し、CI が通ってからマージする）" >> "$GITHUB_STEP_SUMMARY"
 
       - name: リリースブランチを消す
         # マージ済みのブランチを残すと、次のリリースの「release/* が残っていないか」の確認に引っかかる
