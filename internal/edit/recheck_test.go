@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -27,8 +28,11 @@ import (
 そのため、ここではモデルを試験の中で壊して、確かめが誤りを見つけることを見る。
 
 後半のうち形の確かめ（飲み込みの疑いとゲームの読み方との食い違い）は、正しく組み立てても
-外れることがある。値が改行で終わる列を持つレコードに、カンマで始まる訳を書くと、続きの
-物理行を単独で読んだときにヘッダーと同じ列の数に見える（TestSaveRechecksTheShapesOfWrittenValues）。
+外れうる。値が改行で終わる列を持つレコードに、カンマで始まる訳を書くと、続きの物理行を
+単独で読んだときにヘッダーと同じ列の数に見える。訳の改行の後ろの行も同じ形になりうる。
+この形は、SetTranslation が差し替えたレコードをヘッダーと並べて先に断る
+（TestSetTranslationRefusesLinesThatLookLikeRecords）ので、Save の確かめはモデルを差し替えて
+見る（TestSaveRechecksTheShapesOfTouchedRecords）。
 
 ゲームの読み方で読んだ値が保存の前後で変わらないことの確かめ（File.gameChange）は、
 key 列も原文も空のレコードの訳を書き換えたときに外れていた。いまはそのレコードを編集
@@ -72,27 +76,44 @@ func TestRecheckRecord(t *testing.T) {
 		text  string
 		value string
 		ok    bool
+		// span は、通るときに返るはずの物理行の数から1を引いたもの。0 なら元のレコードと同じ。
+		span int
 	}{
-		{"1物理行のレコード", one, prefixOne + "新しい\r\n", "新しい", true},
-		{"原文が行をまたぐレコード", two, prefixTwo + "段落\r\n", "段落", true},
-		{"引用が要る訳", one, prefixOne + "\"a,b\"\r\n", "a,b", true},
-		{"後ろにレコードが増える", one, prefixOne + "x\r\nk,y\r\n", "x", false},
-		{"引用符が閉じない", one, prefixOne + "\"x\r\n", "\"x", false},
-		{"終端が変わる", one, prefixOne + "x\n", "x", false},
-		{"物理行の数が変わる", two, prefixTwo + "\"x\ny\"\r\n", "x\ny", false},
-		{"区切りの数が変わる", one, prefixOne + "x,y\r\n", "x,y", false},
-		{"訳より前の値が変わる", one, "k,UI,,,UI,one,x\r\n", "x", false},
-		{"訳が value と違う", one, prefixOne + "x\r\n", "y", false},
-		{"ゲームの読み方と割れる", one, prefixOne + "a\"b\"c\r\n", "a\"b\"c", false},
+		{"1物理行のレコード", one, prefixOne + "新しい\r\n", "新しい", true, 0},
+		{"原文が行をまたぐレコード", two, prefixTwo + "段落\r\n", "段落", true, 0},
+		{"引用が要る訳", one, prefixOne + "\"a,b\"\r\n", "a,b", true, 0},
+		{"後ろにレコードが増える", one, prefixOne + "x\r\nk,y\r\n", "x", false, 0},
+		{"引用符が閉じない", one, prefixOne + "\"x\r\n", "\"x", false, 0},
+		{"終端が変わる", one, prefixOne + "x\n", "x", false, 0},
+		// 訳への改行の入力（決まったことの 1）。物理行の数は、訳の改行のぶんだけ変わってよい。
+		{"訳の改行で物理行の数が増える", two, prefixTwo + "\"x\ny\"\r\n", "x\ny", true, 2},
+		{"訳が改行で終わる", one, prefixOne + "\"x\n\"\r\n", "x\n", true, 1},
+		{"改行を引用せずに書くと後ろにレコードが増える", one, prefixOne + "x\ny\r\n", "x\ny", false, 0},
+		{"区切りの数が変わる", one, prefixOne + "x,y\r\n", "x,y", false, 0},
+		{"訳より前の値が変わる", one, "k,UI,,,UI,one,x\r\n", "x", false, 0},
+		{"訳が value と違う", one, prefixOne + "x\r\n", "y", false, 0},
+		{"訳の改行が value と違う", one, prefixOne + "\"x\r\ny\"\r\n", "x\ny", false, 0},
+		{"ゲームの読み方と割れる", one, prefixOne + "a\"b\"c\r\n", "a\"b\"c", false, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fields, ok := recheckRecord(tt.orig, tt.text, tt.value)
+			fields, span, ok := recheckRecord(tt.orig, tt.text, tt.value)
 			if ok != tt.ok {
 				t.Fatalf("recheckRecord = %v、%v を期待", ok, tt.ok)
 			}
-			if ok && fields[len(fields)-1] != tt.value {
+			if !ok {
+				return
+			}
+			if fields[len(fields)-1] != tt.value {
 				t.Errorf("読み直した訳 = %q", fields[len(fields)-1])
+			}
+			// 物理行の数から1を引いたもの。省いた見本では、元のレコードと同じ。
+			want := tt.span
+			if want == 0 {
+				want = tt.orig.EndNumber - tt.orig.Number
+			}
+			if span != want {
+				t.Errorf("物理行の数 = %d+1、%d+1 を期待", span, want)
 			}
 		})
 	}
@@ -306,44 +327,69 @@ func TestSaveRechecksTheShapesOfTouchedRecords(t *testing.T) {
 // 値は改行で終わり、続きの物理行（3行目）は閉じ引用符で始まる。そこへカンマで始まる訳を
 // 書くと、3行目を単独で読んだとき、閉じ引用符が開き引用符に見え、訳のカンマが区切りに
 // なって、ヘッダーと同じ3列に見える（csvfile.FindSwallows の same_columns）。
+// ID 3 は1物理行のレコード。
 const swallowOnWrite = "key,speaker,translation\r\n" +
 	"aaaaaaaaaaaaaaaa,\"Fern\r\n\",\r\n" +
 	"bbbbbbbbbbbbbbbb,Kobold,ok\r\n"
 
-// TestSaveRechecksTheShapesOfWrittenValues は、編集できるレコードに書いた訳が、ファイル
-// 全体で読むと飲み込みの疑いに当たるとき、書かずに断ることを見る。モデルは壊さない。
-// 差し替えたレコードだけを読み直す確かめ（SetTranslation）は通り、書く直前の全体の確かめで
-// 外れる形である。
-func TestSaveRechecksTheShapesOfWrittenValues(t *testing.T) {
-	path := writeTemp(t, swallowOnWrite)
-	f, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
+// TestSetTranslationRefusesLinesThatLookLikeRecords は、書こうとした訳の行が、その行だけで
+// 読むとレコードに見える（飲み込みの疑いに当たる）とき、書き換えずに、訳の何行目かを
+// 添えて断ることを見る。publish は同じ関数（csvfile.FindSwallows）でそのレコードを止める。
+//
+// PR3 では、この形は書く直前のファイル全体の確かめ（Save）で外れ、理由は書く前の事後確認の
+// 一般の文（reason.EditRecheckFailed）だった。訳に改行を入れられるようになると、訳の2行目
+// 以降がこの形になりうるので、差し替えたレコードをヘッダーと並べて確かめ、直す先の分かる
+// 理由で先に断る（File.swallowedLine）。
+func TestSetTranslationRefusesLinesThatLookLikeRecords(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    int
+		value string
+		// line は、レコードに見える行が訳の何行目か。0 なら書ける。
+		line int
+	}{
+		// 原文（speaker）が改行で終わるので、訳の1行目が続きの物理行に入る。
+		{"カンマで始まる訳が3列に見える", 2, ",訳,", 1},
+		{"カンマで始まらない訳は書ける", 2, "訳,あり", 0},
+		// 訳の改行の後ろの行。
+		{"改行の後ろの行がキーの形で始まる", 3, "いち\nfedcba9876543210,x", 2},
+		{"改行の後ろの行が3列に見える", 3, "いち\nに\na,b,c", 3},
+		{"改行の後ろの行が台詞IDで始まる", 3, "いち\nline:0a0b0c01,x", 2},
+		{"改行の後ろの行の列が少ない", 3, "いち\nに,さん", 0},
+		{"改行の後ろの行が '#' で始まる", 3, "いち\n# a,b,c", 0},
 	}
-	if line, _ := f.Line(2); !line.Editable || line.Key() == "" {
-		t.Fatalf("前提が崩れている。ID 2 はキーのある編集できる行のはず: %+v", line)
-	}
-	if err := f.SetTranslation(2, ",訳,"); err != nil {
-		t.Fatalf("書き換えそのものは通るはず: %v", err)
-	}
-	var recheck *RecheckError
-	if err := f.Save(); !errors.As(err, &recheck) || recheck.ID != 2 || recheck.Line != 2 {
-		t.Fatalf("Save = %v、ID 2 を指す *RecheckError を期待", err)
-	}
-	if got := readFile(t, path); got != swallowOnWrite {
-		t.Errorf("外れたのに書いた: %q", got)
-	}
-
-	// カンマで始まらない訳なら書ける。
-	again, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := again.SetTranslation(2, "訳,あり"); err != nil {
-		t.Fatal(err)
-	}
-	if err := again.Save(); err != nil {
-		t.Fatalf("保存に失敗した: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTemp(t, swallowOnWrite)
+			f, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if line, _ := f.Line(tt.id); !line.Editable || line.Key() == "" {
+				t.Fatalf("前提が崩れている。ID %d はキーのある編集できる行のはず: %+v", tt.id, line)
+			}
+			err = f.SetTranslation(tt.id, tt.value)
+			if tt.line == 0 {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Save(); err != nil {
+					t.Fatalf("保存に失敗した: %v", err)
+				}
+				return
+			}
+			var invalid *InvalidValueError
+			if !errors.As(err, &invalid) || invalid.Cause.ID != reason.EditLineLooksLikeRecord ||
+				invalid.ID != tt.id || argOf(invalid.Cause, "line") != strconv.Itoa(tt.line) {
+				t.Fatalf("SetTranslation = %v、訳の%d行目がレコードに見える理由を期待", err, tt.line)
+			}
+			if f.Dirty() || string(f.Bytes()) != swallowOnWrite {
+				t.Error("断ったのにモデルが変わった")
+			}
+			if l, _ := f.Line(3); l.Number != 4 || l.EndNumber != 4 || f.PhysicalLines() != 4 {
+				t.Errorf("断ったのに行番号が変わった: %d〜%d、物理行 %d", l.Number, l.EndNumber, f.PhysicalLines())
+			}
+		})
 	}
 }
 
@@ -456,6 +502,45 @@ func TestSaveBlamesTheRecordThatFailsAlone(t *testing.T) {
 			blame: 4, alone: 2,
 			want: "key,translation\r\n" +
 				"cccccccccccccccc,架空の訳\r\n" +
+				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+				",p\"q\r\n" +
+				"bbbbbbbbbbbbbbbb,ok\r\n",
+		},
+		{
+			// 上と同じ形で、後ろの ID 4 の訳に改行を入れて外れる。ID 4 の物理行が1つ増える
+			// ので、ID 2 だけを書き換えたバイト列では、ID 5 の行番号がモデル（どちらの書き換えも
+			// 入れたもの）と1つずれる。1つずつ確かめ直すときは、入れた書き換えのぶんだけで
+			// 行番号を見積もる（File.numbers）。モデルの行番号と比べると、原因でない ID 2 を
+			// 指してしまう。
+			name: "後ろのレコードの訳に改行を入れて外れる",
+			body: "key,translation\r\n" +
+				"cccccccccccccccc,old\r\n" +
+				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+				",p\"q\r\n" +
+				"bbbbbbbbbbbbbbbb,ok\r\n",
+			force: 4,
+			edits: []recheckEdit{{2, "架空の訳"}, {4, "訳\nです"}},
+			blame: 4, alone: 2,
+			want: "key,translation\r\n" +
+				"cccccccccccccccc,架空の訳\r\n" +
+				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+				",p\"q\r\n" +
+				"bbbbbbbbbbbbbbbb,ok\r\n",
+		},
+		{
+			// 前の ID 2 の訳に改行を入れ（原因ではない）、後ろの ID 4 で外れる。ID 4 だけを
+			// 書き換えたバイト列では、ID 3 から後ろの行番号がモデルと1つずれる。
+			name: "前のレコードの訳に改行を入れ、後ろのレコードで外れる",
+			body: "key,translation\r\n" +
+				"cccccccccccccccc,old\r\n" +
+				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+				",p\"q\r\n" +
+				"bbbbbbbbbbbbbbbb,ok\r\n",
+			force: 4,
+			edits: []recheckEdit{{2, "架空の\n訳"}, {4, "訳"}},
+			blame: 4, alone: 2,
+			want: "key,translation\r\n" +
+				"cccccccccccccccc,\"架空の\n訳\"\r\n" +
 				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
 				",p\"q\r\n" +
 				"bbbbbbbbbbbbbbbb,ok\r\n",

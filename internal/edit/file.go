@@ -77,6 +77,7 @@ type Line struct {
 	// （csvfile.SplitSegments の Fields）を、区切りの数（Offsets の個数）まで空文字で
 	// 埋めたもの。埋めるのは、未訳の行 `a,b,` で落ちる末尾の空フィールドを戻すため。
 	// 値の中の改行は、ファイルにあるとおり（LF・CRLF・単独の CR）のまま入る。
+	// [File.SetTranslation] で書いた訳の改行は LF になる。
 	Fields []string
 	// Editable はこの行の訳を書き換えてよいか。
 	Editable bool
@@ -91,6 +92,11 @@ type Line struct {
 	// orig は、読み込んだ（または最後に保存した）ときの Text。書く直前の確かめ
 	// （[File.verify]）が、触っていない行が1バイトも変わらないことを見るのに使う。
 	orig string
+	// origSpan は orig が占める物理行の数から1を引いたもの（1物理行なら 0）。訳に
+	// 改行を足すと、書き換えたレコードの物理行の数が変わり、後ろの行の行番号がずれる。
+	// 書く直前の確かめが、書き換えの一部だけを入れたバイト列の行番号を見積もるのに
+	// 使う（[File.numbers]）。
+	origSpan int
 	// term は Text の終わりの終端（"\r\n" / "\n" / "\r" / ""）。
 	term string
 	// last は最終フィールドの開始位置（Text の先頭から）。KindData のレコードだけ。
@@ -137,7 +143,11 @@ type File struct {
 	bom string
 	// header は受理されたヘッダー。読み取り専用で開いたときは nil。
 	header []string
-	lines  []Line
+	// headerText は受理されたヘッダーの生のバイト列（終端を含む）。訳を書き換えた
+	// レコードを、ヘッダーと並べて飲み込みの疑いの検出にかけるのに使う
+	// （[File.looksSwallowing]）。
+	headerText string
+	lines      []Line
 	// physical はファイルの物理行の数（csvfile.Segments の Lines）。
 	physical int
 	// version は読み込んだ（または最後に保存した）バイト列全体の SHA-256。
@@ -185,7 +195,7 @@ func Parse(data []byte) *File {
 		}
 		line := Line{ID: seg.ID, Number: seg.Line, EndNumber: seg.EndLine,
 			Text: segs.Text[seg.Start : seg.End+len(seg.Term)], term: string(seg.Term)}
-		line.orig = line.Text
+		line.orig, line.origSpan = line.Text, seg.EndLine-seg.Line
 		line.Kind = kindOf(seg)
 		switch line.Kind {
 		case KindHeader:
@@ -207,6 +217,7 @@ func Parse(data []byte) *File {
 	}
 	if header != nil {
 		f.header = header
+		f.headerText = f.lines[headerIndex].Text
 		f.lines[headerIndex].Fields = slices.Clone(header)
 		// 形の検出は publish と同じ関数を呼ぶ（csvfile の detect.go）。閉じない引用符の
 		// ファイルは全体を読み取り専用にするので見ない。
@@ -334,7 +345,9 @@ func rawKind(body string) Kind {
 // swallowed と sw は、そのレコードに飲み込みの疑いがあるか（csvfile.FindSwallows）と
 // その最初の1件、disagrees と game は、ゲームの読み方と値が割れるか
 // （csvfile.CSharpDisagreements）とその1件。理由は、直す先を指す順（列の数、飲み込み、
-// ゲームの読み方との食い違い、publish がキーを決められない、訳の改行）に1つだけ付ける。
+// ゲームの読み方との食い違い、publish がキーを決められない）に1つだけ付ける。
+// どれにも当たらなければ編集できる。訳に改行（CR か LF）があっても編集できる（決まった
+// ことの 1。画面は Shift+Enter で改行を入れ、貼り付けた改行も LF にそろえて残す）。
 //
 // publish がキーを決められない（key 列が16桁のキーでも台詞ID でもなく、原文も空。
 // 決まったことの 24）を置く位置の理由:
@@ -348,10 +361,6 @@ func rawKind(body string) Kind {
 //     引用の外の単独の CR など）を直す理由で、ファイルの形を直す理由から、そのレコードの
 //     中身の理由へ、という流れにそろえて後ろに置いた。key 列も原文も空のレコードは
 //     食い違いの判定に入らないので、同時には当たらない。
-//   - 訳の改行より前。訳の改行は、訳への改行の入力を足すまで（PR4）の画面の制限で、
-//     入れば消える。キーを決められないことは、PR4 のあとも publish が捨てることに
-//     変わりがなく、直す先（key 列を直すか、キーのある行へ訳を移して要らない行を消すか）
-//     を指す。
 func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees bool, game csvfile.Disagreement) {
 	line.Editable = false
 	switch {
@@ -390,7 +399,8 @@ func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees b
 		line.setReason(reason.New(reason.EditNoKeyOrSource,
 			"key列が16桁のキーでも台詞IDでもなく、原文（source_en）も空（publishがこのレコードを捨てるので、書いた訳は公開されない）"))
 	default:
-		judgeTranslation(line)
+		line.Editable = true
+		line.setReason(reason.Reason{})
 	}
 }
 
@@ -405,19 +415,6 @@ func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees b
 // 2列）では、原文は空と同じに見る。
 func keyless(header, fields []string) bool {
 	return publish.Keyless(csvfile.NewRow(header, fields))
-}
-
-// judgeTranslation は、ほかの理由に当たらないレコードの編集可否を、訳の値で決める。
-func judgeTranslation(line *Line) {
-	if tr := line.Fields[len(line.Fields)-1]; strings.ContainsAny(tr, "\r\n") {
-		// 訳への改行の入力は PR4 で足す（決まったことの 1）。いまの画面は改行を空白に
-		// 置き換えるので、開いて1字打つと、翻訳者が見ていない改行まで消える。
-		line.setReason(reason.New(reason.EditMultilineTranslation,
-			"訳に改行がある（改行の入る訳は、まだ画面から書き換えられない）"))
-		return
-	}
-	line.Editable = true
-	line.setReason(reason.Reason{})
 }
 
 // Open はファイルを読んで編集モデルにする。読み取りに失敗したときだけ誤りを返す。
@@ -485,7 +482,13 @@ func (f *File) Line(id int) (Line, bool) {
 // 書き換えるのは最終フィールドの開始位置からレコードの本体の終わり（レコードを
 // 終える改行の手前）までだけで、ほかの行にも、このレコードの前半にも触れない。
 // 終端はそのレコードが元々持っていた種類（CRLF / LF / CR / 無し）のまま残る。
-// 原文が行をまたぐレコードも、訳が1行に収まるかぎり書ける。
+//
+// 訳には改行を入れられる（決まったことの 1）。value の中の CRLF と単独の CR は LF に
+// そろえてから書く（決まったことのそのほか 1。作業コピーのレコードの区切りが CRLF でも
+// 値の中は LF で、実物のゲーム側の作業コピーと同じ形）。そろえた値は [Line.Translation] で
+// 読める。改行の入った訳は引用符で囲んで書く（[escapeTranslation]）。改行のぶんだけ
+// このレコードの物理行の数が変わり、後ろの行の行番号（[Line.Number] と
+// [Line.EndNumber]）と [File.PhysicalLines] がずれる。ID は変わらない。
 //
 // 差し替えた結果がいまのレコードと1バイトも変わらないなら、何もせず nil を返す
 // （[File.Dirty] も立たない）。
@@ -494,14 +497,17 @@ func (f *File) Line(id int) (Line, bool) {
 // 前半。[recheckRecord]）。外れたら書き換えずに、理由 reason.EditRecheckFailed の
 // [NotEditableError] を返す。ファイル全体の確かめは [File.Save] が書く直前に行う。
 //
+// 差し替えたレコードは、ヘッダーと並べて飲み込みの疑いの検出（csvfile.FindSwallows）にも
+// かける（[File.swallowedLine]）。訳の2行目以降が、その行だけで読むとレコードに見える
+// （キーの形で始まるか、列の数がヘッダーと同じ）と、publish はそのレコードを引用符の
+// 閉じ誤りの疑いとして止める。書く前に断り、どの行かを返す。
+//
 // 誤りを返す場合:
 //
 //   - ファイル全体が読み取り専用: [ErrReadOnly]
 //   - 行が無い / データ行でない / 編集できない行 / 読み直すと合わない: [NotEditableError]
-//   - value に CR か LF が入っている: [InvalidValueError]
-//
-// value の CR / LF を拒むのは、訳への改行の入力を PR4 で足すからである
-// （決まったことの 1）。
+//   - value に NUL が入っている / 正しい UTF-8 ではない / 書くと訳の行がレコードに
+//     見える: [InvalidValueError]
 func (f *File) SetTranslation(id int, value string) error {
 	if f.readOnly {
 		return fmt.Errorf("%w: %s", ErrReadOnly, f.readOnlyReason)
@@ -521,9 +527,7 @@ func (f *File) SetTranslation(id int, value string) error {
 	if !line.Editable {
 		return notEditable(id, line.Number, line.Cause)
 	}
-	if strings.ContainsAny(value, "\r\n") {
-		return invalidValue(id, line.Number, reason.New(reason.EditNoNewline, "訳に改行は入れられない"))
-	}
+	value = LFLineBreaks(value)
 	if strings.ContainsRune(value, 0) {
 		// NUL は Python の csv.reader が _csv.Error にする値だが、
 		// internal/validate はその再現をしていない。ここで止めないと
@@ -532,7 +536,7 @@ func (f *File) SetTranslation(id int, value string) error {
 	}
 	if !utf8.ValidString(value) {
 		// 不正なUTF-8も後段のどこも検出しない（validate の doc コメント参照）。
-		// 書けない値は書かせない、という CR/LF と同じ扱いにする。
+		// 書けない値は書かせない、という NUL と同じ扱いにする。
 		//
 		// HTTP の経路からここは立たない。[encoding/json] が不正なバイトを
 		// U+FFFD へ置き換えてしまい、届く文字列はもう正しい UTF-8 だからである。
@@ -547,15 +551,21 @@ func (f *File) SetTranslation(id int, value string) error {
 	if text == line.Text {
 		return nil
 	}
-	fields, ok := recheckRecord(*line, text, value)
+	fields, span, ok := recheckRecord(*line, text, value)
 	if !ok {
 		return notEditable(id, line.Number, recheckReason(line.Number))
+	}
+	if n := f.swallowedLine(*line, text); n > 0 {
+		return invalidValue(id, line.Number, reason.New(reason.EditLineLooksLikeRecord,
+			fmt.Sprintf("訳の%d行目を1行だけで読むとレコードに見える（キーの形で始まるか、列の数がヘッダーと同じになる。publishが引用符の閉じ誤りの疑いとして止めるので、書かない）", n),
+			"line", strconv.Itoa(n)))
 	}
 	// 訳を消しても、値がどれも空のレコード（空行相当。[kindOf]）にはならない。編集できる
 	// レコードには、原文か、16桁のキーか台詞ID の key 列がある（[keyless]。決まったことの
 	// 24）。そのため書き換えで行の種類は変わらない。
 	line.Text = text
 	line.Fields = fields
+	f.shift(i, span-(line.EndNumber-line.Number))
 	if f.touched == nil {
 		f.touched = make(map[int]bool)
 	}
@@ -564,9 +574,76 @@ func (f *File) SetTranslation(id int, value string) error {
 	return nil
 }
 
+// shift は、f.lines の添字 i のレコードの物理行の数が delta だけ変わったことを、行番号へ
+// 映す。そのレコードの最後の物理行と、後ろのすべての行の行番号を delta だけずらし、
+// ファイルの物理行の数も直す。ID は変えない。
+func (f *File) shift(i, delta int) {
+	if delta == 0 {
+		return
+	}
+	f.lines[i].EndNumber += delta
+	for j := i + 1; j < len(f.lines); j++ {
+		f.lines[j].Number += delta
+		f.lines[j].EndNumber += delta
+	}
+	f.physical += delta
+}
+
+// LFLineBreaks は、v の中の CRLF と単独の CR を LF にそろえる。
+//
+// 訳を書く前（[File.SetTranslation]）と、画面へ値を渡す前（internal/web）の両方で使う。
+// 画面の入力欄（textarea）の値も、ブラウザーが改行を LF にそろえる。
+func LFLineBreaks(v string) string {
+	if !strings.Contains(v, "\r") {
+		return v
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(v, "\r\n", "\n"), "\r", "\n")
+}
+
+// swallowedLine は、書き換えたレコードの生のバイト列 text をヘッダーの後ろに置いて、
+// 飲み込みの疑いの検出（csvfile.FindSwallows。publish の形の確かめと同じ関数）にかける。
+// 当たれば、当たった物理行が訳の何行目か（1始まり）を返し、当たらなければ 0 を返す。
+//
+// 検出は、レコードの続きの物理行を1行ずつ単独で読み、レコードに見える行（最初の値が
+// キーの形か、区切りの数がヘッダーの列の数と同じ）を返す。見るのはレコード自身と
+// ヘッダーの列の数だけなので、ヘッダーとこのレコードだけを並べれば、ファイルの中で
+// 見るのと同じ結果になる。書き換える前のレコードは当たらない（当たれば [File.judge] が
+// 編集させない）ので、当たるのは書いた訳の行である。訳が改行を含まなくても、原文が
+// 改行で終わる列の後ろなら、訳の1行目が続きの物理行に入って当たりうる。
+func (f *File) swallowedLine(line Line, text string) int {
+	segs := csvfile.SplitSegments([]byte(f.headerText + text))
+	swallows := csvfile.FindSwallows(segs)
+	if len(swallows) == 0 {
+		return 0
+	}
+	// 訳の最初の物理行。ヘッダーの物理行の後ろから数える。
+	header := segs.List[0]
+	first := header.EndLine + 1 + lineBreaks(text[:line.last])
+	return max(1, swallows[0].SwallowedLine-first+1)
+}
+
+// lineBreaks は s の中の改行の数を返す。"\r\n" / "\n" / "\r" をどれも1つと数える
+// （csvfile.SplitSegments の物理行の区切りと同じ）。
+func lineBreaks(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\r':
+			n++
+			if i+1 < len(s) && s[i+1] == '\n' {
+				i++
+			}
+		case '\n':
+			n++
+		}
+	}
+	return n
+}
+
 // recheckRecord は、差し替えたレコードの生のバイト列 text を読み直し、書いてよい形かを
 // 確かめる（書く前の事後確認の前半。決まったことのそのほか 4）。書いてよければ、
-// 読み直した値（区切りの数まで空文字で埋めたもの）を返す。
+// 読み直した値（区切りの数まで空文字で埋めたもの）と、レコードが占める物理行の数から
+// 1を引いたもの（1物理行なら 0）を返す。
 //
 // レコードはレコードの境目（引用の外の物理行の先頭）から始まり、読み方は後ろへ向かう
 // だけなので、text だけを読んでもファイルの中で読むのと同じ値になる。ファイル全体の
@@ -575,27 +652,31 @@ func (f *File) SetTranslation(id int, value string) error {
 // 確かめること:
 //
 //   - 区切りの関数で1つのセグメントとして読め、引用符が閉じ、本体の終わりと終端が
-//     差し替えた位置のとおりで、物理行の数が変わらない
+//     差し替えた位置のとおりである
 //   - 区切りの数が変わらず、訳より前の値が元と同じで、訳を value として読む
 //   - ゲームの読み方（CsvReader の移植）でも同じ値に読む
-func recheckRecord(orig Line, text, value string) ([]string, bool) {
+//
+// 物理行の数は、訳の改行のぶんだけ変わってよい（訳への改行の入力。決まったことの 1）。
+// 訳より前は1バイトも変えず、訳を value として読むので、増えたり減ったりした物理行は
+// どれも訳の中の改行である。呼び出し側が後ろの行の行番号をずらす（[File.shift]）。
+func recheckRecord(orig Line, text, value string) ([]string, int, bool) {
 	segs := csvfile.SplitSegments([]byte(text))
 	if len(segs.List) != 1 {
-		return nil, false
+		return nil, 0, false
 	}
 	seg := segs.List[0]
 	if seg.Unclosed() || seg.End != len(text)-len(orig.term) || string(seg.Term) != orig.term ||
-		seg.EndLine-seg.Line != orig.EndNumber-orig.Number || len(seg.Offsets) != orig.columns {
-		return nil, false
+		len(seg.Offsets) != orig.columns {
+		return nil, 0, false
 	}
 	fields := padFields(seg.Fields, len(seg.Offsets))
 	if !slices.Equal(fields[:len(fields)-1], orig.Fields[:len(orig.Fields)-1]) || fields[len(fields)-1] != value {
-		return nil, false
+		return nil, 0, false
 	}
 	if game := csvfile.ParseCSharpRecords(text); len(game) != 1 || !slices.Equal(game[0], fields) {
-		return nil, false
+		return nil, 0, false
 	}
-	return fields, true
+	return fields, seg.EndLine - seg.Line, true
 }
 
 // recheckReason は、書く前の事後確認が外れたときの理由を作る。line はそのレコードの
@@ -612,7 +693,8 @@ func recheckReason(line int) reason.Reason {
 // 確かめること:
 //
 //   - セグメントの数・ID・物理行の範囲・種類・バイト列が、どの行もモデルと同じ
-//     （ID が保存の前後で変わらないことと、触っていない行が1バイトも変わらないこと）
+//     （ID が保存の前後で変わらないことと、触っていない行が1バイトも変わらないこと。
+//     訳の改行で物理行の数が変わったレコードの後ろは、ずれた行番号で比べる）
 //   - 書き換えたレコードの値が、ファイル全体を読んでもモデルと同じ
 //   - 書き換えたレコードが、飲み込みの疑い（csvfile.FindSwallows）にも、ゲームの
 //     読み方との食い違い（csvfile.CSharpDisagreements）にも当たらない
@@ -621,11 +703,33 @@ func recheckReason(line int) reason.Reason {
 //
 // 外れたら、原因の書き換えたレコードを指す [RecheckError] を返す（[File.culprit]）。
 func (f *File) verify(out []byte) error {
-	at := f.mismatch(out, f.touched)
+	at := f.mismatch(out, f.touched, true)
 	if at < 0 {
 		return nil
 	}
 	return f.recheckError(f.culprit(at))
+}
+
+// numbers は、touched の添字のレコードだけを書き換えたバイト列での、各行の最初と最後の
+// 物理行を返す。
+//
+// 書き換えたレコードは、いまの Text の物理行の数を占め、ほかの行は読み込んだとき（または
+// 最後に保存したとき）の数を占める。行（セグメント）は隙間も重なりも無く並び、最後の
+// 行のほかはどれも終端で終わるので、次の行は前の行の最後の物理行の次から始まる。
+// [File.culprit] は書き換えの一部だけを入れたバイト列を確かめるので、モデルの行番号
+// （すべての書き換えを入れたもの）とは別に見積もる。
+func (f *File) numbers(touched map[int]bool) (starts, ends []int) {
+	starts, ends = make([]int, len(f.lines)), make([]int, len(f.lines))
+	n := 1
+	for i, line := range f.lines {
+		span := line.origSpan
+		if touched[i] {
+			span = line.EndNumber - line.Number
+		}
+		starts[i], ends[i] = n, n+span
+		n += span + 1
+	}
+	return starts, ends
 }
 
 // mismatch は、touched の添字のレコードを書き換えたバイト列 out をファイル全体として
@@ -635,10 +739,13 @@ func (f *File) verify(out []byte) error {
 // touched に無いレコードは、読み込んだとき（または最後に保存したとき）のままのはずの
 // レコードとして見る。f.touched のうち touched に無いレコード（[File.culprit] が1つずつ
 // 確かめ直すとき）も、書き換える前のバイト列で見る。行の種類は書き換えで変わらない
-// （[File.SetTranslation]）ので、どの行もモデルの種類と比べる。
-func (f *File) mismatch(out []byte, touched map[int]bool) int {
-	whole := csvfile.ReadPowerShellMarked(out)
-	segs := whole.Segments
+// （[File.SetTranslation]）ので、どの行もモデルの種類と比べる。行番号は [File.numbers] で
+// 見積もったものと比べる。whole が true なら（touched がすべての書き換えのとき）、
+// モデルの行番号（[File.SetTranslation] がずらしたもの）とも比べる。
+func (f *File) mismatch(out []byte, touched map[int]bool, whole bool) int {
+	file := csvfile.ReadPowerShellMarked(out)
+	segs := file.Segments
+	starts, ends := f.numbers(touched)
 	for i, line := range f.lines {
 		if i >= len(segs.List) {
 			return i
@@ -650,8 +757,11 @@ func (f *File) mismatch(out []byte, touched map[int]bool) int {
 		if touched[i] {
 			want = line.Text
 		}
-		if seg.Unclosed() || seg.ID != line.ID || seg.Line != line.Number || seg.EndLine != line.EndNumber ||
+		if seg.Unclosed() || seg.ID != line.ID || seg.Line != starts[i] || seg.EndLine != ends[i] ||
 			kindOf(seg) != line.Kind || segs.Text[seg.Start:seg.End+len(seg.Term)] != want {
+			return i
+		}
+		if whole && (line.Number != starts[i] || line.EndNumber != ends[i]) {
 			return i
 		}
 		if touched[i] && line.Kind == KindData && !slices.Equal(padFields(seg.Fields, len(seg.Offsets)), line.Fields) {
@@ -666,12 +776,12 @@ func (f *File) mismatch(out []byte, touched map[int]bool) int {
 			return s.ID - 1
 		}
 	}
-	for _, d := range csvfile.CSharpDisagreements(whole) {
+	for _, d := range csvfile.CSharpDisagreements(file) {
 		if touched[d.ID-1] {
 			return d.ID - 1
 		}
 	}
-	return f.gameChange(whole, out, touched)
+	return f.gameChange(file, out, touched)
 }
 
 // culprit は、書く直前の確かめが f.lines の添字 at で外れたとき、原因として指す書き換えた
@@ -695,7 +805,7 @@ func (f *File) culprit(at int) int {
 	if len(touched) > 1 {
 		for _, i := range touched {
 			only := map[int]bool{i: true}
-			if f.mismatch(f.bytesWith(only), only) >= 0 {
+			if f.mismatch(f.bytesWith(only), only, false) >= 0 {
 				return i
 			}
 		}
@@ -830,9 +940,14 @@ func (f *File) bytesWith(only map[int]bool) []byte {
 
 // recheckError は、f.lines の添字 i の書き換えたレコードを指す、書く直前の確かめの誤りを
 // 作る（指すレコードは [File.culprit] が決める）。
+//
+// 行番号は、ファイルにいまある（読み込んだとき、または最後に保存したときの）行番号で
+// 言う。この誤りのときは1バイトも書かないので、訳の改行でずらしたモデルの行番号
+// （[Line.Number]）で言うと、画面とエディターに出ている行番号と食い違う。
 func (f *File) recheckError(i int) *RecheckError {
-	line := f.lines[i]
-	return &RecheckError{ID: line.ID, Line: line.Number, Cause: recheckReason(line.Number)}
+	starts, _ := f.numbers(nil)
+	line := starts[i]
+	return &RecheckError{ID: f.lines[i].ID, Line: line, Cause: recheckReason(line)}
 }
 
 // escapeTranslation は訳をCSVの1フィールドとして書ける形にする。

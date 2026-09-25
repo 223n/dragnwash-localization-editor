@@ -82,7 +82,7 @@ func TestEditErrorFrameMatchesTheSourceText(t *testing.T) {
 		},
 		{
 			name: "書けない値",
-			err:  &edit.InvalidValueError{Line: 6, Reason: "訳に改行は入れられない"},
+			err:  &edit.InvalidValueError{Line: 6, Reason: "訳に NUL は入れられない"},
 			key:  "error.invalid_value",
 		},
 	}

@@ -451,14 +451,17 @@ func TestSetTranslationRejects(t *testing.T) {
 	})
 
 	t.Run("改行を含む訳", func(t *testing.T) {
-		for _, v := range []string{"a\nb", "a\rb", "a\r\nb", "a\n"} {
+		// PR4 から書ける（決まったことの 1）。CRLF と単独の CR は LF にそろえ、引用符で
+		// 囲んで書く。
+		for v, want := range map[string]string{
+			"a\nb": "\"a\nb\"", "a\rb": "\"a\nb\"", "a\r\nb": "\"a\nb\"", "a\n": "\"a\n\"",
+		} {
 			f := Parse([]byte(header + "0123456789abcdef,,,,,\n"))
-			var invalid *InvalidValueError
-			if err := f.SetTranslation(2, v); !errors.As(err, &invalid) {
-				t.Fatalf("SetTranslation(%q) = %v, want *InvalidValueError", v, err)
+			if err := f.SetTranslation(2, v); err != nil {
+				t.Fatalf("SetTranslation(%q) = %v", v, err)
 			}
-			if f.Dirty() {
-				t.Errorf("拒否したのに Dirty が立った: %q", v)
+			if got := string(f.Bytes()); got != header+"0123456789abcdef,,,,,"+want+"\n" {
+				t.Errorf("SetTranslation(%q) の結果 = %q", v, got)
 			}
 		}
 	})

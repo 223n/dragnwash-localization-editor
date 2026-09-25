@@ -48,8 +48,10 @@ type rowEdit struct {
 	// 空なら照合しない。キーを持たない行（キー列が空の作業コピー）があるため
 	// で、送られてきたときは必ず照合する。画面は常に送る。
 	Key string `json:"key,omitempty"`
-	// Translation は差し替える訳。CR / LF / NUL / 不正なUTF-8 は
-	// internal/edit が拒む。画面側は送る前に置き換えておくこと。
+	// Translation は差し替える訳。改行を入れてよい（決まったことの 1）。CRLF と単独の
+	// CR は internal/edit が LF にそろえて書き、そろえた行の結果には断り（Warning）を付ける。
+	// NUL と不正なUTF-8、書くと訳の行がレコードに見える値は internal/edit が拒む。画面は
+	// 送る前に改行を LF にそろえ、NUL を落としておく（app.js の sanitize）。
 	Translation string `json:"translation"`
 }
 
@@ -326,9 +328,10 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 			if line, ok := file.Line(e.ID); ok {
 				res.Translation = line.Translation()
 				if res.Translation != e.Translation {
-					// CSV として書き戻して読み直すと値が変わる場合
-					// （internal/edit の doc.go が挙げている前後の空白など）。
-					// 画面の値をこちらで上書きするので、変えたことを断る。
+					// 書いた値が送られた値と違う。いまは、訳の中の CRLF と単独の CR を
+					// LF にそろえたときだけ起きる（internal/edit の SetTranslation）。前後の
+					// 空白は引用して書くので変わらない。画面の値をこちらで上書きするので、
+					// 変えたことを断る（改善の ui-16。画面の出し方は app.js の applyResults）。
 					addWarning(&res, s.cat.T(cat, "warn.value_normalized"))
 				}
 			}
@@ -337,7 +340,8 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 			// 来たなら1行ずつ断るのではなくまとめて断る。
 			return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 		default:
-			// 編集できない行と、書けない値（改行・NUL・不正なUTF-8）。
+			// 編集できない行と、書けない値（NUL・不正なUTF-8・書くと訳の行がレコードに
+			// 見える値）。
 			// 理由は目録から組み直す。行の中身は含まない。
 			res.Error = s.editErrorText(cat, err)
 		}

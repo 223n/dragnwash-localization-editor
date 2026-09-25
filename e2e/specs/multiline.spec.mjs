@@ -301,26 +301,22 @@ test.describe("訳が行をまたぐレコード", () => {
     }),
   });
 
-  // いまは、訳に改行があるレコードを編集させない（reason.edit_multiline_translation）。画面は
-  // 改行を空白に置き換えるので、開いて1字打つと、翻訳者が見ていない改行まで消えるためである。
-  test("いまは、訳に改行があるレコードを理由を付けて編集させず、生の字を出す", async ({ app, server }) => {
+  // 訳に改行があるレコードも編集できる行として並べる（PR4。PR3 のあいだは
+  // reason.edit_multiline_translation で読み取り専用にしていた）。訳の欄は改行をそのまま描く。
+  test("訳に改行があるレコードも編集できる行として並べ、訳の改行をそのまま描く", async ({ app, server }) => {
     const before = await server.readRoot(workingRel);
     const row = rowById(app, 3);
-    await expect(row).toHaveClass(/(^|\s)not-editable(\s|$)/);
+    await expect(row).not.toHaveClass(/(^|\s)not-editable(\s|$)/);
     await expect(row.locator(".num-start")).toHaveText("3");
     await expect(row.locator(".num-end")).toHaveText(msg("ja", "ui.line_end", { line: 4 }));
-    await expect(row.locator(".row-note")).toHaveText(
-      msg("ja", "ui.not_editable", { reason: msg("ja", "reason.edit_multiline_translation") }),
-    );
-    expect(await textOf(row.locator(".cell.raw"))).toBe(recordOf(twoLines, twoLines.translation));
-    await expect(translationCell(app, 3)).toHaveCount(0);
-    await row.locator(".cell.raw").click();
-    await expect(editor(app)).toHaveCount(0);
+    await expect(row.locator(".row-note")).toBeHidden();
+    expect(await drawnText(translationCell(app, 3))).toBe(twoLines.translation);
 
-    // 前後の行はいままでどおり書ける。Enter は訳に改行がある行を飛ばす。
+    // Enter は訳に改行がある行にも進む。
     await openEditor(app, 2);
     await editor(app).press("Enter");
-    await expect(rowById(app, 4).locator("textarea.editor")).toBeFocused();
+    await expect(rowById(app, 3).locator("textarea.editor")).toBeFocused();
+    await expect(editor(app)).toHaveValue(twoLines.translation);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
 });
