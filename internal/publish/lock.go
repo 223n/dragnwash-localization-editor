@@ -3,7 +3,9 @@ package publish
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -52,10 +54,10 @@ func (e *LockTimeoutError) Error() string {
 //
 // 錠のファイルは、利用者のキャッシュのフォルダー（Windows は %LocalAppData%、Linux は
 // $XDG_CACHE_HOME か ~/.cache、macOS は ~/Library/Caches）の dwloc/locks に置き、名前は
-// 書き出し先の実体の絶対パスから作る（[lockName]）。キャッシュのフォルダーを作れない
-// 環境（HOME の無い利用者で動かした docker など）では、一時フォルダーに落とす
-// （[lockDir]）。書き出し先の横には置かない。横に置くと、作業コピーの
-// 無いロケールでは翻訳リポジトリの Translations/<ロケール>/ に錠のファイルが残り、
+// 書き出し先の実体の絶対パスから作る（[lockName]）。キャッシュのフォルダーに置けない
+// 環境（HOME の無い利用者で動かした docker、root の持ち物になったフォルダーなど）では、
+// 一時フォルダーに落とす（[lockPath]）。書き出し先の横には置かない。横に置くと、作業
+// コピーの無いロケールでは翻訳リポジトリの Translations/<ロケール>/ に錠のファイルが残り、
 // git status に出る。放すときに消す形も試したが、Windows では、消したファイルを
 // ほかの dwloc が開けない（削除の保留中で拒まれる）ことや、2つの dwloc が同時に錠を
 // 持つことがあった（試験で確かめた）。そのため錠のファイルは消さずに残す。中身は空で、
@@ -181,45 +183,94 @@ func (l fileLock) acquire() (unlock func(), err error) {
 	}
 }
 
-// lockDir は錠のファイルを置くフォルダーを返す。無ければ作る。
+// lockPath は、名前が base の錠のファイルを置くパスを返す。置くフォルダーが無ければ作る。
 //
-// 使うのは、利用者のキャッシュのフォルダーの dwloc/locks で、作れなければ一時フォルダーの
-// dwloc-locks-<利用者の番号>（Windows は dwloc-locks）である。キャッシュのフォルダーを
-// 作れない環境（HOME の無い利用者で動かした docker、passwd に無い利用者など）でも、
-// 画面の保存と publish が毎回止まらないようにする（PR3 の前は、錠が無いので書けた）。
+// 使うのは、利用者のキャッシュのフォルダーの dwloc/locks で、そこに置けなければ一時
+// フォルダーの dwloc-locks-<利用者の番号>（Windows は dwloc-locks）である。キャッシュの
+// フォルダーに置けない環境でも、画面の保存と publish が毎回止まらないようにする（PR3 の
+// 前は、錠が無いので書けた）。置けないのは、フォルダーを作れないとき（HOME の無い利用者で
+// 動かした docker、passwd に無い利用者など）と、フォルダーはあるが錠のファイルを開けない
+// ときである。後者は、利用者のホームを渡して root で動かした docker が
+// ~/.cache/dwloc/locks を root の持ち物で作ったあとに、ふつうの利用者で動かした場合に
+// 起きる（PR3 の検証で再現した）。フォルダーを作れるかだけで決めると、錠のファイルを
+// 開くところで権限の誤りになり、保存も publish も毎回止まる。
+//
+// 錠のファイルを開けないとき、次の置き場へ移るのは、権限で断られたときと、読み取り専用の
+// ファイルシステムのときだけである（[cannotWrite]）。どちらも、同じ利用者の同じ環境の
+// dwloc なら同じに当たるので、同じ書き出し先には同じ錠のファイルを使い続ける。ほかの誤り
+// （開けるファイルの数の上限など、そのときだけのもの）で移ると、同じファイルを書くほかの
+// dwloc と別の錠のファイルを使い、直列にならない。そうした誤りは移らずに返す。
+//
 // 同じ環境の dwloc は同じ選び方をするので、同じ書き出し先には同じ錠のファイルを使う。
-// 環境の違う dwloc（HOME の違う端末など）どうしは、キャッシュのフォルダーが違うのと
-// 同じく直列にならず、版の照合（画面）と書く直前の読み直し（publish）だけが守りになる。
+// 環境の違う dwloc（HOME の違う端末、コンテナーと手元、WSL と Windows など）どうしは、
+// キャッシュのフォルダーが違うので直列にならず、版の照合（画面）と書く直前の読み直し
+// （publish）だけが守りになる。
 //
 // 一時フォルダーはほかの利用者と分け合うことがある（Linux の /tmp）。ほかの利用者が
 // 先に作ったフォルダーや、ほかの利用者が書けるフォルダーに錠のファイルを置くと、錠の
 // ファイルを消されて直列が崩れうるので、自分のもので、ほかの利用者が書けないときだけ
 // 使う（[ownDir]）。
 //
-// どちらも作れなければ、直し方を添えた誤り（[LockDirError]）を返す。
-func lockDir() (string, error) {
+// どちらにも置けなければ、直し方を添えた誤り（[LockDirError]）を返す。
+func lockPath(base string) (string, error) {
 	if d := os.Getenv(LockDirEnv); d != "" {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return "", err
 		}
-		return d, nil
+		return filepath.Join(d, base), nil
 	}
 	var tried []error
 	if cache, err := os.UserCacheDir(); err != nil {
 		tried = append(tried, err)
 	} else {
-		d := filepath.Join(cache, "dwloc", "locks")
-		if err := os.MkdirAll(d, 0o700); err == nil {
-			return d, nil
-		} else {
-			tried = append(tried, err)
+		name, next, err := placeLock(filepath.Join(cache, "dwloc", "locks"), base, mkdirAll)
+		if err != nil {
+			return "", err
 		}
+		if next == nil {
+			return name, nil
+		}
+		tried = append(tried, next)
 	}
-	d := tempLockDir()
-	if err := makeOwnDir(d); err != nil {
-		return "", &LockDirError{Tried: append(tried, err)}
+	name, next, err := placeLock(tempLockDir(), base, makeOwnDir)
+	if err != nil {
+		return "", err
 	}
-	return d, nil
+	if next != nil {
+		return "", &LockDirError{Tried: append(tried, next)}
+	}
+	return name, nil
+}
+
+// placeLock は、フォルダー dir に名前が base の錠のファイルを置けるかを確かめる。フォルダーは
+// mkdir で作り、錠のファイルは開いてみる（無ければ空で作る）。置けるなら、そのパスを返す。
+//
+// 置けないとき、次の置き場へ移ってよい誤りは next に、移らずに返す誤りは err に入れる。
+// フォルダーを作れない誤りは、どれも移ってよい。錠のファイルを開けない誤りは、
+// [cannotWrite] に当たるときだけ移ってよい（[lockPath] の注記）。
+func placeLock(dir, base string, mkdir func(string) error) (name string, next, err error) {
+	if err := mkdir(dir); err != nil {
+		return "", err, nil
+	}
+	name = filepath.Join(dir, base)
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		if cannotWrite(err) {
+			return "", err, nil
+		}
+		return "", nil, err
+	}
+	f.Close()
+	return name, nil, nil
+}
+
+// mkdirAll は、錠のファイルを置くフォルダー d を、自分だけが使える権限で作る。
+func mkdirAll(d string) error { return os.MkdirAll(d, 0o700) }
+
+// cannotWrite は、錠のファイルを開けない誤り err が、その置き場へ書けないことを表すか
+// （権限で断られた、読み取り専用のファイルシステム）を返す。
+func cannotWrite(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || readOnlyFS(err)
 }
 
 // tempLockDir は、キャッシュのフォルダーを作れないときに錠のファイルを置く一時
@@ -249,7 +300,8 @@ func makeOwnDir(d string) error {
 	return nil
 }
 
-// LockDirError は、錠のファイルを置くフォルダーをどこにも作れなかったこと。
+// LockDirError は、錠のファイルをどの置き場にも置けなかったこと（フォルダーを作れない、
+// またはフォルダーに書けない）。
 type LockDirError struct {
 	// Tried は、試した置き場ごとの誤り（キャッシュのフォルダー、一時フォルダーの順）。
 	Tried []error
@@ -260,17 +312,17 @@ func (e *LockDirError) Error() string {
 	for i, err := range e.Tried {
 		msgs[i] = err.Error()
 	}
-	return "書き込みの錠のファイルを置くフォルダーを作れません（" + strings.Join(msgs, "、") + "）。" +
+	return "書き込みの錠のファイルを置くフォルダーを作れないか、そこに書けません（" + strings.Join(msgs, "、") + "）。" +
 		"利用者のキャッシュのフォルダー（Linux は XDG_CACHE_HOME か HOME、macOS は HOME、Windows は LocalAppData）か、" +
 		"一時フォルダー（TMPDIR、Windows は TMP）を、書けるフォルダーに向けてください"
 }
 
-// lockName は、書き出し先の実体 target の錠のファイルの名前を返す。
+// lockName は、書き出し先の実体 target の錠のファイルのパスを返す。
 //
 // 名前は、実体の絶対パスの SHA-256 の先頭から作る。同じファイルを指す綴りの違い
 // （相対パス、途中のフォルダーのリンク、Windows の 8.3 形式の短い名前、大文字小文字）を
 // そろえてから数える。そろえられない（実体もフォルダーも無い）ときは、絶対パスの
-// ままで数える。置くフォルダー（[lockDir]）が無ければ作る。
+// ままで数える。置き場は [lockPath] が決め、置くフォルダーが無ければ作る。
 func lockName(target string) (string, error) {
 	abs, err := filepath.Abs(target)
 	if err != nil {
@@ -287,11 +339,7 @@ func lockName(target string) (string, error) {
 		key = strings.ToLower(key)
 	}
 	sum := sha256.Sum256([]byte(key))
-	dir, err := lockDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, hex.EncodeToString(sum[:12])+".lock"), nil
+	return lockPath(hex.EncodeToString(sum[:12]) + ".lock")
 }
 
 // sameFile は、開いているファイル f と、いま name が指すファイルが同じかを返す。

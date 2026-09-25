@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"errors"
 	"os"
 	"syscall"
 	"unsafe"
@@ -21,7 +22,14 @@ const (
 	lockfileExclusiveLock = 0x00000002
 	// errorLockViolation は、ほかが錠を持っているときの誤り（ERROR_LOCK_VIOLATION）。
 	errorLockViolation syscall.Errno = 33
+	// errorWriteProtect は、書き込みを禁じた媒体に書こうとした誤り（ERROR_WRITE_PROTECT）。
+	errorWriteProtect syscall.Errno = 19
 )
+
+// readOnlyFS は、err が書き込みを禁じた媒体に書こうとした誤りかを返す（[cannotWrite]）。
+// フォルダーやファイルの権限で断られたとき（ERROR_ACCESS_DENIED）は fs.ErrPermission に
+// 当たるので、ここでは見ない。
+func readOnlyFS(err error) bool { return errors.Is(err, errorWriteProtect) }
 
 // tryLock は f の先頭1バイトに排他の錠を掛けてみる。ほかが持っていれば待たずに
 // false を返す。

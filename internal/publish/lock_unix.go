@@ -28,6 +28,11 @@ func unlockFile(f *os.File) {
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 }
 
+// readOnlyFS は、err が読み取り専用のファイルシステムに書こうとした誤り（EROFS）かを
+// 返す（[cannotWrite]）。利用者のホームを読み取り専用で渡したコンテナーで、錠の
+// フォルダーが既にあるときに当たる。
+func readOnlyFS(err error) bool { return errors.Is(err, syscall.EROFS) }
+
 // ownDir は、info のフォルダーが自分のもので、ほかの利用者（グループを含む）が
 // 書けないかを返す（[makeOwnDir]）。
 func ownDir(info os.FileInfo) bool {

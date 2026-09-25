@@ -16,3 +16,6 @@ func unlockFile(*os.File) {}
 
 // ownDir は、錠を持たない OS では確かめない。
 func ownDir(os.FileInfo) bool { return true }
+
+// readOnlyFS は、錠を持たない OS では権限の誤り（[cannotWrite]）のほかを見ない。
+func readOnlyFS(error) bool { return false }
