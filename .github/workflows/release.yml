@@ -473,31 +473,40 @@ jobs:
         # 動かした実行は、動かす前から同じ SHA にあった実行（手で動かしたものや、このジョブの前の試行のもの）を
         # 除いて見分ける。ci.yml の concurrency の組は ref とイベントを含むので、PR の承認待ちの実行とは
         # 互いに止め合わない
+        #
+        # 止まったときは、ここより後の段（取り消し）に進まないので、PR の実行は承認待ちのまま残る。
+        # そのため、どの案内でも、人がマージするなら「Approve workflows to run」を押して CI が通ってからにする、と出す。
+        # 一時の失敗（CI の揺れや API の失敗）なら、この「リリース」の実行の「Re-run failed jobs」でも進められる。
+        # merge ジョブと、それに続く publish ジョブが入れ直され、前の試行で動かした実行は除いて見分ける。
+        # 「Re-run all jobs」は、release ブランチが残っているため prepare の「タグとブランチが未使用で、版が新しいことを確かめる」で止まる
         env:
           CI_WORKFLOW: ci.yml
           CI_WAIT_MINUTES: '30'
           CI_APPEAR_MINUTES: '5'
           CI_POLL_SECONDS: '20'
         run: |
+          by_hand='PR は開いたままにしてある。PR の「Approve workflows to run」を押し、CI が通ってから人がマージする（押さずにマージすると、承認待ちの実行が期限切れの失敗として残る）'
+          rerun='一時の失敗なら、この「リリース」の実行の「Re-run failed jobs」で入れ直してもよい（CI を動かし直し、通れば承認待ちの実行を取り消して、マージと公開まで進む）'
+
           # release ブランチが prepare の押したコミットのままかを見る。動いていると、CI を走らせる木と
           # マージする木が食い違う
           if ! tip="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BRANCH}" --jq '.commit.sha')"; then
-            echo "::error::${BRANCH} の先端の SHA を取れなかった"
+            echo "::error::${BRANCH} の先端の SHA を取れなかった。${by_hand}。${rerun}: ${PR_URL}"
             exit 1
           fi
           if [ "${tip}" != "${HEAD_SHA}" ]; then
-            echo "::error::${BRANCH} の先端（${tip:-空}）が、このワークフローの押したコミット（${HEAD_SHA}）と違う。PR の中身を確かめ、「Approve workflows to run」を押して CI が通ってから、人がマージする: ${PR_URL}"
+            echo "::error::${BRANCH} の先端（${tip:-空}）が、このワークフローの押したコミット（${HEAD_SHA}）と違う。PR の中身を確かめる。${by_hand}: ${PR_URL}"
             exit 1
           fi
 
           runs="repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${HEAD_SHA}&branch=${BRANCH}&event=workflow_dispatch&per_page=100"
           if ! before="$(gh api "${runs}" --jq '[.workflow_runs[].id | tostring] | join(",")')"; then
-            echo "::error::CI（${CI_WORKFLOW}）の実行を引けなかった"
+            echo "::error::CI（${CI_WORKFLOW}）の実行を引けなかった。${by_hand}。${rerun}: ${PR_URL}"
             exit 1
           fi
           if ! gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW}/dispatches" \
             -f ref="${BRANCH}" --silent; then
-            echo "::error::${BRANCH} で CI（${CI_WORKFLOW}）を動かせなかった。PR の「Approve workflows to run」を押し、CI が通ってから人がマージする: ${PR_URL}"
+            echo "::error::${BRANCH} で CI（${CI_WORKFLOW}）を動かせなかった。${by_hand}: ${PR_URL}"
             exit 1
           fi
           echo "${BRANCH} で CI（${CI_WORKFLOW}）を動かした"
@@ -516,23 +525,24 @@ jobs:
             if ! line="$(gh api "${runs}" --jq "${pick}")"; then
               api_failures=$((api_failures + 1))
               if [ "${api_failures}" -ge 3 ]; then
-                echo "::error::CI（${CI_WORKFLOW}）の実行を3回続けて引けなかった。Actions の画面で ${BRANCH} の CI を確かめ、通っていれば人が PR をマージする: ${PR_URL}"
+                echo "::error::CI（${CI_WORKFLOW}）の実行を3回続けて引けなかった。${by_hand}。${rerun}: ${PR_URL}"
                 exit 1
               fi
               echo "::warning::CI の実行を引けなかった。${CI_POLL_SECONDS}秒後に引き直す"
             elif [ -z "${line}" ]; then
               api_failures=0
               if [ "${elapsed}" -ge $((CI_APPEAR_MINUTES * 60)) ]; then
-                echo "::error::${BRANCH} で動かした CI（${CI_WORKFLOW}）の実行が、${CI_APPEAR_MINUTES} 分たっても作られない。PR の「Approve workflows to run」を押し、CI が通ってから人がマージする: ${PR_URL}"
+                echo "::error::${BRANCH} で動かした CI（${CI_WORKFLOW}）の実行が、${CI_APPEAR_MINUTES} 分たっても作られない。${by_hand}: ${PR_URL}"
                 exit 1
               fi
               echo "CI の実行がまだ無い。作られるのを待つ（${elapsed}秒経過）"
             else
               api_failures=0
               read -r status conclusion url <<<"${line}"
-              # workflow_dispatch の実行まで承認待ちで作られるようになったら、待っても進まない
+              # workflow_dispatch の実行まで承認待ちで作られるようになったら、待っても進まない。
+              # 入れ直しても同じく承認待ちになるので、人がマージする道だけを案内する
               if [ "${status}" = 'action_required' ] || [ "${conclusion}" = 'action_required' ]; then
-                echo "::error::${BRANCH} で動かした CI が承認待ちで作られた。実行の画面で承認して通るのを待つか、PR の「Approve workflows to run」を押し、CI が通ってから人がマージする: ${url}"
+                echo "::error::${BRANCH} で動かした CI が承認待ちで作られた。${by_hand}。PR: ${PR_URL} CI の実行: ${url}"
                 exit 1
               fi
               if [ "${status}" = 'completed' ]; then
@@ -540,8 +550,9 @@ jobs:
               fi
               echo "CI は ${status}。終わるのを待つ（${elapsed}秒経過）: ${url}"
             fi
+            # 入れ直すと、動かした実行を ci.yml の concurrency で止めて、また同じ上限で待つだけなので、勧めない
             if [ "${elapsed}" -ge $((CI_WAIT_MINUTES * 60)) ]; then
-              echo "::error::CI が ${CI_WAIT_MINUTES} 分たっても終わらない。実行の画面で様子を確かめ、通ったら人が PR をマージする: ${url:-（実行がまだ無い）}"
+              echo "::error::CI が ${CI_WAIT_MINUTES} 分たっても終わらない。${by_hand}。PR: ${PR_URL} CI の実行: ${url:-まだ無い}"
               exit 1
             fi
             sleep "${CI_POLL_SECONDS}"
@@ -553,7 +564,7 @@ jobs:
             else
               reason="通っていない（${conclusion}）"
             fi
-            echo "::error::${BRANCH} の CI は${reason}。PR は開いたままにしてある。揺れや取り消しなら実行の画面の「Re-run jobs」で入れ直し、通ったら人が PR をマージする。直すべき不具合なら PR を閉じて ${BRANCH} を消し、develop で直してからやり直す: ${url}"
+            echo "::error::${BRANCH} の CI は${reason}。${by_hand}。${rerun}。直すべき不具合なら PR を閉じて ${BRANCH} を消し、develop で直してからやり直す。PR: ${PR_URL} CI の実行: ${url}"
             exit 1
           fi
           echo "CI が通ったことを確かめた: ${url}"
