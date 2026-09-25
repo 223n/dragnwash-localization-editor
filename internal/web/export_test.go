@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/key"
 )
 
 // ここは /api/export の試験。
@@ -148,6 +150,57 @@ func TestExportRefusesToLoseTranslations(t *testing.T) {
 	rec = do(t, s, http.MethodGet, "/api/export?locale=ja&form=working", true, nil)
 	if rec.Code != http.StatusOK {
 		t.Errorf("編集中のファイルの書き出しまで止めている: %d", rec.Code)
+	}
+}
+
+// TestExportRefusesKeylessRowOfPublishedFile は、作業コピーの無いロケールで公開ファイル
+// 自身を開いているとき、publish がキーを決められない行（2列の `hello,訳`）に訳があると、
+// 公開ファイルの形の書き出しを断ることを見る（README の「書き換えられない行」）。
+//
+// publish はその行を捨てるので、入力と書き出し先が同じこの形では、いまの公開ファイルに
+// ある訳が新しい出力から消える。dwloc publish も同じ守り（publish.CheckLoss）で止まる。
+// 画面はその行の訳を空にする書き換えも断るので、画面からはほどけない。key 列を手で直すと
+// 書き出せる。
+func TestExportRefusesKeylessRowOfPublishedFile(t *testing.T) {
+	root := newEditRoot(t)
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, filepath.FromSlash("Translations/ja/strings.csv"))
+	body := "key,translation\n" + key.For(srcHello) + ",既訳\n" + "hello,訳だけ\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+
+	rec := do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+	if want := s.cat.T(ja, "error.export_would_lose", "count", "1"); rec.Code != http.StatusConflict ||
+		strings.TrimSpace(rec.Body.String()) != want {
+		t.Fatalf("状態コード %d、%q。409 と %q を期待", rec.Code, rec.Body.String(), want)
+	}
+
+	// 画面からその行の訳を空にすることもできない。
+	lines := getLines(t, s, "ja")
+	if len(lines.Lines) != 2 || lines.Lines[1].Key != "hello" || lines.Lines[1].Editable {
+		t.Fatalf("並べた行 = %+v、2行目が読み取り専用の hello の行であることを期待", lines.Lines)
+	}
+	rec = save(t, s, "ja", lines.Version, rowEdit{ID: lines.Lines[1].ID, Key: "hello", Translation: ""})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("訳を空にする要求が %d、422 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	if readFile(t, path) != body {
+		t.Error("断ったのにファイルが変わった")
+	}
+
+	// key 列を手で16桁のキーに直すと書き出せる。
+	fixed := "key,translation\n" + key.For(srcHello) + ",既訳\n" + key.For(srcBye) + ",訳だけ\n"
+	if err := os.WriteFile(path, []byte(fixed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, s, http.MethodGet, "/api/export?locale=ja&form=published", true, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), key.For(srcBye)+",") {
+		t.Errorf("直したあとの書き出しが %d:\n%s", rec.Code, rec.Body.String())
 	}
 }
 

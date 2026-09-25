@@ -195,7 +195,7 @@ const (
 // TestEditKeylessRowIsReadOnly は、publish がキーを決められないレコード（原文が空で、
 // key 列が16桁のキーでも台詞ID でもない）を、理由を付けて編集させないことを見る
 // （決まったことの 24）。publish はこのレコードを捨てる（移植仕様 R17）ので、書いた訳は
-// 公開されず、黙って落ちる。値がどれも空のレコード（改善の ui-15）と同じ理由である。
+// 公開されない。値がどれも空のレコード（改善の ui-15）と同じ理由である。
 //
 // PR3 のはじめは、訳だけが入った行はいままでどおり書けて、訳を消すと空行相当になった
 // （消すことは断らなかった。そのころは TestEditCommaOnlyRowIsBlank の後半と
@@ -344,12 +344,6 @@ func TestEditSpacesAroundKeyColumn(t *testing.T) {
 // 「publish で捨てられる行」として知らせる）。そのため、比べるのは原文が空の行だけで、
 // 原文のある行は publish が捨てるかどうかにかかわらず編集できることを見る。
 func TestKeylessAgreesWithPublish(t *testing.T) {
-	keys := []string{
-		"", "  ", "hello", "abc", "LINE:intro_1", "line:", "line:intro_1",
-		"0123456789abcdef", "  0123456789abcdef  ", "0123456789ABCDEF",
-		"0123456789abcde", "0123456789abcdeg", key.For("Start"),
-	}
-	values := map[string]string{"section": "UI", "node": "", "order": "", "speaker": "UI", "translation": "訳"}
 	var keyless, dropped, kept int
 	for _, header := range []string{headerWorking, headerPublished, headerSpeaker, headerPair} {
 		columns := strings.Split(strings.TrimSuffix(header, "\n"), ",")
@@ -357,20 +351,9 @@ func TestKeylessAgreesWithPublish(t *testing.T) {
 		if slices.Contains(columns, "source_en") {
 			sources = append(sources, "Start", " ")
 		}
-		for _, k := range keys {
+		for _, k := range keyColumnSamples {
 			for _, src := range sources {
-				fields := make([]string, len(columns))
-				for i, col := range columns {
-					switch col {
-					case "key":
-						fields[i] = csvField(k)
-					case "source_en":
-						fields[i] = csvField(src)
-					default:
-						fields[i] = values[col]
-					}
-				}
-				data := header + strings.Join(fields, ",") + "\n"
+				data := header + sampleRecord(columns, k, src, "訳")
 				_, stats, err := publish.Build(nil, []byte(data), nil)
 				if err != nil {
 					t.Fatalf("%q: publish.Build: %v", data, err)
@@ -403,6 +386,111 @@ func TestKeylessAgreesWithPublish(t *testing.T) {
 	// 見本が痩せていないこと（どの組み合わせも一度は通る）。
 	if keyless == 0 || dropped == 0 || kept == 0 {
 		t.Errorf("見本が偏っている: 編集させない %d、原文があって捨てられる %d、原文が空で書ける %d", keyless, dropped, kept)
+	}
+}
+
+// keyColumnSamples は、publish がキーを決められるかの境目を突く key 列の値。キーを
+// 決められない形（空、空白だけ、16桁のキーの形でない値、大文字の接頭辞や接頭辞だけの
+// 台詞ID、15桁、16進でない字）と、決められる形（台詞ID、16桁のキー、前後に空白のある
+// 16桁のキー、大文字の16桁のキー）を混ぜる。
+var keyColumnSamples = []string{
+	"", "  ", "hello", "abc", "LINE:intro_1", "line:", "line:intro_1",
+	"0123456789abcdef", "  0123456789abcdef  ", "0123456789ABCDEF",
+	"0123456789abcde", "0123456789abcdeg", key.For("Start"),
+}
+
+// sampleRecord は、列 columns のヘッダーのもとで、key 列が k、原文が src、訳が tr の
+// レコードを1行（改行で終わる）にする。ほかの列は UI の行の値で埋める。
+func sampleRecord(columns []string, k, src, tr string) string {
+	values := map[string]string{"section": "UI", "node": "", "order": "", "speaker": "UI"}
+	fields := make([]string, len(columns))
+	for i, col := range columns {
+		switch col {
+		case "key":
+			fields[i] = csvField(k)
+		case "source_en":
+			fields[i] = csvField(src)
+		case "translation":
+			fields[i] = csvField(tr)
+		default:
+			fields[i] = values[col]
+		}
+	}
+	return strings.Join(fields, ",") + "\n"
+}
+
+// TestKeylessRowInPublishedFileStopsPublish は、publish がキーを決められない理由で編集
+// させない行に訳が入っているとき、publish がどうなるかを、開いているファイルごとに見る
+// （README の「書き換えられない行」と移植仕様の edit_no_key_or_source）。
+//
+//   - 作業コピーの無いロケールで公開ファイル自身を開いているとき（publish の入力と
+//     書き出し先が同じ）は、失われる訳の確かめ（publish.CheckLoss）がその行を拾い、
+//     publish は止まる。画面はその行の訳を空にする書き換えも断るので、止まった状態は
+//     画面からはほどけない。編集できる行は、同じ形で置いても止めない。
+//   - 作業コピーを開いているときは、publish はその行を捨てるだけで止まらない（いまの
+//     公開ファイルにその行は無いので、失われる訳に数えない）。
+func TestKeylessRowInPublishedFileStopsPublish(t *testing.T) {
+	var stopped, passed int
+	for _, header := range []string{headerPublished, headerSpeaker, headerPair} {
+		columns := strings.Split(strings.TrimSuffix(header, "\n"), ",")
+		for _, k := range keyColumnSamples {
+			// 公開ファイル自身が入力で、同じファイルへ書き出す。
+			current := header + sampleRecord(columns, "fedcba9876543210", "", "既訳") +
+				sampleRecord(columns, k, "", "訳")
+			out, _, err := publish.Build(nil, []byte(current), nil)
+			if err != nil {
+				t.Fatalf("%q: publish.Build: %v", current, err)
+			}
+			losses, err := publish.CheckLoss("zz", []byte(current), out)
+			if err != nil {
+				t.Fatalf("%q: publish.CheckLoss: %v", current, err)
+			}
+			f := Parse([]byte(current))
+			l, _ := f.Line(3)
+			if l.Editable {
+				passed++
+				if len(losses) != 0 {
+					t.Errorf("%q: 編集できる行なのに publish が止まる: %+v", current, losses)
+				}
+				continue
+			}
+			if l.Cause.ID != reason.EditNoKeyOrSource {
+				t.Fatalf("%q: ID 3 = %+v、キーを決められない理由を期待", current, l)
+			}
+			stopped++
+			if len(losses) != 1 || losses[0].Line != 3 || losses[0].Why.ID != reason.PublishRowGone {
+				t.Errorf("%q: 失われる訳 = %+v、3行目の1件（%s）を期待", current, losses, reason.PublishRowGone)
+			}
+			var notEditable *NotEditableError
+			if err := f.SetTranslation(3, ""); !errors.As(err, &notEditable) {
+				t.Errorf("%q: 画面から訳を空にできてしまう: %v", current, err)
+			}
+		}
+	}
+	if stopped == 0 || passed == 0 {
+		t.Errorf("見本が偏っている: 止まる %d、止まらない %d", stopped, passed)
+	}
+
+	// 作業コピーが入力のとき。書き出し先の公開ファイルには、キーのある行だけがある。
+	published := headerPublished + "fedcba9876543210,UI,,,UI,既訳\n"
+	columns := strings.Split(strings.TrimSuffix(headerWorking, "\n"), ",")
+	for _, k := range []string{"", "hello"} {
+		working := headerWorking + sampleRecord(columns, "fedcba9876543210", "", "既訳") +
+			sampleRecord(columns, k, "", "訳")
+		if l, _ := Parse([]byte(working)).Line(3); l.Editable || l.Cause.ID != reason.EditNoKeyOrSource {
+			t.Fatalf("%q: ID 3 = %+v、キーを決められない理由を期待", working, l)
+		}
+		out, stats, err := publish.Build(nil, []byte(working), nil)
+		if err != nil {
+			t.Fatalf("%q: publish.Build: %v", working, err)
+		}
+		losses, err := publish.CheckLoss("zz", []byte(published), out)
+		if err != nil {
+			t.Fatalf("%q: publish.CheckLoss: %v", working, err)
+		}
+		if stats.Dropped != 1 || len(losses) != 0 {
+			t.Errorf("%q: 捨てた行 %d、失われる訳 %+v。捨てて止まらないことを期待", working, stats.Dropped, losses)
+		}
 	}
 }
 

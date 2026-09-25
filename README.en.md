@@ -974,7 +974,7 @@ It can also hit a valid multi-line value, but the screen has no way to let it th
 Check it with `dwloc publish` and let it through with `--accept-multiline`.
 
 A row whose columns are all empty, such as `,,,,,,`, is not listed.  
-It has neither a key nor a source text, so `publish` drops it and a translation typed into it would silently disappear.  
+It has neither a key nor a source text, so `publish` drops it and a translation typed into it would never be published.  
 A row whose source text is empty and whose `key` column is neither a 16-digit key nor a line ID (starting with `line:`) is listed, but cannot be edited for the same reason (the last row of the table).  
 `publish` cannot work out a key for that row and drops it.  
 Besides a row whose `key` column is empty, this also covers a row with a value that is not shaped like a 16-digit key, such as `hello`.  
@@ -987,6 +987,14 @@ Removing the spaces, or putting the value in quotes, fixes it.
 In the form of the published file (without a `source_en` column), the source text is treated as empty.  
 A row whose source text does not match its `key` column does not get this reason (`publish` drops it too, but `dwloc diff` and the filters show it under "rows dropped by `publish`").  
 To keep that translation, correct the `key` column, or move the translation to the row that has the key and then delete the row you no longer need.
+
+What `dwloc publish` does when a row with this reason has a translation depends on which file the screen has open.  
+When the screen has a working copy open, `publish` drops that row and writes the other rows.  
+It only counts the row under `malformed dropped` in its summary; it neither stops nor reports the row by itself.  
+When the screen has the published file itself open (a locale without a working copy), `publish` stops because a translation would be lost, and writes no locale (exit code `1`).  
+Saving a copy in "the form of the published file" from "Save a copy" in the top bar is refused for the same reason.  
+You cannot clear the translation of that row from the screen.  
+Open the file in an editor, and correct the `key` column or delete the row you no longer need.
 
 A file whose line breaks are `CR` only cannot be edited at all.  
 The game does not treat `CR` as a line break and reads the whole file as one line.  

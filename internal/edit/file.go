@@ -271,7 +271,7 @@ func Parse(data []byte) *File {
 //
 // 読むと値がどれも空になるレコードは、空行相当にする。"," や `""` の行（区切りの
 // 関数の空のレコード）に加えて、",,,,,," の行もこれに入る（改善の ui-15）。キーも
-// 原文も空なので publish はこの行を捨て（移植仕様 R17）、ここへ打った訳は黙って落ちる。
+// 原文も空なので publish はこの行を捨て（移植仕様 R17）、ここへ打った訳は公開されない。
 func kindOf(seg csvfile.Segment) Kind {
 	switch seg.Kind {
 	case csvfile.SegmentComment:
@@ -383,8 +383,10 @@ func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees b
 	case keyless(f.header, line.Fields):
 		// 原文が空で、key 列が16桁のキーでも台詞ID でもないレコード（2列の `hello,訳`、
 		// 6列の `abc,UI,,,UI,訳`、`,UI,,,UI,,訳` など）。publish はこのレコードを捨てる
-		// （移植仕様 R17）ので、書いた訳は公開されず、黙って落ちる。値がどれも空の
-		// レコード（改善の ui-15。[kindOf]）と同じ理由で編集させない。
+		// （移植仕様 R17）ので、書いた訳は公開されない。値がどれも空のレコード（改善の
+		// ui-15。[kindOf]）と同じ理由で編集させない。作業コピーでは訳が黙って落ち、
+		// 公開ファイル自身を開いているときは publish の守り（publish.CheckLoss）が
+		// 止める（パッケージの doc）。
 		line.setReason(reason.New(reason.EditNoKeyOrSource,
 			"key列が16桁のキーでも台詞IDでもなく、原文（source_en）も空（publishがこのレコードを捨てるので、書いた訳は公開されない）"))
 	default:

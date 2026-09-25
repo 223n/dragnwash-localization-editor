@@ -198,6 +198,10 @@ func rowKey(rec csvfile.Row) (string, keyOutcome) {
 // 画面の保存（internal/edit）は、これに当たるレコードを編集させない。判定は [rowKey]
 // に任せ、規則を2か所に書かない。書くと、編集させない行と publish が捨てる行
 // （集計の malformed dropped）が食い違う。
+//
+// 入力と書き出し先が同じとき（作業コピーの無いロケールで、公開ファイル自身が入力の
+// とき）は、訳の入ったこのレコードを [CheckLoss] が失われる訳と数え、publish は
+// 止まる。黙って捨てて通るのは、入力が作業コピーのときである。
 func Keyless(rec csvfile.Row) bool {
 	_, how := rowKey(rec)
 	return how == keyDropped && rec.Get(colSourceEn) == ""
