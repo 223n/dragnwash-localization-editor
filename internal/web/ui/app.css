@@ -1484,6 +1484,47 @@ button {
 }
 
 /*
+  競合の行の1言の中身（app.js の rowNode）。「ファイルの訳」「あなたの訳」「選んでから
+  直せます」を1段ずつ積む。訳に改行があると、1段に続けて流したとき、どこまでが
+  どちらの訳かが読みにくい。
+
+  1段（.note-pair）は、ラベルの右に値を置く。値が複数行でも、2行目以降はラベルの
+  下へ回り込まず、値の列にそろう。
+*/
+.row-note .note-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.row-note .note-pair {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
+  min-width: 0;
+}
+
+.row-note .note-pair .note-label {
+  flex: none;
+}
+
+.row-note .note-pair .note-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+  行き先の無い訳と、まだファイルに入っていない訳（どちらも .orphans-list）。目印
+  （キーや行番号）の段と、訳の段を分ける。訳に改行があっても、どこからが訳かが
+  読める。字の並び（textContent）は「目印: 訳」のままなので、選べばそのまま写せる。
+*/
+.orphans-list .note-value {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+/*
   競合している行に出す「選んでから直せます」。材料（ファイルの訳／あなたの訳）
   とは役割が違うので、少し弱く出す。読まれなければ、押しても入力欄が開かない
   理由が画面のどこにも無くなるので、消しはしない。

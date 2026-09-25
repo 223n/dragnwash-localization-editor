@@ -449,13 +449,19 @@ test.describe("要求そのものが落ちたとき", () => {
     });
   });
 
-  test("作業コピーが読み取り専用の形に変わった 422 でも、未保存を抱えて送り直し、戻ればファイルに入る", async ({
+  test("作業コピーが読み取り専用の形に変わったら、409 で読み直した一覧を描き、載せ直せない訳を行き先の無い訳として出し続ける", async ({
     page,
     server,
   }) => {
-    // 待ち受けはヘッダーを受理できないファイルを丸ごと読み取り専用として断る（422、
-    // 行ごとの結果は無い）。よそが作業コピーを書き直している途中にも起きる。行ごとの
-    // 理由が無い失敗を「保存できた」とも「保存できない行」とも読まず、未保存のまま抱える。
+    // 待ち受けは版を、ファイル全体の読み取り専用の判定より先に照合する（決まったことの
+    // そのほか 5）。開いているあいだによそが作業コピーを読み取り専用の形（ヘッダーを受理
+    // できない、閉じない引用符など）に書き換えると、1バイトも書かずに 409 といまの行一覧
+    // （読み取り専用の理由つき）を返す。以前は 422 で断られ、画面は行ごとの理由を持てない
+    // まま送り直し続けた。載せ直しも行き先の無い訳への移動も走らなかった。
+    //
+    // 読み直した一覧には編集できる行が1つも無いので、訳はどの行にも載せない（載せると、
+    // 生の行を出す編集できない行の裏に隠れる）。捨てずに行き先の無い訳として出し続け、
+    // 送り直しはしない。
     await openPaused(page, server);
     const before = await server.readRoot(workingRel);
     const renamed = HEADER.working.replace("source_en", "source");
@@ -463,28 +469,35 @@ test.describe("要求そのものが落ちたとき", () => {
     expect(broken.equals(before)).toBe(false);
     await server.writeRoot(workingRel, broken);
 
+    const posts = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && new URL(req.url()).pathname === "/api/rows") {
+        posts.push(req.postDataJSON());
+      }
+    });
     const typed = "さようなら。";
     const n = SAMPLE_LINES.goodbye;
     await typeTranslation(page, n, typed);
     const refused = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/rows");
     await closeEditor(page);
-    expect((await refused).status()).toBe(422);
+    expect((await refused).status()).toBe(409);
 
-    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
-    await expect(page.locator("#message")).toHaveText(msg("ja", "error.file_readonly"));
-    await expect(rowByLine(page, n)).toHaveClass(UNSAVED);
-    await expect(rowByLine(page, n)).not.toHaveClass(SAVE_FAILED);
+    // 読み直した一覧を描く。どの行にも訳の欄が無く、読み取り専用の理由が断り書きに出る。
+    const why = msg("ja", "reason.edit_bad_header", { line: 1, text: JSON.stringify(renamed) });
+    await expect(page.locator("#notes li").filter({ hasText: msg("ja", "ui.file_readonly", { reason: why }) })).toHaveCount(1);
+    await expect(page.locator("#list .cell.translation[data-id]")).toHaveCount(0);
+    await expect(rowByLine(page, n)).toHaveClass(/(^|\s)not-editable(\s|$)/);
+    // 訳は捨てず、行き先の無い訳として出す。保存の状態も「保存済み」とは言わない。
+    await expect(page.locator("#orphans")).toBeVisible();
+    await expect(page.locator("#orphans-list li")).toHaveText([`${keyFor(SAMPLE.goodbye.source)}: ${typed}`]);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
+    await expect(page.locator("#conflict")).toBeHidden();
+
+    // 送り直さない（載せる先が無い）。ファイルも1バイトも変えない。
+    await page.clock.runFor(autosaveDelay + retryDelays.at(-1));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].edits).toEqual([expect.objectContaining({ id: n, translation: typed })]);
     expect((await server.readRoot(workingRel)).equals(broken)).toBe(true);
-
-    // 元の中身に戻ると、画面が読んだときの版と一致するので、送り直しで入る。
-    await server.writeRoot(workingRel, before);
-    const accepted = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/rows");
-    await page.clock.runFor(retryDelays[0]);
-    expect((await accepted).status()).toBe(200);
-    await waitForSaved(page);
-    expectOnlyChanged(before, await server.readRoot(workingRel), {
-      [n]: withTranslation(splitLines(before)[n - 1], typed),
-    });
   });
 
   test("Cookie を失って 404 の平文が返ったら、送り直しを止め、訳を抱えたまま案内し、打ち直せば送る", async ({

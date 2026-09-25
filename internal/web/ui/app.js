@@ -1418,8 +1418,8 @@
       これで keepMine は mine を pending へ足すだけ、takeFile は mine を捨てて
       pending を残すだけになり、どちらのボタンも押したとおりに効く。
       翻訳者は片方を選んでから直すので2手になるが、押したボタンと逆の結果に
-      なるよりはよい。行には「ファイルの訳: … / あなたの訳: …」に続けて、
-      選んでから直せるという断りを出してある（rowNode を見よ）。
+      なるよりはよい。行には「ファイルの訳」と「あなたの訳」を段に分けて並べ、
+      続けて、選んでから直せるという断りを出してある（rowNode を見よ）。
 
       競合していない行は、この引き止めが出ているあいだも今までどおり編集できる。
       止めるのは、どちらを残すか決まっていない行だけである。
@@ -1588,8 +1588,8 @@
       /* 書き換えたら「保存できない行」から外す。次の保存でまた試す。 */
       state.failed.delete(id);
       /*
-        競合中の行では1言を消さない。そこに出ているのは「ファイルの訳: … /
-        あなたの訳: …」と、選んでから直せるという断りで、消すと自分の版が
+        競合中の行では1言を消さない。そこに出ているのは「ファイルの訳」と
+        「あなたの訳」の2段と、選んでから直せるという断りで、消すと自分の版が
         画面から消える。
 
         openEditor が競合中の行を開かなくなったので、いまここは通らない。
@@ -2336,11 +2336,16 @@
     });
   }
 
-  /* いま描いている行の ID → キー。読み直す前に控えておく。 */
+  /*
+    いま描いている行の ID → { key, n }。読み直す前に控えておく。
+
+    n（最初の物理行）は、載せる先が見つからなかった訳に添える目印である。キーの無い
+    行には、ほかに探す手がかりが無い。
+  */
   function keyIndex() {
     var keys = new Map();
     state.rows.forEach(function (entry, id) {
-      keys.set(id, entry.key);
+      keys.set(id, { key: entry.key, n: entry.n });
     });
     return keys;
   }
@@ -2355,17 +2360,32 @@
 
       同じキーが同じ ID にある    → その ID のまま（ずれていない）
       どこか1か所にだけある       → その ID へ移す
-      無い、2か所以上ある、先が埋まっている
+      無い、2か所以上ある、先が埋まっている、先が編集できない
                                   → 載せる先を決められない。捨てずに
                                     「行き先が見つからない訳」として画面に出す
 
     キーを持たない行（キー列が空の作業コピー）は、同じ ID に載せるしかない。
-    待ち受けもキーの無い要求は照合しないので、扱いはそろっている。
+    待ち受けもキーの無い要求は照合しないので、扱いはそろっている。ただし、その ID に
+    いまはキーのある行があれば、それは別の行なので載せない。
+
+    先が編集できない行にも載せない（決まったことのそのほか 5）。開いているあいだに
+    ファイルが読み取り専用の形（閉じない引用符など）に書き換わると、待ち受けは 409 と
+    読み取り専用の理由つきの一覧を返す。そこへ載せると、その訳は編集できない行の
+    裏に隠れ（編集できない行は訳ではなく生の行を出す）、保存は読み取り専用で断られ
+    続ける。行き先の無い訳として出せば、翻訳者は写してから直せる。
   */
   function remap(edits, oldKeys, data) {
     var byKey = new Map();
+    /* 載せてよい行（編集できるデータ行）の ID → キー（無ければ空）。 */
+    var open = new Map();
     (data.lines || []).forEach(function (line) {
-      if (line.kind !== "data" || !line.key) {
+      if (line.kind !== "data") {
+        return;
+      }
+      if (line.editable) {
+        open.set(line.id, line.key ? line.key : "");
+      }
+      if (!line.key) {
         return;
       }
       var seen = byKey.get(line.key);
@@ -2379,20 +2399,26 @@
     var moved = new Map();
     var lost = [];
     edits.forEach(function (value, id) {
-      var k = oldKeys.get(id);
-      if (!k) {
-        moved.set(id, value);
-        return;
-      }
-      var seen = byKey.get(k);
+      /*
+        載せ直すのは描いてある行の訳だけなので（抱えている訳の鍵は、どれも描いた行の
+        ID）、控えにその行は必ずある。
+      */
+      var was = oldKeys.get(id);
       var to = null;
-      if (seen && seen.indexOf(id) >= 0) {
-        to = id;
-      } else if (seen && seen.length === 1) {
-        to = seen[0];
+      if (!was.key) {
+        if (open.get(id) === "") {
+          to = id;
+        }
+      } else {
+        var seen = byKey.get(was.key);
+        if (seen && seen.indexOf(id) >= 0) {
+          to = id;
+        } else if (seen && seen.length === 1) {
+          to = seen[0];
+        }
       }
-      if (to === null || moved.has(to)) {
-        lost.push({ key: k, text: value });
+      if (to === null || moved.has(to) || !open.has(to)) {
+        lost.push({ key: was.key, n: was.n, text: value });
         return;
       }
       moved.set(to, value);
@@ -2413,17 +2439,36 @@
     renderOrphans();
   }
 
+  /*
+    画面の中にしか無い訳を、一覧の1項目にする。行き先の無い訳（#orphans）と、まだ
+    ファイルに入っていない訳（#unsent）で同じ形にする。
+
+    目印（キーや行番号）と訳は、段を分けて出す（app.css の .orphans-list .note-value）。
+    訳に改行があると、同じ段に続けて流したとき、どこからが訳かが読みにくい。字の
+    並び（textContent）は「目印: 訳」のままで、選べばそのまま写せる。
+
+    訳は textContent で入れる（行の中身を innerHTML に渡さない）。向きは中身から
+    決めさせる。
+  */
+  function noteItem(label, text) {
+    var row = li(null, "");
+    row.appendChild(span("note-label", label + ": "));
+    var value = span("note-value", text);
+    value.dir = "auto";
+    value.lang = state.locale;
+    row.appendChild(value);
+    return row;
+  }
+
+  /*
+    行き先の無い訳の一覧を描く。目印はキーで、キーの無い行（作業コピーにはありうる）は
+    行番号にする。
+  */
   function renderOrphans() {
     clear(el.orphansList);
     state.orphans.forEach(function (item) {
-      var row = li(null, "");
-      row.appendChild(span("note-label", item.key + ": "));
-      var text = span("note-value", item.text);
-      /* 訳なので向きは中身から決めさせる。 */
-      text.dir = "auto";
-      text.lang = state.locale;
-      row.appendChild(text);
-      el.orphansList.appendChild(row);
+      var label = item.key ? item.key : t("ui.unsent_line", { line: item.n });
+      el.orphansList.appendChild(noteItem(label, item.text));
     });
     el.orphans.hidden = state.orphans.length === 0;
   }
@@ -2440,7 +2485,7 @@
 
     並べるのは、送り直している訳（state.pending）と、行ごとに断られた訳（state.failed）。
     どちらも画面の中にしか無い。競合で抱えている訳（state.mine）は並べない。その行に
-    「ファイルの訳 / あなたの訳」が並んでいて、「自分の訳を上に載せる」を選べば未保存へ
+    「ファイルの訳」と「あなたの訳」が並んでいて、「自分の訳を上に載せる」を選べば未保存へ
     移ってここに並ぶ。行き先の無い訳は、すぐ上の #orphans に出ている。
 
     文言は目録から。訳は textContent で入れる（行の中身を innerHTML に渡さない）。
@@ -2480,14 +2525,7 @@
     items.forEach(function (item) {
       /* キーの欄が空の行（作業コピーにはありうる）では、行番号だけにする。 */
       var label = [t("ui.unsent_line", { line: item.n }), item.key].join(" ").trim();
-      var row = li(null, "");
-      row.appendChild(span("note-label", label + ": "));
-      var text = span("note-value", item.text);
-      /* 訳なので向きは中身から決めさせる（renderOrphans と同じ）。 */
-      text.dir = "auto";
-      text.lang = state.locale;
-      row.appendChild(text);
-      el.unsentList.appendChild(row);
+      el.unsentList.appendChild(noteItem(label, item.text));
     });
     el.unsent.hidden = items.length === 0;
   }
@@ -2564,7 +2602,7 @@
     state.pending.forEach(function (value, id) {
       var entry = state.rows.get(id);
       var was = entry ? entry.saved : "";
-      if (fileChanged(id, oldKeys.get(id), was, byKey)) {
+      if (fileChanged(id, oldKeys.get(id).key, was, byKey)) {
         clashed.set(id, value);
         return;
       }
@@ -2605,7 +2643,7 @@
     addOrphans(mine.lost);
     addOrphans(keep.lost);
     addOrphans(failed.lost.map(function (item) {
-      return { key: item.key, text: item.text.value };
+      return { key: item.key, n: item.n, text: item.text.value };
     }));
     /*
       描き直すあいだは、入力欄の blur で保存へ回さない。入力欄を頁から外すと
@@ -2800,6 +2838,24 @@
   }
 
   /*
+    競合している行の1言に並べる、ラベルと値の1段（「ファイルの訳: …」）。
+
+    2つの訳は段を分けて並べる。値に改行があると、同じ段に続けて流したとき、
+    どこまでがどちらの訳かが読みにくい。値は訳なので、向きは中身から決めさせ、
+    lang にはロケール名を入れる（訳の欄と同じ）。
+  */
+  function notePair(label, value, locale) {
+    var pair = document.createElement("div");
+    pair.className = "note-pair";
+    pair.appendChild(span("note-label", label + ": "));
+    var text = span("note-value", value);
+    text.dir = "auto";
+    text.lang = locale;
+    pair.appendChild(text);
+    return pair;
+  }
+
+  /*
     1行を組む。1行は1レコード（またはコメント行・閉じない引用符から後ろの生の1物理行）
     で、引用符で囲んだ値に改行があるレコードも1行になる。
 
@@ -2938,13 +2994,15 @@
       clear(note);
       note.hidden = false;
       note.appendChild(icon("code-merge"));
-      /* 文はまとめて1つの span に入れる。1言は flex なので、ばらすと隙間が空く。 */
-      var body = span(null, "");
-      body.appendChild(span("note-label", t("ui.conflict_file") + ": "));
-      body.appendChild(span("note-value", entry.saved));
-      body.appendChild(span("note-label", " / " + t("ui.conflict_mine") + ": "));
-      body.appendChild(span("note-value", state.mine.get(line.id)));
-      body.appendChild(span("note-locked", " " + t("ui.conflict_locked")));
+      /*
+        文はまとめて1つの箱に入れる。1言は flex なので、ばらすと隙間が空く。
+        箱の中は、ファイルの訳・あなたの訳・断りの3段にする（notePair）。
+      */
+      var body = document.createElement("div");
+      body.className = "note-body";
+      body.appendChild(notePair(t("ui.conflict_file"), entry.saved, locale));
+      body.appendChild(notePair(t("ui.conflict_mine"), state.mine.get(line.id), locale));
+      body.appendChild(span("note-locked", t("ui.conflict_locked")));
       note.appendChild(body);
     }
     markRow(entry);

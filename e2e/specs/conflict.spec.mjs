@@ -676,6 +676,32 @@ test.describe("キーを持たない行", () => {
     await waitForSaved(page);
     await expectFile(server, copy(hello(), keyless("さようなら。"), wonderful("最高！")));
   });
+
+  // キーの無い行は同じ ID へ載せ直すしかない。ただし、その ID にいまキーのある行が来て
+  // いたら、それは別の行である。載せると、「自分の訳を上に載せる」で別のレコードへ書かれる
+  // （待ち受けはキーの無い要求を照合しない）。載せずに、行番号を添えて行き先の無い訳に出す。
+  test("キーの無い行の ID に、よそが足したキーのある行が来たら載せず、行番号を添えて行き先の無い訳に出す", async ({
+    page,
+    server,
+  }) => {
+    await openPaused(page, server, initial);
+    const external = copy(hello(), extra, keyless(), wonderful());
+    await raiseConflict(page, server, L.goodbye, "さようなら。", external);
+
+    await expect(orphansBox(page)).toBeVisible();
+    await expect(page.locator("#orphans-list li")).toHaveText([
+      `${msg("ja", "ui.unsent_line", { line: L.goodbye })}: さようなら。`,
+    ]);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
+    await expect(conflictBox(page)).toBeHidden();
+    // よそが足した行（いまの 6行目）にも、ずれたキーの無い行（7行目）にも載せていない。
+    await expect(translationCell(page, L.goodbye)).toHaveText(extra.translation);
+    await expect(translationCell(page, L.goodbye + 1)).toHaveText("");
+    await expect(rowByLine(page, L.goodbye)).not.toHaveClass(/(^|\s)unsaved(\s|$)/);
+    await page.clock.runFor(pastRetries);
+    expect(await rowPosts(page)).toBe(1);
+    await expectFile(server, external);
+  });
 });
 
 // ---- 狭い・低い画面 ----

@@ -85,6 +85,24 @@ function trackSaves(page) {
   return bodies;
 }
 
+// conflictWith は、次からの保存に、いまのファイルの行一覧を change で書き換えた 409 を返す。
+//
+// よそが書き換えた場面を、待ち受けの応答だけで作る。訳に改行が入ったレコードを待ち受けは
+// 読み取り専用で返す（改行の入力を足すまで）ので、複数行の訳を持つ競合は、いまはファイルを
+// 書き換えても作れない。画面がその形を描けることを、応答を差し替えて先に確かめておく。
+async function conflictWith(page, server, change) {
+  await page.route("**/api/rows", async (route) => {
+    const res = await page.request.get(`${server.origin}/api/lines?locale=ja`);
+    const current = await res.json();
+    current.lines.forEach(change);
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ conflict: true, message: msg("ja", "error.conflict"), current }),
+    });
+  });
+}
+
 test.describe("行をまたぐレコード", () => {
   // 行番号と ID（区切りは CRLF、値の中は LF）:
   //   1 ヘッダー / 2 空行 / 3・4 見出し / 5 hello（ID 5）
@@ -179,6 +197,62 @@ test.describe("行をまたぐレコード", () => {
     await editor(app).press("Escape");
     await waitForSaved(app);
     expectSameBytes(await server.readRoot(workingRel), before, "作業コピー");
+  });
+
+  test("競合でファイルの訳が複数行でも、ファイルの訳とあなたの訳を段に分けて並べる", async ({ app, server }) => {
+    const external = "一行目\n\n三行目";
+    await conflictWith(app, server, (line) => {
+      if (line.id === ID.wonderful) {
+        line.translation = external;
+      }
+    });
+    await typeTranslation(app, ID.wonderful, "すごい！");
+    await editor(app).press("Escape");
+
+    const row = rowById(app, ID.wonderful);
+    await expect(row).toHaveClass(/(^|\s)conflicted(\s|$)/);
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_conflict"));
+    const pairs = row.locator(".row-note .note-pair");
+    await expect(pairs).toHaveCount(2);
+    await expect(pairs.locator(".note-label")).toHaveText([
+      `${msg("ja", "ui.conflict_file")}:`,
+      `${msg("ja", "ui.conflict_mine")}:`,
+    ]);
+    // ファイルの訳の改行と空行は、描いた字にも残る。
+    expect(await drawnText(pairs.nth(0).locator(".note-value"))).toBe(external);
+    await expect(pairs.nth(1).locator(".note-value")).toHaveText("すごい！");
+    await expect(row.locator(".row-note .note-locked")).toHaveText(msg("ja", "ui.conflict_locked"));
+
+    // 段が分かれている。あなたの訳の段は、ファイルの訳の段の下から始まる。値の2行目
+    // 以降もラベルの下へ回り込まず、値の列にそろう。
+    const first = await pairs.nth(0).boundingBox();
+    const second = await pairs.nth(1).boundingBox();
+    expect(second.y).toBeGreaterThanOrEqual(first.y + first.height - 1);
+    const label = await pairs.nth(0).locator(".note-label").boundingBox();
+    const value = await pairs.nth(0).locator(".note-value").boundingBox();
+    expect(value.x).toBeGreaterThanOrEqual(label.x + label.width - 1);
+    expect(value.height).toBeGreaterThan(label.height * 2);
+  });
+
+  test("載せる先の無い訳は、目印と訳の段を分けて、行き先の無い訳に並べる", async ({ app, server }) => {
+    const before = await server.readRoot(workingRel);
+    // よそが hello のキーを書き換えた。打った訳を載せる先が無くなる。
+    await conflictWith(app, server, (line) => {
+      if (line.id === ID.hello) {
+        line.key = "0000000000000000";
+      }
+    });
+    const typed = "もしもーし、聞こえますか。こちらは港の洗車場です。";
+    await typeTranslation(app, ID.hello, typed);
+    await editor(app).press("Escape");
+
+    const item = app.locator("#orphans-list li");
+    await expect(item).toHaveText([`${keyFor(SAMPLE.hello.source)}: ${typed}`]);
+    await expect(saveState(app)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
+    const label = await item.locator(".note-label").boundingBox();
+    const value = await item.locator(".note-value").boundingBox();
+    expect(value.y).toBeGreaterThanOrEqual(label.y + label.height - 1);
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
 });
 

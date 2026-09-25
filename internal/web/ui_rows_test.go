@@ -96,3 +96,25 @@ func TestSourceKeepsLineBreaks(t *testing.T) {
 		t.Error(".source に white-space: pre-wrap が無い。段落を2つ持つ原文が1段に詰まり、空行も消える")
 	}
 }
+
+// TestRemapDoesNotPlaceOnRowsThatCannotBeEdited は、409 のあとの載せ直しで、編集
+// できない行には載せないことを見る（決まったことのそのほか 5）。
+//
+// 開いているあいだにファイルが読み取り専用の形に書き換わると、待ち受けは 409 と読み
+// 取り専用の理由つきの一覧を返す。編集できない行に載せると、訳は生の行の裏に隠れ、
+// 保存は読み取り専用で断られ続ける。行き先の無い訳として出す。キーの無い行も、同じ
+// ID にいまキーのある行が来ていたら載せない。
+func TestRemapDoesNotPlaceOnRowsThatCannotBeEdited(t *testing.T) {
+	js := uiSource(t, "ui/app.js")
+
+	remap := functionBody(t, js, "remap")
+	for _, want := range []string{
+		"if (line.editable) {",
+		`if (open.get(id) === "") {`,
+		"if (to === null || moved.has(to) || !open.has(to)) {",
+	} {
+		if !strings.Contains(remap, want) {
+			t.Errorf("remap に %q が無い", want)
+		}
+	}
+}
