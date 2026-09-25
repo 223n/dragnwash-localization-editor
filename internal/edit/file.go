@@ -90,10 +90,6 @@ type Line struct {
 	// orig は、読み込んだ（または最後に保存した）ときの Text。書く直前の確かめ
 	// （[File.verify]）が、触っていない行が1バイトも変わらないことを見るのに使う。
 	orig string
-	// origKind は、読み込んだ（または最後に保存した）ときの Kind。書き換えたレコードを
-	// 1つずつ確かめ直すとき（[File.culprit]）、確かめに入れないレコードを書き換える前の
-	// 形で見るのに使う。訳を消して空行相当になったレコードは、Kind だけが変わる。
-	origKind Kind
 	// term は Text の終わりの終端（"\r\n" / "\n" / "\r" / ""）。
 	term string
 	// last は最終フィールドの開始位置（Text の先頭から）。KindData のレコードだけ。
@@ -190,7 +186,6 @@ func Parse(data []byte) *File {
 			Text: segs.Text[seg.Start : seg.End+len(seg.Term)], term: string(seg.Term)}
 		line.orig = line.Text
 		line.Kind = kindOf(seg)
-		line.origKind = line.Kind
 		switch line.Kind {
 		case KindHeader:
 			headerIndex, headerBody = len(f.lines), segs.Body(seg)
@@ -317,7 +312,7 @@ func (f *File) appendRaw(segs csvfile.Segments, seg csvfile.Segment) {
 		body, term := segs.PhysicalLine(n)
 		kind := rawKind(body)
 		f.lines = append(f.lines, Line{ID: id, Number: n, EndNumber: n, Kind: kind,
-			Text: body + string(term), orig: body + string(term), origKind: kind, term: string(term)})
+			Text: body + string(term), orig: body + string(term), term: string(term)})
 		id++
 	}
 }
@@ -629,7 +624,8 @@ func (f *File) verify(out []byte) error {
 //
 // touched に無いレコードは、読み込んだとき（または最後に保存したとき）のままのはずの
 // レコードとして見る。f.touched のうち touched に無いレコード（[File.culprit] が1つずつ
-// 確かめ直すとき）も、書き換える前のバイト列と種類で見る。
+// 確かめ直すとき）も、書き換える前のバイト列で見る。行の種類は書き換えで変わらない
+// （[File.SetTranslation]）ので、どの行もモデルの種類と比べる。
 func (f *File) mismatch(out []byte, touched map[int]bool) int {
 	whole := csvfile.ReadPowerShellMarked(out)
 	segs := whole.Segments
@@ -640,15 +636,12 @@ func (f *File) mismatch(out []byte, touched map[int]bool) int {
 		seg := segs.List[i]
 		// 触っていない行は、読み込んだとき（または最後に保存したとき）のバイト列と比べる。
 		// モデルと比べるだけでは、モデルの側で壊れた行を見逃す。
-		want, kind := line.orig, line.Kind
-		switch {
-		case touched[i]:
+		want := line.orig
+		if touched[i] {
 			want = line.Text
-		case f.touched[i]:
-			kind = line.origKind
 		}
 		if seg.Unclosed() || seg.ID != line.ID || seg.Line != line.Number || seg.EndLine != line.EndNumber ||
-			kindOf(seg) != kind || segs.Text[seg.Start:seg.End+len(seg.Term)] != want {
+			kindOf(seg) != line.Kind || segs.Text[seg.Start:seg.End+len(seg.Term)] != want {
 			return i
 		}
 		if touched[i] && line.Kind == KindData && !slices.Equal(padFields(seg.Fields, len(seg.Offsets)), line.Fields) {

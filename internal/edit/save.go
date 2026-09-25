@@ -110,12 +110,10 @@ func (f *File) writeLocked(out []byte) error {
 }
 
 // saved は、いまの中身を保存したものとして覚える。書き換えた印を下ろし、どの行も
-// いまのバイト列と種類を「読み込んだときのバイト列と種類」にする（[File.verify] が
-// 比べる相手）。
+// いまのバイト列を「読み込んだときのバイト列」にする（[File.verify] が比べる相手）。
 func (f *File) saved() {
 	for i := range f.touched {
 		f.lines[i].orig = f.lines[i].Text
-		f.lines[i].origKind = f.lines[i].Kind
 	}
 	f.touched = nil
 }
