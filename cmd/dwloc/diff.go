@@ -346,7 +346,14 @@ func checkDiffOutput(root, game, out string, stderr io.Writer) int {
 	if game != "" {
 		guarded = append(guarded, filepath.Join(game, publish.TranslationsDir))
 	}
-	if within(abs, guarded) {
+	// 書き出し先がリンクなら、たどった先も見ます。publish.WriteBytes はリンクを
+	// 残したままリンク先へ書くので、リンクの置き場だけを見ると、公開ファイルを指す
+	// リンクを渡されたときに公開ファイルを上書きします。
+	target := abs
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		target = resolved
+	}
+	if within(abs, guarded) || within(target, guarded) {
 		fmt.Fprintf(stderr,
 			"dwloc: --output には、diff が読むフォルダーの中を指定できません（翻訳リポジトリの Translations と data、ゲームの Translations）: %s\n",
 			filepath.ToSlash(out))

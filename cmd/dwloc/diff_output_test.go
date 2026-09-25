@@ -115,6 +115,28 @@ func TestRunDiffOutputRefusesWhatDiffReads(t *testing.T) {
 	}
 }
 
+// TestRunDiffOutputRefusesALinkIntoTranslations は、Translations の外に置いたリンクが
+// 公開ファイルを指しているとき、リンク先へ書かずに止めることを見る。書き出しは
+// リンクを残したままリンク先へ書く（publish.WriteBytes）ので、リンクの置き場だけを
+// 見ると公開ファイルを上書きする。リンクを作れない環境（権限の無い Windows）では飛ばす。
+func TestRunDiffOutputRefusesALinkIntoTranslations(t *testing.T) {
+	root := recordDiffTree(t)
+	published := filepath.Join(root, "Translations", "ja", "strings.csv")
+	before := readFile(t, root, "Translations/ja/strings.csv")
+	link := filepath.Join(t.TempDir(), "report.csv")
+	if err := os.Symlink(published, link); err != nil {
+		t.Skipf("シンボリックリンクを作れない: %v", err)
+	}
+	code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv", "--output", link)
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--output には、diff が読むフォルダーの中を指定できません"})
+	if got := readFile(t, root, "Translations/ja/strings.csv"); got != before {
+		t.Errorf("リンク先の公開ファイルが書き換わった:\n%s", got)
+	}
+}
+
 // TestRunDiffOutputReportsWriteFailure は、--output に書けなかったとき（書き出し先が
 // フォルダーだった、など）に終了コード2で止まり、どこに書けなかったかを出すことを見る。
 func TestRunDiffOutputReportsWriteFailure(t *testing.T) {
