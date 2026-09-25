@@ -10,11 +10,11 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
-// TestSaveRejectsMovedRow は、行番号の指す行が思っているキーの行でないときに
+// TestSaveRejectsMovedRow は、ID（通し番号）の指す行が思っているキーの行でないときに
 // 書かないことを確かめる。
 //
 // 409 を受けた画面は、読み直した内容に自分の編集を載せ直す。そのあいだに
-// よそが行を足したり消したりしていると、同じ行番号が別のキーの行を指す。
+// よそがレコードを足したり消したりしていると、同じ ID が別のキーの行を指す。
 // 書いてしまうと、訳が別の行へ入り、その行にもとからあった訳が消える。
 // どちらも黙って起きるので、翻訳者は気づけない。
 func TestSaveRejectsMovedRow(t *testing.T) {
@@ -23,7 +23,7 @@ func TestSaveRejectsMovedRow(t *testing.T) {
 	before := readFile(t, path)
 
 	lines := getLines(t, s, "ja")
-	// 6行目にあるのは srcBye のキー。srcHello のキーだと思って送る。
+	// ID 6（6行目）にあるのは srcBye のキー。srcHello のキーだと思って送る。
 	rec := save(t, s, "ja", lines.Version, rowEdit{
 		ID:          6,
 		Key:         key.For(srcHello),
