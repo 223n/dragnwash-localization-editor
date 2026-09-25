@@ -38,7 +38,7 @@ func TestPublishStopsWhenTheInputChangesAfterBuilding(t *testing.T) {
 	if code != exitProblems {
 		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
 	}
-	checkContains(t, "stderr", stderr, []string{publishInputChangedText, "dwloc:   Translations/ja/strings.csv\n"})
+	checkContains(t, "stderr", stderr, []string{publishFilesChangedText, "dwloc:   Translations/ja/strings.csv\n"})
 	if strings.Contains(stdout, "書き出しました") {
 		t.Errorf("書き出したと言っている:\n%s", stdout)
 	}
@@ -155,10 +155,164 @@ func TestPublishRereadsTheInputInsideTheLock(t *testing.T) {
 	if r.code != exitProblems {
 		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", r.code, exitProblems, r.stdout, r.stderr)
 	}
-	checkContains(t, "stderr", r.stderr, []string{publishInputChangedText})
+	checkContains(t, "stderr", r.stderr, []string{publishFilesChangedText})
 	if got := readFile(t, root, "Translations/ja/strings.csv"); got != edited {
 		t.Errorf("画面が保存した訳を消した:\n%s", got)
 	}
+}
+
+// gameInputTree は、ゲーム側の作業コピーを入力にし、リポジトリの公開ファイルへ書く
+// publish の見本を作る。返すのはリポジトリのルートとゲームのフォルダー。
+//
+// 画面を --no-game で開くと、画面はリポジトリの公開ファイルを開いて保存する。publish の
+// 入力（ゲーム側の作業コピー）と、画面が書くファイル（publish の書き出し先）が別になる
+// 組み合わせである。
+//
+// ゲーム側の公開ファイル（作業コピーの土台）は、リポジトリの公開ファイルと同じにする
+// （ゲームに最新の翻訳が入っている）。
+func gameInputTree(t *testing.T) (root, game string) {
+	t.Helper()
+	root = lossRepo(t)
+	return root, makeGame(t, map[string]string{
+		"Translations/_discovered/ja.working.csv": workingBoth,
+		"Translations/ja/strings.csv":             readFile(t, root, jaPublishedPath),
+	})
+}
+
+// screenSaved は、画面（dwloc edit --no-game）が公開ファイルに訳を保存したあとの中身。
+// lossRepo の公開ファイルの訳を書き換えたもの。
+const screenSaved = "key,section,node,order,speaker,translation\n" +
+	keyHello + ",L01 Ryan,Ryan_1_intro,1,Ryan,もしもし？（画面で直した）\n"
+
+// TestPublishLocksTheOutputToo は、publish が入力だけでなく書き出し先にも錠を掛け、
+// 錠の中で書き出し先を読み直すことを見る。
+//
+// ゲーム側の作業コピーを入力にした publish と、公開ファイルを開いた画面（--no-game）が
+// 同時に動く場面である。画面の保存は公開ファイルに錠を掛けて書く。publish が入力に
+// しか錠を掛けないと、画面の保存を待たずに、保存する前の公開ファイルから組み立てた
+// 中身で上書きし、画面が「保存済み」と出した訳が消える（検証で、実物の写しを使って
+// Windows で60回中2回、Linux で100回中7回再現した）。
+func TestPublishLocksTheOutputToo(t *testing.T) {
+	root, game := gameInputTree(t)
+	output := filepath.Join(root, filepath.FromSlash(jaPublishedPath))
+	unlock, err := publish.LockFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		code           int
+		stdout, stderr string
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, stdout, stderr := runCLI("publish", "--root", root, "--game", game)
+		done <- result{code, stdout, stderr}
+	}()
+	select {
+	case r := <-done:
+		unlock()
+		t.Fatalf("書き出し先の錠を持っているあいだに publish が終わった: %d\n%s", r.code, r.stderr)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// 錠を持つ側（画面の保存）が、公開ファイルの訳を書き換える。
+	if err := os.WriteFile(output, []byte(screenSaved), 0o644); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+
+	r := <-done
+	if r.code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", r.code, exitProblems, r.stdout, r.stderr)
+	}
+	checkContains(t, "stderr", r.stderr, []string{publishFilesChangedText, "dwloc:   Translations/ja/strings.csv\n"})
+	if got := readFile(t, root, jaPublishedPath); got != screenSaved {
+		t.Errorf("画面が保存した訳を消した:\n%s", got)
+	}
+}
+
+// TestPublishStopsWhenTheOutputChangesAfterBuilding は、組み立てたあとに書き出し先が
+// 書き換わったら、入力が変わっていなくても、1バイトも書かずに止まることを見る。
+// 組み立て（前の公開ファイルからの引き継ぎ）と失われる訳の確かめは、書き換える前の
+// 中身で行っている。
+func TestPublishStopsWhenTheOutputChangesAfterBuilding(t *testing.T) {
+	root, game := gameInputTree(t)
+	output := filepath.Join(root, filepath.FromSlash(jaPublishedPath))
+	setBeforePublishWrite(t, func() {
+		if err := os.WriteFile(output, []byte(screenSaved), 0o644); err != nil {
+			t.Error(err)
+		}
+	})
+
+	code, stdout, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{publishFilesChangedText, "dwloc:   Translations/ja/strings.csv\n"})
+	if strings.Contains(stderr, "ja.working.csv") {
+		t.Errorf("変わっていない入力を変わったと言っている:\n%s", stderr)
+	}
+	if got := readFile(t, root, jaPublishedPath); got != screenSaved {
+		t.Errorf("画面が保存した訳を消した:\n%s", got)
+	}
+
+	// もう一度回せば、書き換わったあとの公開ファイルで確かめる。コミットする側の訳が
+	// ゲーム側の公開ファイルと食い違うので、今度は「ゲームに入っている翻訳が古い」で
+	// 止まり、画面の訳は残る（順に動かしたときと同じ）。
+	setBeforePublishWrite(t, func() {})
+	if code, _, stderr := runCLI("publish", "--root", root, "--game", game); code != exitProblems ||
+		!strings.Contains(stderr, "ゲームに入っている翻訳が古いので") {
+		t.Fatalf("2回目の終了コード = %d、ゲームに入っている翻訳が古いので止まることを期待\n%s", code, stderr)
+	}
+	if got := readFile(t, root, jaPublishedPath); got != screenSaved {
+		t.Errorf("2回目で画面が保存した訳を消した:\n%s", got)
+	}
+}
+
+// TestPublishStopsWhenTheGameBaseChangesAfterBuilding は、組み立てたあとにゲーム側の
+// 公開ファイルが書き換わったら、1バイトも書かずに止まることを見る。「ゲームに入っている
+// 翻訳が古い」の確かめは、書き換える前の中身で行っている。dwloc はこのファイルを
+// 書かないので錠は掛けず、読み直して比べるだけにする。
+func TestPublishStopsWhenTheGameBaseChangesAfterBuilding(t *testing.T) {
+	root, game := gameInputTree(t)
+	base := filepath.Join(game, "Translations", "ja", "strings.csv")
+	setBeforePublishWrite(t, func() {
+		if err := os.WriteFile(base, []byte(screenSaved), 0o644); err != nil {
+			t.Error(err)
+		}
+	})
+	before := readFile(t, root, jaPublishedPath)
+
+	code, stdout, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitProblems {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{publishFilesChangedText, "dwloc:   " + filepath.ToSlash(base) + "\n"})
+	if got := readFile(t, root, jaPublishedPath); got != before {
+		t.Errorf("止めたのに公開ファイルが変わった:\n%s", got)
+	}
+}
+
+// TestPublishStopsWhenTheOutputCannotBeReadAgain は、書く直前に書き出し先を読み直せ
+// なければ（ファイルがフォルダーに置き換わった、など）、1バイトも書かずに止まることを
+// 見る（終了コード 2）。
+func TestPublishStopsWhenTheOutputCannotBeReadAgain(t *testing.T) {
+	root, game := gameInputTree(t)
+	output := filepath.Join(root, filepath.FromSlash(jaPublishedPath))
+	setBeforePublishWrite(t, func() {
+		if err := os.Remove(output); err != nil {
+			t.Error(err)
+		}
+		if err := os.Mkdir(output, 0o755); err != nil {
+			t.Error(err)
+		}
+	})
+	code, _, stderr := runCLI("publish", "--root", root, "--game", game)
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstderr:\n%s", code, exitError, stderr)
+	}
+	checkContains(t, "stderr", stderr, []string{"Translations/ja/strings.csv を読み直せないので、1バイトも書きませんでした"})
 }
 
 // TestPublishLocksTheSameInputOnce は、--path に同じファイルを2度渡しても、錠を

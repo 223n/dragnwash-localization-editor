@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -64,17 +65,89 @@ func (e *LockTimeoutError) Error() string {
 // 錠は dwloc 同士の約束で、ゲーム（Mod の書き出し）や表計算ソフトは従わない。
 // そちらとの競り合いは、版の照合（画面）と書く直前の読み直し（publish）で見つける。
 func LockFile(path string) (unlock func(), err error) {
-	target, err := resolveLink(path)
+	l, err := lockFor(path)
 	if err != nil {
 		return nil, err
+	}
+	return l.acquire()
+}
+
+// LockFiles は、paths のどれにも [LockFile] と同じ錠を掛ける。返す関数で、掛けた順と
+// 逆に放す。1つでも取れなければ、それまでに取った錠を放して誤りを返す。
+//
+// publish が、入力と書き出し先の両方に錠を掛けるためにある。画面の保存
+// （dwloc edit）は、開いたファイル（作業コピーのあるロケールでは作業コピー、無ければ
+// 公開ファイル）に錠を掛けて書くので、publish の入力だけに掛けると、画面が公開
+// ファイルを開いているときの保存と、作業コピーから公開ファイルを書く publish が
+// 直列にならない。
+//
+// 同じ錠のファイルになるパス（同じファイルを綴りを変えて2度渡した、入力と書き出し先が
+// 同じファイル、など）は1度だけ掛ける。同じ錠を同じプロセスの中で2度取ろうとすると、
+// 自分を待って上限まで止まる。
+//
+// 掛ける順は、パスの綴りではなく錠のファイルの名前の順である。2つの publish が同じ
+// ファイルを綴りを変えて渡しても、同じ順に掛けるので、互いに待ち合って止まることは
+// 無い。画面の保存は錠を1つしか取らないので、publish と待ち合うことも無い。
+func LockFiles(paths []string) (unlock func(), err error) {
+	var locks []fileLock
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		l, err := lockFor(p)
+		if err != nil {
+			return nil, err
+		}
+		if seen[l.name] {
+			continue
+		}
+		seen[l.name] = true
+		locks = append(locks, l)
+	}
+	slices.SortFunc(locks, func(a, b fileLock) int { return strings.Compare(a.name, b.name) })
+
+	var unlocks []func()
+	release := func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+	for _, l := range locks {
+		u, err := l.acquire()
+		if err != nil {
+			release()
+			return nil, err
+		}
+		unlocks = append(unlocks, u)
+	}
+	return release, nil
+}
+
+// fileLock は、書き出し先1つの錠。
+type fileLock struct {
+	// target は書き出し先の実体。
+	target string
+	// name は錠のファイルのパス（[lockName]）。
+	name string
+}
+
+// lockFor は path の錠を求める。錠のファイルを置くフォルダーが無ければ作る。
+func lockFor(path string) (fileLock, error) {
+	target, err := resolveLink(path)
+	if err != nil {
+		return fileLock{}, err
 	}
 	name, err := lockName(target)
 	if err != nil {
-		return nil, err
+		return fileLock{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
-		return nil, err
+		return fileLock{}, err
 	}
+	return fileLock{target: target, name: name}, nil
+}
+
+// acquire は錠を取る。ほかが持っていれば、上限（lockWait）まで待つ。
+func (l fileLock) acquire() (unlock func(), err error) {
+	name, target := l.name, l.target
 	deadline := time.Now().Add(lockWait)
 	for {
 		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o600)

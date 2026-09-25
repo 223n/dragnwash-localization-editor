@@ -1,99 +1,93 @@
 package main
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	"io"
-	"os"
-	"sort"
 
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
 
-// beforePublishWrite は、組み立てと確かめを終えて、入力の錠を取る直前に呼ぶ。
+// beforePublishWrite は、組み立てと確かめを終えて、入力と書き出し先の錠を取る直前に
+// 呼ぶ。
 //
-// 試験が、組み立てたあとに入力が書き換わる場面（画面の保存やゲームの書き出しが
-// 割り込む場面）を作るための差し込み口で、ふだんは何もしない。
+// 試験が、組み立てたあとに入力や書き出し先が書き換わる場面（画面の保存やゲームの
+// 書き出しが割り込む場面）を作るための差し込み口で、ふだんは何もしない。
 var beforePublishWrite = func() {}
 
-// publishInputChangedText は、組み立てたあとに入力が変わったときの見出しです。
-const publishInputChangedText = `dwloc: 組み立てたあとに入力が変わったので、1バイトも書きませんでした。
+// publishFilesChangedText は、組み立てたあとに、組み立てと確かめに使ったファイルが
+// 変わったときの見出しです。
+const publishFilesChangedText = `dwloc: 組み立てたあとに入力か書き出し先が変わったので、1バイトも書きませんでした。
 dwloc:       画面（dwloc edit）の保存やゲームの書き出しが、同じファイルを書いた直後です。
-dwloc:       このまま書くと、そのとき入った訳が出力に入らず、入力と書き出し先が同じファイルなら
-dwloc:       その訳が消えます。もう一度実行してください。
+dwloc:       このまま書くと、そのとき入った訳が出力に入らないか、書き出し先に入った訳が消えます。
+dwloc:       もう一度実行してください。
 `
 
-// lockInputs は、どのロケールの入力にも書き込みの錠（publish.LockFile）を掛ける。
-// 返す関数で、掛けた順と逆に放す。
+// lockTargets は、どのロケールの入力と書き出し先にも、書き込みの錠
+// （publish.LockFiles）を掛ける。返す関数で錠を放す。
 //
 // 画面の保存（dwloc edit）は、版の照合から rename までを同じ錠で囲むので、錠を
-// 持っているあいだは入力を書き換えない。錠はパスの順に掛けるので、publish を
-// 2つ同時に回しても、互いに待ち合って止まることは無い。
+// 持っているあいだは、画面が開いたファイル（作業コピーか公開ファイル）を書き換えない。
+// 入力だけに錠を掛けると、画面が公開ファイルを開いているときの保存（--no-game など）と、
+// ゲーム側の作業コピーから公開ファイルを書く publish が直列にならない。
 //
-// 同じファイルを指す入力（--path に同じファイルを綴りを変えて2度渡した、など）は
-// 1度だけ掛ける。同じ錠を同じプロセスの中で2度取ろうとすると、自分を待って上限まで
-// 止まる。
-func lockInputs(targets []publish.Target) (func(), error) {
-	var paths []string
-	var seen []os.FileInfo
+// ゲーム側の公開ファイルには掛けない。dwloc はそのファイルを書かないので、錠で
+// 待ち合う相手がいない。書く直前に読み直すだけにする（reportFilesChanged）。
+//
+// 同じファイルを指すパス（入力と書き出し先が同じファイル、--path に同じファイルを
+// 綴りを変えて2度渡した、など）には1度だけ掛け、掛ける順は錠のファイルの名前の順に
+// する（publish.LockFiles）。2つの publish を同時に回しても、互いに待ち合って
+// 止まることは無い。
+func lockTargets(targets []publish.Target) (func(), error) {
+	paths := make([]string, 0, 2*len(targets))
 	for _, t := range targets {
-		info, err := os.Stat(t.Input)
-		if err == nil {
-			dup := false
-			for _, s := range seen {
-				if os.SameFile(s, info) {
-					dup = true
-					break
-				}
-			}
-			if dup {
-				continue
-			}
-			seen = append(seen, info)
-		}
-		paths = append(paths, t.Input)
+		paths = append(paths, t.Input, t.Output)
 	}
-	sort.Strings(paths)
-
-	var unlocks []func()
-	release := func() {
-		for i := len(unlocks) - 1; i >= 0; i-- {
-			unlocks[i]()
-		}
-	}
-	for _, p := range paths {
-		unlock, err := publish.LockFile(p)
-		if err != nil {
-			release()
-			return nil, err
-		}
-		unlocks = append(unlocks, unlock)
-	}
-	return release, nil
+	return publish.LockFiles(paths)
 }
 
-// reportInputChanged は、どのロケールの入力も、組み立てに使ったバイト列（inputs）から
-// 変わっていないことを確かめる。変わっていれば、どのファイルかを出して止める
-// （終了コード 1）。読み直せなければ終了コード 2。
-func reportInputChanged(root string, targets []publish.Target, inputs [][]byte, stderr io.Writer) int {
+// reportFilesChanged は、どのロケールの入力・書き出し先・ゲーム側の公開ファイルも、
+// 組み立てと確かめに使った中身（before）から変わっていないことを確かめる。変わって
+// いれば、どのファイルかを出して止める（終了コード 1）。読み直せなければ終了コード 2。
+func reportFilesChanged(root string, targets []publish.Target, before []publish.Files, stderr io.Writer) int {
 	var changed []string
 	for i, t := range targets {
-		now, err := os.ReadFile(t.Input)
+		now, err := publish.ReadFiles(t)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %s を読み直せないので、1バイトも書きませんでした: %v\n",
-				displayPath(root, t.Input), err)
+				displayPath(root, shapeErrorPath(err, t.Input)), shapeErrorCause(err))
 			return exitError
 		}
-		if !bytes.Equal(now, inputs[i]) {
-			changed = append(changed, displayPath(root, t.Input))
+		for _, p := range publish.ChangedPaths(t, before[i], now) {
+			changed = append(changed, displayPath(root, p))
 		}
 	}
 	if len(changed) == 0 {
 		return exitOK
 	}
-	fmt.Fprint(stderr, publishInputChangedText)
+	fmt.Fprint(stderr, publishFilesChangedText)
 	for _, p := range changed {
 		fmt.Fprintf(stderr, "dwloc:   %s\n", p)
 	}
 	return exitProblems
+}
+
+// shapeErrorPath は、publish.ReadFiles の誤り err が指すファイルを返す。どのファイルか
+// 分からなければ fallback を返す。
+func shapeErrorPath(err error, fallback string) string {
+	var shapeErr *publish.ShapeError
+	if errors.As(err, &shapeErr) {
+		return shapeErr.Path
+	}
+	return fallback
+}
+
+// shapeErrorCause は、publish.ReadFiles の誤り err から、ファイルの名前を除いた元の
+// 誤りを返す。報告の頭にファイルの名前を出すので、2度出さない。
+func shapeErrorCause(err error) error {
+	var shapeErr *publish.ShapeError
+	if errors.As(err, &shapeErr) {
+		return shapeErr.Err
+	}
+	return err
 }

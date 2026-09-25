@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -190,8 +189,8 @@ func NameableKey(k string) bool {
 // 両方があるときだけ確かめる。土台の確かめ（[CheckBase]）がそのファイルを読むのは
 // その場合だけだからである（cmd/dwloc の reportBaseDrift）。
 //
-// 誤りを返すのは、ファイルを読めないときだけである。[ShapeError] に包み、
-// どのファイルかを添える。
+// 誤りを返すのは、ファイルを読めないとき（入力が無いときを含む）だけである。
+// [ShapeError] に包み、どのファイルかを添える（[ReadFiles]）。
 //
 // ヘッダーの列名の重複は、ここでは誤りにも形の崩れにもしない。組み立て（[Build]）と
 // 失われる訳の確かめ（[CheckLoss]）が同じ読み方で読んで誤りを返し、呼び出し側は
@@ -199,36 +198,29 @@ func NameableKey(k string) bool {
 // 走るので、ここで誤りにすると、入力の列名の重複が「変換できない」でなく「読めない」と
 // 伝わってしまう。
 func CheckTargetShape(t Target) ([]Hazard, error) {
+	f, err := ReadFiles(t)
+	if err != nil {
+		return nil, err
+	}
+	return CheckShapeFiles(t, f), nil
+}
+
+// CheckShapeFiles は [CheckTargetShape] と同じ確かめを、[ReadFiles] で読んだ中身 f で
+// 行う。publish（cmd/dwloc）が、組み立てと失われる訳の確かめに使うのと同じバイト列で
+// 形を確かめるためにある。
+func CheckShapeFiles(t Target, f Files) []Hazard {
 	var out []Hazard
-	same := filepath.Clean(t.Input) == filepath.Clean(t.Output)
-	if !same {
-		input, err := os.ReadFile(t.Input)
-		if err != nil {
-			return nil, &ShapeError{Path: t.Input, Err: err}
-		}
-		out = append(out, place(CheckShape(input), t.Locale, t.Input, false, false)...)
+	if !sameTarget(t) {
+		out = append(out, place(CheckShape(f.Input), t.Locale, t.Input, false, false)...)
 	}
-
-	current, err := readIfExists(t.Output)
-	if err != nil {
-		return nil, &ShapeError{Path: t.Output, Err: err}
+	if f.Output == nil {
+		return out
 	}
-	if current == nil {
-		return out, nil
+	out = append(out, place(CheckShape(f.Output), t.Locale, t.Output, true, false)...)
+	if f.GameBase == nil {
+		return out
 	}
-	out = append(out, place(CheckShape(current), t.Locale, t.Output, true, false)...)
-
-	if t.GameBase == "" {
-		return out, nil
-	}
-	game, err := readIfExists(t.GameBase)
-	if err != nil {
-		return nil, &ShapeError{Path: t.GameBase, Err: err}
-	}
-	if game == nil {
-		return out, nil
-	}
-	return append(out, place(CheckShape(game), t.Locale, t.GameBase, false, true)...), nil
+	return append(out, place(CheckShape(f.GameBase), t.Locale, t.GameBase, false, true)...)
 }
 
 // ShapeError は、形を確かめるためにファイルを読めなかったこと。

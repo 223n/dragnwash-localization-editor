@@ -338,3 +338,120 @@ func TestSameFile(t *testing.T) {
 		t.Error("閉じたファイルを同じと言う")
 	}
 }
+
+// TestLockFilesHoldsEveryPath は、LockFiles が渡したどのパスにも錠を掛け、放すまで
+// ほかの取り手に取らせないことと、同じファイルを指すパスには1度だけ掛けることを見る。
+//
+// publish は入力と書き出し先の両方に掛ける。入力と書き出し先が同じファイル（作業
+// コピーの無いロケール）でも、綴りを変えて同じファイルを渡しても、自分を待たない。
+func TestLockFilesHoldsEveryPath(t *testing.T) {
+	shortLockWait(t, 200*time.Millisecond)
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "sub", "b.csv") // まだ無いファイル（新しいロケールの書き出し先）
+	if err := os.WriteFile(a, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(b), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	unlock, err := LockFiles([]string{a, b, a, filepath.Join(dir, ".", "a.csv")})
+	if err != nil {
+		t.Fatalf("錠を取れない: %v", err)
+	}
+	if took := time.Since(start); took >= 200*time.Millisecond {
+		t.Errorf("同じファイルの錠を待った: %v", took)
+	}
+	for _, p := range []string{a, b} {
+		var timeout *LockTimeoutError
+		if _, err := LockFile(p); !errors.As(err, &timeout) {
+			t.Errorf("%s の錠 = %v、*LockTimeoutError を期待", p, err)
+		}
+	}
+	unlock()
+	for _, p := range []string{a, b} {
+		u, err := LockFile(p)
+		if err != nil {
+			t.Fatalf("放したのに %s の錠を取れない: %v", p, err)
+		}
+		u()
+	}
+}
+
+// TestLockFilesReleasesWhatItTookWhenOneTimesOut は、1つでも錠を取れなければ、それまでに
+// 取った錠を放して誤りを返すことを見る。取った錠を持ったまま返すと、publish が止まった
+// あとも、画面の保存がその錠を待ち続ける。
+func TestLockFilesReleasesWhatItTookWhenOneTimesOut(t *testing.T) {
+	shortLockWait(t, 100*time.Millisecond)
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "b.csv")
+	held, err := LockFile(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+
+	var timeout *LockTimeoutError
+	if _, err := LockFiles([]string{a, b}); !errors.As(err, &timeout) {
+		t.Fatalf("LockFiles = %v、*LockTimeoutError を期待", err)
+	}
+	u, err := LockFile(a)
+	if err != nil {
+		t.Fatalf("取れなかったあとも %s の錠が残っている: %v", a, err)
+	}
+	u()
+}
+
+// TestLockFilesTakesLocksInTheSameOrder は、2つの取り手が同じ2つのファイルを逆の順に
+// 渡しても、互いに待ち合って止まらないことを見る。LockFiles は、渡した順でなく錠の
+// ファイルの名前の順に掛ける。渡した順に掛けると、片方が a を、もう片方が b を持った
+// まま、互いの錠を上限まで待つ。
+func TestLockFilesTakesLocksInTheSameOrder(t *testing.T) {
+	shortLockWait(t, 500*time.Millisecond)
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "b.csv")
+	var wg sync.WaitGroup
+	var failures atomic.Int32
+	for _, order := range [][]string{{a, b}, {b, a}} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				unlock, err := LockFiles(order)
+				if err != nil {
+					failures.Add(1)
+					return
+				}
+				time.Sleep(time.Millisecond)
+				unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if n := failures.Load(); n > 0 {
+		t.Errorf("錠を取れなかった取り手が %d", n)
+	}
+}
+
+// TestLockFilesRefusesWhatItCannotResolve は、錠を求められないパス（たどれないリンク
+// など）が1つでもあれば、1つも錠を掛けずに誤りを返すことを見る。
+func TestLockFilesRefusesWhatItCannotResolve(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	link := filepath.Join(dir, "broken.csv")
+	if err := os.Symlink(filepath.Join(dir, "無い.csv"), link); err != nil {
+		t.Skipf("シンボリックリンクを作れない環境なので飛ばす: %v", err)
+	}
+	if _, err := LockFiles([]string{a, link}); err == nil {
+		t.Fatal("たどれないリンクで錠を取れたことになっている")
+	}
+	u, err := LockFile(a)
+	if err != nil {
+		t.Fatalf("断ったのに %s の錠が残っている: %v", a, err)
+	}
+	u()
+}

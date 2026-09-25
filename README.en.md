@@ -1099,6 +1099,8 @@ If a different row that has a key now sits at that number, it is not put there; 
 
 Saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
 The span from checking the version to finishing the write is wrapped in an OS lock.  
+`publish` takes the same lock on both its input and its output.  
+Even when the screen has the published file open (with `--no-game`, for example) and you run a `publish` that writes that published file from the working copy in the game, one of them waits.  
 The lock is taken on a file kept only for locking, in your cache folder.  
 That is `%LocalAppData%\dwloc\locks` on Windows, `~/.cache/dwloc/locks` on Linux, and `~/Library/Caches/dwloc/locks` on macOS.  
 There is one empty file per file being written, and it is left in place.  
@@ -1235,12 +1237,12 @@ If a file has a shape it would misread, it also stops without writing.
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
-If the input changed after it was assembled, it also stops without writing (exit code `1`).  
-Right before writing, it reads the input again and stops if even one byte differs from what it assembled.  
+If the input or the output changed after it was assembled, it also stops without writing (exit code `1`).  
+Right before writing, it reads the input, the output and the published file in the game again, and stops if even one byte differs from what it assembled and checked.  
 That happens when a save from the screen (`dwloc edit`) or an export from the game wrote the same file while it was assembling.  
-Writing anyway would leave the translation written then out of the output, and when the input and the output are the same file (a locale with no working copy, and `--path`), it would erase that translation.  
-From reading it again until the write is done, it holds the same OS lock on the input as a save from the screen.  
-Running it again writes from the changed input.  
+Writing anyway would leave the translation written then out of the output, or erase the translation that went into the output.  
+From reading them again until the write is done, it holds the same OS lock on the input and the output as a save from the screen.  
+Running it again checks everything again with the changed contents.  
 Each file is written through a temporary file, so a file it could not write keeps its original content.  
 However, if writing fails partway (no write permission, not enough disk space, and so on), it does not roll back.  
 The locales it wrote before that keep their new content, and it stops with exit code `2`.  
@@ -1260,11 +1262,11 @@ As for exit codes, 0 is success and 2 is a runtime error.
 - When `publish` judges that writing would lose translations and stops
 - When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
-- When `publish` judges that the input changed after it was assembled and stops
+- When `publish` judges that the input or the output changed after it was assembled and stops
 
 The four for `publish` are separate checks.  
 The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.  
-When the input changed, just run it again.
+When the input or the output changed, just run it again.
 
 #### Committing and opening a pull request
 

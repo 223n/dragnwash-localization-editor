@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -496,6 +494,23 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return exitError
 	}
 
+	// 入力・いまの公開ファイル・ゲーム側の公開ファイルを、ここで1回ずつ読みます。
+	// 下の形の確かめ・組み立て・2つの確認は、どれもこのバイト列を使い、書く直前に
+	// 錠の中で読み直して、1バイトでも違えば書かずに止めます（reportFilesChanged）。
+	// 確かめごとに読み直すと、確かめのあいだに画面の保存（dwloc edit）が書き出し先を
+	// 書き換えたとき、書き換える前の中身で「失われない」と判断して、書き換えたあとの
+	// 中身（画面が保存した訳）を上書きします。
+	files := make([]publish.Files, len(targets))
+	for i, t := range targets {
+		f, err := publish.ReadFiles(t)
+		if err != nil {
+			fmt.Fprintf(stderr, "dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
+				displayPath(*root, shapeErrorPath(err, t.Output)), shapeErrorCause(err))
+			return exitError
+		}
+		files[i] = f
+	}
+
 	// 入力・いまの公開ファイル・ゲーム側の公開ファイルが、読むと訳や原文を取り違える
 	// 形になっていないかを最初に見ます。この形のファイルは、下の組み立てと2つの確認も
 	// 同じ読み方で読むので、取り違えたまま「そろっている」「失われない」と判断して
@@ -504,7 +519,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 組み立てより前に見るのは、組み立てが読み方の誤り（閉じない引用符など）で
 	// 止まる前に、どのファイルの何行目をどう直すかを出すためです。組み立ての誤りは
 	// 「変換できません」（終了コード 2）としか言えません。
-	if code := reportShape(*root, targets, accepted, stderr); code != exitOK {
+	if code := reportShape(*root, targets, files, accepted, stderr); code != exitOK {
 		return code
 	}
 
@@ -517,21 +532,20 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 下の書き出しの繰り返しは巻き戻さないので、そこで失敗したときは先に書いた
 	// ロケールだけが新しい内容になります。使い方の説明はそのとおりに書いてあります。
 	built := make([][]byte, len(targets))
-	inputs := make([][]byte, len(targets))
 	stats := make([]publish.Stats, len(targets))
 	for i, t := range targets {
-		out, input, st, err := publish.BuildTargetInput(data, t)
+		out, st, err := publish.Build(data, files[i].Input, files[i].Output)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %s を変換できません: %v\n", displayPath(*root, t.Input), err)
 			return exitError
 		}
-		built[i], inputs[i], stats[i] = out, input, st
+		built[i], stats[i] = out, st
 	}
 
 	// ゲーム側の作業コピーを入力にしたロケールでは、その作業コピーが建っている
 	// 土台がコミット済みとそろっているかを先に見ます。ずれていると、訳は消えない
 	// まま古い版へ巻き戻るので、次の reportLosses では捕まりません。
-	if code := reportBaseDrift(*root, targets, stderr); code != exitOK {
+	if code := reportBaseDrift(*root, targets, files, stderr); code != exitOK {
 		return code
 	}
 
@@ -539,7 +553,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 止めはしません（上流も同じ行を落として書きます）。失われる訳の確認より前に
 	// 出すのは、その行の訳がいまの公開ファイルにあると、下の確認が「失われる」で
 	// 止めるためです。止まった理由がここに書いてあります。
-	if code := reportSourceLineEnds(*root, targets, stderr); code != exitOK {
+	if code := reportSourceLineEnds(*root, targets, files, stderr); code != exitOK {
 		return code
 	}
 
@@ -547,7 +561,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// どのロケールも書きません。--dry-run でも同じ判定をします。書かないことは
 	// どちらでも変わらないので、判定だけ変えると「dry-run では通ったのに
 	// 本番で止まる」という食い違いが生まれます。
-	if code := reportLosses(*root, targets, built, stderr); code != exitOK {
+	if code := reportLosses(*root, targets, files, built, stderr); code != exitOK {
 		return code
 	}
 
@@ -555,7 +569,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		changed := 0
 		for i, t := range targets {
 			note := "変更なし"
-			if !sameContent(t.Output, built[i]) {
+			if files[i].Output == nil || !bytes.Equal(files[i].Output, built[i]) {
 				note = fmt.Sprintf("変更あり: %d バイト", len(built[i]))
 				changed++
 			}
@@ -567,20 +581,25 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return exitOK
 	}
 
-	// 書く直前に、組み立てに使った入力を読み直して確かめます（改善の決定 3）。
-	// 組み立てたあとに画面の保存（dwloc edit）やゲームが入力を書き換えていたら、
-	// その訳の入っていない中身を書くことになり、入力と書き出し先が同じファイル
-	// （作業コピーの無いロケールと --path）なら、書き換えた訳そのものを消します。
-	// 読み直してから書き終えるまでは、画面の保存と同じ OS の錠を入力に掛けておき、
-	// そのあいだに dwloc edit の保存が入らないようにします。
+	// 書く直前に、組み立てと確かめに使ったファイル（入力・書き出し先・ゲーム側の
+	// 公開ファイル）を読み直して確かめます（改善の決定 3）。組み立てたあとに画面の
+	// 保存（dwloc edit）やゲームが入力を書き換えていたら、その訳の入っていない中身を
+	// 書くことになります。画面が書き出し先（公開ファイル）を開いて保存していたら、
+	// 書くとその訳が消えます。
+	//
+	// 読み直してから書き終えるまでは、画面の保存と同じ OS の錠を、入力と書き出し先の
+	// 両方に掛けておき、そのあいだに dwloc edit の保存が入らないようにします。画面は
+	// 開いたファイル（作業コピーか公開ファイル）に錠を掛けて書くので、入力だけに
+	// 掛けると、画面が公開ファイルを開いているときの保存と、作業コピーから公開
+	// ファイルを書く publish が直列になりません。
 	beforePublishWrite()
-	unlock, err := lockInputs(targets)
+	unlock, err := lockTargets(targets)
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: 入力の錠を取れないので、1バイトも書きませんでした: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: 入力と書き出し先の錠を取れないので、1バイトも書きませんでした: %v\n", err)
 		return exitError
 	}
 	defer unlock()
-	if code := reportInputChanged(*root, targets, inputs, stderr); code != exitOK {
+	if code := reportFilesChanged(*root, targets, files, stderr); code != exitOK {
 		return code
 	}
 
@@ -837,9 +856,9 @@ const publishAcceptText = "dwloc: --accept-multiline の指定で、次の行を
 // すべて --accept-multiline で通せば）exitOK を返します。
 //
 // 1件でも残れば exitProblems（1）で、どのロケールも書きません。reportLosses と
-// 同じく、読んだうえで「書けば訳を取り違える」と分かったので 1 です。読めなくて
-// 確かめられなかったときは 2 で、そのときの文面は reportLosses と同じにします。
-// どちらの確認でも、読めないファイルに対してすることは同じだからです。
+// 同じく、読んだうえで「書けば訳を取り違える」と分かったので 1 です。確かめるのは
+// runPublish が読んだ中身（files）で、読めなかったときは、runPublish が読んだ
+// ところで 2 にしています（文面は reportLosses と同じです）。
 //
 // --accept-multiline の指定が1つでも、通せる行に当たらなければ 2 です（決まったことの
 // 16）。打ち間違えた key を黙って無視すると、通したつもりのレコードが止まったままに
@@ -848,24 +867,12 @@ const publishAcceptText = "dwloc: --accept-multiline の指定で、次の行を
 //
 // 通した行は、止めるときも書くときも標準エラーに出します。止めるときに出すのは、
 // 止まった原因を直したあとで、同じ指定で何が通るかを先に見せるためです。
-func reportShape(root string, targets []publish.Target, accept acceptSet, stderr io.Writer) int {
+func reportShape(root string, targets []publish.Target, files []publish.Files, accept acceptSet, stderr io.Writer) int {
 	var all, found, passed []publish.Hazard
 	var passedBy []string
 	used := make([]bool, len(accept.specs))
-	for _, t := range targets {
-		hazards, err := publish.CheckTargetShape(t)
-		if err != nil {
-			path := t.Output
-			var shapeErr *publish.ShapeError
-			if errors.As(err, &shapeErr) {
-				path, err = shapeErr.Path, shapeErr.Err
-			}
-			fmt.Fprintf(stderr,
-				"dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
-				displayPath(root, path), err)
-			return exitError
-		}
-		for _, h := range hazards {
+	for i, t := range targets {
+		for _, h := range publish.CheckShapeFiles(t, files[i]) {
 			all = append(all, h)
 			by := accept.covers(h)
 			if len(by) == 0 {
@@ -999,23 +1006,13 @@ dwloc:       ゲームへ最新の翻訳を入れ直してから、もう一度�
 // 確かめずに通します。巻き戻る先が無いからです。publish.CheckTargetLoss が
 // 出力先の無いときを「失うものが無い」と扱うのと同じ考えです。ここで止めると、
 // ゲームで入れた新しい言語の訳が、コミットする側へ1行も届きません。
-func reportBaseDrift(root string, targets []publish.Target, stderr io.Writer) int {
+func reportBaseDrift(root string, targets []publish.Target, files []publish.Files, stderr io.Writer) int {
 	var found []publish.BaseResult
-	for _, t := range targets {
-		if t.GameBase == "" {
+	for i, t := range targets {
+		if t.GameBase == "" || files[i].Output == nil {
 			continue
 		}
-		current, err := os.ReadFile(t.Output)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			fmt.Fprintf(stderr,
-				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
-				displayPath(root, t.Output), err)
-			return exitError
-		}
-		res, err := publish.CheckBase(t, current)
+		res, err := publish.CheckBaseBytes(t.Locale, files[i].Output, files[i].GameBase)
 		if err != nil {
 			fmt.Fprintf(stderr,
 				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
@@ -1060,10 +1057,10 @@ dwloc:       ゲーム内で F1 → Translation → Export working copy を押�
 //
 // 行とキーは出しますが、原文は出しません。原文はゲームの台本で、報告が貼られる先へ
 // 出していくものではないからです。
-func reportSourceLineEnds(root string, targets []publish.Target, stderr io.Writer) int {
+func reportSourceLineEnds(root string, targets []publish.Target, files []publish.Files, stderr io.Writer) int {
 	printed := false
-	for _, t := range targets {
-		hints, err := publish.SourceLineEndHints(t)
+	for i, t := range targets {
+		hints, err := publish.SourceLineEndHintsIn(files[i].Input)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %s を読めません: %v\n", displayPath(root, t.Input), err)
 			return exitError
@@ -1098,13 +1095,18 @@ func reportSourceLineEnds(root string, targets []publish.Target, stderr io.Write
 //
 // 報告に出すのは、ロケール・ファイル・行番号・キー・いまの訳の先頭だけです。
 // 訳を丸ごと並べないのは internal/publish の Loss に書いた理由によります。
-func reportLosses(root string, targets []publish.Target, built [][]byte, stderr io.Writer) int {
+func reportLosses(root string, targets []publish.Target, files []publish.Files, built [][]byte, stderr io.Writer) int {
 	found := make([][]publish.Loss, len(targets))
 	total := 0
 	for i, t := range targets {
-		losses, err := publish.CheckTargetLoss(t, built[i])
+		var losses []publish.Loss
+		var err error
+		if files[i].Output != nil {
+			// 書き出し先がまだ無ければ、失うものが無い。
+			losses, err = publish.CheckLoss(t.Locale, files[i].Output, built[i])
+		}
 		if err != nil {
-			// いまの公開ファイルを読めない。失われないことを確かめられていないので、
+			// いまの公開ファイルを解釈できない。失われないことを確かめられていないので、
 			// 書かずに終わります。
 			fmt.Fprintf(stderr,
 				"dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
@@ -1225,14 +1227,4 @@ func localeNames(targets []publish.Target) []string {
 		names = append(names, t.Locale)
 	}
 	return names
-}
-
-// sameContent は path の中身が want と同じかを返します。
-// 読めなければ「同じではない」とみなします（--dry-run の表示にしか使いません）。
-func sameContent(path string, want []byte) bool {
-	got, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return bytes.Equal(got, want)
 }
