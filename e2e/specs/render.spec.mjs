@@ -249,10 +249,10 @@ test("見出しはファイルのコメント行を書き換えずに写し、�
   }
 });
 
-// 一覧は1700行を超えるので、画面の外の行と見出しは描かない（app.css の content-visibility）。
+// 一覧は1700行を超えるので、画面の外の行は描かない（app.css の content-visibility）。
 // 描く前の高さは見積もりで持つ。入力欄を差し込んだ行だけは、いつも描く（入力欄は、差し
-// 込んだ直後、画面へ送る前に高さを測る）。
-test("画面の外の行と見出しは描かず、入力欄を差し込んだ行だけはいつも描く", async ({ app }) => {
+// 込んだ直後、画面へ送る前に高さを測る）。見出しはいつも描く（下の読み上げの木の試験）。
+test("画面の外の行は描かず、入力欄を差し込んだ行と見出しはいつも描く", async ({ app }) => {
   const style = (locator) =>
     locator.evaluate((e) => {
       const s = getComputedStyle(e);
@@ -260,8 +260,7 @@ test("画面の外の行と見出しは描かず、入力欄を差し込んだ�
     });
   expect((await style(rowByLine(app, LINE.hello))).visibility).toBe("auto");
   expect((await style(rowByLine(app, LINE.hello))).size).toMatch(/^auto \d+px$/);
-  expect((await style(headings(app).first())).visibility).toBe("auto");
-  expect((await style(headings(app).first())).size).toMatch(/^auto \d+px$/);
+  expect((await style(headings(app).first())).visibility).toBe("visible");
 
   await openEditor(app, LINE.goodbye);
   expect((await style(rowByLine(app, LINE.goodbye))).visibility).toBe("visible");
@@ -647,5 +646,56 @@ test.describe("空白を含む訳", () => {
     expect(await textOf(cell)).toBe(spaced);
     // 描かれた字も同じでなければならない。
     expect(await cell.evaluate((e) => e.innerText)).toBe(spaced);
+  });
+});
+
+test.describe("長い一覧の読み上げの木", () => {
+  // 200 行と、20 行ごとの節点の見出し 10 個。画面（800px の高さ）に収まらない長さにする。
+  const rows = [];
+  for (let i = 1; i <= 200; i++) {
+    const n = String(i).padStart(3, "0");
+    if (i % 20 === 1) {
+      rows.push(`# --- block ${n} ---`);
+    }
+    rows.push({ source: `Probe line ${n}.`, section: "UI", node: "", order: "", speaker: "UI", translation: `訳${i}` });
+  }
+  const repo = sampleRepo();
+  repo.root[workingRel] = workingCopy(rows);
+  test.use({ repo });
+
+  // nodeHeadingNames は、Chromium の読み上げの木（アクセシビリティツリー）にある、節点の
+  // 見出し（aria-level 3）の名前を並びのまま返す。Playwright の toHaveAccessibleName は
+  // DOM から名前を計算するので、読み上げの木の欠けを見ない。CDP で木そのものを読む。
+  async function nodeHeadingNames(page) {
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      await cdp.send("Accessibility.enable");
+      const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+      const level = (n) => n.properties?.find((p) => p.name === "level")?.value?.value;
+      return nodes
+        .filter((n) => n.role?.value === "heading" && !n.ignored && level(n) === 3)
+        .map((n) => (n.name?.value ?? "").trim());
+    } finally {
+      await cdp.detach();
+    }
+  }
+
+  // 読み上げソフトの見出しの一覧と見出しへ移る操作（節と節点を見出しにした改善の ui-10）は、
+  // 読み上げの木の見出しの名前を使う。見出しにも描かない指定（content-visibility: auto）を
+  // 付けていたころは、画面の外の見出しの名前が空になり、スクロールすると今度は上の見出しの
+  // 名前が空になった（PR3 の検証の指摘）。
+  test("画面の外の節点の見出しも、読み上げの木で名前を持つ", async ({ app }) => {
+    await expect(app.locator("#list .row")).toHaveCount(200);
+    const want = Array.from({ length: 10 }, (_, i) => `# --- block ${String(i * 20 + 1).padStart(3, "0")} ---`);
+    // 最後の見出しは、はじめは画面の外にある。
+    const top = await headings(app)
+      .last()
+      .evaluate((e) => e.getBoundingClientRect().top);
+    expect(top).toBeGreaterThan(await app.evaluate(() => window.innerHeight));
+    await expect.poll(() => nodeHeadingNames(app)).toEqual(want);
+
+    await headings(app).last().evaluate((e) => e.scrollIntoView());
+    await app.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await expect.poll(() => nodeHeadingNames(app)).toEqual(want);
   });
 });

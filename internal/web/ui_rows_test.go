@@ -142,22 +142,26 @@ func TestSectionHeadingsAreHeadings(t *testing.T) {
 	}
 }
 
-// TestOffscreenRowsAreNotDrawn は、画面の外の行と見出しを描かず、入力欄を差し込んだ行
-// だけはいつも描くことを見る（改善の決定 21）。
+// TestOffscreenRowsAreNotDrawn は、画面の外の行を描かず、入力欄を差し込んだ行だけは
+// いつも描くことと、見出しには描かない指定を付けないことを見る（改善の決定 21）。
+//
+// 見出しに付けると、Chromium の読み上げの木で、画面の外の見出しの名前が空になり、
+// 読み上げソフトの見出しの一覧と見出しへ移る操作が使えなくなる（改善の ui-10）。
 func TestOffscreenRowsAreNotDrawn(t *testing.T) {
 	css := uiSource(t, "ui/app.css")
 
-	for _, sel := range []string{".list > .row", ".list > .heading"} {
-		rule := cssRule(t, css, sel)
-		if !strings.Contains(rule, "content-visibility: auto;") {
-			t.Errorf("%s に content-visibility: auto が無い。全行を描き直すたびに画面が止まる", sel)
-		}
-		if !strings.Contains(rule, "contain-intrinsic-block-size: auto ") {
-			t.Errorf("%s に高さの見積もり（contain-intrinsic-block-size: auto …）が無い", sel)
-		}
+	rule := cssRule(t, css, ".list > .row")
+	if !strings.Contains(rule, "content-visibility: auto;") {
+		t.Error("行に content-visibility: auto が無い。全行を描き直すたびに画面が止まる")
+	}
+	if !strings.Contains(rule, "contain-intrinsic-block-size: auto ") {
+		t.Error("行に高さの見積もり（contain-intrinsic-block-size: auto …）が無い")
 	}
 	if !strings.Contains(cssRule(t, css, ".list > .row:has(> .editor)"), "content-visibility: visible;") {
 		t.Error("入力欄を差し込んだ行を描かないままにしている。入力欄の高さを測れない")
+	}
+	if strings.Contains(css, "\n.list > .heading {") || strings.Contains(cssRule(t, css, ".heading"), "content-visibility") {
+		t.Error("見出しに描かない指定がある。画面の外の見出しが読み上げの木で名前を失う")
 	}
 }
 

@@ -1174,6 +1174,9 @@ A comment line with neither mark (a memo, for example) is not made a heading.
 This has been checked through the attributes only, not with an actual screen reader.
 
 So that a long list does not freeze, rows outside the screen are drawn only when they come into view.  
+Headings are always drawn, so a screen reader's list of headings includes the sections and nodes outside the screen, with their names.  
+In Chromium, however, the source text and translation of a row outside the screen do not reach the screen reader until the row comes into view and is drawn.  
+To read through the rows, bring the row you want onto the screen by jumping by heading or with `Tab`.  
 The height of a row not drawn yet is an estimate, so the scrollbar length and the row you land on after a big jump can be slightly off until it is drawn.
 
 ### The order to run things in
