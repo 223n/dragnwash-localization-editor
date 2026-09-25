@@ -120,7 +120,7 @@ jobs:
         id: ci
         # 出すのは develop の先端の木である。その木で CI（ci.yml）の Go のテスト、画面の E2E、lint が
         # 通ったかを確かめる。このワークフローの中で走らせる検査は npm run lint だけで、GITHUB_TOKEN が開く
-        # リリースの PR の CI は承認待ちのまま動かない。確かめないと、CI が落ちている木や走っている途中の
+        # リリースの PR の CI は、人が承認するまで動かない。確かめないと、CI が落ちている木や走っている途中の
         # 木からでも、不変の Release（あとで直せない）が公開される。
         #
         # 過去のリリースの4割は、develop の CI が終わる前に起動していた（PR をマージしてすぐ実行するため）。
@@ -374,11 +374,26 @@ jobs:
           BRANCH: ${{ steps.version.outputs.branch }}
           CI_SHA: ${{ steps.ci.outputs.sha }}
           CI_RUN_URL: ${{ steps.ci.outputs.run_url }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
         run: |
           {
             echo "\`${DEVELOP_BRANCH}\` の内容を ${TAG} としてリリースします。"
             echo
             echo "**マージコミット（Create a merge commit）でマージしてください。** squash や rebase は使いません。"
+            echo
+            echo "## マージの前に"
+            echo
+            if [ "${AUTO_MERGE}" = 'true' ]; then
+              echo "\`auto_merge\` で動いています。人の承認とマージは要りません。"
+              echo "ワークフローがこのブランチで CI を動かし、通ったら、この PR の承認待ちの実行を取り消してからマージします。"
+              echo "止まったときは、ワークフローの実行の画面に理由と次にすることが出ます。"
+            else
+              echo "この PR は GitHub Actions が開いたため、CI などの実行は「承認待ち」で作られます。"
+              echo "**「Approve workflows to run」を押し、CI が通ってからマージしてください。**"
+              echo
+              echo "- CI は、リリースする木そのもの（\`${DEVELOP_BRANCH}\` の先端に \`${MAIN_BRANCH}\` を取り込み、版を上げたもの）で走ります。ワークフローの中では走らない画面の E2E と Windows のテストも、ここで通ります"
+              echo "- 承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残ります"
+            fi
             echo
             echo "この PR をマージすると「リリースを公開する」ワークフローが動き、次を行います。"
             echo
@@ -388,7 +403,6 @@ jobs:
             echo
             echo "\`${DEVELOP_BRANCH}\` の先端（${CI_SHA}）で CI が通ったことを確かめてから、このブランチを切っています: ${CI_RUN_URL}"
             echo "版を上げたあとの検査（\`npm run lint\`）もワークフローの中で済んでいます。"
-            echo "この PR の CI は「承認待ち」で作られます。結果を PR に出したいときは「Approve workflows to run」を押してください。"
             echo
             echo "## 変更の一覧（下書き）"
             echo
@@ -415,6 +429,9 @@ jobs:
             echo "- PR: ${url}"
             echo "- ブランチ: \`${BRANCH}\`"
             echo "- ${DEVELOP_BRANCH} の CI: ${CI_RUN_URL}"
+            if [ "${AUTO_MERGE}" != 'true' ]; then
+              echo "- PR の「Approve workflows to run」を押し、CI が通ってからマージする"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   merge:
