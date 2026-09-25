@@ -201,7 +201,7 @@ func TestSetTranslationIsIdempotent(t *testing.T) {
 	for _, v := range values {
 		t.Run(v, func(t *testing.T) {
 			const header = "key,translation\n"
-			f := Parse([]byte(header + "abc,古い\n"))
+			f := Parse([]byte(header + "0123456789abcdef,古い\n"))
 			if err := f.SetTranslation(2, v); err != nil {
 				t.Fatalf("1回目が失敗した: %v", err)
 			}
@@ -240,7 +240,7 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 	t.Run("書けないときは再試行してから諦める", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "strings.csv")
-		const original = "key,translation\nabc,古い\n"
+		const original = "key,translation\n0123456789abcdef,古い\n"
 		if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -282,7 +282,7 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 	t.Run("再試行中の書き込みを消さない", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "strings.csv")
-		const original = "key,translation\nabc,古い\n"
+		const original = "key,translation\n0123456789abcdef,古い\n"
 		if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -297,7 +297,7 @@ func TestSaveRetriesAndRechecksVersion(t *testing.T) {
 
 		// 保存の直前に第三者が書く。版が変わるので、1バイトも書かずに
 		// 競合として返らなければならない。
-		const other = "key,translation\nabc,他のツールが書いた\n"
+		const other = "key,translation\n0123456789abcdef,他のツールが書いた\n"
 		if err := os.WriteFile(path, []byte(other), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -405,7 +405,7 @@ func TestSaveWithoutChangesKeepsModTime(t *testing.T) {
 func TestTranslationHidesMiscountedColumns(t *testing.T) {
 	const header = "key,section,node,order,speaker,translation\n"
 	f := Parse([]byte(header +
-		"k1,s,n,1,sp,ふつう\n" +
+		"0123456789abcdef,s,n,1,sp,ふつう\n" +
 		"k2,s,n,1,sp,extra,over\n" +
 		"k3,s,n,1,short\n"))
 
@@ -487,7 +487,7 @@ func TestSetTranslationRejectsUnwritableValues(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := Parse([]byte("key,translation\nabc,古い\n"))
+			f := Parse([]byte("key,translation\n0123456789abcdef,古い\n"))
 			before := string(f.Bytes())
 			err := f.SetTranslation(2, tt.value)
 			if err == nil {

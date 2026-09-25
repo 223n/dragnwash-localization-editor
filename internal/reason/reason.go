@@ -276,9 +276,12 @@ const (
 	// EditGameMissesRecord は、ゲームの読み方でそのレコードが見つからないこと
 	// （csvfile.CSharpDisagreements の Column が空）。
 	EditGameMissesRecord = "edit_game_misses_record"
-	// EditNoKeyOrSource は、key 列（前後の空白を除く）も原文（source_en 列。無い形の
-	// ファイルでは空と同じ）も空で、訳を引く鍵が無いこと。publish はこのレコードを
-	// 捨てる（移植仕様 R17）ので、書いた訳は公開されない（決まったことの 24）。
+	// EditNoKeyOrSource は、原文（source_en 列。無い形のファイルでは空と同じ）が空で、
+	// key 列（前後の空白を除く）が16桁のキー（小文字にして16桁の16進）でも台詞ID でも
+	// なく、publish がキーを決められないこと。publish はこのレコードを捨てる（移植仕様
+	// R17。判定は publish.Keyless）ので、書いた訳は公開されない（決まったことの 24）。
+	// 識別子の名前は、key 列も原文も空のレコードだけを当てていたころのもので、画面と
+	// 目録が使うので変えていない。
 	EditNoKeyOrSource = "edit_no_key_or_source"
 	// EditRecheckFailed は、書く前の事後確認（決まったことのそのほか 4）が外れたこと。
 	// 書き換えたレコードを読み直すと、書いた訳のほかの値や、ほかの行まで変わって

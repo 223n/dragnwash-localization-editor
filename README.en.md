@@ -961,7 +961,7 @@ In each of them, `publish` or the game would read what you write as a different 
 | A quote seems to be closed on another line and to swallow the lines after it | Line N looks swallowed into this record's value (a quote may be closed in the wrong place) |
 | The game's reader (`CsvReader`) reads a value differently (a `"` in the middle of a value, and so on) | The game's reader (CsvReader) reads the (column name) column of this record differently |
 | The game's reader (`CsvReader`) does not find the record | The game's reader (CsvReader) does not find this record |
-| Both the `key` column and the source text (`source_en`) are empty (`,UI,,,UI,,訳`, and so on) | Both the key column and the source text (source_en) are empty (publish drops this record, so a translation written here is never published) |
+| The `key` column is neither a 16-digit key nor a line ID, and the source text (`source_en`) is empty (`hello,訳`, `,UI,,,UI,,訳`, and so on) | The key column is neither a 16-digit key nor a line ID, and the source text (source_en) is empty (publish drops this record, so a translation written here is never published) |
 
 A translation with a line break cannot be edited because the screen replaces line breaks with spaces for now.  
 Opening it and typing one character would drop line breaks you cannot see.  
@@ -975,9 +975,13 @@ Check it with `dwloc publish` and let it through with `--accept-multiline`.
 
 A row whose columns are all empty, such as `,,,,,,`, is not listed.  
 It has neither a key nor a source text, so `publish` drops it and a translation typed into it would silently disappear.  
-A row with neither a key nor a source text but with a value in another column (such as the translation) is listed, but cannot be edited for the same reason (the last row of the table).  
-In the form of the published file (without a `source_en` column), that is a row whose `key` column is empty.  
-To keep that translation, move it to the row that has the key, then delete the row you no longer need.
+A row whose source text is empty and whose `key` column is neither a 16-digit key nor a line ID (starting with `line:`) is listed, but cannot be edited for the same reason (the last row of the table).  
+`publish` cannot work out a key for that row and drops it.  
+Besides a row whose `key` column is empty, this also covers a row with a value that is not shaped like a 16-digit key, such as `hello`.  
+A 16-digit key is 16 hexadecimal digits; `publish` still reads it in upper case or with spaces around it, so such a row can be edited.  
+In the form of the published file (without a `source_en` column), the source text is treated as empty.  
+A row whose source text does not match its `key` column does not get this reason (`publish` drops it too, but `dwloc diff` and the filters show it under "rows dropped by `publish`").  
+To keep that translation, correct the `key` column, or move the translation to the row that has the key and then delete the row you no longer need.
 
 A file whose line breaks are `CR` only cannot be edited at all.  
 The game does not treat `CR` as a line break and reads the whole file as one line.  

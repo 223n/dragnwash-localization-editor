@@ -229,7 +229,7 @@
     "reason.edit_swallow": "{line}行目がこのレコードの値に飲み込まれて見える（引用符の閉じ誤りの疑い）",
     "reason.edit_game_disagrees": "ゲームの読み方（CsvReader）では {column} 列の値が違って読まれる",
     "reason.edit_game_misses_record": "ゲームの読み方（CsvReader）では、このレコードが見つからない",
-    "reason.edit_no_key_or_source": "key列も原文（source_en）も空（publishがこのレコードを捨てるので、書いた訳は公開されない）",
+    "reason.edit_no_key_or_source": "key列が16桁のキーでも台詞IDでもなく、原文（source_en）も空（publishがこのレコードを捨てるので、書いた訳は公開されない）",
     "reason.edit_recheck_failed": "{line}行目から始まるレコードを書き換えて読み直すと、書いた訳のほかまで変わって読める",
     "reason.publish_row_gone": "この行が新しい出力に無い",
     "reason.publish_translation_cleared": "新しい出力ではこの行の訳が空になる",

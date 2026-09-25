@@ -11,9 +11,10 @@
 //   行は ID で指す       ID はセグメントの通し番号。行をまたぐレコードの後ろでは、ID と
 //                        物理行の番号がずれる。保存の要求も、入力欄の行き先も ID で決め、
 //                        読み上げの名前にだけ行番号を使う。
-//   書かせない形         飲み込みの疑い、ゲームの読み方との食い違い、key 列も原文も空の行、
-//                        閉じない引用符は、理由を付けて読み取り専用にする。値がどれも空の
-//                        レコード（,,,,,,）は空行と同じく並べない。
+//   書かせない形         飲み込みの疑い、ゲームの読み方との食い違い、publish がキーを
+//                        決められない行（原文が空で、key 列が16桁のキーでも台詞ID でも
+//                        ない）、閉じない引用符は、理由を付けて読み取り専用にする。値が
+//                        どれも空のレコード（,,,,,,）は空行と同じく並べない。
 //
 // 保存がほかのバイトを変えないことは、ファイル全体のバイトで比べる（support/records.mjs）。
 // 見本の英文と訳はどれも架空の文である。
@@ -292,11 +293,13 @@ test.describe("書くと読み違える形のレコード", () => {
   //   1 ヘッダー / 2 hello
   //   3〜5 SWALLOW（訳の開き引用符が5行目で閉じ、4行目のレコードを値に飲み込む）
   //   6 値がどれも空のレコード / 7 DISAGREE（訳の途中の '"'。ゲームの読み方では引用になる）
-  //   8 KEYLESS（key 列も原文も空で、訳だけがある） / 9 wonderful
+  //   8 KEYLESS（key 列も原文も空で、訳だけがある）
+  //   9 NON_KEY（key 列が16桁のキーでも台詞ID でもなく、原文が空） / 10 wonderful
   const swallow =
     `${recordOf(ui("One."), "")}"いち\r\n` + `${recordOf(ui("Two."), "")}\r\n` + `${recordOf(ui("Three."), "")}さん"`;
   const disagree = `${recordOf(ui("Four."), "")}よ"ん"`;
   const keyless = ",UI,,,UI,,訳だけ";
+  const nonKey = "hello,UI,,,UI,,訳だけ";
   test.use({
     repo: sampleRepo({
       workingCopy: workingCopy(
@@ -306,6 +309,7 @@ test.describe("書くと読み違える形のレコード", () => {
           ",,,,,,",
           disagree,
           keyless,
+          nonKey,
           { ...SAMPLE.wonderful, translation: SAMPLE.wonderful.ja },
         ],
         { eol: "\r\n" },
@@ -313,7 +317,7 @@ test.describe("書くと読み違える形のレコード", () => {
     }),
   });
 
-  test("飲み込みの疑い・ゲームの読み方との食い違い・key 列も原文も空の行は理由を付けて編集させず、空のレコードは並べない", async ({
+  test("飲み込みの疑い・ゲームの読み方との食い違い・publish がキーを決められない行は理由を付けて編集させず、空のレコードは並べない", async ({
     app,
     server,
   }) => {
@@ -339,20 +343,26 @@ test.describe("書くと読み違える形のレコード", () => {
     );
     expect(await textOf(split.locator(".cell.raw"))).toBe(disagree);
 
-    // key 列も原文も空の行。publish が捨てるので、書いた訳は公開されない（決まったことの 24）。
+    // publish がキーを決められない行（決まったことの 24）。key 列も原文も空の行と、key 列が
+    // 16桁のキーでも台詞ID でもなく原文が空の行。publish が捨てるので、書いた訳は公開されない。
     // 値が空でない列があるので並べるが、生の字と理由を出して編集させない。
-    const orphan = rowByLine(app, 8);
-    await expect(orphan).toHaveClass(/(^|\s)not-editable(\s|$)/);
-    await expect(orphan.locator(".row-note")).toHaveText(notEditable(msg("ja", "reason.edit_no_key_or_source")));
-    expect(await textOf(orphan.locator(".cell.raw"))).toBe(keyless);
-    await orphan.locator(".cell.raw").click();
-    await expect(editor(app)).toHaveCount(0);
+    for (const [line, raw] of [
+      [8, keyless],
+      [9, nonKey],
+    ]) {
+      const orphan = rowByLine(app, line);
+      await expect(orphan).toHaveClass(/(^|\s)not-editable(\s|$)/);
+      await expect(orphan.locator(".row-note")).toHaveText(notEditable(msg("ja", "reason.edit_no_key_or_source")));
+      expect(await textOf(orphan.locator(".cell.raw"))).toBe(raw);
+      await orphan.locator(".cell.raw").click();
+      await expect(editor(app)).toHaveCount(0);
+    }
 
     // ほかのレコードはいままでどおり書ける。書けない行には訳の欄が無い。
-    await expect(dataRows(app)).toHaveCount(5);
+    await expect(dataRows(app)).toHaveCount(6);
     await expect(app.locator("#list .cell.translation[data-id]")).toHaveCount(2);
     await expect(translationCell(app, 2)).toHaveCount(1);
-    await expect(rowByLine(app, 9).locator(".cell.translation[data-id]")).toHaveCount(1);
+    await expect(rowByLine(app, 10).locator(".cell.translation[data-id]")).toHaveCount(1);
     await split.locator(".cell.raw").click();
     await expect(editor(app)).toHaveCount(0);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);

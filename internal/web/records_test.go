@@ -224,8 +224,9 @@ func TestLineBreaksInValuesAreSentAsLF(t *testing.T) {
 //     飲み込んでいる疑い。原文の側で飲み込み、訳は1行に収まる形。
 //   - ゲームの読み方との食い違い（csvfile.CSharpDisagreements）: フィールドの途中の '"'。
 //   - ",,,,,," の行（改善の ui-15）: 空行相当として並べない。
-//   - key 列も原文も空の行（決まったことの 24）: publish が捨てるので、書いた訳は公開
-//     されない。
+//   - publish がキーを決められない行（原文が空で、key 列が16桁のキーでも台詞ID でも
+//     ない。決まったことの 24）: publish が捨てるので、書いた訳は公開されない。key 列も
+//     原文も空の行と、key 列に16桁のキーでない値のある行。
 //
 // 行の区切りが CR だけのファイルは、ファイル全体を読み取り専用にする。
 func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
@@ -236,15 +237,16 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 		key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + "\"," + jaHello + "\n" +
 		",,,,,,\n" +
 		key.For("Start") + ",UI,,,UI,Start,は\"じ\"める\n" +
-		",UI,,,UI,,訳だけ\n"
+		",UI,,,UI,,訳だけ\n" +
+		"hello,UI,,,UI,,訳だけ\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s := newTestServer(t, Options{Root: root, UILang: "ja"})
 	ja := s.cat.lookup("ja")
 	lines := getLines(t, s, "ja")
-	if len(lines.Lines) != 3 || lines.Rows != 3 {
-		t.Fatalf("並べた行 = %+v、カンマだけの行を除いた3行を期待", lines.Lines)
+	if len(lines.Lines) != 4 || lines.Rows != 4 {
+		t.Fatalf("並べた行 = %+v、カンマだけの行を除いた4行を期待", lines.Lines)
 	}
 	wants := []struct {
 		id     int
@@ -253,6 +255,7 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 		{2, s.cat.T(ja, "reason."+reason.EditSwallow, "line", "3")},
 		{4, s.cat.T(ja, "reason."+reason.EditGameDisagrees, "column", "translation")},
 		{5, s.cat.T(ja, "reason."+reason.EditNoKeyOrSource)},
+		{6, s.cat.T(ja, "reason."+reason.EditNoKeyOrSource)},
 	}
 	for i, w := range wants {
 		l := lines.Lines[i]
@@ -261,7 +264,7 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 		}
 	}
 	before := readFile(t, path)
-	for _, id := range []int{2, 3, 4, 5} {
+	for _, id := range []int{2, 3, 4, 5, 6} {
 		if rec := save(t, s, "ja", lines.Version, rowEdit{ID: id, Translation: jaTyped}); rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("ID %d: 状態コードが %d、422 を期待", id, rec.Code)
 		}
@@ -279,14 +282,16 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 	}
 }
 
-// TestRowWithoutKeyOrSourceIsReadOnly は、key 列も原文も空の行を、行一覧で理由を付けて
-// 読み取り専用にし、保存の要求を断ることを見る（決まったことの 24）。publish はこの行を
-// 捨てる（移植仕様 R17）ので、書いた訳は公開されない。同じ要求に入ったほかの行は保存する。
+// TestKeylessRowIsReadOnly は、key 列も原文も空の行を、行一覧で理由を付けて読み取り
+// 専用にし、保存の要求を断ることを見る（決まったことの 24）。publish はこの行を捨てる
+// （移植仕様 R17）ので、書いた訳は公開されない。同じ要求に入ったほかの行は保存する。
+// key 列に16桁のキーでない値のある行は TestRowWithANonKeyIsReadOnly が見る。
 //
 // 見本は PR3 の検証の形である。この行（ID 3）の訳を書き換えると、ゲームの読み方
 // （CsvReader）で後ろの行（ID 4）が見つからなくなった。そのころは書く直前の確かめ（422
 // error.save_check_failed）で断っていたが、いまはその前に、行そのものを編集させない。
-func TestRowWithoutKeyOrSourceIsReadOnly(t *testing.T) {
+// そのころの名前は TestRowWithoutKeyOrSourceIsReadOnly だった。
+func TestKeylessRowIsReadOnly(t *testing.T) {
 	root := newEditRoot(t)
 	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
 	body := "key,translation\r\n" +
@@ -341,6 +346,88 @@ func TestRowWithoutKeyOrSourceIsReadOnly(t *testing.T) {
 		t.Errorf("結果 = %+v", saved.Results)
 	}
 	if after := strings.Replace(body, "bbbbbbbbbbbbbbbb,ok", "bbbbbbbbbbbbbbbb,"+jaTyped, 1); readFile(t, path) != after {
+		t.Errorf("保存後の中身 = %q", readFile(t, path))
+	}
+}
+
+// TestRowWithANonKeyIsReadOnly は、原文が無く、key 列に16桁のキーでも台詞ID でもない値の
+// ある行（2列の公開ファイルの "hello,訳" など）を、行一覧で理由を付けて読み取り専用にし、
+// 保存の要求を断ることを見る（決まったことの 24）。publish はこの行のキーを決められずに
+// 捨てる（移植仕様 R17）ので、書いた訳は公開されない。画面が並べたとおりに ID と key を
+// 名指しても（手で送っても）422 で、同じ要求に入ったほかの行は保存する。
+//
+// 前後に空白のある16桁のキー、大文字の16桁のキー、台詞ID の行は、publish がそのキーで
+// 引く（R11〜R16）ので書ける。作業コピーの無いロケールで、画面が公開ファイルを直接開く
+// 形にする。
+func TestRowWithANonKeyIsReadOnly(t *testing.T) {
+	root := newEditRoot(t)
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, filepath.FromSlash("Translations/ja/strings.csv"))
+	body := "key,translation\n" +
+		"hello,訳だけ\n" +
+		"\"  0123456789abcdef  \",空白のあるキー\n" +
+		"0123456789ABCDEF,大文字のキー\n" +
+		"line:intro_1,台詞\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	lines := getLines(t, s, "ja")
+	if len(lines.Lines) != 4 {
+		t.Fatalf("並べた行 = %+v、4行を期待", lines.Lines)
+	}
+	why := s.cat.T(ja, "reason."+reason.EditNoKeyOrSource)
+	if l := lines.Lines[0]; l.ID != 2 || l.Editable || l.Key != "hello" || l.Reason != why {
+		t.Errorf("ID 2 = %+v、理由 %q を期待", l, why)
+	}
+	for _, l := range lines.Lines[1:] {
+		if !l.Editable || l.Reason != "" {
+			t.Errorf("ID %d = %+v、編集できる行を期待", l.ID, l)
+		}
+	}
+	want := s.cat.T(ja, "error.not_editable", "line", "2", "reason", why)
+
+	// ID 2 だけを送ると、1行も書かずに 422（error.no_row_saved）で、その行に理由が付く。
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 2, Key: "hello", Translation: jaTyped})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[errorResponse](t, rec.Body.Bytes())
+	if got.Message != s.cat.T(ja, "error.no_row_saved") || len(got.Results) != 1 ||
+		got.Results[0].Saved || got.Results[0].Error != want {
+		t.Errorf("応答 = %+v、ID 2 に理由 %q を期待", got, want)
+	}
+	if readFile(t, path) != body {
+		t.Error("断ったのにファイルが変わった")
+	}
+
+	// 書ける行と同じ要求に入れると、書ける行だけを保存する。
+	edits := []rowEdit{{ID: 2, Key: "hello", Translation: jaTyped}}
+	for _, l := range lines.Lines[1:] {
+		edits = append(edits, rowEdit{ID: l.ID, Key: l.Key, Translation: jaTyped})
+	}
+	rec = save(t, s, "ja", lines.Version, edits...)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	saved := decode[rowsResponse](t, rec.Body.Bytes())
+	if len(saved.Results) != 4 || saved.Results[0].Saved || saved.Results[0].Error != want {
+		t.Errorf("結果 = %+v", saved.Results)
+	}
+	for i, r := range saved.Results[1:] {
+		if !r.Saved || r.Error != "" {
+			t.Errorf("ID %d が保存されない: %+v", lines.Lines[i+1].ID, r)
+		}
+	}
+	after := "key,translation\n" +
+		"hello,訳だけ\n" +
+		"\"  0123456789abcdef  \"," + jaTyped + "\n" +
+		"0123456789ABCDEF," + jaTyped + "\n" +
+		"line:intro_1," + jaTyped + "\n"
+	if readFile(t, path) != after {
 		t.Errorf("保存後の中身 = %q", readFile(t, path))
 	}
 }

@@ -487,16 +487,18 @@ func editReasons(t *testing.T) []reason.Reason {
 		t.Fatal("2行目が無い")
 	}
 
-	// key 列も原文も空の行（2列で訳だけ）。
-	keyless := edit.Parse([]byte("key,translation\n,v\n"))
+	// key 列が16桁のキーでも台詞ID でもなく、原文も空の行（2列の公開ファイル）。
+	// publish が捨てる（移植仕様 R17）ので編集させない。
+	keyless := edit.Parse([]byte("key,translation\nk,v\n"))
 	if line, ok := keyless.Line(2); ok {
 		out = append(out, line.Cause)
 	} else {
 		t.Fatal("2行目が無い")
 	}
 
-	// 書き換えを断る経路。誤りの型から理由を取り出す。
-	f := edit.Parse([]byte("key,translation\n# 見出し\nk,v\n"))
+	// 書き換えを断る経路。誤りの型から理由を取り出す。key 列は16桁のキーにする
+	// （そうでないと、上の理由で先に断る）。
+	f := edit.Parse([]byte("key,translation\n# 見出し\n0123456789abcdef,v\n"))
 	refuse := []struct {
 		line  int
 		value string
@@ -524,7 +526,7 @@ func editReasons(t *testing.T) []reason.Reason {
 
 	// 訳が行をまたぐレコードと、閉じない引用符のファイルと、行の区切りが CR だけの
 	// ファイル。
-	multi := edit.Parse([]byte("key,translation\nk,\"い\nち\"\n"))
+	multi := edit.Parse([]byte("key,translation\n0123456789abcdef,\"い\nち\"\n"))
 	if err := multi.SetTranslation(2, "x"); err == nil {
 		t.Error("訳が行をまたぐレコードが書けてしまった")
 	} else {

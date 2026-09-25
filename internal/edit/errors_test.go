@@ -170,7 +170,7 @@ func TestInvalidValueErrorCarriesOneReason(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := Parse([]byte("key,translation\nabc,古い\n"))
+			f := Parse([]byte("key,translation\n0123456789abcdef,古い\n"))
 			var e *InvalidValueError
 			if err := f.SetTranslation(2, tt.value); !errors.As(err, &e) {
 				t.Fatalf("err = %v, want *InvalidValueError", err)

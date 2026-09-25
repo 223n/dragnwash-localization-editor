@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -333,19 +334,24 @@ func rawKind(body string) Kind {
 // swallowed と sw は、そのレコードに飲み込みの疑いがあるか（csvfile.FindSwallows）と
 // その最初の1件、disagrees と game は、ゲームの読み方と値が割れるか
 // （csvfile.CSharpDisagreements）とその1件。理由は、直す先を指す順（列の数、飲み込み、
-// ゲームの読み方との食い違い、key 列も原文も空、訳の改行）に1つだけ付ける。
+// ゲームの読み方との食い違い、publish がキーを決められない、訳の改行）に1つだけ付ける。
 //
-// key 列も原文も空（決まったことの 24）を置く位置の理由:
+// publish がキーを決められない（key 列が16桁のキーでも台詞ID でもなく、原文も空。
+// 決まったことの 24）を置く位置の理由:
 //
 //   - 列の数と飲み込みより後ろ。どちらも、そのレコードの値の位置そのものが崩れている
 //     形で、key 列や原文の列に見えている値が本当のその列の値とは限らない。先に引用符や
-//     列の数を直すと、鍵のあるレコードに戻ることがある。
-//   - ゲームの読み方との食い違いとは同時に当たらない。食い違いの判定は、key 列か原文の
-//     あるレコードだけを組にして比べる（csvfile.RecordIdentity）。並べる順は、ファイルの
-//     形を直す理由から、そのレコードの中身の理由へ、という流れにそろえて後ろに置いた。
+//     列の数を直すと、キーのあるレコードに戻ることがある。
+//   - ゲームの読み方との食い違いより後ろ。key 列が空でなければ（`hello` など）、
+//     食い違いの判定（key 列か原文のあるレコードを組にして比べる。csvfile.RecordIdentity）
+//     にも入るので、同時に当たることがある。食い違いはファイルの形（値の途中の '"'、
+//     引用の外の単独の CR など）を直す理由で、ファイルの形を直す理由から、そのレコードの
+//     中身の理由へ、という流れにそろえて後ろに置いた。key 列も原文も空のレコードは
+//     食い違いの判定に入らないので、同時には当たらない。
 //   - 訳の改行より前。訳の改行は、訳への改行の入力を足すまで（PR4）の画面の制限で、
-//     入れば消える。鍵が無いことは、PR4 のあとも publish が捨てることに変わりがなく、
-//     直す先（キーのある行へ訳を移すか、要らない行を消すか）を指す。
+//     入れば消える。キーを決められないことは、PR4 のあとも publish が捨てることに
+//     変わりがなく、直す先（key 列を直すか、キーのある行へ訳を移して要らない行を消すか）
+//     を指す。
 func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees bool, game csvfile.Disagreement) {
 	line.Editable = false
 	switch {
@@ -374,27 +380,29 @@ func (f *File) judge(line *Line, swallowed bool, sw csvfile.Swallow, disagrees b
 		line.setReason(reason.New(reason.EditGameDisagrees,
 			fmt.Sprintf("ゲームの読み方（CsvReader）では %s 列の値が違って読まれる", game.Column),
 			"column", game.Column))
-	case !hasKeyOrSource(f.header, line.Fields):
-		// `,UI,,,UI,,訳` や2列の `,訳` のように、key 列も原文も空のレコード。publish は
-		// このレコードを捨てる（移植仕様 R17）ので、書いた訳は公開されず、黙って落ちる。
-		// 値がどれも空のレコード（改善の ui-15。[kindOf]）と同じ理由で編集させない。
+	case keyless(f.header, line.Fields):
+		// 原文が空で、key 列が16桁のキーでも台詞ID でもないレコード（2列の `hello,訳`、
+		// 6列の `abc,UI,,,UI,訳`、`,UI,,,UI,,訳` など）。publish はこのレコードを捨てる
+		// （移植仕様 R17）ので、書いた訳は公開されず、黙って落ちる。値がどれも空の
+		// レコード（改善の ui-15。[kindOf]）と同じ理由で編集させない。
 		line.setReason(reason.New(reason.EditNoKeyOrSource,
-			"key列も原文（source_en）も空（publishがこのレコードを捨てるので、書いた訳は公開されない）"))
+			"key列が16桁のキーでも台詞IDでもなく、原文（source_en）も空（publishがこのレコードを捨てるので、書いた訳は公開されない）"))
 	default:
 		judgeTranslation(line)
 	}
 }
 
-// hasKeyOrSource は、受理したヘッダー header のもとで、値 fields のレコードに訳を引く
-// 鍵（key 列か原文）があるかを返す。
+// keyless は、受理したヘッダー header のもとで、値 fields のレコードを publish が
+// キーを決められずに捨てるか（移植仕様 R17。原文が空で、key 列が16桁のキーでも
+// 台詞ID でもない）を返す。
 //
-// 見分け方は、ゲームとの突き合わせの鍵（csvfile.RecordIdentity。key 列は前後の空白を
-// 除き、source_en はそのまま見る）にそろえる。publish のキーの決め方（移植仕様 R11〜
-// R17）でも、key 列が空白だけで source_en も空のレコードは捨てられる。source_en 列の
-// 無い形（公開ファイルの6列・3列・2列）では、原文は空と同じに見る。
-func hasKeyOrSource(header, fields []string) bool {
-	_, ok := csvfile.RecordIdentity(csvfile.NewRow(header, fields))
-	return ok
+// 判定は publish と同じ関数（publish.Keyless。publish がキーを決める rowKey を呼ぶ）に
+// 任せ、ここに規則を書かない。書くと、編集させない行と publish が捨てる行が食い違う。
+// 原文があって key 列と合わないレコード（R15）は、publish が捨てても当てない（diff が
+// 「捨てられる行」として別に知らせる）。source_en 列の無い形（公開ファイルの6列・3列・
+// 2列）では、原文は空と同じに見る。
+func keyless(header, fields []string) bool {
+	return publish.Keyless(csvfile.NewRow(header, fields))
 }
 
 // judgeTranslation は、ほかの理由に当たらないレコードの編集可否を、訳の値で決める。
@@ -542,8 +550,8 @@ func (f *File) SetTranslation(id int, value string) error {
 		return notEditable(id, line.Number, recheckReason(line.Number))
 	}
 	// 訳を消しても、値がどれも空のレコード（空行相当。[kindOf]）にはならない。編集できる
-	// レコードには key 列か原文がある（[hasKeyOrSource]。決まったことの 24）。そのため
-	// 書き換えで行の種類は変わらない。
+	// レコードには、原文か、16桁のキーか台詞ID の key 列がある（[keyless]。決まったことの
+	// 24）。そのため書き換えで行の種類は変わらない。
 	line.Text = text
 	line.Fields = fields
 	if f.touched == nil {
@@ -712,7 +720,7 @@ func (f *File) culprit(at int) int {
 // ゲームが引かないので、食い違いの判定（csvfile.CSharpDisagreements）に入らない。その
 // 訳を書き換えると、ゲームの引用の閉じる位置が動き、触っていない後ろのレコードをゲームが
 // 見つけられなくなることがある（PR3 の検証で再現した）。publish の読み方は変わらない
-// ので、ほかの確かめでは見つからない。いまはそのレコードを編集させない（[hasKeyOrSource]。
+// ので、ほかの確かめでは見つからない。いまはそのレコードを編集させない（[keyless]。
 // 決まったことの 24）。編集できるレコードだけを書き換えてここで外れる形は見つけていない
 // （乱数で作った架空のファイルで探した）ので、判定をすり抜けた書き換えを捕まえる守りである。
 //

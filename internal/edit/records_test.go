@@ -8,6 +8,7 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
@@ -23,8 +24,9 @@ PR3 の最初のコミットでは、切り替える前の結果を名前の末�
     なり、訳が1行に収まるかぎり書ける（以前は物理行で並び、行をまたぐレコードの
     どの物理行も編集できなかった）。
   - カンマだけの行（",,,,,,"）は空行相当で、編集させない（以前はキーの空いた編集できる
-    行だった。改善の ui-15）。key 列も原文も空のレコード（",UI,,,UI,,訳" など）も、
-    理由を付けて編集させない（以前は編集できた。決まったことの 24）。
+    行だった。改善の ui-15）。publish がキーを決められないレコード（原文が空で key 列が
+    16桁のキーでも台詞ID でもない。",UI,,,UI,,訳" や2列の "hello,訳" など）も、理由を
+    付けて編集させない（以前は編集できた。決まったことの 24）。
   - 行の区切りが CR だけのファイルは全体を読み取り専用にし、ゲームの読み方と値が割れる
     レコードは編集させない（以前はどちらも編集できた）。
   - 飲み込みの疑いのあるレコードは、飲み込まれたと疑う物理行を添えて編集させない
@@ -179,36 +181,57 @@ func TestEditCommaOnlyRowIsBlank(t *testing.T) {
 		})
 	}
 	// 訳だけが入った行（",,,,,,古い"）は、値がどれも空ではないので空行相当にはならず、
-	// key 列も原文も空の理由で編集させない（TestEditRowWithoutKeyOrSourceIsReadOnly）。
+	// publish がキーを決められない理由で編集させない（TestEditKeylessRowIsReadOnly）。
 }
 
-// TestEditRowWithoutKeyOrSourceIsReadOnly は、key 列も原文も空のレコード（`,UI,,,UI,,訳`、
-// 2列の `,訳` など）を、理由を付けて編集させないことを見る（決まったことの 24）。publish は
-// このレコードを捨てる（移植仕様 R17）ので、書いた訳は公開されず、黙って落ちる。値がどれも
-// 空のレコード（改善の ui-15）と同じ理由である。
+// 行の形の見本に使うヘッダー（受理される4種）。
+const (
+	headerWorking   = "key,section,node,order,speaker,source_en,translation\n"
+	headerPublished = "key,section,node,order,speaker,translation\n"
+	headerSpeaker   = "key,speaker,translation\n"
+	headerPair      = "key,translation\n"
+)
+
+// TestEditKeylessRowIsReadOnly は、publish がキーを決められないレコード（原文が空で、
+// key 列が16桁のキーでも台詞ID でもない）を、理由を付けて編集させないことを見る
+// （決まったことの 24）。publish はこのレコードを捨てる（移植仕様 R17）ので、書いた訳は
+// 公開されず、黙って落ちる。値がどれも空のレコード（改善の ui-15）と同じ理由である。
 //
 // PR3 のはじめは、訳だけが入った行はいままでどおり書けて、訳を消すと空行相当になった
 // （消すことは断らなかった。そのころは TestEditCommaOnlyRowIsBlank の後半と
-// TestRefreshRecomputesKind が見ていた）。
-func TestEditRowWithoutKeyOrSourceIsReadOnly(t *testing.T) {
-	const working = "key,section,node,order,speaker,source_en,translation\n"
+// TestRefreshRecomputesKind が見ていた）。次に key 列も原文も空のレコードだけを編集
+// させないようにし（そのころの名前は TestEditRowWithoutKeyOrSourceIsReadOnly）、publish
+// の規則にそろえて、key 列に16桁のキーでない値があるレコードまで広げた。
+func TestEditKeylessRowIsReadOnly(t *testing.T) {
 	tests := []struct {
 		name, data string
 	}{
-		{"作業コピーで訳だけ", working + ",UI,,,UI,,訳\n"},
-		{"作業コピーで訳も空", working + ",UI,,,UI,,\n"},
-		{"作業コピーで値がみな空で訳だけ", working + ",,,,,,古い\n"},
-		{"key 列が空白だけ", working + "\"  \",UI,,,UI,,訳\n"},
-		{"2列で訳だけ", "key,translation\n,訳\n"},
-		{"3列で訳だけ", "key,speaker,translation\n,Fern,訳\n"},
-		{"公開ファイルの6列で訳だけ", "key,section,node,order,speaker,translation\n,UI,,,UI,訳\n"},
+		// key 列も原文も空。
+		{"作業コピーで訳だけ", headerWorking + ",UI,,,UI,,訳\n"},
+		{"作業コピーで訳も空", headerWorking + ",UI,,,UI,,\n"},
+		{"作業コピーで値がみな空で訳だけ", headerWorking + ",,,,,,古い\n"},
+		{"key 列が空白だけ", headerWorking + "\"  \",UI,,,UI,,訳\n"},
+		{"2列で訳だけ", headerPair + ",訳\n"},
+		{"3列で訳だけ", headerSpeaker + ",Fern,訳\n"},
+		{"公開ファイルの6列で訳だけ", headerPublished + ",UI,,,UI,訳\n"},
+		// key 列に値があるが、16桁のキーでも台詞ID でもなく、原文が空。
+		{"2列の公開ファイルで key が16桁のキーでない", headerPair + "hello,訳\n"},
+		{"3列で key が16桁のキーでない", headerSpeaker + "hello,Fern,訳\n"},
+		{"6列で key が16桁のキーでない", headerPublished + "abc,UI,,,UI,訳\n"},
+		{"7列で key が16桁のキーでなく原文が空", headerWorking + "hello,UI,,,UI,,訳\n"},
+		{"key が15桁", headerPair + "0123456789abcde,訳\n"},
+		{"key が17桁", headerPair + "0123456789abcdef0,訳\n"},
+		{"key に16進でない字がある", headerPair + "0123456789abcdeg,訳\n"},
+		// 台詞ID の接頭辞は大文字小文字を区別する（key.LooksLikeLineID）。
+		{"台詞ID の接頭辞が大文字", headerPair + "LINE:intro_1,訳\n"},
+		{"台詞ID の接頭辞だけ", headerPair + "line:,訳\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := Parse([]byte(tt.data))
 			l, ok := f.Line(2)
 			if !ok || l.Kind != KindData || l.Editable || l.Cause.ID != reason.EditNoKeyOrSource || l.Text == "" {
-				t.Fatalf("ID 2 = %+v、key 列も原文も空の理由を期待", l)
+				t.Fatalf("ID 2 = %+v、publish がキーを決められない理由を期待", l)
 			}
 			var notEditable *NotEditableError
 			if err := f.SetTranslation(2, "新しい訳"); !errors.As(err, &notEditable) || notEditable.Cause.ID != reason.EditNoKeyOrSource {
@@ -223,21 +246,125 @@ func TestEditRowWithoutKeyOrSourceIsReadOnly(t *testing.T) {
 		})
 	}
 
-	// どちらかがあれば書ける。key 列が空でも原文があれば publish は原文からキーを作り
-	// （移植仕様 R15）、原文が空でも key 列があれば、そのキーで引く（R16）。
-	f := Parse([]byte(working + ",UI,,,UI,Start,はじめる\n" + "0123456789abcdef,UI,,,UI,,おわる\n"))
-	for _, id := range []int{2, 3} {
-		if l, _ := f.Line(id); !l.Editable {
-			t.Errorf("ID %d = %+v、編集できる行を期待", id, l)
-		}
+	// 書ける形。原文があれば publish は原文からキーを作る（移植仕様 R14）。原文が空でも、
+	// key 列が台詞ID（R12）か、前後の空白を除き小文字にして16桁のキー（R11・R13・R16）
+	// なら、そのキーで引く。原文があって key 列と合わないレコード（R15）も publish は
+	// 捨てるが、ここには当てない（diff が「publish で捨てられる行」として知らせる）。
+	// 原文はトリムしないので、空白だけの原文も原文である。
+	writable := []struct {
+		name, data string
+	}{
+		{"原文があって key 列が空", headerWorking + ",UI,,,UI,Start,はじめる\n"},
+		{"原文と key 列が合う", headerWorking + key.For("Start") + ",UI,,,UI,Start,はじめる\n"},
+		{"原文があって key 列が合わない", headerWorking + "hello,UI,,,UI,Start,はじめる\n"},
+		{"原文があって key 列が別の16桁のキー", headerWorking + "0123456789abcdef,UI,,,UI,Start,はじめる\n"},
+		{"原文が空白だけ", headerWorking + ",UI,,,UI,\" \",訳\n"},
+		{"原文が空で key 列が16桁のキー", headerWorking + "0123456789abcdef,UI,,,UI,,おわる\n"},
+		{"2列で16桁のキー", headerPair + "0123456789abcdef,訳\n"},
+		{"2列で前後に空白のある16桁のキー", headerPair + "\"  0123456789abcdef  \",訳\n"},
+		{"2列で大文字の16桁のキー", headerPair + "0123456789ABCDEF,訳\n"},
+		{"2列で台詞ID", headerPair + "line:intro_1,訳\n"},
+		{"3列で台詞ID", headerSpeaker + "line:intro_1,Fern,訳\n"},
+		{"6列で16桁のキー", headerPublished + "0123456789abcdef,UI,,,UI,訳\n"},
+	}
+	for _, tt := range writable {
+		t.Run(tt.name, func(t *testing.T) {
+			f := Parse([]byte(tt.data))
+			if l, _ := f.Line(2); !l.Editable {
+				t.Fatalf("ID 2 = %+v、編集できる行を期待", l)
+			}
+			if err := f.SetTranslation(2, "新しい訳"); err != nil {
+				t.Errorf("書けない: %v", err)
+			}
+		})
 	}
 }
 
-// TestEditReasonOrderWithoutKeyOrSource は、key 列も原文も空のレコードがほかの理由にも
-// 当たるとき、直す先を指す順（列の数、飲み込み、ゲームの読み方との食い違い、key 列も
-// 原文も空、訳の改行）で理由を1つだけ付けることを見る（[File.judge] の注記）。
-func TestEditReasonOrderWithoutKeyOrSource(t *testing.T) {
-	const working = "key,section,node,order,speaker,source_en,translation\n"
+// TestKeylessAgreesWithPublish は、publish がキーを決められない理由で編集させない行が、
+// 同じ入力で publish が捨てて集計の malformed dropped に数える行と食い違わないことを見る
+// （決まったことの 24）。判定は publish と同じ関数（publish.Keyless）を呼ぶが、呼び方
+// （ヘッダーと値の組み方）がずれても食い違うので、実際に publish.Build を走らせて比べる。
+//
+// 原文があって key 列と合わない行（R15）は、publish が捨てても編集させる（diff が
+// 「publish で捨てられる行」として知らせる）。そのため、比べるのは原文が空の行だけで、
+// 原文のある行は publish が捨てるかどうかにかかわらず編集できることを見る。
+func TestKeylessAgreesWithPublish(t *testing.T) {
+	keys := []string{
+		"", "  ", "hello", "abc", "LINE:intro_1", "line:", "line:intro_1",
+		"0123456789abcdef", "  0123456789abcdef  ", "0123456789ABCDEF",
+		"0123456789abcde", "0123456789abcdeg", key.For("Start"),
+	}
+	values := map[string]string{"section": "UI", "node": "", "order": "", "speaker": "UI", "translation": "訳"}
+	var keyless, dropped, kept int
+	for _, header := range []string{headerWorking, headerPublished, headerSpeaker, headerPair} {
+		columns := strings.Split(strings.TrimSuffix(header, "\n"), ",")
+		sources := []string{""}
+		if slices.Contains(columns, "source_en") {
+			sources = append(sources, "Start", " ")
+		}
+		for _, k := range keys {
+			for _, src := range sources {
+				fields := make([]string, len(columns))
+				for i, col := range columns {
+					switch col {
+					case "key":
+						fields[i] = csvField(k)
+					case "source_en":
+						fields[i] = csvField(src)
+					default:
+						fields[i] = values[col]
+					}
+				}
+				data := header + strings.Join(fields, ",") + "\n"
+				_, stats, err := publish.Build(nil, []byte(data), nil)
+				if err != nil {
+					t.Fatalf("%q: publish.Build: %v", data, err)
+				}
+				l, _ := Parse([]byte(data)).Line(2)
+				isKeyless := !l.Editable && l.Cause.ID == reason.EditNoKeyOrSource
+				switch {
+				case src == "" && isKeyless != (stats.Dropped == 1):
+					t.Errorf("%q: 編集させない %v、publish が捨てた行 %d（%s）", data, isKeyless, stats.Dropped, stats.LogLine("out", "in"))
+				case src != "" && !l.Editable:
+					t.Errorf("%q: 原文のある行が編集できない（%+v）", data, l)
+				case src == "" && !isKeyless && !l.Editable:
+					t.Errorf("%q: ほかの理由で編集できない（%+v）", data, l)
+				}
+				if isKeyless {
+					keyless++
+					if !strings.Contains(stats.LogLine("out", "in"), "1 malformed dropped") {
+						t.Errorf("%q: 集計に malformed dropped として出ない: %s", data, stats.LogLine("out", "in"))
+					}
+				}
+				if src != "" && stats.Dropped == 1 {
+					dropped++ // R15。publish は捨てるが編集できる
+				}
+				if src == "" && !isKeyless {
+					kept++
+				}
+			}
+		}
+	}
+	// 見本が痩せていないこと（どの組み合わせも一度は通る）。
+	if keyless == 0 || dropped == 0 || kept == 0 {
+		t.Errorf("見本が偏っている: 編集させない %d、原文があって捨てられる %d、原文が空で書ける %d", keyless, dropped, kept)
+	}
+}
+
+// csvField は、値 v を CSV のフィールドに書く形にする。前後の空白、カンマ、二重引用符が
+// あれば引用する（引用しない前後の空白は、ゲームの読み方と割れる別の理由に当たる）。
+func csvField(v string) string {
+	if v != strings.TrimSpace(v) || strings.ContainsAny(v, ",\"") {
+		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
+	}
+	return v
+}
+
+// TestEditReasonOrderForKeylessRow は、publish がキーを決められないレコードがほかの理由にも
+// 当たるとき、直す先を指す順（列の数、飲み込み、ゲームの読み方との食い違い、publish が
+// キーを決められない、訳の改行）で理由を1つだけ付けることを見る（[File.judge] の注記）。
+func TestEditReasonOrderForKeylessRow(t *testing.T) {
+	const working = headerWorking
 	tests := []struct {
 		name, data, want string
 		args             []string
@@ -255,16 +382,29 @@ func TestEditReasonOrderWithoutKeyOrSource(t *testing.T) {
 			want: reason.EditSwallow, args: []string{"line", "3"},
 		},
 		{
-			// 値の途中の '"' はゲームの読み方と割れる形だが、食い違いの判定は鍵のある
-			// レコードだけを見るので、同時には当たらない。
-			name: "ゲームの読み方と割れる形",
+			// 値の途中の '"' はゲームの読み方と割れる形だが、食い違いの判定は key 列か
+			// 原文のあるレコードだけを見るので、key 列も原文も空なら同時には当たらない。
+			name: "key 列も原文も空でゲームの読み方と割れる形",
 			data: working + ",UI,,,UI,,い\"ろ\"は\n",
 			want: reason.EditNoKeyOrSource,
 		},
 		{
-			// 訳の改行は改行の入力を足すまで（PR4）の制限で、鍵が無いことはそのあとも残る。
+			// key 列に値があれば食い違いの判定に入るので、同時に当たる。食い違いは
+			// ファイルの形を直す理由なので先に付ける。
+			name: "key 列が16桁のキーでなくゲームの読み方と割れる形",
+			data: headerPair + "hello,い\"ろ\"は\n",
+			want: reason.EditGameDisagrees, args: []string{"column", "translation"},
+		},
+		{
+			// 訳の改行は改行の入力を足すまで（PR4）の制限で、キーを決められないことは
+			// そのあとも残る。
 			name: "訳の改行",
 			data: working + ",UI,,,UI,,\"い\nち\"\n",
+			want: reason.EditNoKeyOrSource,
+		},
+		{
+			name: "key 列が16桁のキーでなく訳の改行",
+			data: headerPair + "hello,\"い\nち\"\n",
 			want: reason.EditNoKeyOrSource,
 		},
 	}
