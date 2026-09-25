@@ -145,7 +145,7 @@ type File struct {
 	header []string
 	// headerText は受理されたヘッダーの生のバイト列（終端を含む）。訳を書き換えた
 	// レコードを、ヘッダーと並べて飲み込みの疑いの検出にかけるのに使う
-	// （[File.looksSwallowing]）。
+	// （[File.swallowedLine]）。
 	headerText string
 	lines      []Line
 	// physical はファイルの物理行の数（csvfile.Segments の Lines）。
