@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -297,6 +300,75 @@ func TestRunDiffOutputReportsWriteFailure(t *testing.T) {
 		if strings.Contains(got, "に書きました") {
 			t.Errorf("書けなかったのに、%sで書いたと言っている:\n%s", label, got)
 		}
+	}
+}
+
+// TestRunDiffOutputHeldOpen は、Windows で --output の先をほかのプログラムが開いている
+// とき、閉じればよいことを添えて止まることを見る。
+//
+// Excel は CSV を、削除の共有（FILE_SHARE_DELETE）を許さずに開く。そのファイルは
+// rename で置き換えられず、理由の文は「権限がありません」になる。Go の os.Open も
+// 読み書きの共有だけを許して開くので、同じ状態を作れる。Linux と macOS は開いている
+// ファイルも置き換えられるので飛ばす（添えないことは TestHeldOpen が見る）。
+func TestRunDiffOutputHeldOpen(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("開いているファイルを rename で置き換えられないのは Windows だけ")
+	}
+	root := recordDiffTree(t)
+	out := filepath.Join(t.TempDir(), "report.csv")
+	if err := os.WriteFile(out, []byte("前の報告\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv", "--output", out)
+	f.Close()
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{
+		"dwloc: 結果を " + filepath.ToSlash(out) + " に書き出せません: 権限がありません\n",
+		outputHeldOpenText + "\n",
+	})
+	if got := readFile(t, filepath.Dir(out), "report.csv"); got != "前の報告\n" {
+		t.Errorf("開いているファイルが書き換わった:\n%s", got)
+	}
+}
+
+// TestHeldOpen は、--output に書けなかったときに「開いていれば閉じて」を添えるかの
+// 判断を見る。添えるのは Windows で、書き出し先に普通のファイルがあり、権限か共有か
+// 錠の誤りのときだけである。
+func TestHeldOpen(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "report.csv")
+	if err := os.WriteFile(file, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	denied := &os.LinkError{Op: "rename", Old: file + ".tmp", New: file, Err: fs.ErrPermission}
+	tests := []struct {
+		name string
+		goos string
+		path string
+		err  error
+		want bool
+	}{
+		{"Windows で権限の誤り", "windows", file, denied, true},
+		{"Windows で共有違反", "windows", file, &os.LinkError{Op: "rename", New: file, Err: syscall.Errno(32)}, true},
+		{"Windows で錠の違反", "windows", file, &os.LinkError{Op: "rename", New: file, Err: syscall.Errno(33)}, true},
+		{"Windows でほかの誤り", "windows", file, errors.New("ディスクがいっぱい"), false},
+		{"Windows でファイルが無い", "windows", filepath.Join(dir, "missing.csv"), denied, false},
+		{"Windows でフォルダー", "windows", dir, denied, false},
+		{"Linux", "linux", file, denied, false},
+		{"macOS", "darwin", file, denied, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := heldOpen(tt.goos, tt.path, tt.err); got != tt.want {
+				t.Errorf("heldOpen = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

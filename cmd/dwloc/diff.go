@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
@@ -326,6 +329,9 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	if *output != "" {
 		if err := publish.WriteBytes(*output, file.Bytes()); err != nil {
 			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "結果を %s に書き出せません: %w", filepath.ToSlash(*output), err))
+			if heldOpen(runtime.GOOS, *output, err) {
+				fmt.Fprintln(stderr, outputHeldOpenText)
+			}
 			return exitError
 		}
 		written = true
@@ -337,6 +343,44 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 // utf8BOMText は UTF-8 の BOM です。diff --output が csv の頭に付けます。
 const utf8BOMText = "\xef\xbb\xbf"
+
+// outputHeldOpenText は、--output の先をほかのプログラムが開いているために書けなかった
+// かもしれないときに、誤りの文の次に添える1行です。
+const outputHeldOpenText = "dwloc:       ほかのプログラム（表計算ソフトなど）でこのファイルを開いていれば、閉じてからもう一度実行してください。"
+
+// Windows の誤りの番号のうち、ほかのプロセスがファイルを開いているときに返るもの。
+// syscall は Windows でもこの2つの名前を持たないので、番号で置きます。
+const (
+	errorSharingViolation syscall.Errno = 32 // ERROR_SHARING_VIOLATION
+	errorLockViolation    syscall.Errno = 33 // ERROR_LOCK_VIOLATION
+)
+
+// heldOpen は、diff --output の書き出しの誤り err が、ほかのプログラムがファイルを
+// 開いているために起きたのかもしれないかを返します。goos は runtime.GOOS です
+// （試験でほかの OS の扱いを確かめられるように受けます）。
+//
+// Windows では、ほかのプロセスが削除の共有（FILE_SHARE_DELETE）を許さずに開いている
+// ファイルは、rename で置き換えられず、ERROR_ACCESS_DENIED が返ります。Excel は
+// CSV をそう開きます。--output は Excel で開く前提で BOM を付けるので、開いたまま
+// 回し直す人が出ます。理由の文は「権限がありません」になり、権限の問題に見えるので、
+// 閉じればよいことを添えます。開き方によっては共有違反か錠の違反にもなります。
+//
+// 添えるのは、書き出し先に普通のファイルがあるときだけです。無いときやフォルダーの
+// ときの「権限がありません」は、開いていることとは関係がありません。Linux と macOS は、
+// 開いているファイルも rename で置き換えられるので添えません。
+func heldOpen(goos, path string, err error) bool {
+	if goos != "windows" {
+		return false
+	}
+	if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && (errno == errorSharingViolation || errno == errorLockViolation) {
+		return true
+	}
+	return errors.Is(err, fs.ErrPermission)
+}
 
 // checkDiffOutput は、diff --output の書き出し先を確かめます。書いてよければ exitOK です。
 //

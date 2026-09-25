@@ -338,6 +338,7 @@ With `--format csv` it adds a BOM so that spreadsheet software can tell the file
 `>` in PowerShell 7 and in the Command Prompt does not garble the text, but the CSV gets no BOM.  
 The path is relative to the current directory.  
 It does not create the folder to write into.  
+If the file is still open in spreadsheet software or another program, Windows does not let it be replaced and `dwloc` stops (the reason reads `権限がありません`, "No permission"). Close it and run the command again.  
 It cannot write inside `Translations` or `data` of the translation repository, or inside `Translations` of the game, so as not to overwrite files that `diff`, `publish` and `edit` read.  
 Pointing inside these folders through a link or a junction is refused as well.  
 Wherever the path points, it cannot use a name that `dwloc` reads (`strings.csv`, `<locale>.working.csv`, `layout_risks.csv`, `script_order.csv`, `level_flow.csv`).  
