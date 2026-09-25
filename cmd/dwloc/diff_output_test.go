@@ -156,36 +156,58 @@ func TestRunDiffOutputReportsWriteFailure(t *testing.T) {
 }
 
 // TestRunDiffOutputIsNotRecorded は、--output で書いた本文を、画面に出したときと
-// 同じく記録（logs/dwloc_<日付>.log）へ写さないことを見る。記録には、text の見出しと
-// 件数と、本文を省いたことの1行を残す。
+// 同じく記録（logs/dwloc_<日付>.log）へ写さないことを見る（改善の決定 1）。
+// 記録には、text の見出しと件数と、本文を省いたことの1行を残す。csv は1行も写さない。
+//
+// csv の行は8桁の字下げで始まらないので、text の見出しを選ぶ関数（diffHeadingLine）を
+// csv にも当てると、全行が見出しとして記録に入る。形式ごとに見るのはそのためである。
 func TestRunDiffOutputIsNotRecorded(t *testing.T) {
-	resetRecord(t)
-	root := recordDiffTree(t)
-	dir := t.TempDir()
-	t.Chdir(dir)
-	setArgs(t, "diff", "--root", root, "--no-game", "--output", "report.txt")
+	tests := []struct {
+		name string
+		args []string
+		out  string
+		// wantLog は記録に残っていてほしい文字列。
+		wantLog []string
+	}{
+		{"text", nil, "report.txt", []string{"要確認が 1 行あります。"}},
+		{"csv", []string{"--format", "csv"}, "report.csv", nil},
+		{"csv --raw-csv", []string{"--format", "csv", "--raw-csv"}, "report.csv", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetRecord(t)
+			root := recordDiffTree(t)
+			dir := t.TempDir()
+			t.Chdir(dir)
+			setArgs(t, append([]string{"diff", "--root", root, "--no-game", "--output", tt.out}, tt.args...)...)
 
-	read := captureStd(t)
-	code := mainWithRecord()
-	stdout, stderr := read()
-	if code != exitProblems {
-		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+			read := captureStd(t)
+			code := mainWithRecord()
+			stdout, stderr := read()
+			if code != exitProblems {
+				t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
+			}
+			got := readFile(t, dir, tt.out)
+			_, log := readLogs(t, dir)
+			for _, secret := range []string{recordSource, recordVanished} {
+				if !strings.Contains(got, secret) {
+					t.Errorf("--output のファイルに %q が無い（試験の前提が崩れている）", secret)
+				}
+				if strings.Contains(log, secret) {
+					t.Errorf("記録に %q が入っている\n--- 記録 ---\n%s", secret, log)
+				}
+			}
+			// csv のヘッダー（source_en と translation の列名を持つ行）も写さない。
+			// 見本の原文と訳だけを探すと、行の写り方が変わったときに見落とす。
+			if strings.Contains(log, "source_en") {
+				t.Errorf("記録に csv のヘッダーか行が入っている\n--- 記録 ---\n%s", log)
+			}
+			checkContains(t, "記録", log, append([]string{
+				"（--output のファイルに書きました）",
+				"dwloc: 結果を " + tt.out + " に書きました。",
+			}, tt.wantLog...))
+		})
 	}
-	got := readFile(t, dir, "report.txt")
-	_, log := readLogs(t, dir)
-	for _, secret := range []string{recordSource, recordVanished} {
-		if !strings.Contains(got, secret) {
-			t.Errorf("--output のファイルに %q が無い（試験の前提が崩れている）", secret)
-		}
-		if strings.Contains(log, secret) {
-			t.Errorf("記録に %q が入っている\n--- 記録 ---\n%s", secret, log)
-		}
-	}
-	checkContains(t, "記録", log, []string{
-		"要確認が 1 行あります。",
-		"（--output のファイルに書きました）",
-		"dwloc: 結果を report.txt に書きました。",
-	})
 }
 
 // TestRunDiffOutputUsage は、使い方が --output と BOM の扱いを書いていることを見る。
