@@ -340,14 +340,14 @@ type Disagreement struct {
 func CSharpDisagreements(f PowerShellFile) []Disagreement {
 	game := make(map[string][]Row)
 	for _, r := range ReadCSharpRows([]byte(f.Segments.Text)) {
-		if id, ok := recordIdentity(r); ok {
+		if id, ok := RecordIdentity(r); ok {
 			game[id] = append(game[id], r)
 		}
 	}
 	seen := make(map[string]int)
 	var out []Disagreement
 	for _, r := range f.Records {
-		id, ok := recordIdentity(r.Row)
+		id, ok := RecordIdentity(r.Row)
 		if !ok {
 			continue
 		}
@@ -370,8 +370,13 @@ func CSharpDisagreements(f PowerShellFile) []Disagreement {
 	return out
 }
 
-// recordIdentity は、2つの読み方のレコードを突き合わせる鍵を返す。
-func recordIdentity(r Row) (string, bool) {
+// RecordIdentity は、2つの読み方のレコードを突き合わせる鍵を返す。key 列の値（前後の
+// 空白を除く）か、key が空なら source_en の値で、どちらも空なら第2戻り値が false に
+// なる。ゲーム（Mod）が訳を引けるのは、この鍵のあるレコードだけである。
+//
+// 画面の保存（internal/edit）は、書く直前に、書き換えたレコードのほかの鍵で、ゲームの
+// 読み方の値が変わらないことをこの鍵で確かめる。
+func RecordIdentity(r Row) (string, bool) {
 	if k := strings.TrimSpace(r.Get("key")); k != "" {
 		return "key:" + k, true
 	}

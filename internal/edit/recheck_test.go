@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
@@ -23,7 +24,9 @@ import (
 
 どちらも、正しく組み立てたバイト列では外れない。外れるのは、組み立て（編集モデル）に
 誤りがあるときである。そのため、ここではモデルを試験の中で壊して、確かめが誤りを
-見つけることを見る。見本の英文と訳はどれも架空の文である。
+見つけることを見る。ただし後半のうち、ゲームの読み方で読んだ値が保存の前後で変わらない
+ことの確かめ（File.gameChange）は、正しく組み立てても外れることがあるので、壊さずに
+見る。見本の英文と訳はどれも架空の文である。
 */
 
 // recheckWorking は、確かめの試験に使う作業コピー。ID 2 は1物理行、ID 3 は原文が
@@ -223,6 +226,112 @@ func TestSaveRechecksTheShapesOfTouchedRecords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// gameShiftWorking は、キーも原文も空のレコード（ID 3）の訳を書き換えると、ゲームの
+// 読み方（CsvReader）で後ろのレコード（ID 4）が見つからなくなる2列の作業コピー。
+//
+// ID 2 の訳の途中の '"' からゲームは引用を始め、ID 3 の訳の '"' で閉じる。ID 3 の訳を
+// '"' の無い値にすると、引用が閉じずにファイルの終わりまで続き、ID 4 を飲み込む。
+// ID 2 はゲームの読み方と割れるので編集できないが、ID 3 はゲームが引かない（鍵が無い）
+// ので食い違いの判定に入らず、編集できる。
+const gameShiftWorking = "key,translation\r\n" +
+	"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+	",p\"q\r\n" +
+	"bbbbbbbbbbbbbbbb,ok\r\n"
+
+// TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords は、書き換えたレコードのほかで、
+// ゲームの読み方の値が変わる保存を、書かずに断ることを見る（PR3 の検証の指摘）。
+//
+// publish の読み方ではどのレコードも変わらないので、ほかの確かめでは見つからない。
+// 書くと、ホットリロードのあと、ゲームは ID 4 の訳を出さなくなる。
+func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
+	path := writeTemp(t, gameShiftWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line, _ := f.Line(3); !line.Editable || line.Key() != "" {
+		t.Fatalf("前提が崩れている。ID 3 はキーの空いた編集できる行のはず: %+v", line)
+	}
+	if line, _ := f.Line(4); !line.Editable {
+		t.Fatalf("前提が崩れている。ID 4 は編集できる行のはず: %+v", line)
+	}
+	if err := f.SetTranslation(3, "訳"); err != nil {
+		t.Fatalf("書き換えそのものは通るはず: %v", err)
+	}
+
+	var recheck *RecheckError
+	if err := f.Save(); !errors.As(err, &recheck) || recheck.ID != 3 || recheck.Line != 3 {
+		t.Fatalf("Save = %v、ID 3 を指す *RecheckError を期待", err)
+	}
+	if got := readFile(t, path); got != gameShiftWorking {
+		t.Errorf("外れたのに書いた: %q", got)
+	}
+}
+
+// TestGameChangePointsAtTheFirstChangedRecord は、ゲームの読み方の値が変わったところの
+// うち、ファイルの前にあるものを返すことと、publish の読み方に無い鍵の行がゲームにだけ
+// 増えたときはファイルの終わりを返すことを見る。
+func TestGameChangePointsAtTheFirstChangedRecord(t *testing.T) {
+	t.Run("前にあるほう", func(t *testing.T) {
+		f := Parse([]byte(gameShiftWorking))
+		if err := f.SetTranslation(3, "訳"); err != nil {
+			t.Fatal(err)
+		}
+		out := f.Bytes()
+		// ID 2（添字 1）はゲームの読み方の値が変わり、ID 4（添字 3）は見つからなくなる。
+		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out); got != 1 {
+			t.Errorf("gameChange = %d、1 を期待", got)
+		}
+	})
+	t.Run("ゲームから消えた鍵", func(t *testing.T) {
+		// 書いたあとのバイト列から、鍵のある行が1つ消える形。消えた鍵のレコードは
+		// 書いたあとの publish の読み方にも無いので、ファイルの終わりを返す。
+		const orig = "key,translation\n" +
+			"aaaaaaaaaaaaaaaa,a\n" +
+			"bbbbbbbbbbbbbbbb,b\n"
+		f := Parse([]byte(orig))
+		out := []byte("key,translation\naaaaaaaaaaaaaaaa,a\n")
+		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out); got != len(f.lines) {
+			t.Errorf("gameChange = %d、ファイルの終わり（%d）を期待", got, len(f.lines))
+		}
+	})
+	t.Run("ゲームにだけある鍵", func(t *testing.T) {
+		const orig = "key,section,node,order,speaker,source_en,translation\n" +
+			"0123456789abcdef,UI,,,UI,one,いち\n"
+		f := Parse([]byte(orig))
+		// 引用符で囲まない値の先頭の空白は、publish の読み方では削られ、ゲームの読み方
+		// では残る。ゲームの鍵（source_en の値）は publish の読み方のどのレコードにも無い。
+		out := []byte(orig + ",UI,,,UI, two,に\n")
+		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out); got != len(f.lines) {
+			t.Errorf("gameChange = %d、ファイルの終わり（%d）を期待", got, len(f.lines))
+		}
+	})
+	t.Run("変わらない", func(t *testing.T) {
+		// ゲームの読み方と割れるレコード（ID 2。値の先頭の空白）があっても、ほかの
+		// レコードの訳を書き換えるだけなら、ゲームの読み方の値は変わらない。
+		const orig = "key,translation\n" +
+			"aaaaaaaaaaaaaaaa, x\n" +
+			"bbbbbbbbbbbbbbbb,ok\n"
+		path := writeTemp(t, orig)
+		f, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line, _ := f.Line(2); line.Editable {
+			t.Fatalf("前提が崩れている。ID 2 はゲームの読み方と割れるはず: %+v", line)
+		}
+		if err := f.SetTranslation(3, "よし"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Save(); err != nil {
+			t.Fatalf("保存に失敗した: %v", err)
+		}
+		if got := readFile(t, path); got != "key,translation\naaaaaaaaaaaaaaaa, x\nbbbbbbbbbbbbbbbb,よし\n" {
+			t.Errorf("保存後の中身 = %q", got)
+		}
+	})
 }
 
 // TestRecheckReasonMatchesTheCatalog は、書く前の事後確認の理由の文面が、画面の目録

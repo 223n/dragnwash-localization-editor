@@ -275,12 +275,55 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 	}
 }
 
+// TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords は、キーも原文も空の行の訳を
+// 書き換えると、ゲームの読み方（CsvReader）で後ろの行が見つからなくなるとき、1バイトも
+// 書かずに 422（error.save_check_failed）を返し、その行に理由を付けることを見る
+// （PR3 の検証の指摘）。書くと 200 の saved が返り、ホットリロードのあと、ゲームは後ろの
+// 行の訳を出さなくなっていた。
+func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	body := "key,translation\r\n" +
+		"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+		",p\"q\r\n" +
+		"bbbbbbbbbbbbbbbb,ok\r\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	lines := getLines(t, s, "ja")
+	keyless := false
+	for _, l := range lines.Lines {
+		keyless = keyless || l.ID == 3 && l.Key == "" && l.Editable
+	}
+	if !keyless {
+		t.Fatalf("前提が崩れている。ID 3 はキーの空いた編集できる行のはず: %+v", lines.Lines)
+	}
+
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 3, Translation: jaTyped})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[errorResponse](t, rec.Body.Bytes())
+	why := reason.New(reason.EditRecheckFailed, "", "line", "3")
+	want := s.cat.T(ja, "error.not_editable", "line", "3", "reason", s.reasonText(ja, why))
+	if got.Message != s.cat.T(ja, "error.save_check_failed") || len(got.Results) != 1 ||
+		got.Results[0].Saved || got.Results[0].Error != want {
+		t.Errorf("応答 = %+v、ID 3 に理由 %q を期待", got, want)
+	}
+	if readFile(t, path) != body {
+		t.Error("断ったのにファイルが変わった")
+	}
+}
+
 // TestSaveCheckFailureNamesTheRow は、書く直前のファイル全体の確かめ（書く前の事後確認の
 // 後半）が外れたときの行ごとの結果を見る。どの行の saved も倒し、外れた行にだけ理由を
 // 付ける。画面はその行を保存できない行にして送り直しを止め、理由の無い行は送り直す。
 //
-// 確かめは正しく組み立てたファイルでは外れないので、誤りは試験の中で作る（外れること
-// そのものは internal/edit の TestSaveRechecksTheWholeFile が見ている）。
+// ここでは、2行以上の結果のうち外れた行にだけ理由を付けることを、誤りを作って見る。
+// 要求から 422 になる道そのものは TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords が
+// 見る（外れることそのものは internal/edit の TestSaveRechecksTheWholeFile も見ている）。
 func TestSaveCheckFailureNamesTheRow(t *testing.T) {
 	s := newTestServer(t, Options{UILang: "en"})
 	en := s.cat.lookup("en")

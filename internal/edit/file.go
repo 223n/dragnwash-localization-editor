@@ -581,6 +581,8 @@ func recheckReason(line int) reason.Reason {
 //   - 書き換えたレコードの値が、ファイル全体を読んでもモデルと同じ
 //   - 書き換えたレコードが、飲み込みの疑い（csvfile.FindSwallows）にも、ゲームの
 //     読み方との食い違い（csvfile.CSharpDisagreements）にも当たらない
+//   - 書き換えたレコードのほかは、ゲームの読み方（CsvReader の移植）で読んだ値が、
+//     保存の前後で変わらない（[File.gameChange]）
 //
 // 外れたら、外れたところに最も近い書き換えたレコードを指す [RecheckError] を返す。
 func (f *File) verify(out []byte) error {
@@ -618,7 +620,113 @@ func (f *File) verify(out []byte) error {
 			return f.recheckError(d.ID - 1)
 		}
 	}
+	if at := f.gameChange(whole, out); at >= 0 {
+		return f.recheckError(at)
+	}
 	return nil
+}
+
+// gameChange は、書き換えたレコードのほかで、ゲームの読み方（CsvReader の移植。
+// csvfile.ReadCSharpRows）で読んだ値が、保存の前後で変わったところを探し、f.lines での
+// 添字を返す。変わらなければ -1。
+//
+// 引用符の崩れたレコードがあると、ゲームはそこから引用を始め、後ろのレコードを値に
+// 取り込むことがある。そうしたレコードは編集させないが、キーも原文も空のレコードは
+// ゲームが引かないので、食い違いの判定（csvfile.CSharpDisagreements）に入らず、編集
+// できる。その訳を書き換えると、ゲームの引用の閉じる位置が動き、触っていない後ろの
+// レコードをゲームが見つけられなくなることがある（PR3 の検証で再現した）。publish の
+// 読み方は変わらないので、ほかの確かめでは見つからない。
+//
+// 比べるのは、ゲームが訳を引ける鍵（csvfile.RecordIdentity。key、無ければ source_en）
+// ごとの行である。鍵の無い行はゲームが使わないので比べない。書き換えたレコードの鍵の
+// 行は、訳の列だけが変わってよい（その値が書いた訳であることは、食い違いの判定が見る）。
+// 変わった鍵が2つ以上あれば、ファイルの前にあるほうを返す。その鍵のレコードが publish の
+// 読み方に無ければ（ゲームだけが読む行）、ファイルの終わり（len(f.lines)）を返す。
+func (f *File) gameChange(whole csvfile.PowerShellFile, out []byte) int {
+	before, after := gameView(f.savedBytes()), gameView(out)
+	touched := make(map[string]bool)
+	first := make(map[string]int)
+	for _, r := range whole.Records {
+		id, ok := csvfile.RecordIdentity(r.Row)
+		if !ok {
+			continue
+		}
+		if f.touched[r.ID-1] {
+			touched[id] = true
+		}
+		if _, seen := first[id]; !seen {
+			first[id] = r.ID - 1
+		}
+	}
+	at := -1
+	blame := func(id string) {
+		i, ok := first[id]
+		if !ok {
+			i = len(f.lines)
+		}
+		if at < 0 || i < at {
+			at = i
+		}
+	}
+	for id, rows := range after {
+		if !sameGameRows(before[id], rows, touched[id]) {
+			blame(id)
+		}
+	}
+	for id := range before {
+		if _, ok := after[id]; !ok {
+			blame(id)
+		}
+	}
+	return at
+}
+
+// gameView は、data をゲームの読み方で読み、突き合わせの鍵ごとに行を並べる。
+func gameView(data []byte) map[string][]csvfile.Row {
+	out := make(map[string][]csvfile.Row)
+	for _, r := range csvfile.ReadCSharpRows(data) {
+		if id, ok := csvfile.RecordIdentity(r); ok {
+			out[id] = append(out[id], r)
+		}
+	}
+	return out
+}
+
+// sameGameRows は、同じ鍵の行の並び a と b が、同じ列に同じ値を持つかを返す。
+// translation が true なら、訳の列（translation）の違いは見ない。
+func sameGameRows(a, b []csvfile.Row, translation bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		cols := a[i].Columns()
+		if !slices.Equal(cols, b[i].Columns()) {
+			return false
+		}
+		for _, c := range cols {
+			if translation && csvfile.FoldASCII(c) == csvfile.FoldASCII("translation") {
+				continue
+			}
+			if a[i].Get(c) != b[i].Get(c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// savedBytes は、読み込んだとき（または最後に保存したとき）のバイト列を返す。
+func (f *File) savedBytes() []byte {
+	n := len(f.bom)
+	for _, line := range f.lines {
+		n += len(line.orig)
+	}
+	out := make([]byte, 0, n)
+	out = append(out, f.bom...)
+	for _, line := range f.lines {
+		out = append(out, line.orig...)
+	}
+	return out
 }
 
 // recheckError は、f.lines の添字 at で確かめが外れたときの誤りを作る。指すのは、at より

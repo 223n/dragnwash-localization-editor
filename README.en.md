@@ -909,6 +909,8 @@ The row to save is named by the record's sequence number and its key, not by its
 A record that spans lines shifts the line numbers of the records after it.  
 Your own saves do not change the sequence numbers.  
 Before writing, it reads back the rewritten record and then the whole file, and checks that nothing but the translation reads differently.  
+It checks this with the way the game reads the file, not only with the way `publish` reads it.  
+In some files, rewriting the translation on a row whose key column and source are both empty makes the game lose track of other rows.  
 If that check fails, it writes nothing and marks the row as one that could not be saved.
 
 The following rows cannot be edited.  
