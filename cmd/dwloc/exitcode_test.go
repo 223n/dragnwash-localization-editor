@@ -42,7 +42,14 @@ const (
 	checkInComment      = "publish --check が書き換えの要るロケールを見つけたとき"
 	checkInReadme       = "`publish --check`が、書き換えが要るロケールを見つけたとき"
 	checkInReadmeEn     = "When `publish --check` finds a locale that needs rewriting"
+	// checkInReadmeEnSummary は、README.en の「What dwloc prints is in Japanese」の節で
+	// 終了コードを1行ずつ要約するところの、--check の書き方。その節だけを読む人が、
+	// 1 を「止まったときだけ」と取らないように、要約にも入れる。
+	checkInReadmeEnSummary = "`publish --check` found a locale that needs rewriting"
 )
+
+// readmeEnExitOneSummary は、README.en の終了コードの要約のうち、1 の行。
+const readmeEnExitOneSummary = "`1` means it ran, but something is left for a person to look at"
 
 // readRepoFile は、このリポジトリのファイルを、ルートからの相対パスで読む。
 // 試験は cmd/dwloc をカレントにして走る。
@@ -194,7 +201,16 @@ func TestExitCodeOneReasonsAgree(t *testing.T) {
 	})
 
 	t.Run("README.en", func(t *testing.T) {
-		countEn, itemsEn := readmeExitList(t, readRepoFile(t, "README.en.md"), "1 comes back in these ")
+		readmeEn := readRepoFile(t, "README.en.md")
+		_, summary, ok := strings.Cut(readmeEn, readmeEnExitOneSummary)
+		if !ok {
+			t.Fatalf("README.en に終了コード1の要約 %q が無い", readmeEnExitOneSummary)
+		}
+		summary, _, _ = strings.Cut(summary, "\n")
+		if !strings.Contains(summary, checkInReadmeEnSummary) {
+			t.Errorf("README.en の終了コード1の要約に %q が無い: %s", checkInReadmeEnSummary, summary)
+		}
+		countEn, itemsEn := readmeExitList(t, readmeEn, "1 comes back in these ")
 		var got []string
 		for _, item := range itemsEn {
 			if reason, ok := strings.CutPrefix(item, "When `publish` judges that "); ok {

@@ -385,7 +385,7 @@ Other reasons are the English text from the OS.
 
 The exit code tells you the same thing without reading the text.  
 `0` means it succeeded.  
-`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, or `publish` stopped without writing).  
+`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, `publish` stopped without writing, or `publish --check` found a locale that needs rewriting).  
 `2` means it could not run (a wrong argument, a file it cannot read, and so on).
 
 ### The two buttons inside the game
