@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"io"
@@ -70,9 +71,10 @@ type rowsRequest struct {
 type rowResult struct {
 	// ID は要求の ID をそのまま返す。
 	ID int `json:"id"`
-	// Number は、その行の最初の物理行（その行を書き換える前のもの。同じ要求の前の行で
-	// 訳の改行が増えたり減ったりしていれば、そのぶんずれている）。同定には使わない。
-	// そんな行が無ければ 0。画面は行番号の欄を rowsResponse.Numbers で直す。
+	// Number は、その行の最初の物理行。応答を受けた時点のファイルの行番号で言う。書けた
+	// なら書いたあとの行番号（rowsResponse.Numbers と同じ）、書けなかったなら読んだときの
+	// 行番号である。Error の「N行目」も同じ番号にそろえる（[server.finishRows]）。同定には
+	// 使わない。そんな行が無ければ 0。画面は行番号の欄を rowsResponse.Numbers で直す。
 	Number int `json:"n"`
 	// Saved はこの行が保存されたか。
 	Saved bool `json:"saved"`
@@ -116,13 +118,12 @@ type lineNumber struct {
 	End    int `json:"end,omitempty"`
 }
 
-// lineSpans は、データ行の ID ごとの最初と最後の物理行を控える。
+// lineSpans は、行の ID ごとの最初と最後の物理行を控える。データ行でない行も入れる
+// （編集できない理由の「N行目」を引くため。[server.finishRows]）。
 func lineSpans(file *edit.File) map[int][2]int {
 	out := make(map[int][2]int)
 	for _, l := range file.Lines() {
-		if l.Kind == edit.KindData {
-			out[l.ID] = [2]int{l.Number, l.EndNumber}
-		}
+		out[l.ID] = [2]int{l.Number, l.EndNumber}
 	}
 	return out
 }
@@ -368,19 +369,22 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	results := make([]rowResult, 0, len(req.Edits))
+	// errs は、internal/edit が断った行の誤り（results と同じ添字。断っていなければ nil）。
+	// 理由の文は、行番号が決まってから組む（finishRows）。
+	errs := make([]error, 0, len(req.Edits))
 	applied := 0
 	// 書き換える前の行番号。訳の改行で変わった行を、保存のあとに拾う（changedNumbers）。
+	// 書けなかったときの応答の行番号にも使う（finishRows）。
 	before := lineSpans(file)
 	for _, e := range req.Edits {
 		res := rowResult{ID: e.ID}
-		if line, ok := file.Line(e.ID); ok {
-			res.Number = line.Number
-		}
+		var rejected error
 		if !keyMatches(file, e) {
 			// その ID には別のキーの行がある。書くと訳が別の行へ入り、
 			// その行にもとからあった訳が消える。書かずに理由を返す。
 			res.Error = s.cat.T(cat, "error.row_moved")
 			results = append(results, res)
+			errs = append(errs, nil)
 			continue
 		}
 		switch err := file.SetTranslation(e.ID, e.Translation); {
@@ -403,11 +407,11 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 			return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 		default:
 			// 編集できない行と、書けない値（NUL・不正なUTF-8・書くと訳の行がレコードに
-			// 見える値）。
-			// 理由は目録から組み直す。行の中身は含まない。
-			res.Error = s.editErrorText(cat, err)
+			// 見える値）。理由の文はここでは組まない（finishRows）。
+			rejected = err
 		}
 		results = append(results, res)
+		errs = append(errs, rejected)
 	}
 
 	if applied == 0 {
@@ -415,13 +419,16 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		// 画面はこの結果を見て、その行を「保存できていない行」として残す。
 		// ここまででファイルへは1バイトも書いていない（モデルを触っただけ）。
 		return saveOutcome{
-			results: results,
+			results: s.finishRows(cat, results, errs, before),
 			status:  http.StatusUnprocessableEntity,
 			errKey:  "error.no_row_saved",
 		}
 	}
 
 	if err := file.Save(); err != nil {
+		// ここから先の失敗では、ファイルに1バイトも書いていない。行番号は読んだときのもので
+		// 言う（finishRows に before を渡す）。
+		results = s.finishRows(cat, results, errs, before)
 		var recheck *edit.RecheckError
 		if errors.As(err, &recheck) {
 			// 書く直前にファイル全体を読み直すと、編集モデルと同じに読めなかった
@@ -476,7 +483,39 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		}
 	}
 
-	return saveOutcome{file: file, results: results, numbers: changedNumbers(before, file), applied: applied}
+	return saveOutcome{
+		file:    file,
+		results: s.finishRows(cat, results, errs, lineSpans(file)),
+		numbers: changedNumbers(before, file),
+		applied: applied,
+	}
+}
+
+// finishRows は、行ごとの結果に行番号（rowResult.Number）と、internal/edit が断った行の
+// 理由の文（errs の同じ添字の誤りから組む）を入れて、results を返す。
+//
+// spans は応答で言う行番号（[lineSpans]）。書けたなら書いたあとのファイルの行番号を、
+// 書けなかったなら読んだときの行番号を渡す。どちらも、応答を受けた時点のファイルの
+// 行番号で、画面の行番号の欄（書けたときは rowsResponse.Numbers で直したもの）と同じになる。
+//
+// 行を差し替えるループの中で組まないのは、そこでの行番号が、要求の並びで先の行の書き換えを
+// 入れた途中のものだからである。先の行が訳に改行を足したり消したりすると、後ろの行の
+// 行番号がずれる。画面は未保存の控えに入った順に送るので、下の行が上の行より先に並ぶことが
+// ある。ループの中で組んでいたころは、そのとき下の行の理由が、ずれる前の行番号を言い、
+// 保存のあとの行番号の欄と1つ食い違った。逆の並びで書けなかったときは、ずらしたあとの
+// 行番号を言い、1バイトも書いていないファイルと食い違った（検証の指摘）。
+func (s *server) finishRows(cat *Catalog, results []rowResult, errs []error, spans map[int][2]int) []rowResult {
+	for i := range results {
+		span, ok := spans[results[i].ID]
+		if ok {
+			results[i].Number = span[0]
+		}
+		if errs[i] != nil {
+			// 理由は目録から組み直す。行の中身は含まない。
+			results[i].Error = s.editErrorText(cat, errs[i], results[i].Number)
+		}
+	}
+	return results
 }
 
 // recheckResults は、書く前の事後確認が外れたときの行ごとの結果を作る。
@@ -523,7 +562,11 @@ func addWarning(res *rowResult, text string) {
 // 知らない型の誤りは Error() をそのまま返す。訳されていない文が出るほうが、
 // 何も出ないよりよい。internal/edit の文面に行の中身は入っていないので、
 // そのまま返しても訳や原文が漏れることはない。
-func (s *server) editErrorText(cat *Catalog, err error) string {
+//
+// line は外枠の「N行目」に出す行番号。0 なら誤りが持つ行番号（internal/edit が断った
+// ときのモデルの行番号）を出す。保存の要求では、応答を受けた時点のファイルの行番号を
+// 渡す（[server.finishRows]）。
+func (s *server) editErrorText(cat *Catalog, err error, line int) string {
 	var notEditable *edit.NotEditableError
 	if errors.As(err, &notEditable) {
 		if notEditable.Line == 0 {
@@ -531,12 +574,12 @@ func (s *server) editErrorText(cat *Catalog, err error) string {
 			return s.reasonText(cat, notEditable.Cause)
 		}
 		return s.cat.T(cat, "error.not_editable",
-			"line", itoa(notEditable.Line), "reason", s.reasonText(cat, notEditable.Cause))
+			"line", itoa(cmp.Or(line, notEditable.Line)), "reason", s.reasonText(cat, notEditable.Cause))
 	}
 	var invalid *edit.InvalidValueError
 	if errors.As(err, &invalid) {
 		return s.cat.T(cat, "error.invalid_value",
-			"line", itoa(invalid.Line), "reason", s.reasonText(cat, invalid.Cause))
+			"line", itoa(cmp.Or(line, invalid.Line)), "reason", s.reasonText(cat, invalid.Cause))
 	}
 	return err.Error()
 }

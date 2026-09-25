@@ -462,6 +462,86 @@ func TestSaveWritesLineBreaks(t *testing.T) {
 	}
 }
 
+// TestSaveNamesRejectedRowsByTheLineNumberInTheFile は、1回の要求で断った行の理由と
+// rowResult.n が、応答を受けた時点のファイルの行番号を言うことを見る。書けたなら書いた
+// あとの行番号（応答の numbers と同じ）、書けなかったなら読んだときの行番号である。
+//
+// 画面は未保存の控えに入った順に送るので、下の行が、訳に改行を足す上の行より先に並ぶことが
+// ある（検証の指摘）。行を差し替えるループの中で理由を組んでいたころは、下の行の理由が
+// 上の行でずれる前の行番号（6行目）を言い、保存のあとの行番号の欄（7）と食い違った。
+// 逆の並びで書けなかったとき（503）は、ずらしたあとの行番号（7行目）を言い、1バイトも
+// 書いていないファイル（6行目）と食い違った。
+//
+// 断る理由は2つ見る。書けない値（ID 6。訳の2行目がキーの形）と、編集できない行（ID 7。
+// 見本の末尾に足したコメント行）である。
+func TestSaveNamesRejectedRowsByTheLineNumberInTheFile(t *testing.T) {
+	top := rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし\nもしもし"}
+	bottom := rowEdit{ID: 6, Key: key.For(srcBye), Translation: "上\n0123456789abcdef,UI,,,UI,x,y"}
+	blank := rowEdit{ID: 7, Translation: jaTyped}
+	cases := []struct {
+		name  string
+		edits []rowEdit
+		// readOnly なら作業コピーを書けなくする（503）。
+		readOnly bool
+		// line は、ID 6 の理由と n に出る行番号。ID 7 はその次の行。
+		line int
+	}{
+		{"下の行が先", []rowEdit{bottom, blank, top}, false, 7},
+		{"上の行が先", []rowEdit{top, bottom, blank}, false, 7},
+		{"書けないとき・上の行が先", []rowEdit{top, bottom, blank}, true, 6},
+		{"書けないとき・下の行が先", []rowEdit{blank, bottom, top}, true, 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newEditRoot(t)
+			working := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+			if err := os.WriteFile(working, []byte(readFile(t, working)+"# 架空のメモ\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s := newTestServer(t, Options{Root: root, UILang: "ja", Stderr: io.Discard})
+			ja := s.cat.lookup("ja")
+			path := inputPath(t, s, "ja")
+			lines := getLines(t, s, "ja")
+			if tc.readOnly {
+				makeReadOnly(t, path)
+			}
+			rec := save(t, s, "ja", lines.Version, tc.edits...)
+			var results []rowResult
+			switch {
+			case !tc.readOnly && rec.Code == http.StatusOK:
+				got := decode[rowsResponse](t, rec.Body.Bytes())
+				if want := []lineNumber{{ID: 5, Number: 5, End: 6}, {ID: 6, Number: 7}}; !slices.Equal(got.Numbers, want) {
+					t.Errorf("行番号 = %+v、%+v を期待", got.Numbers, want)
+				}
+				results = got.Results
+			case tc.readOnly && rec.Code == http.StatusServiceUnavailable:
+				results = decode[errorResponse](t, rec.Body.Bytes()).Results
+			default:
+				t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+			}
+			invalid := reason.New(reason.EditLineLooksLikeRecord, "", "line", "2")
+			notData := reason.New(reason.EditNotDataLine, "", "kind", edit.KindComment.String())
+			want := map[int]rowResult{
+				top.ID: {Number: 5, Saved: !tc.readOnly},
+				bottom.ID: {Number: tc.line, Error: s.cat.T(ja, "error.invalid_value",
+					"line", itoa(tc.line), "reason", s.reasonText(ja, invalid))},
+				blank.ID: {Number: tc.line + 1, Error: s.cat.T(ja, "error.not_editable",
+					"line", itoa(tc.line+1), "reason", s.reasonText(ja, notData))},
+			}
+			if len(results) != len(tc.edits) {
+				t.Fatalf("結果 = %+v", results)
+			}
+			for _, r := range results {
+				w, ok := want[r.ID]
+				if !ok || r.Saved != w.Saved || r.Number != w.Number || r.Error != w.Error {
+					t.Errorf("ID %d の結果 = {n:%d saved:%v error:%q}、{n:%d saved:%v error:%q} を期待",
+						r.ID, r.Number, r.Saved, r.Error, w.Number, w.Saved, w.Error)
+				}
+			}
+		})
+	}
+}
+
 func TestSaveWithInvalidUTF8(t *testing.T) {
 	// 不正なUTF-8は JSON の解釈で U+FFFD に置き換わるので、[edit.File.SetTranslation]
 	// の検査までは届かない。届かないこと自体は害にならない（置き換わった時点で
@@ -998,14 +1078,14 @@ func TestEditErrorTextKeepsUnknownErrors(t *testing.T) {
 	en := s.cat.lookup("en")
 
 	unknown := errors.New("unexpected: disk full")
-	if got := s.editErrorText(en, unknown); got != unknown.Error() {
+	if got := s.editErrorText(en, unknown, 0); got != unknown.Error() {
 		t.Errorf("知らない誤りが %q、%q を期待", got, unknown.Error())
 	}
 
 	why := reason.New(reason.EditNoSuchLine, "そんな行番号は無い")
 	wrapped := fmt.Errorf("save: %w", &edit.NotEditableError{Line: 3, Reason: why.Text, Cause: why})
 	want := s.cat.T(en, "error.not_editable", "line", "3", "reason", s.reasonText(en, why))
-	if got := s.editErrorText(en, wrapped); got != want {
+	if got := s.editErrorText(en, wrapped, 0); got != want {
 		t.Errorf("包まれた NotEditableError が %q、%q を期待", got, want)
 	}
 	if hasJapanese(want) {
