@@ -71,6 +71,9 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
+        訳が1件もないロケール（ディレクトリだけがあり、公開ファイルも
+        作業コピーも無いロケール）も要作業に数えます。--locale で報告から
+        外したロケールは数えません。
 
 ゲームが更新されて英文が変わると、その行のキーも変わります。旧キーの訳を
 どの新キーへ移せばよいかの見当を「引き継ぎ候補」として出します。訳は
@@ -178,16 +181,24 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "dwloc: %s\n", errorText(*root, err))
 		return exitError
 	}
-	if len(repo.EmptyLocales) > 0 {
+	// 報告だけを絞ります。比較の母集合は Compare が常に全ロケールから作ります。
+	// 当たらない名前は Compare が黙って無視するので、下の checkDiffLocales が断ります。
+	// 先に組み立てるのは、報告するロケールのうち訳が1件も無いもの（ReportedEmpty）を、
+	// 下の警告にも使うためです。
+	report := diff.Compare(repo, locales)
+
+	if len(report.ReportedEmpty) > 0 {
 		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
-		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
+		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。--strict では
+		// 要作業に数えます（diffExitCode）。--locale で報告から外したロケールは、
+		// --strict が数えないので、ここでも名指ししません。
 		//
 		// 再生順の警告より先に出します。csv 形式では、再生順の警告のあとに
 		// 判定を保留したカテゴリの行と、字下げした締めの1行が続きます
 		// （warnHeldCategories）。あいだにこの行が挟まると、締めがこの行の
 		// 続きに読めてしまいます。
 		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
-			strings.Join(repo.EmptyLocales, ", "))
+			strings.Join(report.ReportedEmpty, ", "))
 	}
 	if repo.LevelFlowUnclosed > 0 {
 		// 見出しの表の閉じない引用符は、diff の判定に使わないので終了コードを変えません
@@ -220,9 +231,6 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "dwloc: %v\n", err)
 		return exitError
 	}
-
-	// 報告だけを絞ります。比較の母集合は Compare が常に全ロケールから作ります。
-	report := diff.Compare(repo, locales)
 
 	// 閉じない引用符で読めなかったファイルは、形式に関わらず標準エラーへ書きます。
 	// text 形式の本文もロケールごとに書きますが、--locale で絞ると、ほかのロケールの
@@ -278,11 +286,17 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 // そのファイルに依るカテゴリは判定していないので、要確認が1件も無くても
 // 「要確認なし」とは言えません。0 で終わると、CI は直すべきファイルを見逃します。
 // 2 にしないのは、実行そのものは最後まで済み、報告も出ているからです。
+//
+// --strict では、報告するロケールに訳が1件もないロケール（公開ファイルも作業コピーも
+// 無いロケール）があるときも 1 にします（改善の調査の cli-7）。そのロケールには
+// 比べる行が無いので Finding は1件も出ませんが、訳が1件も無いことは、その
+// ロケールのいちばん大きい要作業です。数えないと、diff --strict を CI の関門に
+// したとき、訳の無いロケールが通ります。
 func diffExitCode(report *diff.Report, strict bool) int {
 	if report.Status() == diff.StatusReview || len(report.Unclosed) > 0 {
 		return exitProblems
 	}
-	if strict && report.CountByStatus(diff.StatusTodo) > 0 {
+	if strict && (report.CountByStatus(diff.StatusTodo) > 0 || len(report.ReportedEmpty) > 0) {
 		return exitProblems
 	}
 	return exitOK
@@ -310,7 +324,7 @@ func checkDiffLocales(found []diff.Locale, empty []string, want []string) error 
 	for _, name := range empty {
 		targets = append(targets, publish.Target{Locale: name})
 	}
-	_, err := selectLocales(targets, want)
+	_, err := selectLocales(targets, nil, want)
 	return err
 }
 

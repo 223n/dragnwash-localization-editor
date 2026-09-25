@@ -79,6 +79,8 @@ OS の錠で囲むので、同じ環境で dwloc edit を2つ動かしても、p
         --game と一緒には指定できません。
   --locale <ロケール>
         最初に出すロケール。省略すると画面で選びます。
+        公開ファイルも作業コピーも無いロケールは、並べる行が無いので
+        指定できません（終了コード 2）。
   --port <番号>
         待ち受けるポート（既定 0 で、空いているものを自動で取ります）。
         指定しても束ねる先は 127.0.0.1 のままです。
@@ -180,7 +182,8 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めません: %w", publish.TranslationsDir, err))
 			return exitError
 		}
-		found, err := selectLocales(targets, []string{*locale})
+		want := []string{*locale}
+		found, err := selectLocales(targets, emptyLocalesFor(*root, targets, want), want)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %v\n", err)
 			return exitError

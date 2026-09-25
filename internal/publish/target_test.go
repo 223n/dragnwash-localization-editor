@@ -133,6 +133,36 @@ func TestDiscoverTargetsMissingDir(t *testing.T) {
 	}
 }
 
+// TestEmptyLocales は、DiscoverTargets が対象にしなかったロケールのディレクトリ
+// （公開ファイルも作業コピーも無いロケール）だけを、ディレクトリ名順に返すことを見る。
+func TestEmptyLocales(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Translations", "ja", "strings.csv"), "key\n")
+	writeFile(t, filepath.Join(root, "Translations", "ignore.txt"), "x\n")
+	writeFile(t, filepath.Join(root, "Translations", "_discovered", "de.working.csv"), "source_en\n")
+	for _, dir := range []string{"fr", "de", "_private"} {
+		if err := os.MkdirAll(filepath.Join(root, "Translations", dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targets, err := DiscoverTargets(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := EmptyLocales(root, targets)
+	if err != nil {
+		t.Fatalf("EmptyLocales がエラーを返した: %v", err)
+	}
+	// de は作業コピーがあるので対象、ja は公開ファイルがあるので対象。
+	if want := []string{"fr"}; !slices.Equal(got, want) {
+		t.Errorf("EmptyLocales = %q, want %q", got, want)
+	}
+
+	if _, err := EmptyLocales(filepath.Join(root, "nope"), nil); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Translations が無いときの誤り = %v, fs.ErrNotExist を期待", err)
+	}
+}
+
 func TestLoadOrder(t *testing.T) {
 	t.Run("両方のファイルを読む", func(t *testing.T) {
 		root := t.TempDir()

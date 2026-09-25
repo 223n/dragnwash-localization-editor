@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -92,6 +93,8 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
   --locale <ロケール>
         対象のロケール。複数回指定するか、カンマ区切りで並べられます。
         省略すると Translations 配下のすべてが対象になります。
+        公開ファイルも作業コピーも無いロケールは、書き出す元が無いので
+        指定できません（終了コード 2）。
   --path <ファイル>
         Translations の走査をやめて、指定したファイルだけを変換します。
         入力と出力が同じファイルになります。複数回指定できます。
@@ -346,7 +349,7 @@ func parseLocaleAccept(targets []publish.Target, v string) (acceptSpec, error) {
 	if !ok || locale == "" || k == "" {
 		return acceptSpec{}, fmt.Errorf("--accept-multiline はレコード単位で指定してください: %s（%s）", v, acceptFormText)
 	}
-	found, err := matchLocales(targets, []string{locale}, "--accept-multiline")
+	found, err := matchLocales(targets, nil, []string{locale}, "--accept-multiline")
 	if err != nil {
 		return acceptSpec{}, err
 	}
@@ -475,7 +478,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めません: %w", publish.TranslationsDir, err))
 			return exitError
 		}
-		found, err = selectLocales(found, locales)
+		found, err = selectLocales(found, emptyLocalesFor(*root, found, locales), locales)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %v\n", err)
 			return exitError
@@ -1178,19 +1181,46 @@ func localePrefix(locale string) string {
 // pt-BR や zh-Hant のように大文字を含むロケール名があり、Windows では
 // ディレクトリ名の大小が保たれないまま打たれることがあるためです。
 // 既に存在するディレクトリの中から選ぶだけなので、緩めても新しい行き先は増えません。
-func selectLocales(targets []publish.Target, want []string) ([]publish.Target, error) {
+//
+// empty は、公開ファイルも作業コピーも無いロケール（publish.EmptyLocales）です。
+// 対象にはできませんが、ディレクトリは実在するので、当たったら「ありません」ではなく、
+// 何が無いかと作業コピーの作り方を伝えます（改善の調査の cli-7）。
+func selectLocales(targets []publish.Target, empty, want []string) ([]publish.Target, error) {
 	if len(want) == 0 {
 		return targets, nil
 	}
-	return matchLocales(targets, want, "--locale")
+	return matchLocales(targets, empty, want, "--locale")
+}
+
+// emptyLocaleText は、公開ファイルも作業コピーも無いロケールを --locale で指されたときの
+// 文です。%s にはロケール名が入ります。
+const emptyLocaleText = "%s には公開ファイルも作業コピーもありません" +
+	"（ゲーム内でその言語を選び、F1 → Translation → Export working copy を押すと作業コピーができます）"
+
+// emptyLocalesFor は、--locale の照合に使う、公開ファイルも作業コピーも無いロケールを
+// 返します。want が空なら照合しないので、読みません。
+//
+// 読めなければ nil を返し、当たらない名前は「指定したロケールがありません」の文に
+// 落とします。直前に同じディレクトリを読めているので、ふつうは起きません。
+func emptyLocalesFor(root string, targets []publish.Target, want []string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	empty, err := publish.EmptyLocales(root, targets)
+	if err != nil {
+		return nil
+	}
+	return empty
 }
 
 // matchLocales は want に並べたロケール名に当たる対象を返します。照合の仕方は
 // [selectLocales] に書いたとおりで、当たらない名前があれば、flag（指定の名前）を
 // 添えた誤りを返します。--locale と --accept-multiline が同じ照合を使うためです。
-func matchLocales(targets []publish.Target, want []string, flag string) ([]publish.Target, error) {
+// empty（公開ファイルも作業コピーも無いロケール）に当たった名前は、[emptyLocaleText] の
+// 文で断ります。
+func matchLocales(targets []publish.Target, empty, want []string, flag string) ([]publish.Target, error) {
 	keep := make([]bool, len(targets))
-	var missing []string
+	var missing, emptyHit []string
 	for _, name := range want {
 		found := false
 		for i, t := range targets {
@@ -1207,17 +1237,31 @@ func matchLocales(targets []publish.Target, want []string, flag string) ([]publi
 				}
 			}
 		}
-		if !found {
-			missing = append(missing, name)
+		if found {
+			continue
 		}
+		if hit, ok := matchName(empty, name); ok {
+			if !slices.Contains(emptyHit, hit) {
+				emptyHit = append(emptyHit, hit)
+			}
+			continue
+		}
+		missing = append(missing, name)
 	}
+	var msgs []string
 	if len(missing) > 0 {
 		available := "対象にできるロケールがありません"
 		if len(targets) > 0 {
 			available = "対象にできるのは " + strings.Join(localeNames(targets), ", ")
 		}
-		return nil, fmt.Errorf("%s に指定したロケールがありません: %s（%s）",
-			flag, strings.Join(missing, ", "), available)
+		msgs = append(msgs, fmt.Sprintf("%s に指定したロケールがありません: %s（%s）",
+			flag, strings.Join(missing, ", "), available))
+	}
+	if len(emptyHit) > 0 {
+		msgs = append(msgs, fmt.Sprintf(emptyLocaleText, strings.Join(emptyHit, ", ")))
+	}
+	if len(msgs) > 0 {
+		return nil, errors.New(strings.Join(msgs, "\ndwloc: "))
 	}
 
 	out := make([]publish.Target, 0, len(targets))
@@ -1227,6 +1271,20 @@ func matchLocales(targets []publish.Target, want []string, flag string) ([]publi
 		}
 	}
 	return out, nil
+}
+
+// matchName は names の中から name に当たるものを返します。照合は [selectLocales] と
+// 同じで、完全一致を先に見て、外れたら大文字小文字を無視します。
+func matchName(names []string, name string) (string, bool) {
+	if slices.Contains(names, name) {
+		return name, true
+	}
+	for _, n := range names {
+		if strings.EqualFold(n, name) {
+			return n, true
+		}
+	}
+	return "", false
 }
 
 // localeNames は targets のロケール名を並び順のまま取り出します。

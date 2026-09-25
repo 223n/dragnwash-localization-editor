@@ -312,7 +312,7 @@ The options you will use most are these.
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
 | `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
-| `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
+| `--strict` | `diff` | Returns exit code `1` even when there is only work to do. A locale with no translation at all counts as work to do too. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and of the messages `edit` prints in the black window |
 | `--idle-timeout` | `edit` | How long after the last activity it shuts down (`30m` by default, `0` never) |
@@ -1102,6 +1102,13 @@ On the real machine, ja had 32 untranslated, 17 dialogue rows not in the script,
 When the working copy cannot be read, "untranslated", "rows dropped by `publish`", "rows whose tags differ from the source" and "carry-over sources" become "not judged".  
 That is why the same 32 appear as "rows with no translation in any locale".  
 If you want to read the reasons too, run `dwloc diff --all`.
+
+A locale that has only a folder, with neither a published file nor a working copy, falls into none of the thirteen.  
+There is not a single row to compare.  
+`diff` names it as a locale with no translation at all, and `--strict` counts it as work to do (exit code `1`).  
+A locale you left out of the report with `--locale` is not counted.  
+Given such a locale with `--locale`, `publish` and `edit` say what is missing and stop (exit code `2`).  
+Choose that language in the game and press `F1 → Translation → Export working copy` to make a working copy.
 
 The filter and the search are in the left column.  
 If you want to reach them from the middle of the list, press `/`.  
