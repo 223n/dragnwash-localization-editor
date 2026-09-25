@@ -430,6 +430,37 @@ test("Shift+Enter は訳に改行を入れ、次の行へは進まない", async
   await expect(saveState(page)).toHaveText(msg("ja", "ui.save_pending", { count: 1 }));
 });
 
+// 改行を入れるのは、修飾が Shift だけのとき（app.js の入力欄の keydown）。Ctrl・Alt・Meta を
+// 足した Shift+Enter は改行を入れず、Enter と同じく確定して次の行へ進む。Shift だけを見る
+// 形にすると、どれでも改行が入り、ブラウザーや OS の近道と重なる押し方で訳の値が変わる
+// （検証の指摘。この区別を見る試験が無かった）。
+test("Ctrl・Alt・Meta を足した Shift+Enter は改行を入れず、Enter と同じく次の行へ進む", async ({ page, server }) => {
+  await openPaused(page, server);
+  const saves = trackSaves(page);
+  const combos = ["Control+Shift+Enter", "Alt+Shift+Enter", "Meta+Shift+Enter"];
+  for (const [i, combo] of combos.entries()) {
+    const typed = `もしもし${i}。`;
+    await typeTranslation(page, SAMPLE_LINES.hello, typed);
+    await editor(page).press(combo);
+    await expectEditorIn(page, SAMPLE_LINES.goodbye);
+    await expect(translationCell(page, SAMPLE_LINES.hello)).toHaveText(typed);
+  }
+  // 送っているあいだに打ち直した訳は、応答のあとで自動保存の時計が送る。
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(1_500);
+      return lineOnDisk(server, SAMPLE_LINES.hello);
+    })
+    .toBe(`${dataText(ROW.hello, "もしもし2。")}\n`);
+  await waitForSaved(page);
+  expect(saves.length).toBeGreaterThan(0);
+  for (const body of saves) {
+    for (const edit of body.edits) {
+      expect(edit.translation, "送った訳に改行が入った").not.toContain("\n");
+    }
+  }
+});
+
 // 閉じた行の訳は、応答が返るまでは未保存の控えにしか無い。そのあいだに開き直した
 // 入力欄へ古い保存値を入れると、1字打った瞬間に、送っている最中の訳が上書きされる
 // （shownValue が未保存の控えを先に見る理由）。

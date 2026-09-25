@@ -722,6 +722,106 @@ test("閉じた行がもう条件に当たらなければ、閉じたところ�
   });
 });
 
+// Escape で閉じて焦点が訳の欄に留まっているあいだは、焦点を動かさずに当て直しが走っても、
+// その行を隠さない（keepAlways の state.rest）。隠すと焦点が body へ落ち、Enter で開き直せ
+// なくなる。焦点を動かさずに当て直しが走る道は、検索の欄に打ったあとの待ち（searchDelay）の
+// あいだに、行を訳して Escape で閉じる形である。上の試験は、焦点を検索の欄へ移したところで
+// 照らし直すので、この守りを外しても通る（検証の指摘）。
+test("Escape で留まっているあいだに当て直しが走っても、その行は隠さず、焦点も欄に残る", async ({ page, server }) => {
+  await openPaused(page, server);
+  const before = await server.readRoot(workingRel);
+  await chipBox(page, cat("untranslated")).check();
+  await expect(visibleRows(page)).toHaveText(["6", "13"]);
+
+  // 検索の欄に打ち、待ちが切れる前に6行目を訳して Escape で閉じる。
+  await searchBox(page).fill("goodbye");
+  await typeTranslation(page, LINE.goodbye, "さようなら。");
+  await editor(page).press("Escape");
+  await waitForSaved(page);
+  await expect(rowByLine(page, LINE.goodbye).locator(".badge")).toHaveCount(0);
+  await expect(translationCell(page, LINE.goodbye)).toBeFocused();
+
+  // 待ちが切れて当て直しが走る。6行目はもう「未翻訳」ではないが、焦点が留まっているので
+  // 出たまま。13行目は検索に当たらないので隠れる。
+  await page.clock.runFor(searchDelay + 10);
+  await expect(visibleRows(page)).toHaveText(["6"]);
+  await expect(shown(page)).toHaveText(shownText(1));
+  await expect(translationCell(page, LINE.goodbye)).toBeFocused();
+
+  // 留まった欄で Enter を押すと開き直せる。
+  await page.keyboard.press("Enter");
+  await expect(rowByLine(page, LINE.goodbye).locator("textarea.editor")).toHaveCount(1);
+  await expect(editor(page)).toBeFocused();
+  await expect(editor(page)).toHaveValue("さようなら。");
+
+  // 閉じ直して焦点が離れたら、照らし直して隠れる。
+  await editor(page).press("Escape");
+  await expect(translationCell(page, LINE.goodbye)).toBeFocused();
+  await searchBox(page).focus();
+  await expect(visibleRows(page)).toHaveCount(0);
+  await expectOnlyLines(server, before, { [LINE.goodbye]: lineText(T.goodbye, "さようなら。") });
+});
+
+// 一覧を描き直すと、留まっていた訳の欄も作り直すので、留まっている印（state.rest）を
+// 下ろす（renderLines）。下ろさないと、前の ID が、描き直した一覧で同じ ID を持つ別の行を
+// 条件に当たらなくても出し続ける。よそが上に1行足して ID がずれたあとの 409 で起きる。
+// Escape で閉じたときの保存が 409 になり、留まっていた行へは引き直した ID で焦点を戻す
+// （onConflict の restOn）。
+//
+// Chromium は、焦点のある訳の欄を一覧から外すときに focusout を出し、その照らし直し
+// （el.list の focusout）でも印が下りる。そのため、そのままでは描き直しの守りを外しても
+// この試験は通る（検証の指摘）。守りは focusout が届くことに頼らないためのものなので、
+// 外される欄の focusout を一覧へ届かないようにして、届かない場合の形を作る。
+test("Escape で留まったあと、よそが上に行を足して 409 で描き直しても、前の ID の行を出し続けない", async ({
+  page,
+  server,
+}) => {
+  await openPaused(page, server);
+  const before = await server.readRootText(workingRel);
+  // 4行目（節点の見出し）の後ろにメモを1行足す。5行目から後ろの ID と行番号が1つずつずれる。
+  const external = before.replace(`${H.intro1}\n`, `${H.intro1}\n# 架空のメモ\n`);
+  expect(external).not.toBe(before);
+  await chipBox(page, cat("untranslated")).check();
+  await expect(visibleRows(page)).toHaveText(["6", "13"]);
+
+  const typed = "さようなら。";
+  await typeTranslation(page, LINE.goodbye, typed);
+  // 留まる欄（ID 6）から出る focusout を、一覧の見張りへ届かないようにする。この試験で
+  // その欄から焦点が離れるのは、409 の描き直しで欄が外されるときだけである。
+  await page.evaluate((id) => {
+    window.__droppedFocusout = 0;
+    window.addEventListener(
+      "focusout",
+      (e) => {
+        if (e.target instanceof HTMLElement && e.target.matches(`.cell.translation[data-id="${id}"]`)) {
+          e.stopImmediatePropagation();
+          window.__droppedFocusout++;
+        }
+      },
+      true,
+    );
+  }, LINE.goodbye);
+  await server.writeRoot(workingRel, external);
+  const saving = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/rows");
+  await editor(page).press("Escape");
+  expect((await saving).status()).toBe(409);
+
+  // 描き直した一覧では、ID 6 は訳のある hello（条件に当たらない）で、goodbye は ID 7。
+  // hello は隠れ、goodbye は未保存の訳があるので出ていて、焦点も戻る。
+  await expect(page.locator("#conflict")).toBeHidden();
+  await expect(visibleRows(page)).toHaveText(["7", "14"]);
+  await expect(translationCell(page, LINE.goodbye + 1)).toBeFocused();
+  // 前提: 描き直しで外された欄の focusout を、1回落としている。
+  expect(await page.evaluate(() => window.__droppedFocusout)).toBe(1);
+
+  // 打った訳は、読み直した版の上へ保存し直す。
+  await page.clock.runFor(autosaveDelay + 100);
+  await waitForSaved(page);
+  expect(await server.readRootText(workingRel)).toBe(
+    external.replace(`${lineText(T.goodbye, "")}\n`, `${lineText(T.goodbye, typed)}\n`),
+  );
+});
+
 // Enter の行送りでは、次の行を開いてから閉じた行を照らし直す。逆の順だと、照らし直しの
 // 時点で「いま開いている行」が空なので、これから開く行が条件に当たらなければその場で
 // 隠れ、入力欄が隠れた行へ差し込まれる。焦点は入っているのに欄は見えず、打った字は
