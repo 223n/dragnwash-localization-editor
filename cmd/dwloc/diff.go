@@ -293,7 +293,16 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	} else {
 		body = newUnrecorded(stdout, keep)
 	}
-	defer body.Close()
+	// 記録に残す「本文を省いた」の1行は、--output のファイルを書けたかどうかが
+	// 決まってから書きます。書けなかったのに「--output のファイルに書きました」と
+	// 残すと、記録を添えた報告を読む人がファイルができたと読みます。
+	written := false
+	defer func() {
+		if *output != "" && !written {
+			body.Unwritten()
+		}
+		body.Close()
+	}()
 	var werr error
 	if *format == diffFormatCSV {
 		write := report.WriteCSV
@@ -313,6 +322,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "結果を %s に書き出せません: %w", filepath.ToSlash(*output), err))
 			return exitError
 		}
+		written = true
 		fmt.Fprintf(stderr, "dwloc: 結果を %s に書きました。\n", filepath.ToSlash(*output))
 	}
 

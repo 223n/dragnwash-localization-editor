@@ -139,19 +139,36 @@ func TestRunDiffOutputRefusesALinkIntoTranslations(t *testing.T) {
 
 // TestRunDiffOutputReportsWriteFailure は、--output に書けなかったとき（書き出し先が
 // フォルダーだった、など）に終了コード2で止まり、どこに書けなかったかを出すことを見る。
+//
+// 記録（logs/dwloc_<日付>.log）にも、書けなかったと残す。本文を省いたことの1行が
+// 「--output のファイルに書きました」のままだと、記録を添えた報告を読む人は、
+// ファイルができたと読む。
 func TestRunDiffOutputReportsWriteFailure(t *testing.T) {
+	resetRecord(t)
 	root := recordDiffTree(t)
-	dir := filepath.Join(t.TempDir(), "report.csv")
-	if err := os.Mkdir(dir, 0o755); err != nil {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Mkdir(filepath.Join(dir, "report.csv"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv", "--output", dir)
+	setArgs(t, "diff", "--root", root, "--no-game", "--format", "csv", "--output", "report.csv")
+
+	read := captureStd(t)
+	code := mainWithRecord()
+	stdout, stderr := read()
 	if code != exitError {
 		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
 	}
-	checkContains(t, "標準エラー", stderr, []string{"dwloc: 結果を " + filepath.ToSlash(dir) + " に書き出せません: "})
-	if strings.Contains(stderr, "に書きました") {
-		t.Errorf("書けなかったのに書いたと出している:\n%s", stderr)
+	checkContains(t, "標準エラー", stderr, []string{"dwloc: 結果を report.csv に書き出せません: "})
+	_, log := readLogs(t, dir)
+	checkContains(t, "記録", log, []string{
+		"dwloc: 結果を report.csv に書き出せません: ",
+		"（--output のファイルには書けませんでした）",
+	})
+	for label, got := range map[string]string{"標準エラー": stderr, "記録": log} {
+		if strings.Contains(got, "に書きました") {
+			t.Errorf("書けなかったのに、%sで書いたと言っている:\n%s", label, got)
+		}
 	}
 }
 
