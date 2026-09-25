@@ -12,16 +12,8 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
+	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
-
-// sourceRepoEnv は元実装のリポジトリの場所を上書きする環境変数。
-const sourceRepoEnv = "DRAGNWASH_SOURCE_REPO"
-
-// sourceRepoCandidates は環境変数が無いときに探す場所。
-var sourceRepoCandidates = []string{
-	`C:\dev\223n\dragnwash-localization\.claude\worktrees\translator-editor-research-fdf740`,
-	`C:\dev\223n\dragnwash-localization`,
-}
 
 // 実データの実測値。数が変わったらデータが変わったということなので、
 // そのときは「テストを直す」のではなく「何が変わったか」を先に見ること。
@@ -45,22 +37,12 @@ const (
 // realTagUnbalancedExtra は [realTagUnbalanced] と違うロケールの件数。
 var realTagUnbalancedExtra = map[string]int{"de": 51, "ko": 52}
 
-// sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
+// sourceRepo は元実装のリポジトリの場所を返す。環境変数（sourcerepo.Env）で指定した
+// 場所に無ければ落とし、指定していなくて見つからなければ飛ばす（sourcerepo.Find）。
 // CI には元リポジトリが無いので、飛ばせることが必須。
 func sourceRepo(t *testing.T) string {
 	t.Helper()
-
-	candidates := sourceRepoCandidates
-	if env := os.Getenv(sourceRepoEnv); env != "" {
-		candidates = []string{env}
-	}
-	for _, root := range candidates {
-		if _, err := os.Stat(filepath.Join(root, "data", "script_order.csv")); err == nil {
-			return root
-		}
-	}
-	t.Skipf("元実装のリポジトリが見つからないので飛ばす（%s で場所を指定できる）", sourceRepoEnv)
-	return ""
+	return sourcerepo.Find(t, "data", "script_order.csv")
 }
 
 // loadRealRepo は元リポジトリを読む。元リポジトリのファイルは読むだけで、

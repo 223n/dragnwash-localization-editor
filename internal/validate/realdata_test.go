@@ -8,16 +8,8 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
-
-// sourceRepoEnv は元実装のリポジトリの場所を上書きする環境変数。
-const sourceRepoEnv = "DRAGNWASH_SOURCE_REPO"
-
-// sourceRepoCandidates は環境変数が無いときに探す場所。
-var sourceRepoCandidates = []string{
-	`C:\dev\223n\dragnwash-localization\.claude\worktrees\translator-editor-research-fdf740`,
-	`C:\dev\223n\dragnwash-localization`,
-}
 
 // locales は元リポジトリに実在するロケール。この13個ぜんぶが問題なしになることが
 // この移植の到達目標。Translations/ignore.txt は通常ファイルなので入らない。
@@ -25,22 +17,12 @@ var locales = []string{
 	"de", "eo", "es", "fr", "he", "ja", "ko", "pl", "pt-BR", "ru", "tok", "zh-Hans", "zh-Hant",
 }
 
-// sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
+// sourceRepo は元実装のリポジトリの場所を返す。環境変数（sourcerepo.Env）で指定した
+// 場所に無ければ落とし、指定していなくて見つからなければ飛ばす（sourcerepo.Find）。
 // CI には元リポジトリが無いので、飛ばせることが必須。
 func sourceRepo(t *testing.T) string {
 	t.Helper()
-
-	candidates := sourceRepoCandidates
-	if env := os.Getenv(sourceRepoEnv); env != "" {
-		candidates = []string{env}
-	}
-	for _, root := range candidates {
-		if _, err := os.Stat(filepath.Join(root, TranslationsDir)); err == nil {
-			return root
-		}
-	}
-	t.Skipf("元実装のリポジトリが見つからないので飛ばす（%s で場所を指定できる）", sourceRepoEnv)
-	return ""
+	return sourcerepo.Find(t, "Translations")
 }
 
 // TestRealDataAllLocales は13ロケールの公開ファイルを1つずつ検査する。

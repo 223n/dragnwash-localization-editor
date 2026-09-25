@@ -2,10 +2,14 @@ package linekey
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
 
 // 見本の値は、元実装（翻訳リポジトリの tools/linekeys.py）を実際に走らせて
@@ -154,39 +158,26 @@ func TestParseFingerprint(t *testing.T) {
 	}
 }
 
-// sourceRepoEnv は元実装のリポジトリの場所を上書きする環境変数。
-// internal/diff の実データ試験と同じ名前を使う。
-const sourceRepoEnv = "DRAGNWASH_SOURCE_REPO"
-
-// sourceRepoCandidates は環境変数が無いときに探す場所。
-var sourceRepoCandidates = []string{
-	`C:\dev\223n\dragnwash-localization`,
-}
-
 // TestUpstreamVectors は、元実装が配っている見本（ci/linekey-vectors.json）と
 // 1件も食い違わないことを見る。
 //
 // 見本のファイルはこのリポジトリへ写していない。写しは上流が定義を変えたときに
 // 静かに古くなるし、上流は仕組みそのものを experimental と書いている。翻訳
 // リポジトリが手元にあるときだけ突き合わせ、無ければ飛ばす（internal/diff の
-// 実データ試験と同じ考え方）。
+// 実データ試験と同じ考え方。探し方は sourcerepo.Find で、環境変数で指定した
+// 場所に翻訳リポジトリが無ければ落とす）。
+//
+// 翻訳リポジトリはあるのに見本が無いときは飛ばす。見本は上流の途中の版で
+// 足されたもので、それより前の版（003ed1e など）には無い。
 func TestUpstreamVectors(t *testing.T) {
-	root := os.Getenv(sourceRepoEnv)
-	if root == "" {
-		for _, c := range sourceRepoCandidates {
-			if _, err := os.Stat(c); err == nil {
-				root = c
-				break
-			}
-		}
-	}
-	if root == "" {
-		t.Skipf("翻訳リポジトリが見つからないので飛ばす（%s で場所を指定できる）", sourceRepoEnv)
-	}
+	root := sourcerepo.Find(t, "Translations")
 	path := filepath.Join(root, "ci", "linekey-vectors.json")
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("この版の翻訳リポジトリには見本が無いので飛ばす: %s", path)
+	}
 	if err != nil {
-		t.Skipf("見本を読めないので飛ばす: %v", err)
+		t.Fatalf("見本を読めない: %v", err)
 	}
 	var vectors []struct {
 		Text          string `json:"text"`

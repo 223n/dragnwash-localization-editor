@@ -1602,7 +1602,9 @@ CI builds all six targets, so writing anything that uses `CGO` will pass locally
 
 There are tests that refer to the original repository.  
 They run when you put its path in `DRAGNWASH_SOURCE_REPO`.  
-Without it, they look in the default location and are skipped if nothing is found.
+Without it, they look in the default location and are skipped if nothing is found.  
+If you set it and there is no translation repository at that location, they fail instead of being skipped.  
+This is so that a mistyped path does not let them pass without checking the real data even once.
 
 ### Tests and coverage
 
