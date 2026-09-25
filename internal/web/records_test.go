@@ -315,6 +315,47 @@ func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
 	if readFile(t, path) != body {
 		t.Error("断ったのにファイルが変わった")
 	}
+
+	// 同じ要求に、後ろの bbbb…（ID 4）の訳も入った場合（画面の自動保存は、続けて打った
+	// 行を1つの要求にまとめる）。外れるのは ID 4 の食い違いとしてだが、理由は原因の
+	// ID 3 に付け、ID 4 には付けない。画面は ID 3 の送り直しを止め、ID 4 を送り直す。
+	// 以前は理由が ID 4 に付き、単独なら書ける ID 4 を打ち直すまで保存しなかった
+	// （PR3 の検証の指摘）。
+	for _, edits := range [][]rowEdit{
+		{{ID: 3, Translation: jaTyped}, {ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped}},
+		{{ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped}, {ID: 3, Translation: jaTyped}},
+	} {
+		rec := save(t, s, "ja", lines.Version, edits...)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
+		}
+		got := decode[errorResponse](t, rec.Body.Bytes())
+		if len(got.Results) != 2 {
+			t.Fatalf("結果 = %+v", got.Results)
+		}
+		for _, r := range got.Results {
+			wantErr := ""
+			if r.ID == 3 {
+				wantErr = want
+			}
+			if r.Saved || r.Error != wantErr {
+				t.Errorf("ID %d の結果 = %+v、理由 %q を期待", r.ID, r, wantErr)
+			}
+		}
+		if readFile(t, path) != body {
+			t.Error("断ったのにファイルが変わった")
+		}
+	}
+	rec = save(t, s, "ja", lines.Version, rowEdit{ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ID 4 だけを送り直すと状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	if got := decode[rowsResponse](t, rec.Body.Bytes()); len(got.Results) != 1 || !got.Results[0].Saved {
+		t.Errorf("ID 4 だけの結果 = %+v", got.Results)
+	}
+	if want := strings.Replace(body, "bbbbbbbbbbbbbbbb,ok", "bbbbbbbbbbbbbbbb,"+jaTyped, 1); readFile(t, path) != want {
+		t.Errorf("ID 4 を送り直したあとの中身 = %q", readFile(t, path))
+	}
 }
 
 // TestSaveCheckFailureNamesTheRow は、書く直前のファイル全体の確かめ（書く前の事後確認の

@@ -911,7 +911,9 @@ Your own saves do not change the sequence numbers.
 Before writing, it reads back the rewritten record and then the whole file, and checks that nothing but the translation reads differently.  
 It checks this with the way the game reads the file, not only with the way `publish` reads it.  
 In some files, rewriting the translation on a row whose key column and source are both empty makes the game lose track of other rows.  
-If that check fails, it writes nothing and marks the row as one that could not be saved.
+If that check fails, it writes nothing and marks the row as one that could not be saved.  
+When rows you typed one after another are sent together, it checks them again one at a time and marks only the row that causes the failure.  
+The other rows are sent again and saved.
 
 The following rows cannot be edited.  
 They show a lock icon and the reason.  

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -89,6 +90,10 @@ type Line struct {
 	// orig は、読み込んだ（または最後に保存した）ときの Text。書く直前の確かめ
 	// （[File.verify]）が、触っていない行が1バイトも変わらないことを見るのに使う。
 	orig string
+	// origKind は、読み込んだ（または最後に保存した）ときの Kind。書き換えたレコードを
+	// 1つずつ確かめ直すとき（[File.culprit]）、確かめに入れないレコードを書き換える前の
+	// 形で見るのに使う。訳を消して空行相当になったレコードは、Kind だけが変わる。
+	origKind Kind
 	// term は Text の終わりの終端（"\r\n" / "\n" / "\r" / ""）。
 	term string
 	// last は最終フィールドの開始位置（Text の先頭から）。KindData のレコードだけ。
@@ -185,6 +190,7 @@ func Parse(data []byte) *File {
 			Text: segs.Text[seg.Start : seg.End+len(seg.Term)], term: string(seg.Term)}
 		line.orig = line.Text
 		line.Kind = kindOf(seg)
+		line.origKind = line.Kind
 		switch line.Kind {
 		case KindHeader:
 			headerIndex, headerBody = len(f.lines), segs.Body(seg)
@@ -309,8 +315,9 @@ func (f *File) appendRaw(segs csvfile.Segments, seg csvfile.Segment) {
 	id := seg.ID
 	for n := seg.Line; n <= segs.Lines; n++ {
 		body, term := segs.PhysicalLine(n)
-		f.lines = append(f.lines, Line{ID: id, Number: n, EndNumber: n,
-			Kind: rawKind(body), Text: body + string(term), orig: body + string(term), term: string(term)})
+		kind := rawKind(body)
+		f.lines = append(f.lines, Line{ID: id, Number: n, EndNumber: n, Kind: kind,
+			Text: body + string(term), orig: body + string(term), origKind: kind, term: string(term)})
 		id++
 	}
 }
@@ -584,51 +591,105 @@ func recheckReason(line int) reason.Reason {
 //   - 書き換えたレコードのほかは、ゲームの読み方（CsvReader の移植）で読んだ値が、
 //     保存の前後で変わらない（[File.gameChange]）
 //
-// 外れたら、外れたところに最も近い書き換えたレコードを指す [RecheckError] を返す。
+// 外れたら、原因の書き換えたレコードを指す [RecheckError] を返す（[File.culprit]）。
 func (f *File) verify(out []byte) error {
+	at := f.mismatch(out, f.touched)
+	if at < 0 {
+		return nil
+	}
+	return f.recheckError(f.culprit(at))
+}
+
+// mismatch は、touched の添字のレコードを書き換えたバイト列 out をファイル全体として
+// 読み直し（[File.verify] の確かめ）、編集モデルと同じに読めなければ、外れたところの
+// f.lines での添字を返す。同じに読めれば -1。
+//
+// touched に無いレコードは、読み込んだとき（または最後に保存したとき）のままのはずの
+// レコードとして見る。f.touched のうち touched に無いレコード（[File.culprit] が1つずつ
+// 確かめ直すとき）も、書き換える前のバイト列と種類で見る。
+func (f *File) mismatch(out []byte, touched map[int]bool) int {
 	whole := csvfile.ReadPowerShellMarked(out)
 	segs := whole.Segments
 	for i, line := range f.lines {
 		if i >= len(segs.List) {
-			return f.recheckError(i)
+			return i
 		}
 		seg := segs.List[i]
 		// 触っていない行は、読み込んだとき（または最後に保存したとき）のバイト列と比べる。
 		// モデルと比べるだけでは、モデルの側で壊れた行を見逃す。
-		want := line.orig
-		if f.touched[i] {
+		want, kind := line.orig, line.Kind
+		switch {
+		case touched[i]:
 			want = line.Text
+		case f.touched[i]:
+			kind = line.origKind
 		}
 		if seg.Unclosed() || seg.ID != line.ID || seg.Line != line.Number || seg.EndLine != line.EndNumber ||
-			kindOf(seg) != line.Kind || segs.Text[seg.Start:seg.End+len(seg.Term)] != want {
-			return f.recheckError(i)
+			kindOf(seg) != kind || segs.Text[seg.Start:seg.End+len(seg.Term)] != want {
+			return i
 		}
-		if f.touched[i] && line.Kind == KindData && !slices.Equal(padFields(seg.Fields, len(seg.Offsets)), line.Fields) {
-			return f.recheckError(i)
+		if touched[i] && line.Kind == KindData && !slices.Equal(padFields(seg.Fields, len(seg.Offsets)), line.Fields) {
+			return i
 		}
 	}
 	if len(segs.List) != len(f.lines) {
-		return f.recheckError(len(f.lines))
+		return len(f.lines)
 	}
 	for _, s := range csvfile.FindSwallows(segs) {
-		if f.touched[s.ID-1] {
-			return f.recheckError(s.ID - 1)
+		if touched[s.ID-1] {
+			return s.ID - 1
 		}
 	}
 	for _, d := range csvfile.CSharpDisagreements(whole) {
-		if f.touched[d.ID-1] {
-			return f.recheckError(d.ID - 1)
+		if touched[d.ID-1] {
+			return d.ID - 1
 		}
 	}
-	if at := f.gameChange(whole, out); at >= 0 {
-		return f.recheckError(at)
-	}
-	return nil
+	return f.gameChange(whole, out, touched)
 }
 
-// gameChange は、書き換えたレコードのほかで、ゲームの読み方（CsvReader の移植。
-// csvfile.ReadCSharpRows）で読んだ値が、保存の前後で変わったところを探し、f.lines での
-// 添字を返す。変わらなければ -1。
+// culprit は、書く直前の確かめが f.lines の添字 at で外れたとき、原因として指す書き換えた
+// レコードの添字を返す。
+//
+// 書き換えたレコードが2つ以上あれば、1つずつ、そのレコードだけを書き換えたバイト列で
+// 確かめ直し（[File.mismatch]）、それだけでも外れる最初のレコードを指す。外れたところ（at）
+// から決めると、原因ではないレコードを指すことがある。キーも原文も空のレコードの訳を
+// 書き換えて、ゲームの引用の閉じる位置が動き、後ろのレコードをゲームが見つけられなく
+// なる形では、同じ要求で後ろのレコードも書き換えていると、外れるのはその後ろのレコードの
+// 食い違いとしてである。画面は指したレコードの送り直しを止め、ほかを送り直すので、単独なら
+// 書ける後ろのレコードを止め、原因のレコードを次の要求で送り直すことになる（PR3 の検証の
+// 指摘）。
+//
+// どのレコードも単独では外れない（組み合わせたときだけ外れる）ときと、書き換えたレコードが
+// 1つのときは、at かそれより前で最も近い書き換えたレコードを指し、無ければ最初の書き換えた
+// レコードを指す。区切りは前から後ろへ読むので、at で外れた原因は、ふつう at かそれより前の
+// 書き換えにある。
+func (f *File) culprit(at int) int {
+	touched := slices.Sorted(maps.Keys(f.touched))
+	if len(touched) > 1 {
+		for _, i := range touched {
+			only := map[int]bool{i: true}
+			if f.mismatch(f.bytesWith(only), only) >= 0 {
+				return i
+			}
+		}
+	}
+	blame := -1
+	for _, i := range touched {
+		if i <= at {
+			blame = i
+		}
+	}
+	if blame < 0 {
+		blame = touched[0]
+	}
+	return blame
+}
+
+// gameChange は、touched の添字のレコード（書き換えたレコード）のほかで、ゲームの読み方
+// （CsvReader の移植。csvfile.ReadCSharpRows）で読んだ値が、保存の前後で変わったところを
+// 探し、f.lines での添字を返す。変わらなければ -1。保存の前は、読み込んだとき（または
+// 最後に保存したとき）のバイト列である。
 //
 // 引用符の崩れたレコードがあると、ゲームはそこから引用を始め、後ろのレコードを値に
 // 取り込むことがある。そうしたレコードは編集させないが、キーも原文も空のレコードは
@@ -642,17 +703,17 @@ func (f *File) verify(out []byte) error {
 // 行は、訳の列だけが変わってよい（その値が書いた訳であることは、食い違いの判定が見る）。
 // 変わった鍵が2つ以上あれば、ファイルの前にあるほうを返す。その鍵のレコードが publish の
 // 読み方に無ければ（ゲームだけが読む行）、ファイルの終わり（len(f.lines)）を返す。
-func (f *File) gameChange(whole csvfile.PowerShellFile, out []byte) int {
-	before, after := gameView(f.savedBytes()), gameView(out)
-	touched := make(map[string]bool)
+func (f *File) gameChange(whole csvfile.PowerShellFile, out []byte, touched map[int]bool) int {
+	before, after := gameView(f.bytesWith(nil)), gameView(out)
+	rewritten := make(map[string]bool)
 	first := make(map[string]int)
 	for _, r := range whole.Records {
 		id, ok := csvfile.RecordIdentity(r.Row)
 		if !ok {
 			continue
 		}
-		if f.touched[r.ID-1] {
-			touched[id] = true
+		if touched[r.ID-1] {
+			rewritten[id] = true
 		}
 		if _, seen := first[id]; !seen {
 			first[id] = r.ID - 1
@@ -669,7 +730,7 @@ func (f *File) gameChange(whole csvfile.PowerShellFile, out []byte) int {
 		}
 	}
 	for id, rows := range after {
-		if !sameGameRows(before[id], rows, touched[id]) {
+		if !sameGameRows(before[id], rows, rewritten[id]) {
 			blame(id)
 		}
 	}
@@ -715,37 +776,34 @@ func sameGameRows(a, b []csvfile.Row, translation bool) bool {
 	return true
 }
 
-// savedBytes は、読み込んだとき（または最後に保存したとき）のバイト列を返す。
-func (f *File) savedBytes() []byte {
+// bytesWith は、only の添字のレコードだけを書き換えたバイト列を返す。ほかの行は、
+// 読み込んだとき（または最後に保存したとき）のバイト列のままにする。only が空なら、
+// 読み込んだとき（または最後に保存したとき）のバイト列になる。
+func (f *File) bytesWith(only map[int]bool) []byte {
 	n := len(f.bom)
-	for _, line := range f.lines {
-		n += len(line.orig)
+	for i, line := range f.lines {
+		if only[i] {
+			n += len(line.Text)
+		} else {
+			n += len(line.orig)
+		}
 	}
 	out := make([]byte, 0, n)
 	out = append(out, f.bom...)
-	for _, line := range f.lines {
-		out = append(out, line.orig...)
+	for i, line := range f.lines {
+		if only[i] {
+			out = append(out, line.Text...)
+		} else {
+			out = append(out, line.orig...)
+		}
 	}
 	return out
 }
 
-// recheckError は、f.lines の添字 at で確かめが外れたときの誤りを作る。指すのは、at より
-// 前で最も近い書き換えたレコードで、無ければ最初の書き換えたレコードである。
-// 区切りは前から後ろへ読むので、at で外れた原因は、at かそれより前の書き換えにある。
-func (f *File) recheckError(at int) *RecheckError {
-	blame := -1
-	for i := range f.touched {
-		if i <= at && i > blame {
-			blame = i
-		}
-	}
-	if blame < 0 {
-		blame = len(f.lines)
-		for i := range f.touched {
-			blame = min(blame, i)
-		}
-	}
-	line := f.lines[blame]
+// recheckError は、f.lines の添字 i の書き換えたレコードを指す、書く直前の確かめの誤りを
+// 作る（指すレコードは [File.culprit] が決める）。
+func (f *File) recheckError(i int) *RecheckError {
+	line := f.lines[i]
 	return &RecheckError{ID: line.ID, Line: line.Number, Cause: recheckReason(line.Number)}
 }
 

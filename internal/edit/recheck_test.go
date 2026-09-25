@@ -20,7 +20,7 @@ import (
   - 前半: SetTranslation は、差し替えたレコードだけを読み直して確かめ、外れたら
     書き換えずに NotEditableError（reason.EditRecheckFailed）を返す（recheckRecord）。
   - 後半: Save は、書く直前にファイル全体を読み直して確かめ、外れたら1バイトも書かずに、
-    外れたところに最も近い書き換えたレコードを指す RecheckError を返す（File.verify）。
+    原因の書き換えたレコードを指す RecheckError を返す（File.verify と File.culprit）。
 
 どちらも、正しく組み立てたバイト列では外れない。外れるのは、組み立て（編集モデル）に
 誤りがあるときである。そのため、ここではモデルを試験の中で壊して、確かめが誤りを
@@ -115,7 +115,8 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			blame: 2,
 		},
 		{
-			// 触っていない後ろの行が1バイト変わる形。指すのは、その前で最も近い書き換え。
+			// 触っていない後ろの行が1バイト変わる形。指すのは、その前で最も近い書き換え
+			// （ここでは書き換えが1つだけ）。
 			name: "触っていない行が変わる",
 			breakModel: func(f *File) {
 				f.lines[3].Text = f.lines[3].Text[:len(f.lines[3].Text)-2] + "!\r\n"
@@ -175,14 +176,25 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			blame: 2,
 		},
 		{
-			// 2つのレコードを書き換え、後ろ（ID 4）の側で外れる形。指すのは、外れた
-			// ところより前で最も近い書き換えの ID 4 で、最初の書き換えの ID 2 ではない。
+			// 2つのレコードを書き換え、後ろ（ID 4）の側で外れる形。1つずつ確かめ直すと
+			// ID 4 だけが外れるので、指すのは ID 4 で、最初の書き換えの ID 2 ではない。
 			name:  "後ろの書き換えで外れる",
 			edits: []int{2, 4},
 			breakModel: func(f *File) {
 				f.lines[3].Fields[len(f.lines[3].Fields)-1] = "別の訳"
 			},
 			blame: 4, line: 5,
+		},
+		{
+			// 2つのレコードを書き換え、その後ろの触っていない行が変わる形。どちらも
+			// 1つずつ確かめ直すと外れない（触っていない行は読み込んだときのバイト列で
+			// 組む）ので、外れたところより前で最も近い書き換えの ID 3 を指す。
+			name:  "2つ書き換えて触っていない行が変わる",
+			edits: []int{2, 3},
+			breakModel: func(f *File) {
+				f.lines[3].Text = f.lines[3].Text[:len(f.lines[3].Text)-2] + "!\r\n"
+			},
+			blame: 3, line: 3,
 		},
 	}
 	for _, tt := range tests {
@@ -310,6 +322,108 @@ func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
 	}
 }
 
+// recheckEdit は、試験で書き換えるレコードの ID と訳。
+type recheckEdit struct {
+	id    int
+	value string
+}
+
+// TestSaveBlamesTheRecordThatFailsAlone は、1回の保存で2つ以上のレコードを書き換えて
+// 確かめが外れたとき、それだけを書き換えても外れるレコードを指し、指さなかったレコードは
+// 単独なら保存できることを見る（PR3 の検証の指摘）。
+//
+// 画面は、指されたレコードの送り直しを止め、ほかのレコードを次の要求で送り直す。原因で
+// ないレコードを指すと、単独なら書ける訳を打ち直すまで保存せず、原因のレコードを送り直す。
+func TestSaveBlamesTheRecordThatFailsAlone(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		// edits は書き換えるレコードの ID と訳（書き換える順）。
+		edits []recheckEdit
+		// blame は指すレコードの ID（最初の物理行も同じ）、alone は単独なら保存できる
+		// レコードの ID、want はそれを保存したあとの中身。
+		blame, alone int
+		want         string
+	}{
+		{
+			// gameShiftWorking の ID 3（キーの空いた行）と、その後ろの ID 4 を一緒に
+			// 書き換える。外れるのは ID 4 の食い違い（ゲームが ID 4 を見つけられない）と
+			// してで、そこから決めると ID 4 を指していた。
+			name:  "後ろのレコードの食い違いとして外れる",
+			body:  gameShiftWorking,
+			edits: []recheckEdit{{3, "訳"}, {4, "架空の訳"}},
+			blame: 3, alone: 4,
+			want: strings.Replace(gameShiftWorking, "bbbbbbbbbbbbbbbb,ok", "bbbbbbbbbbbbbbbb,架空の訳", 1),
+		},
+		{
+			name:  "書き換える順が逆",
+			body:  gameShiftWorking,
+			edits: []recheckEdit{{4, "架空の訳"}, {3, "訳"}},
+			blame: 3, alone: 4,
+			want: strings.Replace(gameShiftWorking, "bbbbbbbbbbbbbbbb,ok", "bbbbbbbbbbbbbbbb,架空の訳", 1),
+		},
+		{
+			// 前の ID 2 は原因でなく、後ろの ID 4（キーの空いた行）の訳を消すと、ゲームの
+			// 引用が閉じなくなる。訳を消した ID 4 は空行相当に変わるので、ID 2 だけを
+			// 確かめ直すとき、ID 4 は書き換える前の種類（データ行）で見る。外れたところ
+			// （ゲームの読み方の値が変わる ID 3）から決めると、その前の ID 2 を指していた。
+			name: "後ろのレコードの訳を消して外れる",
+			body: "key,translation\r\n" +
+				"cccccccccccccccc,old\r\n" +
+				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+				",p\"q\r\n" +
+				"bbbbbbbbbbbbbbbb,ok\r\n",
+			edits: []recheckEdit{{2, "架空の訳"}, {4, ""}},
+			blame: 4, alone: 2,
+			want: "key,translation\r\n" +
+				"cccccccccccccccc,架空の訳\r\n" +
+				"aaaaaaaaaaaaaaaa,x\"y\r\n" +
+				",p\"q\r\n" +
+				"bbbbbbbbbbbbbbbb,ok\r\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTemp(t, tt.body)
+			f, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value string
+			for _, e := range tt.edits {
+				if err := f.SetTranslation(e.id, e.value); err != nil {
+					t.Fatalf("ID %d の書き換えそのものは通るはず: %v", e.id, err)
+				}
+				if e.id == tt.alone {
+					value = e.value
+				}
+			}
+
+			var recheck *RecheckError
+			if err := f.Save(); !errors.As(err, &recheck) || recheck.ID != tt.blame || recheck.Line != tt.blame {
+				t.Fatalf("Save = %v、ID %d を指す *RecheckError を期待", err, tt.blame)
+			}
+			if got := readFile(t, path); got != tt.body {
+				t.Fatalf("外れたのに書いた: %q", got)
+			}
+
+			again, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := again.SetTranslation(tt.alone, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := again.Save(); err != nil {
+				t.Fatalf("指さなかった ID %d が単独でも保存できない: %v", tt.alone, err)
+			}
+			if got := readFile(t, path); got != tt.want {
+				t.Errorf("保存後の中身 = %q", got)
+			}
+		})
+	}
+}
+
 // TestGameChangePointsAtTheFirstChangedRecord は、ゲームの読み方の値が変わったところの
 // うち、ファイルの前にあるものを返すことと、publish の読み方に無い鍵の行がゲームにだけ
 // 増えたときはファイルの終わりを返すことを見る。
@@ -321,7 +435,7 @@ func TestGameChangePointsAtTheFirstChangedRecord(t *testing.T) {
 		}
 		out := f.Bytes()
 		// ID 2（添字 1）はゲームの読み方の値が変わり、ID 4（添字 3）は見つからなくなる。
-		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out); got != 1 {
+		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out, f.touched); got != 1 {
 			t.Errorf("gameChange = %d、1 を期待", got)
 		}
 	})
@@ -333,7 +447,7 @@ func TestGameChangePointsAtTheFirstChangedRecord(t *testing.T) {
 			"bbbbbbbbbbbbbbbb,b\n"
 		f := Parse([]byte(orig))
 		out := []byte("key,translation\naaaaaaaaaaaaaaaa,a\n")
-		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out); got != len(f.lines) {
+		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out, f.touched); got != len(f.lines) {
 			t.Errorf("gameChange = %d、ファイルの終わり（%d）を期待", got, len(f.lines))
 		}
 	})
@@ -344,7 +458,7 @@ func TestGameChangePointsAtTheFirstChangedRecord(t *testing.T) {
 		// 引用符で囲まない値の先頭の空白は、publish の読み方では削られ、ゲームの読み方
 		// では残る。ゲームの鍵（source_en の値）は publish の読み方のどのレコードにも無い。
 		out := []byte(orig + ",UI,,,UI, two,に\n")
-		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out); got != len(f.lines) {
+		if got := f.gameChange(csvfile.ReadPowerShellMarked(out), out, f.touched); got != len(f.lines) {
 			t.Errorf("gameChange = %d、ファイルの終わり（%d）を期待", got, len(f.lines))
 		}
 	})
