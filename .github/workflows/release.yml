@@ -388,6 +388,7 @@ jobs:
               echo "\`auto_merge\` で動いています。人の承認とマージは要りません。"
               echo "ワークフローがこのブランチで CI を動かし、通ったら、この PR の承認待ちの実行を取り消してからマージします。"
               echo "止まったときは、ワークフローの実行の画面に理由と次にすることが出ます。"
+              echo "止まって人がマージするときは、この PR に「Approve workflows to run」が出ていれば押し、CI が通ってからにしてください。承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残ります。"
             else
               echo "この PR は GitHub Actions が開いたため、CI などの実行は「承認待ち」で作られます。"
               echo "**「Approve workflows to run」を押し、CI が通ってからマージしてください。**"
@@ -689,10 +690,11 @@ jobs:
       - name: PRをマージする
         # マージコミットで取り込む。CI を確かめたコミットのままのときだけマージする（--match-head-commit）。
         # main のルール（必須のチェックや承認）で止められた場合はここで失敗する。
-        # その場合は人が PR をマージすれば、release-publish.yml が pull_request(closed) で動いて公開まで進む
+        # その場合は人が PR をマージすれば、release-publish.yml が pull_request(closed) で動いて公開まで進む。
+        # 前の段で取り消せなかった承認待ちの実行が残っていれば、人が承認して CI が通ってからマージする
         run: |
           if ! gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --delete-branch --match-head-commit "${HEAD_SHA}"; then
-            echo "::error::PR をマージできなかった。${MAIN_BRANCH} のルール（必須のチェックや承認）で止められたか、PR の先端が ${HEAD_SHA} から動いた。${BRANCH} の CI は通っている。人が PR をマージすれば、「リリースを公開する」が動いて公開まで進む: ${PR_URL}"
+            echo "::error::PR をマージできなかった。${MAIN_BRANCH} のルール（必須のチェックや承認）で止められたか、PR の先端が ${HEAD_SHA} から動いた。${BRANCH} の CI は通っている。人が PR をマージすれば、「リリースを公開する」が動いて公開まで進む。PR の画面に「Approve workflows to run」が出ていれば（承認待ちの実行を取り消せなかったとき）、押して CI が通ってからマージする（押さずにマージすると、承認待ちの実行が期限切れの失敗として残る）: ${PR_URL}"
             exit 1
           fi
 
