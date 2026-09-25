@@ -1102,7 +1102,10 @@ The span from checking the version to finishing the write is wrapped in an OS lo
 `publish` takes the same lock on both its input and its output.  
 Even when the screen has the published file open (with `--no-game`, for example) and you run a `publish` that writes that published file from the working copy in the game, one of them waits.  
 The lock is taken on a file kept only for locking, in your cache folder.  
-That is `%LocalAppData%\dwloc\locks` on Windows, `~/.cache/dwloc/locks` on Linux, and `~/Library/Caches/dwloc/locks` on macOS.  
+That is `%LocalAppData%\dwloc\locks` on Windows, `$XDG_CACHE_HOME/dwloc/locks` on Linux (`~/.cache/dwloc/locks` when `XDG_CACHE_HOME` is not set), and `~/Library/Caches/dwloc/locks` on macOS.  
+Where that folder cannot be created (a container run as a user with no `HOME`, for example), it goes in `dwloc-locks-<user number>` in the temporary folder (`dwloc-locks` on Windows).  
+It is never put in a temporary folder that other users can write to.  
+When neither can be created, both saving and `publish` stop without writing and say which environment variable to fix.  
 There is one empty file per file being written, and it is left in place.  
 No file is added to the translation repository or to the game folder.  
 If the `dwloc` holding the lock crashes, the OS releases the lock, so a lock file left behind never stops a save.  

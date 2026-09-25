@@ -41,6 +41,10 @@ func tryLock(f *os.File) (bool, error) {
 	return false, err
 }
 
+// ownDir は、Windows では確かめない。一時フォルダーはもともと利用者ごとにあり
+// （%LocalAppData%\Temp）、ほかの利用者は入れない。
+func ownDir(os.FileInfo) bool { return true }
+
 // unlockFile は f の錠を放す。ハンドルを閉じても OS は錠を放すが、放すまでの時間は
 // 決まっていないので、先に明示して放す。
 func unlockFile(f *os.File) {

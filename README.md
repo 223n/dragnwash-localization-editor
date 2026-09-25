@@ -1103,7 +1103,10 @@ Modや設定の画面の文字は、その画面を開くまで読み込まれ�
 `publish`は、入力と書き出し先の両方に同じ錠を掛けます。  
 画面が公開ファイルを開いているとき（`--no-game`など）に、ゲーム側の作業コピーから同じ公開ファイルを書く`publish`を回しても、どちらかが待ちます。  
 錠は、利用者のキャッシュのフォルダーに置く錠のためのファイルに掛けます。  
-Windowsでは`%LocalAppData%\dwloc\locks`、Linuxでは`~/.cache/dwloc/locks`、macOSでは`~/Library/Caches/dwloc/locks`です。  
+Windowsでは`%LocalAppData%\dwloc\locks`、Linuxでは`$XDG_CACHE_HOME/dwloc/locks`（`XDG_CACHE_HOME`が無ければ`~/.cache/dwloc/locks`）、macOSでは`~/Library/Caches/dwloc/locks`です。  
+このフォルダーを作れない環境（`HOME`の無い利用者で動かしたコンテナーなど）では、一時フォルダーの`dwloc-locks-<利用者の番号>`（Windowsでは`dwloc-locks`）に置きます。  
+ほかの利用者が書ける一時フォルダーには置きません。  
+どちらも作れないときは、保存も`publish`も書かずに止まり、どの環境変数を直せばよいかを出します。  
 書くファイル1つにつき空のファイルが1つでき、消さずに残ります。  
 翻訳リポジトリにもゲームのフォルダーにも、ファイルは増えません。  
 錠を持っている`dwloc`が落ちても、OSが錠を放すので、残った錠のファイルが保存を止めることはありません。  

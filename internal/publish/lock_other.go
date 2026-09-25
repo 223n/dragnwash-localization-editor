@@ -13,3 +13,6 @@ func tryLock(*os.File) (bool, error) { return true, nil }
 
 // unlockFile は何もしない。
 func unlockFile(*os.File) {}
+
+// ownDir は、錠を持たない OS では確かめない。
+func ownDir(os.FileInfo) bool { return true }

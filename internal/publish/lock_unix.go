@@ -27,3 +27,10 @@ func tryLock(f *os.File) (bool, error) {
 func unlockFile(f *os.File) {
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 }
+
+// ownDir は、info のフォルダーが自分のもので、ほかの利用者（グループを含む）が
+// 書けないかを返す（[makeOwnDir]）。
+func ownDir(info os.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Getuid() && info.Mode().Perm()&0o022 == 0
+}

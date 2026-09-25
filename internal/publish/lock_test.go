@@ -288,20 +288,146 @@ func TestLockFileErrors(t *testing.T) {
 	}
 }
 
+// setCacheDir は、利用者のキャッシュのフォルダー（os.UserCacheDir）を試験のあいだだけ
+// dir の下へ向ける。Linux は XDG_CACHE_HOME、macOS は HOME、Windows は LocalAppData を見る。
+func setCacheDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("LocalAppData", dir)
+}
+
+// setTempDir は、一時フォルダー（os.TempDir）を試験のあいだだけ dir へ向ける。
+func setTempDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("TMP", dir)
+	t.Setenv("TEMP", dir)
+}
+
+// notADir は、フォルダーを作れないパス（ふつうのファイルの下）を返す。
+func notADir(t *testing.T) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(file, "sub")
+}
+
 // TestLockDir は、錠のファイルを置くフォルダーの選び方を見る。環境変数があれば
-// それを使い、無ければ利用者のキャッシュのフォルダーの dwloc/locks を使う。
+// それを使い、無ければ利用者のキャッシュのフォルダーの dwloc/locks を使う。どちらも
+// 無ければ作る。
 func TestLockDir(t *testing.T) {
 	t.Setenv(LockDirEnv, "")
+	setCacheDir(t, t.TempDir())
 	cache, err := os.UserCacheDir()
 	if err != nil {
-		t.Skipf("利用者のキャッシュのフォルダーが無い環境なので飛ばす: %v", err)
+		t.Fatal(err)
 	}
-	if got, want := lockDir(), filepath.Join(cache, "dwloc", "locks"); got != want {
-		t.Errorf("lockDir() = %s、%s を期待", got, want)
+	want := filepath.Join(cache, "dwloc", "locks")
+	if got, err := lockDir(); err != nil || got != want {
+		t.Errorf("lockDir() = %s, %v、%s を期待", got, err, want)
 	}
-	t.Setenv(LockDirEnv, "somewhere")
-	if got := lockDir(); got != "somewhere" {
-		t.Errorf("lockDir() = %s、環境変数の値を期待", got)
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Errorf("%s を作っていない: %v", want, err)
+	}
+
+	override := filepath.Join(t.TempDir(), "somewhere")
+	t.Setenv(LockDirEnv, override)
+	if got, err := lockDir(); err != nil || got != override {
+		t.Errorf("lockDir() = %s, %v、環境変数の値を期待", got, err)
+	}
+}
+
+// TestLockDirFallsBackToTheTempDir は、利用者のキャッシュのフォルダーを作れない環境
+// （HOME の無い利用者で動かした docker など）で、一時フォルダーに錠のファイルを置き、
+// 錠を取れることを見る。PR3 の前は錠が無かったので、この環境でも保存と publish が
+// 通った。錠のために毎回止めると、その環境では dwloc を使えなくなる。
+func TestLockDirFallsBackToTheTempDir(t *testing.T) {
+	shortLockWait(t, 100*time.Millisecond)
+	t.Setenv(LockDirEnv, "")
+	setCacheDir(t, notADir(t))
+	temp := t.TempDir()
+	setTempDir(t, temp)
+
+	dir, err := lockDir()
+	if err != nil {
+		t.Fatalf("一時フォルダーに落とさない: %v", err)
+	}
+	if filepath.Dir(dir) != filepath.Clean(os.TempDir()) || !strings.HasPrefix(filepath.Base(dir), "dwloc-locks") {
+		t.Errorf("lockDir() = %s、%s の下の dwloc-locks を期待", dir, temp)
+	}
+
+	path := filepath.Join(t.TempDir(), "strings.csv")
+	unlock, err := LockFile(path)
+	if err != nil {
+		t.Fatalf("錠を取れない: %v", err)
+	}
+	var timeout *LockTimeoutError
+	if _, err := LockFile(path); !errors.As(err, &timeout) {
+		t.Errorf("2つ目の錠 = %v、一時フォルダーでも直列になることを期待", err)
+	}
+	unlock()
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".lock") {
+		t.Errorf("一時フォルダーに錠のファイルが無い: %v %v", entries, err)
+	}
+}
+
+// TestLockDirSaysHowToFixIt は、キャッシュのフォルダーも一時フォルダーも作れないとき、
+// 試した置き場と直し方を添えた誤りを返すことを見る。
+func TestLockDirSaysHowToFixIt(t *testing.T) {
+	t.Setenv(LockDirEnv, "")
+	setCacheDir(t, notADir(t))
+	setTempDir(t, notADir(t))
+
+	_, err := LockFile(filepath.Join(t.TempDir(), "strings.csv"))
+	var dirErr *LockDirError
+	if !errors.As(err, &dirErr) || len(dirErr.Tried) != 2 {
+		t.Fatalf("LockFile = %v、2つの置き場を試した *LockDirError を期待", err)
+	}
+	for _, want := range []string{"作れません", "XDG_CACHE_HOME", "LocalAppData", "TMPDIR"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("誤りに %q が無い: %s", want, err)
+		}
+	}
+}
+
+// TestLockDirRefusesATempDirOthersCanWrite は、一時フォルダーの置き場が、ほかの利用者の
+// 書けるフォルダーやリンクなら使わないことを見る。/tmp のように分け合う一時フォルダー
+// では、ほかの利用者が先に同じ名前で作ったフォルダーに錠のファイルを置くと、錠の
+// ファイルを消されて直列が崩れうる。
+func TestLockDirRefusesATempDirOthersCanWrite(t *testing.T) {
+	t.Setenv(LockDirEnv, "")
+	setCacheDir(t, notADir(t))
+	temp := t.TempDir()
+	setTempDir(t, temp)
+	fallback := tempLockDir()
+
+	if runtime.GOOS != "windows" {
+		if err := os.Mkdir(fallback, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(fallback, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		var dirErr *LockDirError
+		if _, err := lockDir(); !errors.As(err, &dirErr) || !strings.Contains(err.Error(), "自分だけが書けるフォルダーではない") {
+			t.Errorf("ほかの利用者が書けるフォルダーで lockDir() = %v", err)
+		}
+		if err := os.Remove(fallback); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	other := t.TempDir()
+	if err := os.Symlink(other, fallback); err != nil {
+		t.Skipf("シンボリックリンクを作れない環境なので飛ばす: %v", err)
+	}
+	var dirErr *LockDirError
+	if _, err := lockDir(); !errors.As(err, &dirErr) {
+		t.Errorf("リンクの置き場で lockDir() = %v、*LockDirError を期待", err)
 	}
 }
 

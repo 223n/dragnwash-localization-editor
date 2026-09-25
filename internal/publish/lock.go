@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // LockDirEnv は、錠のファイルを置くフォルダーを変える環境変数。試験が、利用者の
 // キャッシュのフォルダーへ錠のファイルを残さないために使う。ふだんは使わない。
+// 値があれば、そのフォルダーだけを使う（作れなければ誤りにし、ほかへ落とさない）。
 const LockDirEnv = "DWLOC_LOCK_DIR"
 
 // lockWait は、ほかの dwloc が錠を持っているときに待つ上限。lockPoll は試す間隔。
@@ -49,8 +51,10 @@ func (e *LockTimeoutError) Error() string {
 // 終われば OS が放すので、落ちた dwloc が錠を残すことは無い。
 //
 // 錠のファイルは、利用者のキャッシュのフォルダー（Windows は %LocalAppData%、Linux は
-// ~/.cache、macOS は ~/Library/Caches）の dwloc/locks に置き、名前は書き出し先の実体の
-// 絶対パスから作る（[lockName]）。書き出し先の横には置かない。横に置くと、作業コピーの
+// $XDG_CACHE_HOME か ~/.cache、macOS は ~/Library/Caches）の dwloc/locks に置き、名前は
+// 書き出し先の実体の絶対パスから作る（[lockName]）。キャッシュのフォルダーを作れない
+// 環境（HOME の無い利用者で動かした docker など）では、一時フォルダーに落とす
+// （[lockDir]）。書き出し先の横には置かない。横に置くと、作業コピーの
 // 無いロケールでは翻訳リポジトリの Translations/<ロケール>/ に錠のファイルが残り、
 // git status に出る。放すときに消す形も試したが、Windows では、消したファイルを
 // ほかの dwloc が開けない（削除の保留中で拒まれる）ことや、2つの dwloc が同時に錠を
@@ -139,9 +143,6 @@ func lockFor(path string) (fileLock, error) {
 	if err != nil {
 		return fileLock{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
-		return fileLock{}, err
-	}
 	return fileLock{target: target, name: name}, nil
 }
 
@@ -180,15 +181,88 @@ func (l fileLock) acquire() (unlock func(), err error) {
 	}
 }
 
-// lockDir は錠のファイルを置くフォルダーを返す。
-func lockDir() string {
+// lockDir は錠のファイルを置くフォルダーを返す。無ければ作る。
+//
+// 使うのは、利用者のキャッシュのフォルダーの dwloc/locks で、作れなければ一時フォルダーの
+// dwloc-locks-<利用者の番号>（Windows は dwloc-locks）である。キャッシュのフォルダーを
+// 作れない環境（HOME の無い利用者で動かした docker、passwd に無い利用者など）でも、
+// 画面の保存と publish が毎回止まらないようにする（PR3 の前は、錠が無いので書けた）。
+// 同じ環境の dwloc は同じ選び方をするので、同じ書き出し先には同じ錠のファイルを使う。
+// 環境の違う dwloc（HOME の違う端末など）どうしは、キャッシュのフォルダーが違うのと
+// 同じく直列にならず、版の照合（画面）と書く直前の読み直し（publish）だけが守りになる。
+//
+// 一時フォルダーはほかの利用者と分け合うことがある（Linux の /tmp）。ほかの利用者が
+// 先に作ったフォルダーや、ほかの利用者が書けるフォルダーに錠のファイルを置くと、錠の
+// ファイルを消されて直列が崩れうるので、自分のもので、ほかの利用者が書けないときだけ
+// 使う（[ownDir]）。
+//
+// どちらも作れなければ、直し方を添えた誤り（[LockDirError]）を返す。
+func lockDir() (string, error) {
 	if d := os.Getenv(LockDirEnv); d != "" {
-		return d
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return "", err
+		}
+		return d, nil
 	}
-	if d, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(d, "dwloc", "locks")
+	var tried []error
+	if cache, err := os.UserCacheDir(); err != nil {
+		tried = append(tried, err)
+	} else {
+		d := filepath.Join(cache, "dwloc", "locks")
+		if err := os.MkdirAll(d, 0o700); err == nil {
+			return d, nil
+		} else {
+			tried = append(tried, err)
+		}
 	}
-	return filepath.Join(os.TempDir(), "dwloc-locks")
+	d := tempLockDir()
+	if err := makeOwnDir(d); err != nil {
+		return "", &LockDirError{Tried: append(tried, err)}
+	}
+	return d, nil
+}
+
+// tempLockDir は、キャッシュのフォルダーを作れないときに錠のファイルを置く一時
+// フォルダーを返す。利用者の番号がある OS（Windows のほか）では、名前に番号を入れて
+// 利用者ごとに分ける。Windows の一時フォルダーは、もともと利用者ごとにある。
+func tempLockDir() string {
+	name := "dwloc-locks"
+	if uid := os.Getuid(); uid >= 0 {
+		name += "-" + strconv.Itoa(uid)
+	}
+	return filepath.Join(os.TempDir(), name)
+}
+
+// makeOwnDir は d を作り、自分のもので、ほかの利用者が書けないフォルダーであることを
+// 確かめる。シンボリックリンクは、たどった先がどこでも使わない。
+func makeOwnDir(d string) error {
+	if err := os.MkdirAll(d, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(d)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || !ownDir(info) {
+		return fmt.Errorf("%s は自分だけが書けるフォルダーではないので、錠のファイルを置きません", d)
+	}
+	return nil
+}
+
+// LockDirError は、錠のファイルを置くフォルダーをどこにも作れなかったこと。
+type LockDirError struct {
+	// Tried は、試した置き場ごとの誤り（キャッシュのフォルダー、一時フォルダーの順）。
+	Tried []error
+}
+
+func (e *LockDirError) Error() string {
+	msgs := make([]string, len(e.Tried))
+	for i, err := range e.Tried {
+		msgs[i] = err.Error()
+	}
+	return "書き込みの錠のファイルを置くフォルダーを作れません（" + strings.Join(msgs, "、") + "）。" +
+		"利用者のキャッシュのフォルダー（Linux は XDG_CACHE_HOME か HOME、macOS は HOME、Windows は LocalAppData）か、" +
+		"一時フォルダー（TMPDIR、Windows は TMP）を、書けるフォルダーに向けてください"
 }
 
 // lockName は、書き出し先の実体 target の錠のファイルの名前を返す。
@@ -196,7 +270,7 @@ func lockDir() string {
 // 名前は、実体の絶対パスの SHA-256 の先頭から作る。同じファイルを指す綴りの違い
 // （相対パス、途中のフォルダーのリンク、Windows の 8.3 形式の短い名前、大文字小文字）を
 // そろえてから数える。そろえられない（実体もフォルダーも無い）ときは、絶対パスの
-// ままで数える。
+// ままで数える。置くフォルダー（[lockDir]）が無ければ作る。
 func lockName(target string) (string, error) {
 	abs, err := filepath.Abs(target)
 	if err != nil {
@@ -213,7 +287,11 @@ func lockName(target string) (string, error) {
 		key = strings.ToLower(key)
 	}
 	sum := sha256.Sum256([]byte(key))
-	return filepath.Join(lockDir(), hex.EncodeToString(sum[:12])+".lock"), nil
+	dir, err := lockDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, hex.EncodeToString(sum[:12])+".lock"), nil
 }
 
 // sameFile は、開いているファイル f と、いま name が指すファイルが同じかを返す。
