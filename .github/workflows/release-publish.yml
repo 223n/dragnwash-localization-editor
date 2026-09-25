@@ -52,6 +52,7 @@ jobs:
     permissions:
       contents: write        # タグを打ち、Release を作り、書庫を添付する
       pull-requests: write   # main を develop へ戻す PR を開く
+      actions: write         # develop へ直接戻したとき、develop の CI を workflow_dispatch で動かす
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -602,6 +603,16 @@ jobs:
           if git merge --no-ff --no-edit --message "${MAIN_BRANCH} を ${DEVELOP_BRANCH} に取り込む（${TAG}）" "origin/${MAIN_BRANCH}"; then
             if git push origin "HEAD:${DEVELOP_BRANCH}"; then
               echo "- ${DEVELOP_BRANCH}: ${MAIN_BRANCH} を直接取り込んだ" >> "$GITHUB_STEP_SUMMARY"
+              # GITHUB_TOKEN の push では push の CI が起きない。次のリリースの「developのCIが
+              # 通ったことを確かめる」は、push の実行が無いとき同じ SHA の workflow_dispatch の
+              # 実行を見るので、ここで動かしておく（GITHUB_TOKEN の workflow_dispatch は実行を
+              # 作れる）。動かせなくても戻しはできているので、止めずに手で動かすよう案内する
+              if gh workflow run ci.yml --ref "${DEVELOP_BRANCH}"; then
+                echo "- ${DEVELOP_BRANCH}: CI を手で動かした（GITHUB_TOKEN の push では CI が起きないため）" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::warning::${DEVELOP_BRANCH} の CI を動かせなかった。次のリリースの前に Actions の CI を ${DEVELOP_BRANCH} で手で動かす"
+                echo "- ${DEVELOP_BRANCH}: CI を動かせなかった。次のリリースの前に手で動かす" >> "$GITHUB_STEP_SUMMARY"
+              fi
               exit 0
             fi
             echo "::warning::${DEVELOP_BRANCH} に直接押せなかった。PR で取り込む"

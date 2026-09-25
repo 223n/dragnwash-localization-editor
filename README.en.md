@@ -1635,6 +1635,9 @@ Only a version greater than the version on `develop`, the version on `main` and 
 It stops if the tag already exists, or if a `release/*` branch is still open.  
 A prerelease version such as `-rc.1` is marked as a prerelease on the GitHub Release too.
 
+When there is no such rule and it can merge `main` back into `develop` directly, it also starts CI on `develop` by hand (`workflow_dispatch`).  
+A commit pushed by GitHub Actions does not start the `push` CI, and the "check that CI on `develop` passed" step of the next release would stop.
+
 If there is a rule requiring pull requests on `develop`, merging `main` back into `develop` becomes a pull request every time.  
 The branch is named `merge/vX.Y.Z-into-develop`.  
 This pull request is also opened by GitHub Actions, so CI and the other runs are created "waiting for approval".  

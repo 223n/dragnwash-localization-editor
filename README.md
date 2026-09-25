@@ -1610,6 +1610,9 @@ v0.4.0では、Releaseを作ってから書庫を載せる順だったため、2
 すでにあるタグや、開いたままの`release/*`ブランチがあると止まります。  
 `-rc.1`のようなプレリリースの版は、GitHub Releaseでもプレリリースになります。
 
+そうした規則が無く`develop`へ直接戻せたときは、あわせて`develop`でCIを手で動かします（`workflow_dispatch`）。  
+GitHub Actionsが押したコミットでは`push`のCIが動かず、次のリリースの「`develop`のCIが通ったことを確かめる」段が止まるためです。
+
 `develop`にPull Requestを必須にする規則がある場合、`main`から`develop`への戻しは毎回Pull Requestになります。  
 ブランチ名は`merge/vX.Y.Z-into-develop`です。  
 このPull RequestもGitHub Actionsが開くので、CIなどの実行は「承認待ち」で作られます。  
