@@ -249,6 +249,27 @@ test("見出しはファイルのコメント行を書き換えずに写し、�
   }
 });
 
+// 一覧は1700行を超えるので、画面の外の行と見出しは描かない（app.css の content-visibility）。
+// 描く前の高さは見積もりで持つ。入力欄を差し込んだ行だけは、いつも描く（入力欄は、差し
+// 込んだ直後、画面へ送る前に高さを測る）。
+test("画面の外の行と見出しは描かず、入力欄を差し込んだ行だけはいつも描く", async ({ app }) => {
+  const style = (locator) =>
+    locator.evaluate((e) => {
+      const s = getComputedStyle(e);
+      return { visibility: s.contentVisibility, size: s.containIntrinsicBlockSize };
+    });
+  expect((await style(rowByLine(app, LINE.hello))).visibility).toBe("auto");
+  expect((await style(rowByLine(app, LINE.hello))).size).toMatch(/^auto \d+px$/);
+  expect((await style(headings(app).first())).visibility).toBe("auto");
+  expect((await style(headings(app).first())).size).toMatch(/^auto \d+px$/);
+
+  await openEditor(app, LINE.goodbye);
+  expect((await style(rowByLine(app, LINE.goodbye))).visibility).toBe("visible");
+  expect((await style(rowByLine(app, LINE.hello))).visibility).toBe("auto");
+  await editor(app).press("Escape");
+  expect((await style(rowByLine(app, LINE.goodbye))).visibility).toBe("auto");
+});
+
 // 画面はファイルの写しである。空行とヘッダー行は番号だけの行になるので出さないが、
 // データ行は、直せない行も含めて1行も落とさずファイルの順に並べる。
 // 空白で始まる # の行は見出しではなくデータ行として出る（internal/edit と同じ判定）。

@@ -142,6 +142,25 @@ func TestSectionHeadingsAreHeadings(t *testing.T) {
 	}
 }
 
+// TestOffscreenRowsAreNotDrawn は、画面の外の行と見出しを描かず、入力欄を差し込んだ行
+// だけはいつも描くことを見る（改善の決定 21）。
+func TestOffscreenRowsAreNotDrawn(t *testing.T) {
+	css := uiSource(t, "ui/app.css")
+
+	for _, sel := range []string{".list > .row", ".list > .heading"} {
+		rule := cssRule(t, css, sel)
+		if !strings.Contains(rule, "content-visibility: auto;") {
+			t.Errorf("%s に content-visibility: auto が無い。全行を描き直すたびに画面が止まる", sel)
+		}
+		if !strings.Contains(rule, "contain-intrinsic-block-size: auto ") {
+			t.Errorf("%s に高さの見積もり（contain-intrinsic-block-size: auto …）が無い", sel)
+		}
+	}
+	if !strings.Contains(cssRule(t, css, ".list > .row:has(> .editor)"), "content-visibility: visible;") {
+		t.Error("入力欄を差し込んだ行を描かないままにしている。入力欄の高さを測れない")
+	}
+}
+
 // TestRemapDoesNotPlaceOnRowsThatCannotBeEdited は、409 のあとの載せ直しで、編集
 // できない行には載せないことを見る（決まったことのそのほか 5）。
 //

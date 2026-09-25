@@ -229,6 +229,26 @@ function reachable(page, selector) {
   }, selector);
 }
 
+// settledScrollY は、頁の送りの位置が止まるのを待って、その位置を返す。
+//
+// 画面の外の行は、描くまで高さを見積もりで持つ（app.css の content-visibility）。送った先の
+// 近くの行を描くと、見積もりとの差のぶんだけブラウザーが位置を直す（見ていた行を画面の
+// 同じところに留めるため）。描き終えるまで、続けて2つの描画で同じ値になるのを待つ。
+async function settledScrollY(page) {
+  let last = -1;
+  await expect
+    .poll(async () => {
+      const now = await page.evaluate(
+        () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res(window.scrollY)))),
+      );
+      const same = now === last;
+      last = now;
+      return same;
+    })
+    .toBe(true);
+  return last;
+}
+
 // axState は selector の要素が読み上げの木でどう見えているかを、Chromium の DevTools
 // Protocol（Accessibility.getPartialAXTree）で読む。ignored は木から外れているか、live は
 // 告知の仕方（aria-live や role="status" から決まる。無ければ null）。
@@ -801,13 +821,16 @@ test.describe("長い一覧の途中から", () => {
     await page.setViewportSize(WIDE);
     await openApp(page, server);
     await expectTopHeightFollowsBand(page);
+    // 画面の外の行は、描くまで高さを見積もりで持つ（app.css の content-visibility）。飛んだ先の
+    // 近くの行を描くと、見積もりとの差のぶんだけ位置が動くので、止まってから基準を取る。
     await page.evaluate(() => window.scrollTo(0, 3000));
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(3000);
+    const at = await settledScrollY(page);
+    expect(at).toBeGreaterThan(1000);
 
     for (let i = 0; i < 3; i++) {
       await pressOutside(page, "/");
       await expect(search(page)).toBeFocused();
-      expect(await page.evaluate(() => window.scrollY), `${i + 1}回目`).toBe(3000);
+      expect(await page.evaluate(() => window.scrollY), `${i + 1}回目`).toBe(at);
     }
     // 列の中は先頭へ戻り、検索の欄は帯の下に見えている。
     await expect.poll(() => reachable(page, "#search")).toBe(true);
