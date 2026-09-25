@@ -280,6 +280,61 @@ func TestEditKeylessRowIsReadOnly(t *testing.T) {
 	}
 }
 
+// TestEditSpacesAroundKeyColumn は、key 列の16桁のキーや台詞ID の前後に空白があるとき、
+// publish はキーとして読む（キーを決められない理由には当たらない）が、引用符で囲まない
+// 空白はゲームの読み方と食い違うことがあり、そのときは食い違いの理由で編集させないことを
+// 見る（README の「書き換えられない行」）。
+//
+// 引用符で囲まない値は、publish の読み方（ConvertFrom-Csv）では先頭の空白とタブを削り、
+// 末尾の空白を1つだけ残す（csvfile の trimPowerShellTrailing）。ゲームの読み方は削らない
+// ので、先頭の空白と、2つ以上続く末尾の空白で値が割れる。引用した値の空白は、どちらの
+// 読み方でも値に残る。
+func TestEditSpacesAroundKeyColumn(t *testing.T) {
+	const hex = "0123456789abcdef"
+	tests := []struct {
+		name, key string
+		editable  bool
+	}{
+		{"先頭の空白", " " + hex, false},
+		{"先頭のタブ", "\t" + hex, false},
+		{"前後の空白", " " + hex + " ", false},
+		{"末尾に2つの空白", hex + "  ", false},
+		{"台詞ID の先頭の空白", " line:intro_1", false},
+		{"台詞ID の末尾に2つの空白", "line:intro_1  ", false},
+		{"末尾に1つの空白", hex + " ", true},
+		{"末尾に1つのタブ", hex + "\t", true},
+		{"引用した前後の空白", `"  ` + hex + `  "`, true},
+		{"引用した台詞ID の前後の空白", `" line:intro_1 "`, true},
+		{"台詞ID の末尾に1つの空白", "line:intro_1 ", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := headerPair + tt.key + ",訳\n"
+			if _, stats, err := publish.Build(nil, []byte(data), nil); err != nil || stats.Dropped != 0 {
+				t.Fatalf("前提が崩れた: publish がこの行を捨てる（%v、%s）", err, stats.LogLine("out", "in"))
+			}
+			f := Parse([]byte(data))
+			l, _ := f.Line(2)
+			if tt.editable {
+				if !l.Editable {
+					t.Fatalf("ID 2 = %+v、編集できる行を期待", l)
+				}
+				if err := f.SetTranslation(2, "新しい訳"); err != nil {
+					t.Errorf("書けない: %v", err)
+				}
+				return
+			}
+			if l.Editable || l.Cause.ID != reason.EditGameDisagrees || argOf(l.Cause, "column") != "key" {
+				t.Fatalf("ID 2 = %+v、key 列の食い違いの理由を期待", l)
+			}
+			var notEditable *NotEditableError
+			if err := f.SetTranslation(2, "新しい訳"); !errors.As(err, &notEditable) || notEditable.Cause.ID != reason.EditGameDisagrees {
+				t.Errorf("書けてしまう、または理由が違う: %v", err)
+			}
+		})
+	}
+}
+
 // TestKeylessAgreesWithPublish は、publish がキーを決められない理由で編集させない行が、
 // 同じ入力で publish が捨てて集計の malformed dropped に数える行と食い違わないことを見る
 // （決まったことの 24）。判定は publish と同じ関数（publish.Keyless）を呼ぶが、呼び方
