@@ -288,6 +288,43 @@ test.describe("行をまたぐレコード", () => {
   });
 });
 
+test.describe("訳が行をまたぐレコード", () => {
+  // 行番号と ID（区切りは CRLF、値の中は LF）:
+  //   1 ヘッダー / 2 hello（ID 2） / 3〜4 TWO_LINES の訳のレコード（ID 3） / 5 wonderful（ID 4）
+  const twoLines = ui("One.", "いち\nに");
+  test.use({
+    repo: sampleRepo({
+      workingCopy: workingCopy(
+        [{ ...SAMPLE.hello, translation: SAMPLE.hello.ja }, twoLines, { ...SAMPLE.wonderful, translation: SAMPLE.wonderful.ja }],
+        { eol: "\r\n" },
+      ),
+    }),
+  });
+
+  // いまは、訳に改行があるレコードを編集させない（reason.edit_multiline_translation）。画面は
+  // 改行を空白に置き換えるので、開いて1字打つと、翻訳者が見ていない改行まで消えるためである。
+  test("いまは、訳に改行があるレコードを理由を付けて編集させず、生の字を出す", async ({ app, server }) => {
+    const before = await server.readRoot(workingRel);
+    const row = rowById(app, 3);
+    await expect(row).toHaveClass(/(^|\s)not-editable(\s|$)/);
+    await expect(row.locator(".num-start")).toHaveText("3");
+    await expect(row.locator(".num-end")).toHaveText(msg("ja", "ui.line_end", { line: 4 }));
+    await expect(row.locator(".row-note")).toHaveText(
+      msg("ja", "ui.not_editable", { reason: msg("ja", "reason.edit_multiline_translation") }),
+    );
+    expect(await textOf(row.locator(".cell.raw"))).toBe(recordOf(twoLines, twoLines.translation));
+    await expect(translationCell(app, 3)).toHaveCount(0);
+    await row.locator(".cell.raw").click();
+    await expect(editor(app)).toHaveCount(0);
+
+    // 前後の行はいままでどおり書ける。Enter は訳に改行がある行を飛ばす。
+    await openEditor(app, 2);
+    await editor(app).press("Enter");
+    await expect(rowById(app, 4).locator("textarea.editor")).toBeFocused();
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+  });
+});
+
 test.describe("書くと読み違える形のレコード", () => {
   // 行番号:
   //   1 ヘッダー / 2 hello

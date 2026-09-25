@@ -335,6 +335,10 @@ test("Escape は入力欄を閉じるだけで、打った訳は残して保存�
   await editor(page).press("Escape");
   await expect(editor(page)).toHaveCount(0);
   await expect(translationCell(page, SAMPLE_LINES.goodbye)).toHaveText(typed);
+  // いまは、閉じると焦点が body へ落ちる。そのまま Enter を押しても、どの行も開かない。
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Enter");
+  await expect(editor(page)).toHaveCount(0);
 
   const expected = `${dataText(ROW.goodbye, typed)}\n`;
   await expect.poll(() => lineOnDisk(server, SAMPLE_LINES.goodbye)).toBe(expected);
@@ -344,6 +348,19 @@ test("Escape は入力欄を閉じるだけで、打った訳は残して保存�
   // 開き直すと、閉じる前に打った訳が入っている。
   await openEditor(page, SAMPLE_LINES.goodbye);
   await expect(editor(page)).toHaveValue(typed);
+});
+
+// いまは Shift+Enter も Enter と同じく行送りに使い、訳に改行を入れない（訳への改行の
+// 入力はまだ無い）。
+test("Shift+Enter も改行を入れず、次の行へ進む", async ({ page, server }) => {
+  await openPaused(page, server);
+  const typed = "もしもし。";
+  await typeTranslation(page, SAMPLE_LINES.hello, typed);
+
+  await editor(page).press("Shift+Enter");
+  await expectEditorIn(page, SAMPLE_LINES.goodbye);
+  await expect.poll(() => lineOnDisk(server, SAMPLE_LINES.hello)).toBe(`${dataText(ROW.hello, typed)}\n`);
+  await waitForSaved(page);
 });
 
 // 閉じた行の訳は、応答が返るまでは未保存の控えにしか無い。そのあいだに開き直した
@@ -791,6 +808,22 @@ test("貼り付けた改行は空白に置き換わり、NUL は落ちて、1行
   expectOnlyLines(before, await server.readRoot(workingRel), { [SAMPLE_LINES.goodbye]: line });
 });
 
+// 表計算ソフトのセルやエディターの行を写すと、末尾に改行が付いてくる。いまはその改行も
+// 空白に置き換わり、訳の末尾に空白が残る（前後の空白は引用して書く）。
+test("貼り付けた文の末尾の改行も空白に置き換わる", async ({ app, server }) => {
+  await openEditor(app, SAMPLE_LINES.goodbye);
+  await editor(app).evaluate((ed) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", "さようなら。\r\n");
+    ed.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+  });
+  await expect(editor(app)).toHaveValue("さようなら。 ");
+
+  await editor(app).press("Escape");
+  await expect.poll(() => lineOnDisk(server, SAMPLE_LINES.goodbye)).toBe(`${dataText(ROW.goodbye, "さようなら。 ")}\n`);
+  await waitForSaved(app);
+});
+
 // 改行は貼り付け以外からも入りうる（ドラッグで落とした字、入力補助など）。どの道で
 // 入っても送る値は1行にする。打っている位置も跳ねさせない。
 test("貼り付け以外で入った改行も空白に置き換え、打つ位置を保つ", async ({ app }) => {
@@ -909,6 +942,38 @@ test("保存の応答が値を変えたと言ったら、その値を行に出�
   await expect(editor(app)).toHaveValue(shown);
   await editor(app).fill("さようなら！");
   await expect(note).toBeHidden();
+});
+
+// 入力欄を開いたままの行に、値を変えたという断りが来たとき。いまは断りだけを行に出し、
+// 入力欄も（閉じたあとの）訳の欄も打った値のままにする。断りの「ファイルにある値を出して
+// います」と、画面に出ている値が食い違う（改善の ui-16）。
+test("入力欄を開いたままの行に値を変えたという断りが来ると、いまは断りだけが出て、欄は打った値のまま", async ({
+  app,
+}) => {
+  const shown = "ファイルにある値";
+  const warning = msg("ja", "warn.value_normalized");
+  await app.route("**/api/rows", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const r of body.results) {
+      r.translation = shown;
+      r.warning = warning;
+    }
+    await route.fulfill({ response, json: body });
+  });
+
+  const typed = "すばらしい。";
+  await typeTranslation(app, SAMPLE_LINES.wonderful, typed);
+  // 出ている最後の行なので、Enter は閉じずに送るだけ。
+  await editor(app).press("Enter");
+  await waitForSaved(app);
+  const note = rowByLine(app, SAMPLE_LINES.wonderful).locator(".row-note");
+  await expect(note).toHaveText(warning);
+  await expect(editor(app)).toHaveValue(typed);
+
+  await editor(app).press("Escape");
+  await expect(translationCell(app, SAMPLE_LINES.wonderful)).toHaveText(typed);
+  await expect(note).toHaveText(warning);
 });
 
 // 画面は件数を数えない。保存の応答に入っている、待ち受けが数え直した件数・チップの
