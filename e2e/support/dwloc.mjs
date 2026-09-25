@@ -224,6 +224,12 @@ export async function launchDwloc(repo, options = {}) {
     try {
       child = spawn(bin, args, {
         cwd: dir,
+        // 書き込みの錠のファイル（internal/publish の LockFile）を見本の一時ディレクトリに
+        // 置かせる。渡さないと、保存のたびに利用者のキャッシュのフォルダー
+        // （%LocalAppData%\dwloc\locks や ~/.cache/dwloc/locks）へ、見本のパスから名前を
+        // 作った錠のファイルが1つずつ残り、走らせるたびに溜まる。Go の試験も TestMain で
+        // 同じ環境変数を渡している。
+        env: { ...process.env, DWLOC_LOCK_DIR: join(dir, "locks") },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });

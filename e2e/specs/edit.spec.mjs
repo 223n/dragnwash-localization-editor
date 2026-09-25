@@ -14,6 +14,8 @@
 // 「待たずに保存した」ことを遅い機械でも取り違えずに確かめられる。page.clock.install は
 // 頁を開く前に要るので、その試験は app ではなく page と server から開く。
 import { createHash } from "node:crypto";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 
 import { expect, test } from "../support/test.mjs";
 import { msg } from "../support/catalog.mjs";
@@ -861,6 +863,18 @@ test("保存の要求は ID（通し番号）にキーと読んだときの版�
   expect(saves[1].edits).toEqual([
     { id: SAMPLE_LINES.hello, key: keyFor(SAMPLE.hello.source), translation: "もしもし。" },
   ]);
+});
+
+// 保存は書き込みの錠を取る（internal/publish の LockFile）。錠のファイルは、試験の仕組みが
+// 渡す DWLOC_LOCK_DIR で見本の一時ディレクトリに置かせ、利用者のキャッシュのフォルダーへ
+// 走らせるたびに溜めない（support/dwloc.mjs の launchDwloc）。
+test("保存の錠のファイルは見本の一時ディレクトリに置く", async ({ app, server }) => {
+  await typeTranslation(app, SAMPLE_LINES.goodbye, "さようなら。");
+  await editor(app).press("Escape");
+  await waitForSaved(app);
+  const locks = await readdir(join(server.dir, "locks"));
+  expect(locks).toHaveLength(1);
+  expect(locks[0]).toMatch(/^[0-9a-f]{24}\.lock$/);
 });
 
 // 待ち受けは保存後の行を読み直した値（translation）を返し、入力と違えば断り（warning）を
