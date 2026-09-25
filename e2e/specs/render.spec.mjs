@@ -676,11 +676,6 @@ test.describe("長い一覧の読み上げの木", () => {
     return probes.flatMap((p) => [p.source, p.translation]).filter((text) => !texts.has(text));
   }
 
-  // afterFrames は、2つの描画を待つ。送った先を描き終えてから読み上げの木を読む。
-  function afterFrames(page) {
-    return page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  }
-
   // 読み上げソフトの見出しの一覧と見出しへ移る操作（節と節点を見出しにした改善の ui-10）は、
   // 読み上げの木の見出しの名前を使う。見出しにも描かない指定（content-visibility: auto）を
   // 付けていたころは、画面の外の見出しの名前が空になり、スクロールすると今度は上の見出しの
@@ -696,7 +691,6 @@ test.describe("長い一覧の読み上げの木", () => {
     await expect.poll(() => nodeHeadingNames(app)).toEqual(want);
 
     await headings(app).last().evaluate((e) => e.scrollIntoView());
-    await afterFrames(app);
     await expect.poll(() => nodeHeadingNames(app)).toEqual(want);
   });
 
@@ -713,7 +707,6 @@ test.describe("長い一覧の読み上げの木", () => {
 
     // 最後まで送ると、今度は最初の行が画面の外になる。
     await rows.last().evaluate((e) => e.scrollIntoView());
-    await afterFrames(app);
     expect(await rows.first().evaluate((e) => e.getBoundingClientRect().bottom)).toBeLessThan(0);
     await expect.poll(() => missingRowTexts(app)).toEqual([]);
   });
