@@ -1606,6 +1606,11 @@ Without it, they look in the default location and are skipped if nothing is foun
 If you set it and there is no translation repository at that location, they fail instead of being skipped.  
 This is so that a mistyped path does not let them pass without checking the real data even once.
 
+These tests follow the upstream `main`.  
+They do not hard-code the number of locales or rows; they count them from the repository they read.  
+The default location is also the author's checkout of the upstream `main`.  
+Shapes that only some versions have (the `level_flow.csv` with a BOM and the `script_order.csv` without columns such as `norm` in upstream `003ed1e`) are checked by tests with synthetic samples.
+
 ### Tests and coverage
 
 There are two kinds of tests.  

@@ -12,30 +12,26 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
 
-// 実データの実測値。数が変わったらデータが変わったということなので、
-// そのときは「テストを直す」のではなく「何が変わったか」を先に見ること。
-const (
-	realLocales      = 13   // Translations 直下のロケール数。ignore.txt はファイルなので入らない
-	realOrderRows    = 1839 // data/script_order.csv の行数
-	realOrderKeys    = 1602 // うちキーの種類数
-	realOrderLineIDs = 1839 // 台詞IDは全行ユニークで非空
-	realHashRows     = 1680 // 各ロケールの公開ハッシュ行。13ロケールとも同じ
-	realNotPublished = 32   // どのロケールにも訳が無い行
-	realScriptGap    = 17   // 台本に無い台詞行
-	realUnknownOrig  = 93   // 由来を判定できない行
-	realResidual     = 110  // 再生順に無い公開ハッシュキー（17 + 93）
-	// realTagUnbalanced はタグの開閉がそろわない行。全部が <size=70%> や <i> を
-	// 原文が閉じずに使っている行で、訳も同じ書き方をしている（原文とは
-	// 比べない判定なので、原文どおりでも当たる）。de と ko は少ない
-	// （realTagUnbalancedExtra）。
-	realTagUnbalanced = 53
-)
-
-// realTagUnbalancedExtra は [realTagUnbalanced] と違うロケールの件数。
-var realTagUnbalancedExtra = map[string]int{"de": 51, "ko": 52}
+// 実データの試験は上流 main に追従する（改善の決定 31）。
+//
+// 以前は上流 003ed1e の実測値（13 ロケール、再生順 1839 行、公開ハッシュ行 1680、
+// どのロケールにも訳が無い行 32、台本に無い台詞行 17、由来を判定できない行 93 など）を
+// 決め打ちにして、データの変化を捕まえるつもりでいた。いまの main（16 ロケール、
+// 公開ハッシュ行 1697、由来を判定できない行 110）を渡すと、コードと関係なく落ちて
+// いた。
+//
+// いまは、件数を入力から数える。数え方は読み手（internal/csvfile と ReadRows）を
+// 通さず、物理行をカンマで分けたもの（sourcerepo.ContentLines）から求める。カテゴリの
+// 判定の正しさは合成の見本の試験（compare_test.go など）が見る。ここで見るのは、
+// 実データの規模と形で、判定が入力から数えた集合とちょうど合うことと、上流の HEAD が
+// 満たすはずの性質（台本から消えた行が無い、など）である。
+//
+// ゲーム更新を再現する試験（TestRealDataGameUpdate など）は、決まったコミット
+// （0490f89）を git show で読むので、その版の実測値のまま決め打ちにしてある。
 
 // sourceRepo は元実装のリポジトリの場所を返す。環境変数（sourcerepo.Env）で指定した
 // 場所に無ければ落とし、指定していなくて見つからなければ飛ばす（sourcerepo.Find）。
@@ -46,108 +42,188 @@ func sourceRepo(t *testing.T) string {
 }
 
 // loadRealRepo は元リポジトリを読む。元リポジトリのファイルは読むだけで、
-// 絶対に書き換えない。
+// 絶対に書き換えない。ロケールの数は、Translations 直下から数えたもの
+// （sourcerepo.Locales）と比べる。
 func loadRealRepo(t *testing.T) *Repo {
 	t.Helper()
-	repo, err := Load(sourceRepo(t), true)
+	root := sourceRepo(t)
+	repo, err := Load(root, true)
 	if err != nil {
 		t.Fatalf("読み込みに失敗した: %v", err)
 	}
-	if len(repo.Locales) != realLocales {
-		t.Fatalf("ロケール数が違う: got %d, want %d", len(repo.Locales), realLocales)
+	if want := len(sourcerepo.Locales(t, root)); len(repo.Locales) != want {
+		t.Fatalf("ロケール数が違う: got %d, want %d", len(repo.Locales), want)
 	}
 	return repo
 }
 
-// TestRealDataCounts は実データの件数が実測値どおりであることを確かめる。
+// realOrder は、data/script_order.csv を読み手を通さずに数えたもの。
+type realOrder struct {
+	// rows はデータ行の数。
+	rows int
+	// keys は、key 列の値（前後の空白を除いて小文字にしたもの。空は除く）の集合。
+	keys map[string]struct{}
+	// lineIDs は、line_id 列の値（空は除く）の集合。
+	lineIDs map[string]struct{}
+}
+
+// countRealOrder は data/script_order.csv を物理行から数える。data/ の2ファイルには
+// 引用符・コメント行・空行が無い（internal/order の TestRealDataLoadersAgree の前提）。
+func countRealOrder(t *testing.T, root string) realOrder {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "data", "script_order.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := sourcerepo.ContentLines(raw)
+	header, _ := sourcerepo.PlainFields(lines[0].Text)
+	col := func(name string) int {
+		for i, h := range header {
+			if strings.EqualFold(h, name) {
+				return i
+			}
+		}
+		t.Fatalf("script_order.csv に %s 列が無い", name)
+		return -1
+	}
+	keyCol, lineIDCol := col("key"), col("line_id")
+	out := realOrder{keys: map[string]struct{}{}, lineIDs: map[string]struct{}{}}
+	for _, line := range lines[1:] {
+		fields, ok := sourcerepo.PlainFields(line.Text)
+		if !ok {
+			t.Fatalf("script_order.csv の %d行目に引用符がある", line.Number)
+		}
+		out.rows++
+		if k := strings.ToLower(strings.TrimSpace(fields[keyCol])); k != "" {
+			out.keys[k] = struct{}{}
+		}
+		if id := fields[lineIDCol]; id != "" {
+			out.lineIDs[id] = struct{}{}
+		}
+	}
+	return out
+}
+
+// realPublished は、1ロケールの公開ファイルを読み手を通さずに数えたもの。
+type realPublished struct {
+	// hashRows は、key 列が16桁のハッシュキーの行の数。
+	hashRows int
+	// keys はそのキーの集合。
+	keys map[string]struct{}
+}
+
+// countRealPublished は公開ファイルを物理行から数える。key 列は最初の列で、キーに
+// 引用符やカンマは入らないので、最初のカンマまでを key の値とする。
+func countRealPublished(t *testing.T, path string) realPublished {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := realPublished{keys: map[string]struct{}{}}
+	for _, line := range sourcerepo.ContentLines(raw)[1:] {
+		first, _, _ := strings.Cut(line.Text, ",")
+		if k := strings.ToLower(strings.TrimSpace(first)); key.LooksLike(k) {
+			out.hashRows++
+			out.keys[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+// TestRealDataCounts は、実データの報告の件数が、入力から数えた集合とちょうど
+// 合うことを確かめる。
 //
-// いちばん大事なのは CatVanished が0件であることで、ここが110件に膨らむなら
-// 「再生順に無い公開キー＝孤児」という素朴な判定に退化したということ。
+// いちばん大事なのは「台本から消えた行」が0件であることで、公開ファイルを
+// いまの再生順で作り直した上流の HEAD では、再生順に無い公開キーはすべて UI の
+// 行になっている（TestRealDataResidualIsUI）。ここが膨らむなら「再生順に無い
+// 公開キー＝孤児」という素朴な判定に退化したということ。
 func TestRealDataCounts(t *testing.T) {
+	root := sourceRepo(t)
 	repo := loadRealRepo(t)
 	rep := Compare(repo, nil)
+	ord := countRealOrder(t, root)
 
-	if rep.OrderRows != realOrderRows {
-		t.Errorf("再生順の行数が違う: got %d, want %d", rep.OrderRows, realOrderRows)
+	if rep.OrderRows != ord.rows {
+		t.Errorf("再生順の行数が違う: got %d, want %d", rep.OrderRows, ord.rows)
 	}
-	if rep.OrderKeys != realOrderKeys {
-		t.Errorf("再生順のキーの種類が違う: got %d, want %d", rep.OrderKeys, realOrderKeys)
+	if rep.OrderKeys != len(ord.keys) {
+		t.Errorf("再生順のキーの種類が違う: got %d, want %d", rep.OrderKeys, len(ord.keys))
 	}
-	if rep.OrderLineIDs != realOrderLineIDs {
-		t.Errorf("再生順の台詞IDが違う: got %d, want %d", rep.OrderLineIDs, realOrderLineIDs)
+	if rep.OrderLineIDs != len(ord.lineIDs) {
+		t.Errorf("再生順の台詞IDが違う: got %d, want %d", rep.OrderLineIDs, len(ord.lineIDs))
 	}
-	if rep.Status() != StatusInfo {
-		t.Errorf("現 HEAD では要確認も要作業も出ないはず: got %s", rep.Status())
+	if rep.Status() == StatusReview {
+		t.Errorf("上流の HEAD では要確認が出ないはず: got %s", rep.Status())
 	}
 
-	want := map[Category]int{
-		CatUntranslated:  0, // 作業コピーが無いので判定そのものが走らない
-		CatLocaleGap:     0,
-		CatVanished:      0,
-		CatCarryover:     0, // 消えた行が無いので引き継ぎ先を探す相手もいない
-		CatDropped:       0,
-		CatStrayLineID:   0,
-		CatNotPublished:  realNotPublished,
-		CatScriptGap:     realScriptGap,
-		CatUnknownOrigin: realUnknownOrig,
-		CatTagUnbalanced: realTagUnbalanced,
+	// 全ロケールの公開ハッシュキーを、読み手を通さずに集める。
+	published := make(map[string]realPublished, len(repo.Locales))
+	union := make(map[string]struct{})
+	for _, loc := range repo.Locales {
+		p := countRealPublished(t, loc.PublishedPath)
+		published[loc.Name] = p
+		for k := range p.keys {
+			union[k] = struct{}{}
+		}
 	}
+	// どのロケールにも訳が無い行は、再生順のキーのうち、どの公開ファイルにも無いもの。
+	notPublished := 0
+	for k := range ord.keys {
+		if _, ok := union[k]; !ok {
+			notPublished++
+		}
+	}
+
 	for _, sum := range rep.Locales {
 		t.Run(sum.Locale, func(t *testing.T) {
 			if sum.HasWorking {
 				t.Fatalf("元リポジトリに作業コピーがある: %s", sum.WorkingPath)
 			}
-			if sum.HashRows != realHashRows {
-				t.Errorf("ハッシュ行の数が違う: got %d, want %d", sum.HashRows, realHashRows)
+			p := published[sum.Locale]
+			if sum.HashRows != p.hashRows {
+				t.Errorf("ハッシュ行の数が違う: got %d, want %d", sum.HashRows, p.hashRows)
 			}
 			if sum.BrokenRows != 0 {
 				t.Errorf("形の分からない行がある: %d", sum.BrokenRows)
 			}
-			for _, c := range categories {
-				expect := want[c]
-				if extra, ok := realTagUnbalancedExtra[sum.Locale]; ok && c == CatTagUnbalanced {
-					expect = extra
-				}
-				if sum.Counts[c] != expect {
-					t.Errorf("%s の件数が違う: got %d, want %d", c, sum.Counts[c], expect)
+			// 作業コピーが無いので判定そのものが走らないもの（未翻訳など）と、上流の
+			// HEAD では出ないはずのもの（台本から消えた行と、消えた行が無いので
+			// 引き継ぎ先を探す相手もいない引き継ぎ候補など）。
+			for _, c := range []Category{CatUntranslated, CatVanished, CatCarryover, CatCarryFrom,
+				CatDropped, CatStrayLineID, CatTagMismatch, CatLayoutRisk} {
+				if sum.Counts[c] != 0 {
+					t.Errorf("%s の件数が違う: got %d, want 0", c, sum.Counts[c])
 				}
 			}
-			// 3つの参考カテゴリで、再生順に無い公開キー110件をちょうど割り切る。
-			residual := sum.Counts[CatVanished] + sum.Counts[CatScriptGap] + sum.Counts[CatUnknownOrigin]
-			if residual != realResidual {
-				t.Errorf("再生順に無い公開キーの合計が違う: got %d, want %d", residual, realResidual)
+			// 他のロケールにあって無い行は、公開ハッシュキーの和集合からこのロケールの
+			// キーを引いた残り。上流 main では全ロケールが同じキーを持つので0件になる。
+			gap := 0
+			for k := range union {
+				if _, ok := p.keys[k]; !ok {
+					gap++
+				}
 			}
+			if sum.Counts[CatLocaleGap] != gap {
+				t.Errorf("%s の件数が違う: got %d, want %d", CatLocaleGap, sum.Counts[CatLocaleGap], gap)
+			}
+			if sum.Counts[CatNotPublished] != notPublished {
+				t.Errorf("%s の件数が違う: got %d, want %d", CatNotPublished, sum.Counts[CatNotPublished], notPublished)
+			}
+			// 3つの参考カテゴリで、再生順に無い公開キーをちょうど割り切る。
+			residual := 0
+			for k := range p.keys {
+				if _, ok := ord.keys[k]; !ok {
+					residual++
+				}
+			}
+			got := sum.Counts[CatVanished] + sum.Counts[CatScriptGap] + sum.Counts[CatUnknownOrigin]
+			if got != residual {
+				t.Errorf("再生順に無い公開キーの合計が違う: got %d, want %d", got, residual)
+			}
+			t.Logf("ハッシュ行 %d、どのロケールにも訳が無い行 %d、台本に無い台詞行 %d、由来を判定できない行 %d、タグの開閉がそろわない行 %d",
+				sum.HashRows, sum.Counts[CatNotPublished], sum.Counts[CatScriptGap], sum.Counts[CatUnknownOrigin], sum.Counts[CatTagUnbalanced])
 		})
-	}
-}
-
-// TestRealDataLocalesShareKeys は13ロケールの公開ハッシュキーが完全に同じ集合で
-// あることを確かめる。「他のロケールにあって無い行」が0件になる根拠がこれで、
-// この前提が崩れたときに件数だけを見て慌てないようにする。
-func TestRealDataLocalesShareKeys(t *testing.T) {
-	repo := loadRealRepo(t)
-
-	union := make(map[string]struct{})
-	sets := make(map[string]map[string]struct{}, len(repo.Locales))
-	for _, loc := range repo.Locales {
-		set := hashKeySet(loc.Published)
-		sets[loc.Name] = set
-		for k := range set {
-			union[k] = struct{}{}
-		}
-	}
-	if len(union) != realHashRows {
-		t.Fatalf("和集合の大きさが違う: got %d, want %d", len(union), realHashRows)
-	}
-	for name, set := range sets {
-		if len(set) != realHashRows {
-			t.Errorf("%s のキー数が違う: got %d, want %d", name, len(set), realHashRows)
-		}
-		for k := range union {
-			if _, ok := set[k]; !ok {
-				t.Errorf("%s に %s が無い", name, k)
-			}
-		}
 	}
 }
 
@@ -155,7 +231,8 @@ func TestRealDataLocalesShareKeys(t *testing.T) {
 // 「node が空」「order が空」の4つが同じ集合であることを確かめる。
 //
 // 3つの列が同じ1ビットの言い換えでしかないことの裏取り。どれか1つを見れば
-// 足りる、という設計の根拠がここにある。
+// 足りる、という設計の根拠がここにある。publish が再生順に置けなかった行を
+// UI の見出しの下へ回すので、上流の HEAD の公開ファイルはこの形になる。
 func TestRealDataResidualIsUI(t *testing.T) {
 	repo := loadRealRepo(t)
 	idx := newOrderIndex(repo.Order)
@@ -171,7 +248,7 @@ func TestRealDataResidualIsUI(t *testing.T) {
 					continue
 				}
 				residual++
-				if row.Section == "UI" {
+				if row.Section == publish.UISectionName {
 					uiSection++
 				}
 				if row.Node == "" {
@@ -181,9 +258,6 @@ func TestRealDataResidualIsUI(t *testing.T) {
 					emptyOrder++
 				}
 			}
-			if residual != realResidual {
-				t.Fatalf("再生順に無い公開キーの数が違う: got %d, want %d", residual, realResidual)
-			}
 			if uiSection != residual || emptyNode != residual || emptyOrder != residual {
 				t.Errorf("4集合が一致しない: 再生順の外 %d / section=UI %d / node 空 %d / order 空 %d",
 					residual, uiSection, emptyNode, emptyOrder)
@@ -192,75 +266,97 @@ func TestRealDataResidualIsUI(t *testing.T) {
 	}
 }
 
-// TestRealDataScriptGapSpeakers は「台本に無い台詞行」17件の話者の内訳が
-// 13ロケールで一致することを確かめる。
+// TestRealDataScriptGapSpeakers は「台本に無い台詞行」がどれも話者を持つ（UI の
+// 文言ではなく会話である）ことと、同じキーを持つロケールどうしで話者の内訳が
+// 一致することを確かめる。
 //
-// これが UI 文言ではなく会話であることの根拠。増えたときに気づけるように
-// 数を固定しておく（運用の方針が決まるまでは参考のまま）。
+// 以前は 003ed1e の内訳（2人の話者で 8 件と 9 件）を決め打ちにしていた。上流 main に
+// 追従するので、件数は決め打ちにしない。
 func TestRealDataScriptGapSpeakers(t *testing.T) {
 	repo := loadRealRepo(t)
 	rep := Compare(repo, nil)
 
-	want := map[string]int{"Ryan": 8, "Conrad": 9}
-	for _, sum := range rep.Locales {
-		got := make(map[string]int)
-		for _, f := range rep.Findings {
-			if f.Locale != sum.Locale || f.Category != CatScriptGap {
-				continue
-			}
-			got[f.Speaker]++
+	byLocale := make(map[string]map[string]int)
+	for _, f := range rep.Findings {
+		if f.Category != CatScriptGap {
+			continue
 		}
-		if len(got) != len(want) {
-			t.Errorf("%s: 話者の種類が違う: %v", sum.Locale, got)
+		if f.Speaker == "" || f.Speaker == publish.UIFallbackSpeaker {
+			t.Errorf("%s: 話者の無い行を「台本に無い台詞行」にしている: %s", f.Locale, f.Key)
 		}
-		for name, n := range want {
-			if got[name] != n {
-				t.Errorf("%s: %s の件数が違う: got %d, want %d", sum.Locale, name, got[name], n)
+		if byLocale[f.Locale] == nil {
+			byLocale[f.Locale] = make(map[string]int)
+		}
+		byLocale[f.Locale][f.Speaker]++
+	}
+	sameKeys := localesWithSameKeys(repo)
+	first := byLocale[sameKeys[0]]
+	for _, name := range sameKeys[1:] {
+		got := byLocale[name]
+		if len(got) != len(first) {
+			t.Errorf("%s: 話者の種類が %s と違う: %v と %v", name, sameKeys[0], sortedKeys(got), sortedKeys(first))
+			continue
+		}
+		for speaker, n := range first {
+			if got[speaker] != n {
+				t.Errorf("%s: %s の件数が %s と違う: got %d, want %d", name, speaker, sameKeys[0], got[speaker], n)
 			}
 		}
 	}
 }
 
-// TestRealDataNotPublishedNodes は「どのロケールにも訳が無い行」32件の
-// ノード別の内訳が実測どおりで、13ロケールで一致することを確かめる。
+// localesWithSameKeys は、最初のロケールと公開ハッシュキーの集合がまったく同じ
+// ロケールの名前を、最初のロケールを先頭に並べて返す。
+func localesWithSameKeys(repo *Repo) []string {
+	base := hashKeySet(repo.Locales[0].Published)
+	out := []string{repo.Locales[0].Name}
+	for _, loc := range repo.Locales[1:] {
+		set := hashKeySet(loc.Published)
+		if len(set) != len(base) {
+			continue
+		}
+		same := true
+		for k := range base {
+			if _, ok := set[k]; !ok {
+				same = false
+				break
+			}
+		}
+		if same {
+			out = append(out, loc.Name)
+		}
+	}
+	return out
+}
+
+// TestRealDataNotPublishedNodes は「どのロケールにも訳が無い行」が、どのロケールでも
+// 同じキーの集合で、どの行も再生順から位置（section と node）を借りていることを
+// 確かめる。
 //
-// 13人が独立に同じ32行を訳し忘れたとは考えにくく、Translations/ignore.txt の
-// 除外パターンと符合する。だから要作業ではなく参考に置いてある。
+// 全ロケールが独立に同じ行を訳し忘れたとは考えにくく、Translations/ignore.txt の
+// 除外パターンと符合する。だから要作業ではなく参考に置いてある。以前は 003ed1e の
+// ノード別の内訳を決め打ちにしていた。
 func TestRealDataNotPublishedNodes(t *testing.T) {
 	repo := loadRealRepo(t)
 	rep := Compare(repo, nil)
 
-	want := map[string]int{
-		"Unused / Start":                           24,
-		"L08 Conrad / Conrad_Outro":                3,
-		"L13 Ryan / Ryan_5_Required_ryan_romanced": 1,
-		"Unused / Alexander_Outro":                 1,
-		"Unused / ConradBeatup_Outro":              1,
-		"Unused / RyanDate_Outro":                  1,
-		"Unused / RyanExploded_Outro":              1,
+	byLocale := make(map[string][]string)
+	for _, f := range rep.Findings {
+		if f.Category != CatNotPublished {
+			continue
+		}
+		if f.Section == "" || f.Node == "" {
+			t.Errorf("%s: 位置の無い行がある: %s", f.Locale, f.Key)
+		}
+		byLocale[f.Locale] = append(byLocale[f.Locale], f.Key)
 	}
-	for _, sum := range rep.Locales {
-		got := make(map[string]int)
-		unused := 0
-		for _, f := range rep.Findings {
-			if f.Locale != sum.Locale || f.Category != CatNotPublished {
-				continue
-			}
-			got[f.Section+" / "+f.Node]++
-			if f.Section == "Unused" {
-				unused++
-			}
-		}
-		if len(got) != len(want) {
-			t.Errorf("%s: ノードの種類が違う: %v", sum.Locale, sortedKeys(got))
-		}
-		for node, n := range want {
-			if got[node] != n {
-				t.Errorf("%s: %s の件数が違う: got %d, want %d", sum.Locale, node, got[node], n)
-			}
-		}
-		if unused != 28 {
-			t.Errorf("%s: Unused の件数が違う: got %d, want 28", sum.Locale, unused)
+	want := byLocale[repo.Locales[0].Name]
+	for _, loc := range repo.Locales[1:] {
+		got := byLocale[loc.Name]
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: どのロケールにも訳が無い行が %s と違う: %d 件と %d 件", loc.Name, repo.Locales[0].Name, len(got), len(want))
 		}
 	}
 }
@@ -268,8 +364,9 @@ func TestRealDataNotPublishedNodes(t *testing.T) {
 // TestRealDataEmptyLineIDsAreNotReported は「再生順に line_id があるのに公開CSVに
 // 台詞ID行が無い」ことを一切報告しないことを、実データで確かめる。
 //
-// 公開の台詞ID行は tok=0 〜 ja=41 と数が違い、再生順の1839件の大半には対応する
-// 行が無い。ここを検出に加えると1ロケールあたり最大1839件の誤検出が出る。
+// 公開の台詞ID行はロケールによって数が違い（0 件のロケールもある）、再生順の
+// 台詞IDの大半には対応する行が無い。ここを検出に加えると、1ロケールあたり
+// 再生順の行の数に近い誤検出が出る。
 func TestRealDataEmptyLineIDsAreNotReported(t *testing.T) {
 	repo := loadRealRepo(t)
 	rep := Compare(repo, nil)
@@ -304,7 +401,8 @@ func TestRealDataEmptyLineIDsAreNotReported(t *testing.T) {
 }
 
 // TestRealDataOutputs は実データの報告を両方の形式で書き出せることを確かめる。
-// 数は他のテストが見ているので、ここは「書けること」と「絶対パスが出ないこと」だけ。
+// 数は他のテストが見ているので、ここは「書けること」と「絶対パスが出ないこと」と、
+// csv の行の数が報告の件数と合うことだけ。
 func TestRealDataOutputs(t *testing.T) {
 	root := sourceRepo(t)
 	repo := loadRealRepo(t)
@@ -317,7 +415,7 @@ func TestRealDataOutputs(t *testing.T) {
 	if strings.Contains(text.String(), root) {
 		t.Error("絶対パスが出ている")
 	}
-	if !strings.Contains(text.String(), "要確認はありません。") {
+	if rep.Status() != StatusReview && !strings.Contains(text.String(), "要確認はありません。") {
 		t.Errorf("締めの行が違う:\n%s", text.String())
 	}
 
@@ -326,8 +424,8 @@ func TestRealDataOutputs(t *testing.T) {
 		t.Fatalf("csv で書けない: %v", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(csv.String(), "\n"), "\n")
-	if len(lines)-1 != realNotPublished+realScriptGap+realUnknownOrig+realTagUnbalanced {
-		t.Errorf("CSV の行数が違う: got %d", len(lines)-1)
+	if len(lines)-1 != len(rep.Findings) {
+		t.Errorf("CSV の行数が違う: got %d, want %d（報告の件数）", len(lines)-1, len(rep.Findings))
 	}
 	// 作業コピーが無いので、英語原文がログへ出ることはない。
 	for _, line := range lines[1:] {
@@ -370,6 +468,10 @@ const (
 	updateOldOnlyKeys = 23
 	updateNewOnlyKeys = 24
 	updateCommonKeys  = 1578
+
+	// updateOrderRows は、この更新の旧版と新版の再生順の行数。どちらも1839行で、
+	// 台詞IDは全行で重ならず空も無い。
+	updateOrderRows = 1839
 )
 
 // orderKeysAt は元リポジトリの指定した版の script_order.csv から、キーの集合を作る。
@@ -517,8 +619,8 @@ func TestRealDataGameUpdateLineIDs(t *testing.T) {
 
 	oldIDs := keysByLineID(repo.OldOrder.Entries)
 	newIDs := keysByLineID(repo.Order.Entries)
-	if len(oldIDs) != realOrderRows || len(newIDs) != realOrderRows {
-		t.Fatalf("台詞IDの数が違う: 旧 %d / 新 %d, want %d", len(oldIDs), len(newIDs), realOrderRows)
+	if len(oldIDs) != updateOrderRows || len(newIDs) != updateOrderRows {
+		t.Fatalf("台詞IDの数が違う: 旧 %d / 新 %d, want %d", len(oldIDs), len(newIDs), updateOrderRows)
 	}
 
 	oldOnly, newOnly, changed := 0, 0, 0
