@@ -288,7 +288,9 @@ func TestPublishStopsWhenTheGameBaseChangesAfterBuilding(t *testing.T) {
 	if code != exitProblems {
 		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitProblems, stdout, stderr)
 	}
-	checkContains(t, "stderr", stderr, []string{publishFilesChangedText, "dwloc:   " + filepath.ToSlash(base) + "\n"})
+	// ゲームのフォルダーは、製品がリンクを解いた形で出す（8.3 形式の TMP など）。
+	shown := filepath.Join(realPath(t, game), "Translations", "ja", "strings.csv")
+	checkContains(t, "stderr", stderr, []string{publishFilesChangedText, "dwloc:   " + filepath.ToSlash(shown) + "\n"})
 	if got := readFile(t, root, jaPublishedPath); got != before {
 		t.Errorf("止めたのに公開ファイルが変わった:\n%s", got)
 	}
