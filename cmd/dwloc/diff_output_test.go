@@ -59,28 +59,42 @@ func TestRunDiffOutputWritesTheBytes(t *testing.T) {
 // 作業コピーとして読まれる（Translations/xx/strings.csv なら新しいロケールになる）。
 // 書き出し先のフォルダーが無いときも、作らずに止める（打ち間違いで別の場所へ
 // 書かないように）。
+//
+// --no-game のときと、ゲームが見つからないときは、ゲームの Translations を守りの
+// フォルダーに数えられない。それでもゲームの作業コピーを報告で上書きしないよう、
+// 場所に関わらず、dwloc が読むファイルの名前では書かない。
 func TestRunDiffOutputRefusesWhatDiffReads(t *testing.T) {
 	root := recordDiffTree(t)
 	game := makeGame(t, map[string]string{
 		"Translations/_discovered/ja.working.csv": "key,source_en,translation\n",
 	})
+	elsewhere := t.TempDir()
 	published := readFile(t, root, "Translations/ja/strings.csv")
+	const (
+		inFolder = "--output には、diff が読むフォルダーの中を指定できません"
+		byName   = "--output には、dwloc が読むファイルの名前を使えません"
+	)
+	gameWorking := filepath.Join(game, "Translations", "_discovered", "ja.working.csv")
 	tests := []struct {
 		name string
 		out  string
 		args []string
 		want string
 	}{
-		{"公開ファイル", filepath.Join(root, "Translations", "ja", "strings.csv"), []string{"--no-game"},
-			"--output には、diff が読むフォルダーの中を指定できません"},
-		{"新しいロケールになる場所", filepath.Join(root, "Translations", "xx", "strings.csv"), []string{"--no-game"},
-			"--output には、diff が読むフォルダーの中を指定できません"},
-		{"作業コピーのフォルダー", filepath.Join(root, "Translations", "_discovered", "report.csv"), []string{"--no-game"},
-			"--output には、diff が読むフォルダーの中を指定できません"},
-		{"再生順のフォルダー", filepath.Join(root, "data", "report.csv"), []string{"--no-game"},
-			"--output には、diff が読むフォルダーの中を指定できません"},
-		{"ゲームの Translations", filepath.Join(game, "Translations", "_discovered", "ja.working.csv"), []string{"--game", game},
-			"--output には、diff が読むフォルダーの中を指定できません"},
+		{"公開ファイル", filepath.Join(root, "Translations", "ja", "strings.csv"), []string{"--no-game"}, inFolder},
+		{"新しいロケールになる場所", filepath.Join(root, "Translations", "xx", "strings.csv"), []string{"--no-game"}, inFolder},
+		{"作業コピーのフォルダー", filepath.Join(root, "Translations", "_discovered", "report.csv"), []string{"--no-game"}, inFolder},
+		{"再生順のフォルダー", filepath.Join(root, "data", "report.csv"), []string{"--no-game"}, inFolder},
+		{"ゲームの Translations", gameWorking, []string{"--game", game}, inFolder},
+		{"--no-game でゲームの作業コピー", gameWorking, []string{"--no-game"}, byName},
+		{"ゲームが見つからないときのゲームの作業コピー", gameWorking, nil, byName},
+		{"--no-game でゲームの公開ファイルになる場所", filepath.Join(game, "Translations", "ja", "strings.csv"), []string{"--no-game"}, byName},
+		{"ほかの場所の公開ファイルの名前", filepath.Join(elsewhere, "strings.csv"), []string{"--no-game"}, byName},
+		{"ほかの場所の作業コピーの名前（大文字）", filepath.Join(elsewhere, "JA.Working.CSV"), []string{"--no-game"}, byName},
+		{"はみ出しの記録の名前", filepath.Join(elsewhere, "layout_risks.csv"), []string{"--no-game"}, byName},
+		{"再生順の名前", filepath.Join(elsewhere, "script_order.csv"), []string{"--no-game"}, byName},
+		{"見出しの表の名前", filepath.Join(elsewhere, "level_flow.csv"), []string{"--no-game"}, byName},
+		{"末尾の点と空白（Windows は落として開く）", filepath.Join(elsewhere, "strings.csv. "), []string{"--no-game"}, byName},
 		{"無いフォルダー", filepath.Join(root, "nope", "report.csv"), []string{"--no-game"},
 			"--output の書き出し先のフォルダーがありません"},
 	}
@@ -112,6 +126,28 @@ func TestRunDiffOutputRefusesWhatDiffReads(t *testing.T) {
 	}
 	if got := readFile(t, game, "Translations/_discovered/ja.working.csv"); got != "key,source_en,translation\n" {
 		t.Errorf("ゲームの作業コピーが書き換わった:\n%s", got)
+	}
+	if names, err := os.ReadDir(elsewhere); err != nil || len(names) > 0 {
+		t.Errorf("ほかの場所に書いている: %v %v", names, err)
+	}
+}
+
+// TestRunDiffOutputAcceptsOtherNames は、dwloc が読む名前に似ているだけの名前には、
+// 止めずに書くことを見る。名前の守りは、読む名前そのものだけに当てる。
+func TestRunDiffOutputAcceptsOtherNames(t *testing.T) {
+	root := recordDiffTree(t)
+	dir := t.TempDir()
+	for _, name := range []string{"strings.csv.bak", "my-strings.csv", "working.csv.txt", "ja.working.txt"} {
+		t.Run(name, func(t *testing.T) {
+			out := filepath.Join(dir, name)
+			code, _, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv", "--output", out)
+			if code != exitProblems {
+				t.Fatalf("終了コード = %d, 期待 %d\nstderr:\n%s", code, exitProblems, stderr)
+			}
+			if _, err := os.Stat(out); err != nil {
+				t.Errorf("%s に書いていない: %v", name, err)
+			}
+		})
 	}
 }
 
@@ -235,5 +271,13 @@ func TestRunDiffOutputUsage(t *testing.T) {
 		"  --output <ファイル>\n",
 		"BOM",
 		"PowerShell 5.1",
+		"dwloc が読むファイルの名前",
 	})
+	// 使い方に並べた名前は、守りが断る名前（dwlocReadNames）と同じにする。
+	// 片方だけを足し引きすると、使い方を読んだ人が守りの範囲を取り違える。
+	flat := strings.Join(strings.Fields(stdout), "")
+	want := "（" + strings.Join(dwlocReadNames(), "、") + "）"
+	if !strings.Contains(flat, want) {
+		t.Errorf("diff --help に守りの名前の並び %q が無い:\n%s", want, stdout)
+	}
 }

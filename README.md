@@ -337,7 +337,9 @@ Windowsに最初から入っているPowerShell 5.1で`>`を使ってファイ�
 PowerShell 7とコマンドプロンプトの`>`は化けませんが、CSVにBOMは付きません。  
 パスはカレントディレクトリからの相対です。  
 書き出し先のフォルダーは作りません。  
-翻訳リポジトリの`Translations`と`data`、ゲームの`Translations`の中には書けません。`diff`・`publish`・`edit`が読むファイルを上書きしないためです。
+翻訳リポジトリの`Translations`と`data`、ゲームの`Translations`の中には書けません。`diff`・`publish`・`edit`が読むファイルを上書きしないためです。  
+場所に関わらず、`dwloc`が読むファイルの名前（`strings.csv`、`<ロケール>.working.csv`、`layout_risks.csv`、`script_order.csv`、`level_flow.csv`）でも書けません。  
+`--no-game`のときや、ゲームが見つからないときも、ゲームの作業コピーを上書きしないためです。
 
 ### 出力は日本語だけです
 

@@ -80,7 +80,11 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         ディレクトリからの相対です。書き出し先のフォルダーは作りません。
         翻訳リポジトリの Translations と data、ゲームの Translations の
         中には書けません（diff・publish・edit が読むファイルを上書き
-        しないためです）。
+        しないためです）。場所に関わらず、dwloc が読むファイルの名前
+        （strings.csv、<ロケール>.working.csv、layout_risks.csv、
+        script_order.csv、level_flow.csv）でも書けません。--no-game の
+        ときや、ゲームが見つからないときも、ゲームの作業コピーを
+        上書きしないためです。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
@@ -341,6 +345,13 @@ const utf8BOMText = "\xef\xbb\xbf"
 // ロケールになります）。フォルダーの照合はファイルの同一性（os.SameFile）で見るので、
 // 大文字小文字の違い、リンク、8.3 形式の短い名前で書いても当たります。
 //
+// 場所に関わらず、dwloc が読むファイルの名前（[readByDwloc]）でも書きません。
+// --no-game のときと、ゲームが見つからないときは、ゲームの Translations を守りの
+// フォルダーに数えられません。それでも、作業コピーの名前をそのまま打つと、
+// 作業コピーが報告に置き換わって訳を失います。守るためだけにゲームを探すことは
+// しません。--no-game は「探しも読みもしない」指定で、探す先も自動検出が見つける
+// 1か所だけだからです。
+//
 // 書き出し先のフォルダーが無いときも止めます。作ると、打ち間違えた名前の
 // フォルダーへ黙って書くことになります。
 func checkDiffOutput(root, game, out string, stderr io.Writer) int {
@@ -369,11 +380,48 @@ func checkDiffOutput(root, game, out string, stderr io.Writer) int {
 			filepath.ToSlash(out))
 		return exitError
 	}
+	if readByDwloc(filepath.Base(abs)) || readByDwloc(filepath.Base(target)) {
+		fmt.Fprintf(stderr,
+			"dwloc: --output には、dwloc が読むファイルの名前を使えません（%s）。別の名前にしてください: %s\n",
+			strings.Join(dwlocReadNames(), "、"), filepath.ToSlash(out))
+		return exitError
+	}
 	if !isDir(filepath.Dir(abs)) {
 		fmt.Fprintf(stderr, "dwloc: --output の書き出し先のフォルダーがありません: %s\n", filepath.ToSlash(filepath.Dir(out)))
 		return exitError
 	}
 	return exitOK
+}
+
+// dwlocReadNames は、dwloc が読むファイルの名前を、使い方と誤りの文に並べる形で返します。
+// 作業コピーは「<ロケール>.working.csv」です。
+func dwlocReadNames() []string {
+	return []string{
+		publish.StringsFile,
+		"<ロケール>" + publish.WorkingSuffix,
+		diff.LayoutRisksFile,
+		filepath.Base(publish.ScriptOrderPath("")),
+		filepath.Base(publish.LevelFlowPath("")),
+	}
+}
+
+// readByDwloc は、name（パスの最後の要素）が、dwloc の読むファイルの名前かを返します。
+//
+// 大文字小文字は区別しません。Windows と macOS の既定のファイルシステムは同じ
+// ファイルとして開きます。名前の後ろの点と空白も落として比べます。Windows は
+// 「strings.csv. 」を strings.csv として開くためです。どちらも、区別する
+// ファイルシステムで断りすぎるだけで、報告の名前を変えれば済みます。
+func readByDwloc(name string) bool {
+	name = strings.ToLower(strings.TrimRight(name, ". "))
+	if strings.HasSuffix(name, publish.WorkingSuffix) {
+		return true
+	}
+	for _, n := range dwlocReadNames() {
+		if name == n {
+			return true
+		}
+	}
+	return false
 }
 
 // within は、path の親をたどったどれかが、dirs のどれかと同じフォルダーかを返します。
