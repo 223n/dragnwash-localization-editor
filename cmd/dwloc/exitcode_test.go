@@ -34,6 +34,16 @@ var publishStopReasonsEn = []string{
 	"the input or the output changed after it was assembled",
 }
 
+// publish --check が、書き換えの要るロケールを見つけて終了コード 1 を返すことの、
+// 5か所での書き方。止まる理由（[publishStopReasons]）とは別の1件として並べる。
+const (
+	checkInPublishUsage = "--check では、書き換えが要るロケールがあるときも 1 です"
+	checkInHelp         = "publish --check で書き換えが要るロケールがある"
+	checkInComment      = "publish --check が書き換えの要るロケールを見つけたとき"
+	checkInReadme       = "`publish --check`が、書き換えが要るロケールを見つけたとき"
+	checkInReadmeEn     = "When `publish --check` finds a locale that needs rewriting"
+)
+
 // readRepoFile は、このリポジトリのファイルを、ルートからの相対パスで読む。
 // 試験は cmd/dwloc をカレントにして走る。
 func readRepoFile(t *testing.T, rel string) string {
@@ -144,6 +154,9 @@ func TestExitCodeOneReasonsAgree(t *testing.T) {
 		if !slices.Equal(got, publishStopReasons) {
 			t.Errorf("publish の使い方の終了コード1の理由 = %q, want %q", got, publishStopReasons)
 		}
+		if !strings.Contains(entry, checkInPublishUsage) {
+			t.Errorf("publish の使い方の終了コード1に --check の場合が無い: %s", entry)
+		}
 	})
 
 	t.Run("dwloc help", func(t *testing.T) {
@@ -154,6 +167,9 @@ func TestExitCodeOneReasonsAgree(t *testing.T) {
 		}
 		if got := bracketed(tail); !slices.Equal(got, publishStopReasons) {
 			t.Errorf("dwloc help の終了コード1の publish の理由 = %q, want %q", got, publishStopReasons)
+		}
+		if !strings.Contains(entry, checkInHelp) {
+			t.Errorf("dwloc help の終了コード1に --check の場合が無い: %s", entry)
 		}
 	})
 
@@ -168,6 +184,9 @@ func TestExitCodeOneReasonsAgree(t *testing.T) {
 		}
 		if !slices.Equal(got, publishStopReasons) {
 			t.Errorf("README の publish の理由 = %q, want %q", got, publishStopReasons)
+		}
+		if !slices.Contains(items, checkInReadme) {
+			t.Errorf("README の一覧に %q が無い: %q", checkInReadme, items)
 		}
 		if want := strconv.Itoa(len(items)) + "つです。"; count != want {
 			t.Errorf("README の件数の行 = %q, 一覧は %d 行（want %q）", count, len(items), want)
@@ -184,6 +203,9 @@ func TestExitCodeOneReasonsAgree(t *testing.T) {
 		}
 		if !slices.Equal(got, publishStopReasonsEn) {
 			t.Errorf("README.en の publish の理由 = %q, want %q", got, publishStopReasonsEn)
+		}
+		if !slices.Contains(itemsEn, checkInReadmeEn) {
+			t.Errorf("README.en の一覧に %q が無い: %q", checkInReadmeEn, itemsEn)
 		}
 		word, _, _ := strings.Cut(countEn, " ")
 		if numberWords[word] != len(itemsEn) {
@@ -207,6 +229,9 @@ func TestExitCodeOneReasonsAgree(t *testing.T) {
 		want := "README の終了コードの" + strconv.Itoa(len(items)) + "つ"
 		if !strings.Contains(comment, want) {
 			t.Errorf("パッケージの注記に %q が無い（README の一覧は %d 行）:\n%s", want, len(items), comment)
+		}
+		if !strings.Contains(comment, checkInComment) {
+			t.Errorf("パッケージの注記に %q が無い:\n%s", checkInComment, comment)
 		}
 	})
 }

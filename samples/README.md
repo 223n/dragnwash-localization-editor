@@ -20,7 +20,7 @@
 見本には、画面に出したいものをわざと残してあります。  
 未翻訳の行は3つ、原文とタグの違う行は1つです。  
 タグの違う行が要確認に当たるので、`dwloc diff --no-game`は終了コード1で終わります。  
-写しで走らせると、`dwloc validate`は問題を出さず、`dwloc publish --no-game --dry-run`は変更なしで終わります。  
+写しで走らせると、`dwloc validate`は問題を出さず、`dwloc publish --no-game --check`は終了コード0（書き換えが要らない）で終わります。  
 手元にゲームがあると、`--no-game`を付けない`diff`と`publish`はゲームの作業コピーを読み、結果が変わります。  
 `samples/harbor`のまま`dwloc validate`を掛けると、終了コード1で終わります。  
 作業コピーをこのリポジトリにコミットしてあり、コミットしてはいけないファイルとして数えるためです。
@@ -88,7 +88,7 @@ npm run screenshots
 それ以外の形は`dwloc validate`が指摘します。
 
 リリースのワークフローは、配る書庫をこの見本の写しで動かして確かめます。  
-直したあとも、写しで`dwloc validate`が問題を出さず、`dwloc publish --no-game --dry-run`が変更なしで終わる形を保ってください。  
+直したあとも、写しで`dwloc validate`が問題を出さず、`dwloc publish --no-game --check`が終了コード0で終わる形を保ってください。  
 崩れると、Goのテスト`TestSampleHarborPassesReleaseChecks`（`cmd/dwloc/samples_test.go`）が落ちます。
 
 撮り直しの台本は、`ja.working.csv`の10行目の訳が空いていることを前提にしています。  

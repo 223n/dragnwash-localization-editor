@@ -20,7 +20,7 @@ It contains none of the game's script.
 The sample deliberately keeps things worth showing on the screen.  
 There are 3 untranslated lines and 1 line whose tags differ from the source.  
 The line whose tags differ counts as "needs checking", so `dwloc diff --no-game` ends with exit code 1.  
-Run on a copy, `dwloc validate` reports no problems, and `dwloc publish --no-game --dry-run` ends with no changes.  
+Run on a copy, `dwloc validate` reports no problems, and `dwloc publish --no-game --check` ends with exit code 0 (no rewriting needed).  
 If the game is installed, `diff` and `publish` without `--no-game` read the game's working copy, and the results change.  
 Running `dwloc validate` on `samples/harbor` in place ends with exit code 1.  
 The working copy is committed to this repository, and it is counted as a file that must not be committed.
@@ -88,7 +88,7 @@ Keep `section` in the form `L01 Harbor`, or to letters, digits and `_` only.
 `dwloc validate` reports any other form.
 
 The release workflow runs the archives it ships on a copy of this sample.  
-After a change, keep it so that, on a copy, `dwloc validate` reports no problems and `dwloc publish --no-game --dry-run` ends with no changes.  
+After a change, keep it so that, on a copy, `dwloc validate` reports no problems and `dwloc publish --no-game --check` ends with exit code 0 (no rewriting needed).  
 If that breaks, the Go test `TestSampleHarborPassesReleaseChecks` (`cmd/dwloc/samples_test.go`) fails.
 
 The retake script assumes that line 10 of `ja.working.csv` has an empty translation.  

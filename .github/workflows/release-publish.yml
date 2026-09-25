@@ -461,24 +461,27 @@ jobs:
             exit 1
           fi
 
-          # 変更なしかどうかは出力の文言で見る。文言は samples_test.go が同じものを確かめている
-          if ! out="$("${dir}/dwloc" publish --root "${sample}" --no-game --dry-run)"; then
-            printf '%s\n' "${out}"
-            echo "::error::dwloc publish --no-game --dry-run が見本で失敗した"
+          # 書き換えが要らないかは、出力の文言ではなく終了コードで見る（publish --check）。
+          # 0 は書き換えが要らない、1 は書き換えが要るか publish の確かめで止まった、2 は実行できなかった。
+          # 見本がこの形を保っているかは samples_test.go が Pull Request のうちに見る
+          if "${dir}/dwloc" publish --root "${sample}" --no-game --check; then
+            :
+          else
+            code=$?
+            if [ "${code}" -eq 1 ]; then
+              echo "::error::dwloc publish --no-game --check が見本で終了コード1を返した。見本の公開ファイルが publish の出力とずれているか、publish の確かめで止まった"
+            else
+              echo "::error::dwloc publish --no-game --check が見本で失敗した（終了コード ${code}）"
+            fi
             exit 1
           fi
-          printf '%s\n' "${out}"
-          if [[ "${out}" == *'[変更あり'* || "${out}" != *'件中 0 件が変わります'* ]]; then
-            echo "::error::dwloc publish --no-game --dry-run が見本で「変更なし」にならなかった"
-            exit 1
-          fi
-          # --dry-run は書かない約束。写しが見本と同じままかも見る
+          # --check は書かない約束。写しが見本と同じままかも見る
           if ! diff -r "${GITHUB_WORKSPACE}/samples/harbor" "${sample}"; then
-            echo "::error::dwloc publish --dry-run が見本の写しを書き換えた"
+            echo "::error::dwloc publish --check が見本の写しを書き換えた"
             exit 1
           fi
 
-          echo "- 書庫を展開して動かした: ${name}.tar.gz（version、validate、publish --dry-run）" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 書庫を展開して動かした: ${name}.tar.gz（version、validate、publish --check）" >> "$GITHUB_STEP_SUMMARY"
 
       - name: タグを打つ
         env:

@@ -1,9 +1,9 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -33,15 +33,16 @@ func copySample(t *testing.T) string {
 // 保っていることを確かめる。
 //
 // release-publish.yml は、タグを打つ前に配る書庫を展開し、見本の写しで
-// validate と publish --no-game --dry-run を走らせる。前者が終了コード0、
-// 後者が「変更なし」で終わらなければ、タグも Release も作らずに止まる。
-// その確認は release/* を main へマージしたあとで初めて走るので、見本が
-// 崩れたまま develop へ入ると、公開の段になって止まる。ここで先に落とし、
-// 見本を変えた Pull Request のうちに気付けるようにする。
+// validate と publish --no-game --check を走らせる。どちらも終了コード0で
+// 終わらなければ、タグも Release も作らずに止まる。その確認は release/* を
+// main へマージしたあとで初めて走るので、見本が崩れたまま develop へ入ると、
+// 公開の段になって止まる。ここで先に落とし、見本を変えた Pull Request のうちに
+// 気付けるようにする。
 //
-// 出力の文言も確かめるのは、ワークフローが publish の出力を文字列で見ている
-// ためである（「件中 0 件が変わります」があり、「[変更あり」が無いこと）。
-// 文言を変えるときは、release-publish.yml の「作った書庫を展開して動かす」も直す。
+// ワークフローも試験も、publish の出力の文言ではなく終了コードで見る
+// （--check。改善の調査の cli-15）。以前は --dry-run の出力に「件中 0 件が
+// 変わります」があり「[変更あり」が無いことを文字列で見ていたので、文言を
+// 直すたびに、ワークフローとこの試験の両方を直す必要があった。
 func TestSampleHarborPassesReleaseChecks(t *testing.T) {
 	root := copySample(t)
 
@@ -53,12 +54,26 @@ func TestSampleHarborPassesReleaseChecks(t *testing.T) {
 		t.Errorf("validate の標準出力 = %q, 期待 %q", stdout, "translations OK\n")
 	}
 
-	code, stdout, stderr = runCLI("publish", "--root", root, "--no-game", "--dry-run")
+	code, stdout, stderr = runCLI("publish", "--root", root, "--no-game", "--check")
 	if code != exitOK {
-		t.Fatalf("publish --dry-run の終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
+		t.Fatalf("publish --check の終了コード = %d, 期待 %d。見本の公開ファイルが publish の出力とずれていれば、"+
+			"写しで dwloc publish --no-game を回した出力で置き換える\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
-	checkContains(t, "publish --dry-run の標準出力", stdout, []string{"[変更なし]", "件中 0 件が変わります"})
-	if strings.Contains(stdout, "[変更あり") {
-		t.Errorf("見本の公開ファイルが publish の出力とずれている。写しで dwloc publish --no-game を回した出力で置き換える\n%s", stdout)
+
+	// --check は書かない約束。ワークフローも写しが見本と同じままかを見る。
+	if err := fs.WalkDir(os.DirFS(sampleDir), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		want, err := os.ReadFile(filepath.Join(sampleDir, filepath.FromSlash(path)))
+		if err != nil {
+			return err
+		}
+		if got := readFile(t, root, path); got != string(want) {
+			t.Errorf("publish --check が %s を書き換えた", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

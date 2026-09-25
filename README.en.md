@@ -308,6 +308,7 @@ The options you will use most are these.
 | ---- | ---- | ---- |
 | `--locale <locale>` | `publish` `diff` | Narrows to the given locales. You can list several, separated by commas |
 | `--dry-run` | `publish` | Only shows what it would do and writes no file. The safety checks are the same |
+| `--check` | `publish` | Gives the same report as `--dry-run`, and returns exit code `1` if rewriting is needed. Writes no file. Meant for CI |
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
@@ -1356,7 +1357,7 @@ To make the published file from a working copy, run `dwloc publish` without `--p
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these seven cases.
+1 comes back in these eight cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
@@ -1365,10 +1366,15 @@ As for exit codes, 0 is success and 2 is a runtime error.
 - When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
 - When `publish` judges that the input or the output changed after it was assembled and stops
+- When `publish --check` finds a locale that needs rewriting
 
-The four for `publish` are separate checks.  
+The four stops of `publish` are separate checks.  
 The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.  
 When the input or the output changed, just run it again.
+
+`publish --check` goes through the four checks and then tells you by the exit code whether rewriting is needed.  
+It writes nothing.  
+Use it in CI to catch a forgotten `publish`.
 
 #### Committing and opening a pull request
 
@@ -1747,7 +1753,7 @@ It checks three things.
 
 - `dwloc version` prints the version being released
 - On a copy of the sample (`samples/harbor`), `dwloc validate` ends with exit code 0
-- On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
+- On the same copy, `dwloc publish --no-game --check` ends with exit code 0 (no rewriting needed)
 
 It also checks that the checksum list matches the archives.  
 For all six archives, it also checks the list of contents.  

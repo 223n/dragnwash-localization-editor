@@ -18,7 +18,7 @@ import (
 )
 
 // publishUsage は publish の説明。
-const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>:<key>] [--dry-run]
+const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>:<key>] [--dry-run] [--check]
 
 <ルート>/Translations 配下の各ロケールについて、公開用の strings.csv を作り直します。
 tools/hash-strings.ps1 と同じ出力です。
@@ -131,6 +131,12 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
         通せる行に当たらない指定は誤りにします。
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
+  --check
+        書き換えが要るかだけを確かめます。ファイルは書きません。報告は
+        --dry-run と同じで、書き換えが要るロケール（出力がいまの公開ファイルと
+        1バイトでも違うか、公開ファイルがまだ無い）が1つでもあれば終了コード 1、
+        無ければ 0 を返します。CI や、publish し忘れていないかの確かめに使います。
+        上の確認は同じにかけ、止まるときはその理由で 1 を返します。
 
 すべての対象を先に組み立ててから書き出します。組み立てで1件でも失敗すれば
 何も書きません。書き出しの途中で失敗したとき（書き込みの権限が無い、ディスクが
@@ -143,7 +149,8 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
   0   成功
   1   書くと訳が失われる、読み違える形のファイルがある、ゲームに入っている
       翻訳が古い、または組み立てたあとに入力か書き出し先が変わったので止めた
-      （どれも1バイトも書いていません）
+      （どれも1バイトも書いていません）。
+      --check では、書き換えが要るロケールがあるときも 1 です
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、
       --accept-multiline の指定が通せる行に当たらない、--path に作業コピーを
       渡した、書き込みの錠を取れない、など）
@@ -442,6 +449,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	fs.Var(&accepts, "accept-multiline", "確かめたうえで複数行の値として通すレコード（<ロケール>:<key>。--path では <ファイル>:<key>）")
 	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	dryRun := fs.Bool("dry-run", false, "書き込まずに内容だけ表示する")
+	check := fs.Bool("check", false, "書き換えが要るかを終了コードで返す（書かない）")
 	if code, ok := parseFlags(fs, args, publishUsage, stdout, stderr); !ok {
 		return code
 	}
@@ -625,7 +633,15 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return code
 	}
 
-	if *dryRun {
+	if *dryRun || *check {
+		// --check は --dry-run と同じ報告を出し、書き換えの要否を終了コードで返します
+		// （改善の調査の cli-15）。--dry-run は変更があっても 0 なので、CI やリリースの
+		// 確かめが「publish し忘れていないか」を見るには、出力の文言を読むしか
+		// ありませんでした。
+		mark := "[dry-run]"
+		if *check {
+			mark = "[check]"
+		}
 		changed := 0
 		for i, t := range targets {
 			note := "変更なし"
@@ -633,11 +649,20 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 				note = fmt.Sprintf("変更あり: %d バイト", len(built[i]))
 				changed++
 			}
-			fmt.Fprintf(stdout, "[dry-run] %s [%s]\n",
+			fmt.Fprintf(stdout, "%s %s [%s]\n", mark,
 				stats[i].LogLine(displayPath(*root, t.Output), displayPath(*root, t.Input)), note)
 		}
-		fmt.Fprintf(stdout, "[dry-run] %d 件中 %d 件が変わります。ファイルは書いていません。\n",
-			len(targets), changed)
+		switch {
+		case !*check:
+			fmt.Fprintf(stdout, "[dry-run] %d 件中 %d 件が変わります。ファイルは書いていません。\n",
+				len(targets), changed)
+		case changed > 0:
+			fmt.Fprintf(stdout, "[check] %d 件中 %d 件が変わります。ファイルは書いていません。dwloc publish で書き換えてください。\n",
+				len(targets), changed)
+			return exitProblems
+		default:
+			fmt.Fprintf(stdout, "[check] %d 件中 0 件が変わります。書き換えは要りません。\n", len(targets))
+		}
 		return exitOK
 	}
 
