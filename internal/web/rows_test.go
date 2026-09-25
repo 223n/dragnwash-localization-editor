@@ -148,14 +148,14 @@ func save(t *testing.T, s *server, locale, version string, edits ...rowEdit) *ht
 }
 
 func TestSaveChangesOnlyTheTouchedLine(t *testing.T) {
-	// 保存は「触った行の最終フィールドだけを差し替える」。触っていない行が
+	// 保存は「触ったレコードの最終フィールドだけを差し替える」。触っていない行が
 	// 1バイトでも変わると、この道具は publish の出力と食い違い始める。
 	s := newTestServer(t, Options{Root: newEditRoot(t)})
 	path := inputPath(t, s, "ja")
 	before := readFile(t, path)
 
 	lines := getLines(t, s, "ja")
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}
@@ -191,7 +191,7 @@ func TestSaveChangesOnlyTheTouchedLine(t *testing.T) {
 
 	// 版は保存後のファイルと合っていること。合っていないと、次の保存が
 	// 自分の書いた内容を「手前で変わった」と見て 409 を返し続ける。
-	again := save(t, s, "ja", got.Version, rowEdit{Line: 6, Translation: jaTyped + "！"})
+	again := save(t, s, "ja", got.Version, rowEdit{ID: 6, Translation: jaTyped + "！"})
 	if again.Code != http.StatusOK {
 		t.Errorf("続けての保存が %d\n%s", again.Code, again.Body.String())
 	}
@@ -205,7 +205,7 @@ func TestSaveRejectsStaleVersion(t *testing.T) {
 	before := readFile(t, path)
 
 	stale := strings.Repeat("0", 64)
-	rec := save(t, s, "ja", stale, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", stale, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("状態コードが %d、409 を期待\n%s", rec.Code, rec.Body.String())
 	}
@@ -236,7 +236,7 @@ func TestSaveConflictKeepsWhatTheOtherWriterWrote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("状態コードが %d、409 を期待", rec.Code)
 	}
@@ -262,7 +262,7 @@ func TestWriteNeedsOriginAndJSON(t *testing.T) {
 	path := inputPath(t, s, "ja")
 	before := readFile(t, path)
 	lines := getLines(t, s, "ja")
-	body := saveBody(t, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	body := saveBody(t, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 
 	cases := []struct {
 		name    string
@@ -304,7 +304,7 @@ func TestWriteNeedsTheCookie(t *testing.T) {
 	lines := getLines(t, s, "ja")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/rows",
-		strings.NewReader(saveBody(t, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})))
+		strings.NewReader(saveBody(t, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})))
 	req.Host = "127.0.0.1:" + testPort
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Origin", "http://127.0.0.1:"+testPort)
@@ -338,7 +338,7 @@ func TestSaveRejectsValuesTheFileCannotHold(t *testing.T) {
 		{"NUL", "あ\x00い"},
 	}
 	for _, tc := range cases {
-		rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: tc.value})
+		rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: tc.value})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: 状態コードが %d、422 を期待\n%s", tc.name, rec.Code, rec.Body.String())
 			continue
@@ -363,7 +363,7 @@ func TestSaveWithInvalidUTF8(t *testing.T) {
 
 	// 対になっていないサロゲート。JSON の \uXXXX として書く。
 	body := `{"locale":"ja","baseVersion":"` + lines.Version +
-		`","edits":[{"line":6,"translation":"a\ud800b"}]}`
+		`","edits":[{"id":6,"translation":"a\ud800b"}]}`
 	rec := doPost(t, s, "/api/rows", body, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
@@ -386,7 +386,7 @@ func TestSaveRejectsLinesThatCannotBeEdited(t *testing.T) {
 	lines := getLines(t, s, "ja")
 
 	for _, line := range []int{1, 2, 3, 4, 7, 0, -1, 999} {
-		rec := save(t, s, "ja", lines.Version, rowEdit{Line: line, Translation: jaTyped})
+		rec := save(t, s, "ja", lines.Version, rowEdit{ID: line, Translation: jaTyped})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%d行目: 状態コードが %d、422 を期待", line, rec.Code)
 			continue
@@ -408,8 +408,8 @@ func TestSaveAppliesTheRowsItCan(t *testing.T) {
 	lines := getLines(t, s, "ja")
 
 	rec := save(t, s, "ja", lines.Version,
-		rowEdit{Line: 6, Translation: jaTyped},
-		rowEdit{Line: 3, Translation: "見出しは編集できない"})
+		rowEdit{ID: 6, Translation: jaTyped},
+		rowEdit{ID: 3, Translation: "見出しは編集できない"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}
@@ -445,7 +445,7 @@ func TestSaveUpdatesUntranslatedCountLocally(t *testing.T) {
 		t.Fatalf("最初の未翻訳が %d 件", base.Count)
 	}
 
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}
@@ -475,7 +475,7 @@ func TestSaveUpdatesUntranslatedCountLocally(t *testing.T) {
 
 	// 訳を消したら戻る。両方向に動かないと、打ち間違いを消したときに
 	// 「未翻訳 0 件」のまま残る。
-	rec = save(t, s, "ja", got.Version, rowEdit{Line: 6, Translation: ""})
+	rec = save(t, s, "ja", got.Version, rowEdit{ID: 6, Translation: ""})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d", rec.Code)
 	}
@@ -507,10 +507,10 @@ func TestSaveRequestsThatAreRefusedBeforeReadingTheFile(t *testing.T) {
 	}{
 		{"JSON でない", `{`, http.StatusBadRequest},
 		{"知らない鍵", `{"locale":"ja","baseVersion":"x","edits":[],"publish":true}`, http.StatusBadRequest},
-		{"版が無い", saveBody(t, "ja", "", rowEdit{Line: 6, Translation: jaTyped}), http.StatusBadRequest},
+		{"版が無い", saveBody(t, "ja", "", rowEdit{ID: 6, Translation: jaTyped}), http.StatusBadRequest},
 		{"行が無い", saveBody(t, "ja", lines.Version), http.StatusBadRequest},
-		{"知らないロケール", saveBody(t, "../../etc", lines.Version, rowEdit{Line: 6}), http.StatusNotFound},
-		{"ロケールが無い", saveBody(t, "", lines.Version, rowEdit{Line: 6}), http.StatusNotFound},
+		{"知らないロケール", saveBody(t, "../../etc", lines.Version, rowEdit{ID: 6}), http.StatusNotFound},
+		{"ロケールが無い", saveBody(t, "", lines.Version, rowEdit{ID: 6}), http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		rec := doPost(t, s, "/api/rows", tc.body, nil)
@@ -533,7 +533,7 @@ func TestRepeatedSaves(t *testing.T) {
 	const rounds = 50
 	for i := range rounds {
 		rec := save(t, s, "ja", version,
-			rowEdit{Line: 6, Translation: jaTyped + strings.Repeat("！", i%5)})
+			rowEdit{ID: 6, Translation: jaTyped + strings.Repeat("！", i%5)})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%d 回目が %d\n%s", i+1, rec.Code, rec.Body.String())
 		}
@@ -554,10 +554,10 @@ func TestSaveLogHasNoRowContent(t *testing.T) {
 	s := newTestServer(t, Options{Root: newEditRoot(t), Verbose: true, Stderr: &log})
 	lines := getLines(t, s, "ja")
 
-	save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	// 拒まれる要求も、競合も記録に通す。
-	save(t, s, "ja", strings.Repeat("0", 64), rowEdit{Line: 6, Translation: jaTyped})
-	save(t, s, "ja", lines.Version, rowEdit{Line: 3, Translation: jaTyped})
+	save(t, s, "ja", strings.Repeat("0", 64), rowEdit{ID: 6, Translation: jaTyped})
+	save(t, s, "ja", lines.Version, rowEdit{ID: 3, Translation: jaTyped})
 
 	out := log.String()
 	for _, secret := range []string{jaTyped, jaHello, srcHello, srcBye} {
@@ -579,7 +579,7 @@ func TestSaveQuietByDefault(t *testing.T) {
 	var log strings.Builder
 	s := newTestServer(t, Options{Root: newEditRoot(t), Stderr: &log})
 	lines := getLines(t, s, "ja")
-	save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if log.Len() != 0 {
 		t.Errorf("既定で記録が出ている:\n%s", log.String())
 	}
@@ -589,7 +589,7 @@ func TestSaveResponsesAreNotCached(t *testing.T) {
 	// 保存の応答にも訳が入っている。ディスクキャッシュに残さない。
 	s := newTestServer(t, Options{Root: newEditRoot(t)})
 	lines := getLines(t, s, "ja")
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control が %q", got)
 	}
@@ -611,7 +611,7 @@ func TestReadOnlyFileCannotBeSaved(t *testing.T) {
 		t.Fatal("読み取り専用の理由が出ていない")
 	}
 	before := readFile(t, path)
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 2, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 2, Translation: jaTyped})
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
 	}
@@ -620,14 +620,17 @@ func TestReadOnlyFileCannotBeSaved(t *testing.T) {
 	}
 }
 
-// TestMultilineRecordIsReadOnly は、複数の物理行にまたがるレコードのどの物理行も、
-// 理由を付けて編集させないことを見る。
+// TestMultilineRecordIsOneRow は、複数の物理行にまたがるレコードを1行として並べ、
+// 訳が1行に収まるかぎり書けることを見る。
 //
-// 保存は物理行の単位なので、行をまたぐレコードの1行目へ書くと続きの行が残り、
-// publish の読み方では壊れたレコードになる。1行目には全体を解釈して読んだキーと
-// 原文の全体を出し、バッジ（未翻訳など）もそこへ付ける。続きの行は生の行のまま出し、
-// 値の中の '#' で始まる行も見出しにしない。
-func TestMultilineRecordIsReadOnly(t *testing.T) {
+// PR2 までは保存が物理行の単位だったので、行をまたぐレコードのどの物理行も編集
+// させていなかった（TestMultilineRecordIsReadOnly）。いまはレコードの最終フィールドを
+// 差し替えるので、原文が行をまたぐ訳の空いたレコード（実物の作業コピーにある形）も
+// 訳せる。訳に改行があるレコードは、改行の入力を足すまで（PR4）読み取り専用にする。
+//
+// 行は ID で指し、行番号（n と end）は表示のためだけに持つ。値の中の '#' で始まる行は
+// 見出しにせず、値の中の空行も並べない。
+func TestMultilineRecordIsOneRow(t *testing.T) {
 	const multi = "para1\n\n# para2"
 	root := newEditRoot(t)
 	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
@@ -635,6 +638,7 @@ func TestMultilineRecordIsReadOnly(t *testing.T) {
 		"key,section,node,order,speaker,source_en,translation",
 		key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + "," + jaHello,
 		key.For(multi) + ",UI,,,UI,\"" + multi + "\",",
+		key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + ",\"さよう\n# なら\"",
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -646,45 +650,60 @@ func TestMultilineRecordIsReadOnly(t *testing.T) {
 	if lines.ReadOnlyReason != "" {
 		t.Fatalf("ファイル全体を読み取り専用にしている: %s", lines.ReadOnlyReason)
 	}
-	why := s.cat.T(ja, "reason."+reason.EditMultiline, "line", "3", "end", "5")
-
-	byLine := make(map[int]lineView)
-	for _, l := range lines.Lines {
-		byLine[l.Number] = l
-	}
-	if l := byLine[2]; !l.Editable {
-		t.Errorf("1物理行のレコードを編集させない: %+v", l)
-	}
-	first, ok := byLine[3]
-	if !ok || first.Kind != lineKindData || first.Editable || first.Reason != why ||
-		first.Key != key.For(multi) || first.Source != multi {
-		t.Errorf("行をまたぐレコードの1行目 = %+v", first)
-	}
-	if !slices.ContainsFunc(first.Badges, func(b badgeView) bool { return b.Category == "untranslated" }) {
-		t.Errorf("1行目に未翻訳のバッジが無い: %+v", first.Badges)
-	}
-	// 4行目は空行なので並べない。5行目は値の中の '#' の行で、見出しではない。
-	if _, ok := byLine[4]; ok {
-		t.Errorf("続きの空行を並べている: %+v", byLine[4])
-	}
-	if l := byLine[5]; l.Kind != lineKindData || l.Editable || l.Reason != why || l.Text != "# para2\"," {
-		t.Errorf("続きの行 = %+v", l)
+	if len(lines.Lines) != 3 || lines.Rows != 3 {
+		t.Fatalf("並べた行 = %d 行（データ %d 行）、3 行を期待: %+v", len(lines.Lines), lines.Rows, lines.Lines)
 	}
 
+	// 1物理行のレコードは end を持たない。
+	if l := lines.Lines[0]; l.ID != 2 || l.Number != 2 || l.End != 0 || !l.Editable {
+		t.Errorf("1物理行のレコード = %+v", l)
+	}
+	para := lines.Lines[1]
+	if para.ID != 3 || para.Number != 3 || para.End != 5 || para.Kind != lineKindData ||
+		!para.Editable || para.Key != key.For(multi) || para.Source != multi || para.Text != "" {
+		t.Errorf("原文が行をまたぐレコード = %+v", para)
+	}
+	if !slices.ContainsFunc(para.Badges, func(b badgeView) bool { return b.Category == "untranslated" }) {
+		t.Errorf("未翻訳のバッジが無い: %+v", para.Badges)
+	}
+	why := s.cat.T(ja, "reason."+reason.EditMultilineTranslation)
+	bye := lines.Lines[2]
+	if bye.ID != 4 || bye.Number != 6 || bye.End != 7 || bye.Editable || bye.Reason != why ||
+		bye.Translation != "" || bye.Text != key.For(srcBye)+",L01 Ryan,Ryan_1_intro,2,Ryan,"+srcBye+",\"さよう\n# なら\"" {
+		t.Errorf("訳が行をまたぐレコード = %+v", bye)
+	}
+
+	// 訳が行をまたぐレコードには書かせない。
 	before := readFile(t, path)
-	for _, n := range []int{3, 5} {
-		rec := save(t, s, "ja", lines.Version, rowEdit{Line: n, Translation: jaTyped})
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Errorf("%d行目: 状態コードが %d、422 を期待", n, rec.Code)
-			continue
-		}
-		got := decode[errorResponse](t, rec.Body.Bytes())
-		if len(got.Results) != 1 || !strings.Contains(got.Results[0].Error, why) {
-			t.Errorf("%d行目: 理由が違う: %+v", n, got.Results)
-		}
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 4, Key: key.For(srcBye), Translation: jaTyped})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("状態コードが %d、422 を期待", rec.Code)
+	}
+	if got := decode[errorResponse](t, rec.Body.Bytes()); len(got.Results) != 1 ||
+		got.Results[0].ID != 4 || got.Results[0].Number != 6 || !strings.Contains(got.Results[0].Error, why) {
+		t.Errorf("理由が違う: %+v", got.Results)
 	}
 	if after := readFile(t, path); after != before {
 		t.Error("断ったのにファイルが変わった")
+	}
+
+	// 原文が行をまたぐレコードには書ける。変わるのは5行目の最終フィールドだけ。
+	rec = save(t, s, "ja", lines.Version, rowEdit{ID: 3, Key: key.For(multi), Translation: jaTyped})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[rowsResponse](t, rec.Body.Bytes())
+	if len(got.Results) != 1 || !got.Results[0].Saved || got.Results[0].ID != 3 || got.Results[0].Number != 3 ||
+		got.Results[0].Translation != jaTyped {
+		t.Errorf("結果 = %+v", got.Results)
+	}
+	if want := strings.Replace(before, "# para2\",\n", "# para2\","+jaTyped+"\n", 1); readFile(t, path) != want {
+		t.Errorf("書いた結果が違う\n got %q\nwant %q", readFile(t, path), want)
+	}
+	for _, b := range got.Results[0].Badges {
+		if b.Category == "untranslated" {
+			t.Error("訳を入れたレコードに未翻訳のバッジが残っている")
+		}
 	}
 }
 
@@ -724,7 +743,7 @@ func TestUnclosedQuoteFileIsReadOnly(t *testing.T) {
 	}
 
 	before := readFile(t, path)
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 2, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 2, Translation: jaTyped})
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
 	}
@@ -752,7 +771,7 @@ func TestSaveBodyLimit(t *testing.T) {
 			before := readFile(t, path)
 
 			// JSON の後ろの空白は読み飛ばされるので、中身を変えずに大きさだけ変えられる。
-			body := saveBody(t, "ja", getLines(t, s, "ja").Version, rowEdit{Line: 6, Translation: jaTyped})
+			body := saveBody(t, "ja", getLines(t, s, "ja").Version, rowEdit{ID: 6, Translation: jaTyped})
 			body += strings.Repeat(" ", tc.size-len(body))
 
 			rec := doPost(t, s, "/api/rows", body, nil)
@@ -796,7 +815,7 @@ func TestSaveEditsLimit(t *testing.T) {
 
 			edits := make([]rowEdit, tc.edits)
 			for i := range edits {
-				edits[i] = rowEdit{Line: 6, Translation: jaTyped}
+				edits[i] = rowEdit{ID: 6, Translation: jaTyped}
 			}
 			rec := save(t, s, "ja", getLines(t, s, "ja").Version, edits...)
 			if rec.Code != tc.want {
@@ -832,7 +851,7 @@ func TestSaveWhenTheFileHasGone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := save(t, s, "ja", version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", version, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("状態コードが %d、500 を期待\n%s", rec.Code, rec.Body.String())
 	}

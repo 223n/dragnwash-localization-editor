@@ -280,6 +280,10 @@ func LoadOrderMarked(root string) (*order.Data, []UnclosedFile, error) {
 //
 // 入力と出力が同じパスのとき（作業コピーが無い既定の場合）は同じファイルを2回読む。
 // 元実装も「CSVとして1回」「コメント引き継ぎ用に1回」の2回読んでいる（R8e）。
+//
+// publish（cmd/dwloc）はこれを使わず、[ReadFiles] で1回読んだ中身を [Build] に渡す。
+// 書く直前に、錠の中で同じファイルを読み直して、組み立てに使った中身と比べるため
+// である（改善の決定 3）。
 func BuildTarget(data *order.Data, t Target) ([]byte, Stats, error) {
 	inputCSV, err := os.ReadFile(t.Input)
 	if err != nil {
@@ -317,6 +321,12 @@ func SourceLineEndHints(t Target) ([]SourceLineEndHint, error) {
 	if err != nil {
 		return nil, err
 	}
+	return SourceLineEndHintsIn(data)
+}
+
+// SourceLineEndHintsIn は [SourceLineEndHints] と同じ行を、入力の中身 data から探す。
+// publish（cmd/dwloc）が、ほかの確かめと同じバイト列（[ReadFiles]）で探すためにある。
+func SourceLineEndHintsIn(data []byte) ([]SourceLineEndHint, error) {
 	f, err := csvfile.ReadPowerShell(data)
 	if err != nil {
 		return nil, err

@@ -369,8 +369,8 @@ func TestPublishHintsCRLFSource(t *testing.T) {
 	})
 }
 
-// TestReportSourceLineEnds は、原文の CRLF の知らせの一覧を切ることと、読めない
-// 入力で終了コード2になることを見る。
+// TestReportSourceLineEnds は、原文の CRLF の知らせの一覧を切ることと、解釈できない
+// 入力（列名の重複）で終了コード2になることを見る。
 func TestReportSourceLineEnds(t *testing.T) {
 	root := t.TempDir()
 	var b strings.Builder
@@ -384,8 +384,9 @@ func TestReportSourceLineEnds(t *testing.T) {
 	if err := os.WriteFile(input, []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	targets := []publish.Target{{Input: input, Output: input}}
 	var stderr strings.Builder
-	if code := reportSourceLineEnds(root, []publish.Target{{Input: input, Output: input}}, &stderr); code != exitOK {
+	if code := reportSourceLineEnds(root, targets, []publish.Files{{Input: []byte(b.String())}}, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d\n%s", code, stderr.String())
 	}
 	checkContains(t, "標準エラー", stderr.String(), []string{
@@ -397,8 +398,9 @@ func TestReportSourceLineEnds(t *testing.T) {
 	}
 
 	stderr.Reset()
-	if code := reportSourceLineEnds(root, []publish.Target{{Input: root, Output: input}}, &stderr); code != exitError {
-		t.Fatalf("読めない入力で終了コード = %d、2 を期待\n%s", code, stderr.String())
+	broken := []publish.Files{{Input: []byte("key,key,translation\n0000000000000001,a,b\n")}}
+	if code := reportSourceLineEnds(root, targets, broken, &stderr); code != exitError {
+		t.Fatalf("解釈できない入力で終了コード = %d、2 を期待\n%s", code, stderr.String())
 	}
 }
 
@@ -1455,19 +1457,18 @@ func TestLineRange(t *testing.T) {
 	}
 }
 
-// TestReportLossesStillRefusesWhatItCannotRead は、失われる訳の確認が、読めない
-// ファイルを「失われない」と扱わないことを見る。
+// TestReportLossesStillRefusesWhatItCannotRead は、失われる訳の確認が、解釈できない
+// 書き出し先を「失われない」と扱わないことを見る。
 //
-// 読めないファイルは、ふつうは先に走る形の確認（reportShape）が終了コード 2 で
-// 止める（TestPublishReportsWhenTheCurrentFileCannotBeChecked）。それでも
-// こちらの確認も同じ扱いを保つ。2つの確認のあいだにファイルが書き換わることは
-// あり、そのときに素通りさせないためである。
+// 確かめるのは runPublish が1回読んだ中身で、読めないファイルはそこで終了コード 2 に
+// なる（TestPublishShapeRefusesWhatItCannotRead）。解釈できない（列名が重複した）
+// 書き出し先は、形の確認（reportShape）を通り、組み立ても通りうるので、ここで止める。
 func TestReportLossesStillRefusesWhatItCannotRead(t *testing.T) {
 	root := t.TempDir()
-	// 書き出し先がディレクトリ。あるのに読めない、という形になる。
-	target := publish.Target{Locale: "ja", Input: filepath.Join(root, "in.csv"), Output: root}
+	target := publish.Target{Locale: "ja", Input: filepath.Join(root, "in.csv"), Output: filepath.Join(root, "out.csv")}
+	files := []publish.Files{{Output: []byte("key,key,translation\n0000000000000001,a,b\n")}}
 	var stderr strings.Builder
-	code := reportLosses(root, []publish.Target{target}, [][]byte{[]byte(publish.HeaderLine + "\n")}, &stderr)
+	code := reportLosses(root, []publish.Target{target}, files, [][]byte{[]byte(publish.HeaderLine + "\n")}, &stderr)
 	if code != exitError {
 		t.Fatalf("終了コード = %d、2 を期待\n%s", code, stderr.String())
 	}

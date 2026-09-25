@@ -35,7 +35,7 @@ func TestSaveRejectsABodyThatIsNotUTF8(t *testing.T) {
 	// saveBody は json.Marshal を通るので使えない（あちらは通る前に U+FFFD へ
 	// 直してしまう）。壊れたバイト列をそのまま本文に載せるため、手で組む。
 	body := fmt.Sprintf(
-		`{"locale":"ja","baseVersion":%q,"edits":[{"line":6,"translation":"%s"}]}`,
+		`{"locale":"ja","baseVersion":%q,"edits":[{"id":6,"translation":"%s"}]}`,
 		lines.Version, cp932)
 	rec := doPost(t, s, "/api/rows", body, nil)
 
@@ -67,7 +67,7 @@ func TestSaveKeepsAReplacementCharacterThatWasSentProperly(t *testing.T) {
 	lines := getLines(t, s, "ja")
 
 	want := "こわれた�もじ"
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: want})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: want})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}

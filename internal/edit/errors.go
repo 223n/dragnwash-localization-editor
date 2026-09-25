@@ -8,7 +8,8 @@ import (
 )
 
 // ErrReadOnly はファイル全体が読み取り専用であることを表す。
-// ヘッダーが受理される4種のいずれでもないか、ヘッダー行そのものが無い。
+// 開いた引用符がファイルの終わりまで閉じないか、ヘッダー行そのものが無いか、
+// ヘッダーが受理される4種のいずれでもないか、行の区切りがすべて単独の CR である。
 // 理由の文言は [File.ReadOnlyReason] で取れる。
 var ErrReadOnly = errors.New("このファイルは読み取り専用")
 
@@ -53,10 +54,40 @@ func (e *ConflictError) Unwrap() []error {
 	return []error{ErrConflict}
 }
 
+// ErrRecheck は、書く前の事後確認が外れたことを表す番兵。この誤りが返ったときは
+// 1バイトも書いていない。詳細が要るなら errors.As で [RecheckError] を取る。
+var ErrRecheck = errors.New("書く前に読み直して確かめると合わない")
+
+// RecheckError は、保存の直前にファイル全体を読み直したとき、編集モデルと同じに
+// 読めなかったことを表す（書く前の事後確認の後半。決まったことのそのほか 4）。
+//
+// 行を特定できるように、原因の書き換えたレコードを指す。書き換えたレコードが2つ以上
+// なら、1つずつ確かめ直して、それだけでも外れるレコードを指す（どれも単独では外れない
+// ときは、外れたところに最も近い書き換えたレコード）。画面はその行を保存できない行に
+// して、送り直しを止める。ほかの行は送り直せば書ける。
+type RecheckError struct {
+	// ID は書き換えたレコードの ID（[Line.ID]）。
+	ID int
+	// Line はそのレコードの最初の物理行（1始まり）。
+	Line int
+	// Cause は理由（reason.EditRecheckFailed）。文面は Cause.Text。
+	Cause reason.Reason
+}
+
+func (e *RecheckError) Error() string {
+	return "保存しない: " + e.Cause.Text
+}
+
+// Unwrap は [ErrRecheck] を返す。
+func (e *RecheckError) Unwrap() error { return ErrRecheck }
+
 // NotEditableError はその行を編集できないことを表す。
-// 行が存在しない、データ行でない、列数がヘッダーと合わない、のいずれか。
+// 行が存在しない、データ行でない、編集できない行（列数がヘッダーと合わない、など）の
+// いずれか。
 type NotEditableError struct {
-	// Line は1始まりの物理行番号。
+	// ID は要求された行の ID（[Line.ID]）。
+	ID int
+	// Line はその行の最初の物理行（1始まり）。そんな行が無ければ 0。
 	Line int
 	// Reason は編集できない理由。そのまま画面に出せる日本語。
 	Reason string
@@ -69,6 +100,9 @@ type NotEditableError struct {
 }
 
 func (e *NotEditableError) Error() string {
+	if e.Line == 0 {
+		return "編集できない: " + e.Reason
+	}
 	return fmt.Sprintf("%d行目は編集できない: %s", e.Line, e.Reason)
 }
 
@@ -76,13 +110,15 @@ func (e *NotEditableError) Error() string {
 //
 // 文面と識別子を別々に代入する場所を増やさないための入口である。片方だけ入った
 // 誤りを返すと、画面は英語で出せるのに CLI が黙る（あるいはその逆）行ができる。
-func notEditable(line int, why reason.Reason) *NotEditableError {
-	return &NotEditableError{Line: line, Reason: why.Text, Cause: why}
+func notEditable(id, line int, why reason.Reason) *NotEditableError {
+	return &NotEditableError{ID: id, Line: line, Reason: why.Text, Cause: why}
 }
 
 // InvalidValueError は訳の値そのものが受け付けられないことを表す。
 type InvalidValueError struct {
-	// Line は1始まりの物理行番号。
+	// ID は要求された行の ID（[Line.ID]）。
+	ID int
+	// Line はその行の最初の物理行（1始まり）。
 	Line int
 	// Reason は受け付けられない理由。
 	Reason string
@@ -96,8 +132,8 @@ func (e *InvalidValueError) Error() string {
 }
 
 // invalidValue は理由から [InvalidValueError] を作る。
-func invalidValue(line int, why reason.Reason) *InvalidValueError {
-	return &InvalidValueError{Line: line, Reason: why.Text, Cause: why}
+func invalidValue(id, line int, why reason.Reason) *InvalidValueError {
+	return &InvalidValueError{ID: id, Line: line, Reason: why.Text, Cause: why}
 }
 
 // short は版（SHA-256 の16進64桁）を画面向けに短く切る。

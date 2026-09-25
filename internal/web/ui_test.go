@@ -44,7 +44,7 @@ func TestConflictKeepsEditsTypedWhileChoosing(t *testing.T) {
 		t.Error("keepMine が pending を丸ごと置き換えている。選んでいるあいだに打った訳が消える")
 	}
 	// 片方にだけ入れる形（打ったばかりのほうを残す）になっていること。
-	if !strings.Contains(js, "if (!state.pending.has(line))") {
+	if !strings.Contains(js, "if (!state.pending.has(id))") {
 		t.Error("keepMine が pending を残していない。打ったばかりの訳のほうが新しい")
 	}
 }
@@ -534,7 +534,7 @@ func TestListIsNotEditableWhileLoading(t *testing.T) {
 	// 読めなかったら、読み込みのあいだに焦点を載せた訳の欄を開き直すこと。開き直さないと、
 	// 焦点は欄に載ったまま focusin がもう来ないので、字も Enter も効かない（実際に起きた）。
 	failed := strings.Index(body, ".catch(")
-	reopen := strings.Index(body, "lineOf(document.activeElement)")
+	reopen := strings.Index(body, "idOf(document.activeElement)")
 	if failed < 0 || reopen < failed {
 		t.Error("load が、読めなかったときに焦点の載った訳の欄を開き直さない")
 	}
@@ -636,7 +636,7 @@ func TestFilterKeepsUnsavedRowsVisible(t *testing.T) {
 		t.Fatal("keepAlways の終わりが分からない")
 	}
 	body := js[start : start+end]
-	for _, want := range []string{"state.pending.has(n)", "state.failed.has(n)", "state.mine"} {
+	for _, want := range []string{"state.pending.has(id)", "state.failed.has(id)", "state.mine"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("keepAlways が %s を見ていない", want)
 		}
@@ -651,7 +651,7 @@ func TestFilterKeepsUnsavedRowsVisible(t *testing.T) {
 	if tail < 0 {
 		t.Fatal("shouldShow の終わりが分からない")
 	}
-	if !strings.Contains(js[show:show+tail], "if (keepAlways(entry.line)) {") {
+	if !strings.Contains(js[show:show+tail], "if (keepAlways(entry.id)) {") {
 		t.Error("出す行の決め方が keepAlways を通っていない")
 	}
 	if !strings.Contains(js, "var show = shouldShow(entry, q);") {
@@ -682,7 +682,7 @@ func TestOpenRowIsNeverHidden(t *testing.T) {
 	if end < 0 {
 		t.Fatal("keepAlways の終わりが分からない")
 	}
-	if !strings.Contains(js[start:start+end], "state.editing === n") {
+	if !strings.Contains(js[start:start+end], "state.editing === id") {
 		t.Error("keepAlways が「いま入力欄が開いている行」を見ていない。開いた直後に隠れて打鍵が落ちる")
 	}
 
@@ -787,7 +787,7 @@ func TestFailedRowKeepsItsValue(t *testing.T) {
 	if end < 0 {
 		t.Fatal("shownValue の終わりが分からない")
 	}
-	if !strings.Contains(js[start:start+end], "state.failed.get(n)") {
+	if !strings.Contains(js[start:start+end], "state.failed.get(id)") {
 		t.Error("shownValue が保存できなかった値を見ていない。開き直すと古い保存値が出る")
 	}
 
@@ -805,8 +805,8 @@ func TestFailedRowKeepsItsValue(t *testing.T) {
 	}
 	// 理由だけを入れる古い形が残っていないこと。
 	for _, bad := range []string{
-		"state.failed.set(r.line, r.error)",
-		`state.failed.set(r.line, r.error ? r.error : "")`,
+		"state.failed.set(r.id, r.error)",
+		`state.failed.set(r.id, r.error ? r.error : "")`,
 	} {
 		if strings.Contains(js, bad) {
 			t.Errorf("app.js に %q がある。理由だけを控えると値が消える", bad)
@@ -846,11 +846,11 @@ func TestConflictRowIsNotEditableUntilChosen(t *testing.T) {
 		t.Fatal("openEditor の終わりが分からない")
 	}
 	body := js[start : start+end]
-	if !strings.Contains(body, "if (isLocked(n)) {") {
+	if !strings.Contains(body, "if (isLocked(id)) {") {
 		t.Error("openEditor が競合中の行を開いてしまう。押したボタンと逆の結果になる道が残る")
 	}
 	// 起点の選び分けは消えていること。残っていると、開ける道がどこかにある。
-	if strings.Contains(body, "editor.value = state.mine.get(n)") {
+	if strings.Contains(body, "editor.value = state.mine.get(id)") {
 		t.Error("openEditor に競合中の起点が残っている。競合中の行は開かないことにした")
 	}
 
@@ -863,7 +863,7 @@ func TestConflictRowIsNotEditableUntilChosen(t *testing.T) {
 	if tail < 0 {
 		t.Fatal("isLocked の終わりが分からない")
 	}
-	if !strings.Contains(js[lock:lock+tail], "state.mine && state.mine.has(n)") {
+	if !strings.Contains(js[lock:lock+tail], "state.mine && state.mine.has(id)") {
 		t.Error("isLocked が state.mine を見ていない")
 	}
 
@@ -876,7 +876,7 @@ func TestConflictRowIsNotEditableUntilChosen(t *testing.T) {
 	if nend < 0 {
 		t.Fatal("nextEditable の終わりが分からない")
 	}
-	if !strings.Contains(js[next:next+nend], "isLocked(line)") {
+	if !strings.Contains(js[next:next+nend], "isLocked(id)") {
 		t.Error("nextEditable が競合中の行を飛ばしていない。Enter で移ると焦点が body へ落ちる")
 	}
 
@@ -901,7 +901,7 @@ func TestConflictRowIsNotEditableUntilChosen(t *testing.T) {
 	if otail < 0 {
 		t.Fatal("onInput の終わりが分からない")
 	}
-	if !strings.Contains(js[at:at+otail], "if (!(state.mine && state.mine.has(n)))") {
+	if !strings.Contains(js[at:at+otail], "if (!(state.mine && state.mine.has(id)))") {
 		t.Error("onInput が競合中の行の1言まで消している。自分の訳が画面から消える")
 	}
 }

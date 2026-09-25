@@ -230,9 +230,9 @@ func TestSetTranslationTouchesOneLineOnly(t *testing.T) {
 		"末尾改行なし": strings.TrimSuffix(sampleWorking, "\n"),
 		"BOM付き":  "\xef\xbb\xbf" + sampleWorking,
 		"改行の混在": "key,section,node,order,speaker,source_en,translation\r\n" +
-			"a,,,,,,\n" +
-			"b,,,,,,古い\r\n" +
-			"c,,,,,,\r",
+			"000000000000000a,,,,,,\n" +
+			"000000000000000b,,,,,,古い\r\n" +
+			"000000000000000c,,,,,,\r",
 	}
 
 	for name, in := range inputs {
@@ -248,7 +248,7 @@ func TestSetTranslationTouchesOneLineOnly(t *testing.T) {
 			for _, line := range f.Lines() {
 				if line.Kind == KindData {
 					if seen++; seen == 2 {
-						target = line.Number
+						target = line.ID
 						break
 					}
 				}
@@ -270,12 +270,12 @@ func TestSetTranslationTouchesOneLineOnly(t *testing.T) {
 				t.Fatalf("行数が変わった: %d -> %d", len(before), len(after))
 			}
 			for i := range before {
-				if before[i].Number == target {
+				if before[i].ID == target {
 					continue
 				}
-				if before[i].Text != after[i].Text {
-					t.Errorf("%d行目が変わった:\n before %q\n after  %q",
-						before[i].Number, before[i].Text, after[i].Text)
+				if before[i].Text != after[i].Text || before[i].ID != after[i].ID {
+					t.Errorf("ID %d の行が変わった:\n before %q\n after  %q",
+						before[i].ID, before[i].Text, after[i].Text)
 				}
 			}
 
@@ -324,21 +324,21 @@ func TestSetTranslationValues(t *testing.T) {
 		want string // 書き戻したあとの行（改行を除く）
 		read string // そのあと読み戻される訳
 	}{
-		{"普通の訳", "abc,", "こんにちは", "abc,こんにちは", "こんにちは"},
-		{"訳を空にする", "abc,古い", "", "abc,", ""},
-		{"カンマを含む", "abc,", "a,b", `abc,"a,b"`, "a,b"},
-		{"二重引用符を含む", "abc,", `a"b`, `abc,"a""b"`, `a"b`},
-		{"引用が要る訳から要らない訳へ", `abc,"a,b"`, "c", "abc,c", "c"},
-		{"タブは引用しない", "abc,", "a\tb", "abc,a\tb", "a\tb"},
-		{"シャープで始まる訳", "abc,", "#x", "abc,#x", "#x"},
-		{"書式タグ", "abc,", `<gradient="gold">金</gradient>`, `abc,"<gradient=""gold"">金</gradient>"`, `<gradient="gold">金</gradient>`},
+		{"普通の訳", "0123456789abcdef,", "こんにちは", "0123456789abcdef,こんにちは", "こんにちは"},
+		{"訳を空にする", "0123456789abcdef,古い", "", "0123456789abcdef,", ""},
+		{"カンマを含む", "0123456789abcdef,", "a,b", `0123456789abcdef,"a,b"`, "a,b"},
+		{"二重引用符を含む", "0123456789abcdef,", `a"b`, `0123456789abcdef,"a""b"`, `a"b`},
+		{"引用が要る訳から要らない訳へ", `0123456789abcdef,"a,b"`, "c", "0123456789abcdef,c", "c"},
+		{"タブは引用しない", "0123456789abcdef,", "a\tb", "0123456789abcdef,a\tb", "a\tb"},
+		{"シャープで始まる訳", "0123456789abcdef,", "#x", "0123456789abcdef,#x", "#x"},
+		{"書式タグ", "0123456789abcdef,", `<gradient="gold">金</gradient>`, `0123456789abcdef,"<gradient=""gold"">金</gradient>"`, `<gradient="gold">金</gradient>`},
 		// 元実装から引き継ぐ非対称。EscapeField は空白を引用せず、
 		// 前後に空白がある訳は引用して書く。引用しないと読み手ごとに値が割れる
 		// （escapeTranslation の doc コメント参照）。
-		{"先頭の空白は引用して保つ", "abc,", " x", `abc," x"`, " x"},
-		{"末尾の空白は引用して保つ", "abc,", "x  ", `abc,"x  "`, "x  "},
-		{"空白だけの訳も引用して保つ", "abc,x", "   ", `abc,"   "`, "   "},
-		{"前後に空白が無ければ引用しない", "abc,x", "ふつうの訳", "abc,ふつうの訳", "ふつうの訳"},
+		{"先頭の空白は引用して保つ", "0123456789abcdef,", " x", `0123456789abcdef," x"`, " x"},
+		{"末尾の空白は引用して保つ", "0123456789abcdef,", "x  ", `0123456789abcdef,"x  "`, "x  "},
+		{"空白だけの訳も引用して保つ", "0123456789abcdef,x", "   ", `0123456789abcdef,"   "`, "   "},
+		{"前後に空白が無ければ引用しない", "0123456789abcdef,x", "ふつうの訳", "0123456789abcdef,ふつうの訳", "ふつうの訳"},
 	}
 
 	for _, tt := range tests {
@@ -410,7 +410,7 @@ func TestSetTranslationRejects(t *testing.T) {
 	})
 
 	t.Run("列が合わない行があっても他の行は編集できる", func(t *testing.T) {
-		f := Parse([]byte(header + "abc,訳\nxyz,,,,,古い\n"))
+		f := Parse([]byte(header + "abc,訳\n0123456789abcdef,,,,,古い\n"))
 		if err := f.SetTranslation(3, "新しい"); err != nil {
 			t.Fatalf("書き換えに失敗した: %v", err)
 		}
@@ -421,7 +421,7 @@ func TestSetTranslationRejects(t *testing.T) {
 	})
 
 	t.Run("引用の中のカンマは列数に数えない", func(t *testing.T) {
-		f := Parse([]byte(header + `abc,"L01, Ryan",n,1,Ryan,訳` + "\n"))
+		f := Parse([]byte(header + `0123456789abcdef,"L01, Ryan",n,1,Ryan,訳` + "\n"))
 		line, _ := f.Line(2)
 		if !line.Editable {
 			t.Fatalf("編集不可になった: %s", line.Reason)
@@ -443,7 +443,7 @@ func TestSetTranslationRejects(t *testing.T) {
 		assertNotEditable(t, f.SetTranslation(1, "x"), 1)
 	})
 
-	t.Run("無い行番号", func(t *testing.T) {
+	t.Run("無い ID", func(t *testing.T) {
 		f := Parse([]byte(header))
 		for _, n := range []int{99, 0, -1} {
 			assertNotEditable(t, f.SetTranslation(n, "x"), n)
@@ -452,7 +452,7 @@ func TestSetTranslationRejects(t *testing.T) {
 
 	t.Run("改行を含む訳", func(t *testing.T) {
 		for _, v := range []string{"a\nb", "a\rb", "a\r\nb", "a\n"} {
-			f := Parse([]byte(header + "abc,,,,,\n"))
+			f := Parse([]byte(header + "0123456789abcdef,,,,,\n"))
 			var invalid *InvalidValueError
 			if err := f.SetTranslation(2, v); !errors.As(err, &invalid) {
 				t.Fatalf("SetTranslation(%q) = %v, want *InvalidValueError", v, err)
@@ -524,14 +524,16 @@ func TestKindString(t *testing.T) {
 	}
 }
 
-func assertNotEditable(t *testing.T, err error, line int) {
+// assertNotEditable は err が id の行の [NotEditableError] であることを確かめる。
+// 行があれば、誤りの行番号がその行の最初の物理行であることも見る。
+func assertNotEditable(t *testing.T, err error, id int) {
 	t.Helper()
 	var e *NotEditableError
 	if !errors.As(err, &e) {
 		t.Fatalf("err = %v, want *NotEditableError", err)
 	}
-	if e.Line != line {
-		t.Errorf("行番号が %d, want %d", e.Line, line)
+	if e.ID != id {
+		t.Errorf("ID が %d, want %d", e.ID, id)
 	}
 	if e.Reason == "" {
 		t.Error("理由が空")
@@ -603,9 +605,9 @@ func TestReadOnlyCause(t *testing.T) {
 	})
 }
 
-// TestLineOutOfRange は、無い行番号を引いても落ちずに「無い」と返すことを見る。
+// TestLineOutOfRange は、無い ID を引いても落ちずに「無い」と返すことを見る。
 //
-// 行番号は画面から届く値で、ファイルを読み直したあとの古い番号や、壊れた要求の
+// ID は画面から届く値で、ファイルを読み直したあとの古い ID や、壊れた要求の
 // 値も来る。範囲の外で添字を引くと、1つの要求でサーバーごと落ちる。
 func TestLineOutOfRange(t *testing.T) {
 	f := Parse([]byte(sampleWorking))

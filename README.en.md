@@ -925,15 +925,80 @@ You can fix a translation that does not fit the column while seeing all of it, w
 
 A translation cannot contain a line break.  
 `Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
-Saving from the screen rewrites the file one line at a time, so a translation containing a line break cannot be saved yet.
+There is no way to enter a line break into a translation yet.
 
-Rows whose quoted value spans lines (one record over several lines) cannot be edited on any of their lines.  
-`publish` reads such a record as one, so rewriting only its first line would leave the rest behind and break it.  
-Those rows show a lock icon and "This line belongs to a record that spans lines N to M, which cannot be edited yet".  
-The source column of the first line shows the whole source text.  
-The continuation lines are shown as they are in the file.  
-A line inside a value that starts with `#` is not made a heading.  
-The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row cannot be translated yet.
+Like `publish`, the screen reads the whole file as one text and lists one record as one row.  
+A record whose quoted value spans lines (one record over several lines) is one row too.  
+Saving rewrites only the translation column (the last column) of that record and leaves the other columns and the other rows byte for byte as they were.  
+The line break that ends the record (`CRLF` or `LF`) is kept as well.  
+A record whose source text spans lines can be edited as long as the translation fits on one line.  
+The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row can be translated too.  
+A line inside a value that starts with `#` is not made a heading.
+
+The line-number column shows the line in the file where the record starts.  
+Only for a record that spans lines, the line where it ends is added below it in small type, after a dash (for `1865` to `1867`, `–1867` appears under `1865`).  
+It is there to compare with the line numbers you see when you open the file in an editor.  
+The source text column shows the line breaks and blank lines inside a value as they are.
+
+The row to save is named by the record's sequence number and its key, not by its line number in the file.  
+A record that spans lines shifts the line numbers of the records after it.  
+Your own saves do not change the sequence numbers.  
+Before writing, it reads back the rewritten record and then the whole file, and checks that nothing but the translation reads differently.  
+It checks this with the way the game reads the file, not only with the way `publish` reads it.  
+In some files, rewriting the translation on a row whose key column and source are both empty made the game lose track of other rows.  
+Such rows can no longer be edited (see the table below), so this check is a safeguard that catches shapes that slipped through.  
+If that check fails, it writes nothing and marks the row as one that could not be saved.  
+When rows you typed one after another are sent together, it checks them again one at a time and marks only the row that causes the failure.  
+The other rows are sent again and saved.
+
+The following rows cannot be edited.  
+They show a lock icon and the reason.  
+In each of them, `publish` or the game would read what you write as a different value from the one on the screen, or `publish` would drop it.
+
+| Row | Reason shown |
+| ---- | ---- |
+| The translation contains a line break | The translation contains a line break (a translation with line breaks cannot be changed from the screen yet) |
+| A quote seems to be closed on another line and to swallow the lines after it | Line N looks swallowed into this record's value (a quote may be closed in the wrong place) |
+| The game's reader (`CsvReader`) reads a value differently (a `"` in the middle of a value, and so on) | The game's reader (CsvReader) reads the (column name) column of this record differently |
+| The game's reader (`CsvReader`) does not find the record | The game's reader (CsvReader) does not find this record |
+| The `key` column is neither a 16-digit key nor a line ID, and the source text (`source_en`) is empty (`hello,訳`, `,UI,,,UI,,訳`, and so on) | The key column is neither a 16-digit key nor a line ID, and the source text (source_en) is empty (publish drops this record, so a translation written here is never published) |
+
+A translation with a line break cannot be edited because the screen replaces line breaks with spaces for now.  
+Opening it and typing one character would drop line breaks you cannot see.  
+The game's reader does not find a record when it takes that row into the value of another row.  
+This happens when the game starts a quote at a `"` in the middle of a value on an earlier row, or when a lone `CR` is mixed in at the end of lines (the game drops a `CR` outside quotes and joins the row to the next one).  
+In a file with a line of only full-width spaces or `NO-BREAK SPACE` before the header, the game reads that line as the header, so every row shows this reason.  
+Deleting that line fixes it.  
+A swallowed line is spotted in the same way as where `publish` stops.  
+It can also hit a valid multi-line value, but the screen has no way to let it through.  
+Check it with `dwloc publish` and let it through with `--accept-multiline`.
+
+A row whose columns are all empty, such as `,,,,,,`, is not listed.  
+It has neither a key nor a source text, so `publish` drops it and a translation typed into it would never be published.  
+A row whose source text is empty and whose `key` column is neither a 16-digit key nor a line ID (starting with `line:`) is listed, but cannot be edited for the same reason (the last row of the table).  
+`publish` cannot work out a key for that row and drops it.  
+Besides a row whose `key` column is empty, this also covers a row with a value that is not shaped like a 16-digit key, such as `hello`.  
+A 16-digit key is 16 hexadecimal digits.  
+`publish` still reads it as a 16-digit key in upper case or with spaces around it, so such a row does not get this reason.  
+However, spaces or tabs around a value that is not in quotes can make the game read it differently (a leading space or tab, two or more trailing spaces, and so on).  
+Such a row cannot be edited either, as a row where "the game's reader (`CsvReader`) reads a value differently" in the table.  
+The same goes for a line ID.  
+Removing the spaces, or putting the value in quotes, fixes it.  
+In the form of the published file (without a `source_en` column), the source text is treated as empty.  
+A row whose source text does not match its `key` column does not get this reason (`publish` drops it too, but `dwloc diff` and the filters show it under "rows dropped by `publish`").  
+To keep that translation, correct the `key` column, or move the translation to the row that has the key and then delete the row you no longer need.
+
+What `dwloc publish` does when a row with this reason has a translation depends on which file the screen has open.  
+When the screen has a working copy open, `publish` drops that row and writes the other rows.  
+It only counts the row under `malformed dropped` in its summary; it neither stops nor reports the row by itself.  
+When the screen has the published file itself open (a locale without a working copy), `publish` stops because a translation would be lost, and writes no locale (exit code `1`).  
+Saving a copy in "the form of the published file" from "Save a copy" in the top bar is refused for the same reason.  
+You cannot clear the translation of that row from the screen.  
+Open the file in an editor, and correct the `key` column or delete the row you no longer need.
+
+A file whose line breaks are `CR` only cannot be edited at all.  
+The game does not treat `CR` as a line break and reads the whole file as one line.  
+Save the file again with `LF` or `CRLF` line breaks, then reload.
 
 A file where a quote is opened and never closed before the end of the file cannot be edited at all.  
 Read as a whole, everything after it becomes one value.  
@@ -1087,11 +1152,38 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 
 | What the screen says | What happened |
 | ---- | ---- |
-| Some translations have nowhere to go. Note them down and reload | That row disappeared from the file, or the same key now appears more than once |
-| This row has shifted. A row with a different key is now at the same line number, so nothing was written | A row with a different key is now at the same line number |
+| Some translations have nowhere to go. Note them down and reload | That row disappeared from the file, the same key now appears more than once, or the row can no longer be edited |
+| This row has shifted. A different key now sits in that position, so nothing was written | A row with a different key now has the same position (sequence number) |
 
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
+
+When the file changes into a shape that cannot be edited while it is open (a quote that is never closed, and so on), that is treated as a conflict as well.  
+The screen shows the reloaded list with the reason it cannot be edited, and keeps showing any translation with no place to go as a translation that has nowhere to go.  
+A translation on a row whose key column is empty is put back on the row with the same sequence number.  
+If a different row that has a key now sits at that number, it is not put there; it is listed as a translation that has nowhere to go, with its line number.
+
+As long as every `dwloc` runs in the same environment, saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
+The span from checking the version to finishing the write is wrapped in an OS lock.  
+`publish` takes the same lock on both its input and its output.  
+Even when the screen has the published file open (with `--no-game`, for example) and you run a `publish` that writes that published file from the working copy in the game, one of them waits.  
+The lock is taken on a file kept only for locking, in your cache folder.  
+That is `%LocalAppData%\dwloc\locks` on Windows, `$XDG_CACHE_HOME/dwloc/locks` on Linux (`~/.cache/dwloc/locks` when `XDG_CACHE_HOME` is not set), and `~/Library/Caches/dwloc/locks` on macOS.  
+Where that folder cannot be created or written to, it goes in `dwloc-locks-<user number>` in the temporary folder (`dwloc-locks` on Windows).  
+Examples are a container run as a user with no `HOME`, and a folder that a container running as `root` created first.  
+It is never put in a temporary folder that other users can write to.  
+When neither can be used, both saving and `publish` stop without writing and say which environment variable to fix.  
+There is one empty file per file being written, and it is left in place.  
+No file is added to the translation repository or to the game folder.  
+If the `dwloc` holding the lock crashes, the OS releases the lock, so a lock file left behind never stops a save.  
+The one that writes later finds that the version no longer matches what the other wrote, which is a conflict.  
+`Export working copy` in the game does not take this lock, so there only the version check catches it.
+
+The lock only works between copies of `dwloc` that use the same lock folder.  
+Even for the same user, a container and the host, WSL and Windows, or machines with a different `HOME` each use their own lock folder.  
+When they write the same file at the same time across environments, only the version check and the re-read right before writing protect it, and a translation shown as saved can be lost.  
+The same goes for writing the same file through another name (a hard link).  
+When you work across environments, quit one `dwloc` before you start the other.
 
 Saving also stops when the screen cannot reach the server, and when the server does not accept saves from this screen.
 
@@ -1139,6 +1231,19 @@ Hovering over a condition chip shows the same text as the counts column.
 While you are composing text (building characters with an `IME`), it does not intercept your keys.  
 The `Enter` that immediately follows committing a composition is not used to move to the next row either.  
 That is so that committing alone does not jump you to the next row.
+
+With a screen reader, the input box is read as "Translation (line N)".  
+The row's source text and any note shown on the row (such as the reason it cannot be saved) are read after it.  
+The source text is read as English.  
+Comment lines for sections (`# =====`) and nodes (`# ---`) are treated as headings, so you can jump from section to section by heading.  
+A comment line with neither mark (a memo, for example) is not made a heading.  
+This has been checked through the attributes only, not with an actual screen reader.
+
+Rows and headings outside the screen are always drawn as well.  
+A screen reader can read on through the source text and translation of rows outside the screen without bringing them onto the screen.  
+Its list of headings includes the sections and nodes outside the screen, with their names.  
+Both have been checked in Chromium's accessibility tree only, not with an actual screen reader.  
+In return, going back to all rows in a long list, by clearing the conditions or the search term, takes about 0.2 seconds to redraw.
 
 ### The order to run things in
 
@@ -1211,6 +1316,12 @@ If a file has a shape it would misread, it also stops without writing.
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
+If the input or the output changed after it was assembled, it also stops without writing (exit code `1`).  
+Right before writing, it reads the input, the output and the published file in the game again, and stops if even one byte differs from what it assembled and checked.  
+That happens when a save from the screen (`dwloc edit`) or an export from the game wrote the same file while it was assembling.  
+Writing anyway would leave the translation written then out of the output, or erase the translation that went into the output.  
+From reading them again until the write is done, it holds the same OS lock on the input and the output as a save from the screen.  
+Running it again checks everything again with the changed contents.  
 Each file is written through a temporary file, so a file it could not write keeps its original content.  
 However, if writing fails partway (no write permission, not enough disk space, and so on), it does not roll back.  
 The locales it wrote before that keep their new content, and it stops with exit code `2`.  
@@ -1222,7 +1333,7 @@ With `--path` it stops scanning `Translations` and converts only the file you na
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these six cases.
+1 comes back in these seven cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
@@ -1230,9 +1341,11 @@ As for exit codes, 0 is success and 2 is a runtime error.
 - When `publish` judges that writing would lose translations and stops
 - When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
+- When `publish` judges that the input or the output changed after it was assembled and stops
 
-The last three are separate checks.  
-The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.
+The four for `publish` are separate checks.  
+The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.  
+When the input or the output changed, just run it again.
 
 #### Committing and opening a pull request
 

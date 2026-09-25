@@ -140,7 +140,8 @@ type server struct {
 
 	// overlay は起動後の局所更新（訳が入ったキー）。件数とバッジをここで引く。
 	overlay *editOverlay
-	// saveMu は保存を直列にする。同じファイルへ同時に2つ書かせない。
+	// saveMu は保存を直列にする。同じファイルへ同時に2つ書かせない。効くのはこの
+	// 待ち受けの中だけで、ほかのプロセスとは edit.File.Save の OS の錠で直列にする。
 	saveMu sync.Mutex
 
 	token string

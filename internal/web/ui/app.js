@@ -153,8 +153,14 @@
   };
 
   /*
-    state.pending   まだ保存していない訳（行番号 → 値）。
-    state.failed    保存できなかった行（行番号 → { reason, value }）。自動保存の
+    行は ID で引く（待ち受けの lineView の id。セグメント＝レコードの通し番号）。
+    行番号（n と end）は表示のためだけに持つ。引用符で囲んだ値に改行があるレコードは
+    複数の物理行にまたがるので、行番号で引くと、ほかのレコードの改行が増えたときに
+    別の行を指す。ID は自分の保存では変わらない（待ち受けが書く前に確かめる）。
+    下の Map の鍵は、どれも ID である。
+
+    state.pending   まだ保存していない訳（ID → 値）。
+    state.failed    保存できなかった行（ID → { reason, value }）。自動保存の
                     対象からだけ外す。書き換えれば pending へ戻る。
                     値まで持つのは、欄の字としてだけ残すと消えるからである。
                     入力欄を開き直す・競合を解く・読み直すのどれでも行は描き
@@ -162,7 +168,8 @@
                     保存できなかった訳が上書きされる。shownValue がここを見る。
     state.mine      競合のあいだ抱えている自分の編集。選ばせるまで捨てない。
     state.orphans   載せる先の行がファイルから無くなった訳。捨てずに画面へ出す。
-    state.rows      行番号 → 描いた要素。保存の結果を差し込むために持つ。
+    state.rows      ID → 描いた要素。保存の結果を差し込むために持つ。並びは描いた順
+                    （＝ファイルの順）で、Enter の行き先もこの順でたどる。
     state.byKey     キー → そのキーの行（描いた要素の並び）。待ち受けはバッジを
                     キー単位で付け直すので、描き直す先もキーで引く。
     state.items     描いた順そのまま（見出しと行）。絞り込みは この並びを
@@ -179,7 +186,7 @@
                     待ち受けが受け付けない（400・404・415。待っても直らないので
                     送り直さない）。どちらでもなければ null。立っているあいだは、
                     まだファイルに入っていない訳を一覧に並べる（renderUnsent）。
-    state.inflight  いま送っている訳（行番号 → 値）。送っていなければ null。
+    state.inflight  いま送っている訳（ID → 値）。送っていなければ null。
                     返るまでのあいだ、その行の「ファイルの値」は entry.saved では
                     なくこちらになる見込みなので、onInput が未保存かどうかを決める
                     ときに見る。
@@ -260,7 +267,7 @@
     status: null,
     /*
       まだファイルに入っていない訳の一覧（#unsent）にいま並べている中身の控え（ロケールと、
-      行番号・キー・訳の並びを1つの文字列にしたもの）。まだ描いていなければ null。同じなら
+      ID・行番号・キー・訳の並びを1つの文字列にしたもの）。まだ描いていなければ null。同じなら
       描き直さないために持つ（renderUnsent を見よ）。
     */
     unsentShown: null,
@@ -309,10 +316,12 @@
   /*
     検索の字を打ってから、絞り込みを走らせるまでの待ち。
 
-    実測（データ行 1721、見出し 202、Windows の Chromium）。1回のなぞり直しは
-    条件の当てはめだけなら 0.2〜17ms で終わる。重いのはそのあとの描き直しで、
-    出す行が大きく入れ替わるとき（1字消して全行に戻るときなど）は 100〜173ms
-    かかった。打鍵ごとに走らせると、この描き直しが打つ手に追いつかない。
+    実測（実物並みの架空の見本、データ行 1769・見出し 203、1280x800、Windows の
+    Chromium）。重いのは条件を当てはめたあとの描き直しで、出す行が大きく入れ替わるとき
+    （1字消して全行に戻るときなど）がいちばん重い。一覧は画面の外の行もいつも描く
+    （app.css の注記）ので、検索語を消して全行に戻すと、待ちのあとの描き直しまでに
+    約 175ms かかる（画面の外の行を描かない指定を付けていたころは約 60ms）。打鍵ごとに
+    走らせると、この描き直しが打つ手に追いつかない。
 
     だから、間引く。待ちを 120ms にしてあるのは、打ち終わりから結果までを
     ひと呼吸に収めるためである。1回ぶんの重さは変わらないが、走る回数が
@@ -1025,7 +1034,9 @@
     値が複数行になる道は開けていない。Enter は行送りに使っており（keydown で
     preventDefault）、貼り付けも改行を空白へ置き換える（sanitize）。textarea に
     したのは折り返しのためだけで、internal/edit が CR / LF を含む値を拒む
-    という前提はそのままである。
+    という前提はそのままである。訳にもう改行があるレコードは、待ち受けが
+    読み取り専用で返す（reason.edit_multiline_translation）。開けると、1字打った
+    瞬間に sanitize が改行を空白へ潰して保存してしまうためである。
 
     高さは中身に合わせて伸ばす（fitEditor）。rows は伸ばす前の下限にあたる。
   */
@@ -1080,9 +1091,10 @@
   /*
     訳に入れられない字を落とす。
 
-    改行は空白へ置き換える。internal/edit は CR / LF を含む値を拒む（公開ファイルの
-    読み手が1物理行=1レコードで読むため）ので、拒まれる値を送らない。入ってくるのは
-    ほとんど貼り付けなので、落とすのではなく空白にしてその行に収める。
+    改行は空白へ置き換える。読み手はファイル全体を解釈するので、引用符で囲めば
+    値に改行を入れても読めるが、訳への改行の入力はまだ入れていない。internal/edit も
+    CR / LF を含む値を拒むので、拒まれる値を送らない。入ってくるのはほとんど
+    貼り付けなので、落とすのではなく空白にしてその行に収める。
     NUL も internal/edit が拒む値なので、同じく落とす。
   */
   function sanitize(value) {
@@ -1097,11 +1109,11 @@
     ときに入力欄へ入るのは古い保存値になり、1字打った瞬間に、保存できなかった
     訳が黙って上書きされる。競合を解いたときと読み直したときの描き直しも同じ。
   */
-  function shownValue(n, saved) {
-    if (state.pending.has(n)) {
-      return state.pending.get(n);
+  function shownValue(id, saved) {
+    if (state.pending.has(id)) {
+      return state.pending.get(id);
     }
-    var bad = state.failed.get(n);
+    var bad = state.failed.get(id);
     if (bad) {
       return bad.value;
     }
@@ -1114,13 +1126,13 @@
     値は、いま未保存として抱えているものを採る。無ければ送った値に戻す。
     どちらも無いときだけ保存値のままになる。
   */
-  function markFailed(line, reason, fallback) {
-    var value = state.pending.has(line) ? state.pending.get(line) : fallback;
-    state.failed.set(line, {
+  function markFailed(id, reason, fallback) {
+    var value = state.pending.has(id) ? state.pending.get(id) : fallback;
+    state.failed.set(id, {
       reason: reason ? reason : "",
       value: value === undefined || value === null ? "" : value
     });
-    state.pending.delete(line);
+    state.pending.delete(id);
   }
 
   /*
@@ -1150,14 +1162,14 @@
     どこにも入らないのに、保存の欄は「保存済み」のままだった（実際に起きた）。
     触っている行は、条件に合わなくても隠さない。
   */
-  function keepAlways(n) {
-    if (state.pending.has(n) || state.failed.has(n)) {
+  function keepAlways(id) {
+    if (state.pending.has(id) || state.failed.has(id)) {
       return true;
     }
-    if (state.editing === n) {
+    if (state.editing === id) {
       return true;
     }
-    return Boolean(state.mine && state.mine.has(n));
+    return Boolean(state.mine && state.mine.has(id));
   }
 
   /* 選ばれている条件のどれかに当たるか。1つも選ばれていなければ全部出す。 */
@@ -1165,10 +1177,10 @@
     if (state.filter.size === 0) {
       return true;
     }
-    if (state.filter.has("state:pending") && state.pending.has(entry.line)) {
+    if (state.filter.has("state:pending") && state.pending.has(entry.id)) {
       return true;
     }
-    if (state.filter.has("state:failed") && state.failed.has(entry.line)) {
+    if (state.filter.has("state:failed") && state.failed.has(entry.id)) {
       return true;
     }
     var hit = false;
@@ -1206,7 +1218,7 @@
     matchesFilter と matchesSearch を並べただけ）。
   */
   function shouldShow(entry, q) {
-    if (keepAlways(entry.line)) {
+    if (keepAlways(entry.id)) {
       return true;
     }
     return matchesFilter(entry) && matchesSearch(entry, q);
@@ -1359,8 +1371,8 @@
     if (!entry) {
       return;
     }
-    entry.row.classList.toggle("unsaved", state.pending.has(entry.line));
-    entry.row.classList.toggle("save-failed", state.failed.has(entry.line));
+    entry.row.classList.toggle("unsaved", state.pending.has(entry.id));
+    entry.row.classList.toggle("save-failed", state.failed.has(entry.id));
   }
 
   /* 行に添える1言（保存できない理由、値が変わった断り）。空なら消す。 */
@@ -1386,12 +1398,12 @@
     決まっていない行は編集させない。理由は openEditor に書いてある。
     ここは state.mine を引くだけで、新しい判断はしていない。
   */
-  function isLocked(n) {
-    return Boolean(state.mine && state.mine.has(n));
+  function isLocked(id) {
+    return Boolean(state.mine && state.mine.has(id));
   }
 
-  function openEditor(n) {
-    if (!state.canEdit || state.editing === n) {
+  function openEditor(id) {
+    if (!state.canEdit || state.editing === id) {
       return;
     }
     /*
@@ -1408,13 +1420,13 @@
       これで keepMine は mine を pending へ足すだけ、takeFile は mine を捨てて
       pending を残すだけになり、どちらのボタンも押したとおりに効く。
       翻訳者は片方を選んでから直すので2手になるが、押したボタンと逆の結果に
-      なるよりはよい。行には「ファイルの訳: … / あなたの訳: …」に続けて、
-      選んでから直せるという断りを出してある（rowNode を見よ）。
+      なるよりはよい。行には「ファイルの訳」と「あなたの訳」を段に分けて並べ、
+      続けて、選んでから直せるという断りを出してある（rowNode を見よ）。
 
       競合していない行は、この引き止めが出ているあいだも今までどおり編集できる。
       止めるのは、どちらを残すか決まっていない行だけである。
     */
-    if (isLocked(n)) {
+    if (isLocked(id)) {
       return;
     }
     /*
@@ -1426,7 +1438,7 @@
     if (state.loading) {
       return;
     }
-    var entry = state.rows.get(n);
+    var entry = state.rows.get(id);
     if (!entry || !entry.editable) {
       return;
     }
@@ -1439,15 +1451,25 @@
     */
     var leaving = state.editing;
     closeEditor();
-    state.editing = n;
-    editor.value = shownValue(n, entry.saved);
+    state.editing = id;
+    editor.value = shownValue(id, entry.saved);
     /*
       向きは中身から決めさせ、lang にはロケール名をそのまま入れる（ヘブライ語の
       確認用）。字形の選び方がこれで変わる。
     */
     editor.dir = "auto";
     editor.lang = state.locale;
-    editor.setAttribute("aria-label", t("ui.edit_label"));
+    /*
+      読み上げに、どの行の訳かを伝える。名前は「訳（N行目）」で、行番号は行の欄に
+      出ている最初の物理行と同じ。説明（aria-describedby）には、その行の原文と、
+      行に添えた1言（保存できない理由、値が変わった断り）を結ぶ。
+      名前が「訳」だけだったころは、Enter で次の行へ進むたびに「訳、編集」とだけ
+      読まれ、どの原文を訳しているかを知るには入力欄を出て一覧を読み戻すしか
+      なかった。訳の欄（span）は焦点が入った瞬間にこの入力欄へ差し替わるので、
+      文脈を載せられるのはここだけである。1言は空なら隠れていて、何も読まれない。
+    */
+    editor.setAttribute("aria-label", t("ui.edit_label_line", { line: entry.n }));
+    editor.setAttribute("aria-describedby", entry.source.id + " " + entry.note.id);
     /*
       差し込んでから焦点を移し、そのあとで元の欄を隠す。順番を逆にすると、
       焦点の載った欄を隠した瞬間に焦点が body へ飛び、入力欄を出した直後に
@@ -1461,7 +1483,7 @@
     fitEditor();
     editor.focus();
     entry.value.hidden = true;
-    if (leaving !== null && leaving !== n) {
+    if (leaving !== null && leaving !== id) {
       /* 離れた行を保存へ回し、条件に照らし直す。順番は Enter の行送りと同じ。 */
       flush();
       reviewClosed(leaving);
@@ -1476,10 +1498,10 @@
     いると blur が起きず、入力欄を差し込んだまま行が隠れるためである。
   */
   function commitEditor() {
-    var n = state.editing;
+    var id = state.editing;
     closeEditor();
     flush();
-    reviewClosed(n);
+    reviewClosed(id);
   }
 
   /*
@@ -1508,11 +1530,11 @@
     保存済みの行から Enter を押すと、入力欄は行番号 41 の行に入ったが、その行は
     hidden、入力欄の高さは 0、一覧は「条件に合う行がありません」になった）。
   */
-  function reviewClosed(n) {
-    if (n === null || n === undefined) {
+  function reviewClosed(id) {
+    if (id === null || id === undefined) {
       return;
     }
-    var entry = state.rows.get(n);
+    var entry = state.rows.get(id);
     if (!entry) {
       return;
     }
@@ -1530,8 +1552,8 @@
     手前（openEditor）から呼ばれることもある。
   */
   function closeEditor() {
-    var n = state.editing;
-    if (n === null) {
+    var id = state.editing;
+    if (id === null) {
       return;
     }
     state.editing = null;
@@ -1539,7 +1561,7 @@
     if (editor.parentNode) {
       editor.parentNode.removeChild(editor);
     }
-    var entry = state.rows.get(n);
+    var entry = state.rows.get(id);
     if (entry) {
       entry.value.hidden = false;
     }
@@ -1547,8 +1569,8 @@
 
   /* 入力のたび。値を控えて、自動保存の時計を引き直す。 */
   function onInput() {
-    var n = state.editing;
-    if (n === null) {
+    var id = state.editing;
+    if (id === null) {
       return;
     }
     var clean = sanitize(editor.value);
@@ -1559,7 +1581,7 @@
     }
     /* 折り返しが1行増えた（減った）ぶんを追う。 */
     fitEditor();
-    var entry = state.rows.get(n);
+    var entry = state.rows.get(id);
     if (entry) {
       setShownText(entry, clean);
       /*
@@ -1570,16 +1592,16 @@
         （実際に起きた）。控えておけば、応答のあとで送った値と違うので残り、
         次の保存で送られる（applyResults と onSaved）。
       */
-      if (clean === entry.saved && !(state.inflight && state.inflight.has(n))) {
-        state.pending.delete(n);
+      if (clean === entry.saved && !(state.inflight && state.inflight.has(id))) {
+        state.pending.delete(id);
       } else {
-        state.pending.set(n, clean);
+        state.pending.set(id, clean);
       }
       /* 書き換えたら「保存できない行」から外す。次の保存でまた試す。 */
-      state.failed.delete(n);
+      state.failed.delete(id);
       /*
-        競合中の行では1言を消さない。そこに出ているのは「ファイルの訳: … /
-        あなたの訳: …」と、選んでから直せるという断りで、消すと自分の版が
+        競合中の行では1言を消さない。そこに出ているのは「ファイルの訳」と
+        「あなたの訳」の2段と、選んでから直せるという断りで、消すと自分の版が
         画面から消える。
 
         openEditor が競合中の行を開かなくなったので、いまここは通らない。
@@ -1587,7 +1609,7 @@
         したくなったときに、この1言が先に消えていると、自分の訳が画面の
         どこにも無い状態を作り直すことになる。
       */
-      if (!(state.mine && state.mine.has(n))) {
+      if (!(state.mine && state.mine.has(id))) {
         setRowNote(entry, "");
       }
       markRow(entry);
@@ -1713,32 +1735,41 @@
     落ちる。キーボードだけで打っている人は、そこで自分がどこにいるか分から
     なくなる。開けない行は行き先にしない。
   */
-  function nextEditable(n) {
+  function nextEditable(from) {
     var found = null;
     var passed = false;
-    /* state.rows は描いた順（＝行番号の順）で並んでいる。 */
-    state.rows.forEach(function (entry, line) {
+    /* state.rows は描いた順（＝ファイルの順）で並んでいる。 */
+    state.rows.forEach(function (entry, id) {
       if (found !== null) {
         return;
       }
-      if (line === n) {
+      if (id === from) {
         passed = true;
         return;
       }
-      if (!passed || !entry.editable || entry.row.hidden || isLocked(line)) {
+      if (!passed || !entry.editable || entry.row.hidden || isLocked(id)) {
         return;
       }
-      found = line;
+      found = id;
     });
     return found;
   }
 
-  /* 焦点を受けた訳欄の行番号。訳欄でなければ null。 */
-  function lineOf(target) {
-    if (!target || target === editor || !target.dataset || !target.dataset.line) {
+  /*
+    焦点を受けた訳欄の行の ID。訳欄でなければ null。
+
+    行（.row）そのものも data-id を持つので、訳欄かどうかを class でも見る。見ないと、
+    行の余白を押しただけで入力欄が開き、編集できない行では既定の動作（字を選ぶ）まで
+    止めてしまう。
+  */
+  function idOf(target) {
+    if (!target || target === editor || !target.dataset || !target.dataset.id) {
       return null;
     }
-    return Number(target.dataset.line);
+    if (!target.classList.contains("translation")) {
+      return null;
+    }
+    return Number(target.dataset.id);
   }
 
   /*
@@ -1749,8 +1780,8 @@
     いるので焦点が body へ落ちる。入力欄は出た瞬間に閉じる（実際に起きた）。
   */
   el.list.addEventListener("mousedown", function (e) {
-    var n = lineOf(e.target);
-    if (n === null) {
+    var id = idOf(e.target);
+    if (id === null) {
       return;
     }
     /*
@@ -1758,7 +1789,7 @@
       マウスで選んで写すことすらできなくなる。どちらを残すか決める場面で、
       両方の訳を読めなくするのは筋が悪い。
     */
-    if (isLocked(n)) {
+    if (isLocked(id)) {
       return;
     }
     /*
@@ -1769,16 +1800,16 @@
       return;
     }
     e.preventDefault();
-    openEditor(n);
+    openEditor(id);
   });
 
   /* Tab で移ってきたとき。こちらはブラウザーが焦点を移し終えている。 */
   el.list.addEventListener("focusin", function (e) {
-    var n = lineOf(e.target);
-    if (n === null) {
+    var id = idOf(e.target);
+    if (id === null) {
       return;
     }
-    openEditor(n);
+    openEditor(id);
   });
 
   function schedule() {
@@ -1840,19 +1871,23 @@
     }
     var edits = [];
     var sent = new Map();
-    state.pending.forEach(function (value, line) {
-      var entry = state.rows.get(line);
+    state.pending.forEach(function (value, id) {
+      var entry = state.rows.get(id);
       edits.push({
-        line: line,
         /*
-          キーも送る。行番号だけで送ると、手前でよそが行を足したり消したり
+          行は ID で指す。行番号では指さない。行をまたぐレコードがあると、行番号は
+          レコードの位置と1対1にならない。
+        */
+        id: id,
+        /*
+          キーも送る。ID だけで送ると、手前でよそが行を足したり消したり
           していたときに、訳が別のキーの行へ入る。待ち受けは食い違いを見つけ
           たら書かずに断る。
         */
         key: entry && entry.key ? entry.key : "",
         translation: value
       });
-      sent.set(line, value);
+      sent.set(id, value);
     });
     /*
       送った時点の世代を覚えておく。返ってくるまでにロケールが変わっていたら、
@@ -2231,8 +2266,8 @@
       if (!r.error) {
         return;
       }
-      var entry = state.rows.get(r.line);
-      markFailed(r.line, r.error, entry ? entry.saved : "");
+      var entry = state.rows.get(r.id);
+      markFailed(r.id, r.error, entry ? entry.saved : "");
       setRowNote(entry, t("ui.row_error", { reason: r.error }));
       markRow(entry);
     });
@@ -2270,18 +2305,23 @@
     }, retryDelays[i]);
   }
 
-  /* 200 のときだけ呼ぶ。saved はファイルに入ったことを意味する。 */
+  /*
+    200 のときだけ呼ぶ。saved はファイルに入ったことを意味する。
+
+    結果は ID で引く。結果の n（いまの最初の物理行）は使わない。訳に改行を入れられない
+    いまは、自分の保存で物理行の数は変わらず、行番号もずれない。
+  */
   function applyResults(results, sent) {
     results.forEach(function (r) {
-      var entry = state.rows.get(r.line);
+      var entry = state.rows.get(r.id);
       if (r.saved) {
-        if (state.pending.get(r.line) === sent.get(r.line)) {
-          state.pending.delete(r.line);
+        if (state.pending.get(r.id) === sent.get(r.id)) {
+          state.pending.delete(r.id);
         }
-        state.failed.delete(r.line);
+        state.failed.delete(r.id);
         if (entry) {
           entry.saved = r.translation;
-          if (state.editing !== r.line) {
+          if (state.editing !== r.id) {
             /*
               ファイルから読み直した値を出す。画面とファイルを同じにする。
 
@@ -2291,7 +2331,7 @@
               いる訳が別物になり、次の保存が落ちたときに翻訳者が見ている訳が
               どこにも無い値になる。
             */
-            setShownText(entry, shownValue(r.line, r.translation));
+            setShownText(entry, shownValue(r.id, r.translation));
           }
           renderBadgesForKey(entry, r.badges);
           setRowNote(entry, r.warning ? r.warning : "");
@@ -2301,18 +2341,23 @@
           この行は保存できない。値は控えごと持ったまま、自動保存の対象からだけ
           外す。外さないと、同じ要求を投げ続けることになる。書き換えれば戻る。
         */
-        markFailed(r.line, r.error, sent.get(r.line));
+        markFailed(r.id, r.error, sent.get(r.id));
         setRowNote(entry, t("ui.row_error", { reason: r.error ? r.error : "" }));
       }
       markRow(entry);
     });
   }
 
-  /* いま描いている行の 行番号 → キー。読み直す前に控えておく。 */
+  /*
+    いま描いている行の ID → { key, n }。読み直す前に控えておく。
+
+    n（最初の物理行）は、載せる先が見つからなかった訳に添える目印である。キーの無い
+    行には、ほかに探す手がかりが無い。
+  */
   function keyIndex() {
     var keys = new Map();
-    state.rows.forEach(function (entry, line) {
-      keys.set(line, entry.key);
+    state.rows.forEach(function (entry, id) {
+      keys.set(id, { key: entry.key, n: entry.n });
     });
     return keys;
   }
@@ -2320,50 +2365,72 @@
   /*
     読み直した内容の上に、抱えている編集を載せ直す。
 
-    行番号だけで載せ直すと危ない。読み直すまでのあいだによそが行を足したり
-    消したりしていると、同じ行番号が別のキーの行を指す。訳が別の行に入り、
-    その行にもとからあった訳が消える（実際に起きた）。だから載せ直しはキーで行う。
+    ID だけで載せ直すと危ない。読み直すまでのあいだによそが行を足したり
+    消したりしていると、同じ ID が別のキーの行を指す。訳が別の行に入り、
+    その行にもとからあった訳が消える（行番号で引いていたころに実際に起きた）。
+    だから載せ直しはキーで行う。
 
-      同じキーが同じ行番号にある  → その行番号のまま（ずれていない）
-      どこか1か所にだけある       → その行番号へ移す
-      無い、2か所以上ある、先が埋まっている
+      同じキーが同じ ID にある    → その ID のまま（ずれていない）
+      どこか1か所にだけある       → その ID へ移す
+      無い、2か所以上ある、先が埋まっている、先が編集できない
                                   → 載せる先を決められない。捨てずに
                                     「行き先が見つからない訳」として画面に出す
 
-    キーを持たない行（キー列が空の作業コピー）は、行番号で載せるしかない。
-    待ち受けもキーの無い要求は照合しないので、扱いはそろっている。
+    キーを持たない行（キー列が空の作業コピー）は、同じ ID に載せるしかない。
+    待ち受けもキーの無い要求は照合しないので、扱いはそろっている。ただし、その ID に
+    いまはキーのある行があれば、それは別の行なので載せない。
+
+    先が編集できない行にも載せない（決まったことのそのほか 5）。開いているあいだに
+    ファイルが読み取り専用の形（閉じない引用符など）に書き換わると、待ち受けは 409 と
+    読み取り専用の理由つきの一覧を返す。そこへ載せると、その訳は編集できない行の
+    裏に隠れ（編集できない行は訳ではなく生の行を出す）、保存は読み取り専用で断られ
+    続ける。行き先の無い訳として出せば、翻訳者は写してから直せる。
   */
   function remap(edits, oldKeys, data) {
     var byKey = new Map();
+    /* 載せてよい行（編集できるデータ行）の ID → キー（無ければ空）。 */
+    var open = new Map();
     (data.lines || []).forEach(function (line) {
-      if (line.kind !== "data" || !line.key) {
+      if (line.kind !== "data") {
+        return;
+      }
+      if (line.editable) {
+        open.set(line.id, line.key ? line.key : "");
+      }
+      if (!line.key) {
         return;
       }
       var seen = byKey.get(line.key);
       if (seen) {
-        seen.push(line.n);
+        seen.push(line.id);
         return;
       }
-      byKey.set(line.key, [line.n]);
+      byKey.set(line.key, [line.id]);
     });
 
     var moved = new Map();
     var lost = [];
-    edits.forEach(function (value, line) {
-      var k = oldKeys.get(line);
-      if (!k) {
-        moved.set(line, value);
-        return;
-      }
-      var seen = byKey.get(k);
+    edits.forEach(function (value, id) {
+      /*
+        載せ直すのは描いてある行の訳だけなので（抱えている訳の鍵は、どれも描いた行の
+        ID）、控えにその行は必ずある。
+      */
+      var was = oldKeys.get(id);
       var to = null;
-      if (seen && seen.indexOf(line) >= 0) {
-        to = line;
-      } else if (seen && seen.length === 1) {
-        to = seen[0];
+      if (!was.key) {
+        if (open.get(id) === "") {
+          to = id;
+        }
+      } else {
+        var seen = byKey.get(was.key);
+        if (seen && seen.indexOf(id) >= 0) {
+          to = id;
+        } else if (seen && seen.length === 1) {
+          to = seen[0];
+        }
       }
-      if (to === null || moved.has(to)) {
-        lost.push({ key: k, text: value });
+      if (to === null || moved.has(to) || !open.has(to)) {
+        lost.push({ key: was.key, n: was.n, text: value });
         return;
       }
       moved.set(to, value);
@@ -2384,17 +2451,36 @@
     renderOrphans();
   }
 
+  /*
+    画面の中にしか無い訳を、一覧の1項目にする。行き先の無い訳（#orphans）と、まだ
+    ファイルに入っていない訳（#unsent）で同じ形にする。
+
+    目印（キーや行番号）と訳は、段を分けて出す（app.css の .orphans-list .note-value）。
+    訳に改行があると、同じ段に続けて流したとき、どこからが訳かが読みにくい。字の
+    並び（textContent）は「目印: 訳」のままで、選べばそのまま写せる。
+
+    訳は textContent で入れる（行の中身を innerHTML に渡さない）。向きは中身から
+    決めさせる。
+  */
+  function noteItem(label, text) {
+    var row = li(null, "");
+    row.appendChild(span("note-label", label + ": "));
+    var value = span("note-value", text);
+    value.dir = "auto";
+    value.lang = state.locale;
+    row.appendChild(value);
+    return row;
+  }
+
+  /*
+    行き先の無い訳の一覧を描く。目印はキーで、キーの無い行（作業コピーにはありうる）は
+    行番号にする。
+  */
   function renderOrphans() {
     clear(el.orphansList);
     state.orphans.forEach(function (item) {
-      var row = li(null, "");
-      row.appendChild(span("note-label", item.key + ": "));
-      var text = span("note-value", item.text);
-      /* 訳なので向きは中身から決めさせる。 */
-      text.dir = "auto";
-      text.lang = state.locale;
-      row.appendChild(text);
-      el.orphansList.appendChild(row);
+      var label = item.key ? item.key : t("ui.unsent_line", { line: item.n });
+      el.orphansList.appendChild(noteItem(label, item.text));
     });
     el.orphans.hidden = state.orphans.length === 0;
   }
@@ -2407,15 +2493,16 @@
     変わり、このタブの訳は新しい待ち受けへは送れない。翻訳者が手で写すしかないので、
     行き先の無い訳と同じ形で、字として並べる（選べばそのまま写せる）。行番号とキーを
     添えるのは、新しい画面でその行を探すためである（検索の欄はキーにも当たる）。
+    行番号は行の欄に出ている最初の物理行で、並べる順は ID（＝ファイルの順）である。
 
     並べるのは、送り直している訳（state.pending）と、行ごとに断られた訳（state.failed）。
     どちらも画面の中にしか無い。競合で抱えている訳（state.mine）は並べない。その行に
-    「ファイルの訳 / あなたの訳」が並んでいて、「自分の訳を上に載せる」を選べば未保存へ
+    「ファイルの訳」と「あなたの訳」が並んでいて、「自分の訳を上に載せる」を選べば未保存へ
     移ってここに並ぶ。行き先の無い訳は、すぐ上の #orphans に出ている。
 
     文言は目録から。訳は textContent で入れる（行の中身を innerHTML に渡さない）。
 
-    並べる中身（ロケールと、行番号・キー・訳）が前に描いたものと同じなら、描き直さない
+    並べる中身（ロケールと、ID・行番号・キー・訳）が前に描いたものと同じなら、描き直さない
     （state.unsentShown）。この関数は updateStatus から、保存の状態が変わるたびに呼ばれる。
     届かないあいだは送り直しの時計が 500ms・1s・2s…と切れ、そのたびに送る・応答を受ける
     の2回ここを通る。毎回作り直していたころは、翻訳者が一覧の訳を選んで写している途中でも、
@@ -2425,19 +2512,21 @@
   function renderUnsent() {
     var items = [];
     if (state.stall) {
-      state.failed.forEach(function (bad, line) {
-        items.push({ line: line, text: bad.value });
+      state.failed.forEach(function (bad, id) {
+        items.push({ id: id, text: bad.value });
       });
-      state.pending.forEach(function (value, line) {
-        items.push({ line: line, text: value });
+      state.pending.forEach(function (value, id) {
+        items.push({ id: id, text: value });
       });
       items.sort(function (a, b) {
-        return a.line - b.line;
+        return a.id - b.id;
       });
     }
     /* 並べるのは描いてある行の訳だけなので、その行は必ずある。 */
     items.forEach(function (item) {
-      item.key = state.rows.get(item.line).key;
+      var entry = state.rows.get(item.id);
+      item.n = entry.n;
+      item.key = entry.key;
     });
     var shown = JSON.stringify([state.locale, items]);
     if (state.unsentShown === shown) {
@@ -2447,15 +2536,8 @@
     clear(el.unsentList);
     items.forEach(function (item) {
       /* キーの欄が空の行（作業コピーにはありうる）では、行番号だけにする。 */
-      var label = [t("ui.unsent_line", { line: item.line }), item.key].join(" ").trim();
-      var row = li(null, "");
-      row.appendChild(span("note-label", label + ": "));
-      var text = span("note-value", item.text);
-      /* 訳なので向きは中身から決めさせる（renderOrphans と同じ）。 */
-      text.dir = "auto";
-      text.lang = state.locale;
-      row.appendChild(text);
-      el.unsentList.appendChild(row);
+      var label = [t("ui.unsent_line", { line: item.n }), item.key].join(" ").trim();
+      el.unsentList.appendChild(noteItem(label, item.text));
     });
     el.unsent.hidden = items.length === 0;
   }
@@ -2466,11 +2548,11 @@
     見分け方は1つ。その行についてこちらが最後に見たファイルの値（entry.saved）と、
     読み直した内容のその行の値を比べるだけである。同じならよそは触っていない。
 
-    どの行と比べるかは remap と同じ規則で決める（同じ行番号に同じキーがあれば
+    どの行と比べるかは remap と同じ規則で決める（同じ ID に同じキーがあれば
     その行、どこか1か所にだけあればその行）。決められないときは「変わった」と
     見なす。決められない行をそのまま保存し直すより、人に見せるほうが安全である。
   */
-  function fileChanged(line, key, was, byKey) {
+  function fileChanged(id, key, was, byKey) {
     if (!key) {
       /* キーを持たない行は照合できない。変わったものとして扱う。 */
       return true;
@@ -2481,7 +2563,7 @@
     }
     var at = null;
     seen.forEach(function (x) {
-      if (x.n === line) {
+      if (x.id === id) {
         at = x;
       }
     });
@@ -2518,7 +2600,7 @@
       if (line.kind !== "data" || !line.key) {
         return;
       }
-      var item = { n: line.n, tr: line.translation ? line.translation : "" };
+      var item = { id: line.id, tr: line.translation ? line.translation : "" };
       var seen = byKey.get(line.key);
       if (seen) {
         seen.push(item);
@@ -2529,21 +2611,21 @@
 
     var clashed = new Map();
     var untouched = new Map();
-    state.pending.forEach(function (value, line) {
-      var entry = state.rows.get(line);
+    state.pending.forEach(function (value, id) {
+      var entry = state.rows.get(id);
       var was = entry ? entry.saved : "";
-      if (fileChanged(line, oldKeys.get(line), was, byKey)) {
-        clashed.set(line, value);
+      if (fileChanged(id, oldKeys.get(id).key, was, byKey)) {
+        clashed.set(id, value);
         return;
       }
-      untouched.set(line, value);
+      untouched.set(id, value);
     });
 
     var mine = remap(clashed, oldKeys, body.current);
     var keep = remap(untouched, oldKeys, body.current);
     /*
       保存できなかった訳（state.failed）も、同じ規則でキーから載せ直す。値は
-      { reason, value } のまま移す。行番号のままにしていたころは、よそが上に
+      { reason, value } のまま移す。行番号で載せ直していたころは、よそが上に
       1行足しただけで、goodbye の訳が hello の行に「保存できない行」として出た。
       そのまま hello の行を1字直すと、goodbye の訳が hello のキーへ保存され、
       hello の訳は消えた（実際に起きた）。載せる先を決められないものは、
@@ -2561,8 +2643,8 @@
     var caret = null;
     var wasTyping = state.editing !== null && document.activeElement === editor;
     if (wasTyping) {
-      remap(new Map([[state.editing, true]]), oldKeys, body.current).edits.forEach(function (value, line) {
-        typing = line;
+      remap(new Map([[state.editing, true]]), oldKeys, body.current).edits.forEach(function (value, id) {
+        typing = id;
       });
       caret = { start: editor.selectionStart, end: editor.selectionEnd };
     }
@@ -2573,7 +2655,7 @@
     addOrphans(mine.lost);
     addOrphans(keep.lost);
     addOrphans(failed.lost.map(function (item) {
-      return { key: item.key, text: item.text.value };
+      return { key: item.key, n: item.n, text: item.text.value };
     }));
     /*
       描き直すあいだは、入力欄の blur で保存へ回さない。入力欄を頁から外すと
@@ -2655,9 +2737,9 @@
       丸ごと置き換えていたころは、選んでいるあいだの入力が黙って消えた。
       「黙って破棄もしない」が破れるのは、まさにこの場面だった。
     */
-    state.mine.forEach(function (value, line) {
-      if (!state.pending.has(line)) {
-        state.pending.set(line, value);
+    state.mine.forEach(function (value, id) {
+      if (!state.pending.has(id)) {
+        state.pending.set(id, value);
       }
     });
     state.mine = null;
@@ -2768,7 +2850,26 @@
   }
 
   /*
-    1行を組む。
+    競合している行の1言に並べる、ラベルと値の1段（「ファイルの訳: …」）。
+
+    2つの訳は段を分けて並べる。値に改行があると、同じ段に続けて流したとき、
+    どこまでがどちらの訳かが読みにくい。値は訳なので、向きは中身から決めさせ、
+    lang にはロケール名を入れる（訳の欄と同じ）。
+  */
+  function notePair(label, value, locale) {
+    var pair = document.createElement("div");
+    pair.className = "note-pair";
+    pair.appendChild(span("note-label", label + ": "));
+    var text = span("note-value", value);
+    text.dir = "auto";
+    text.lang = locale;
+    pair.appendChild(text);
+    return pair;
+  }
+
+  /*
+    1行を組む。1行は1レコード（またはコメント行・閉じない引用符から後ろの生の1物理行）
+    で、引用符で囲んだ値に改行があるレコードも1行になる。
 
     訳の欄には入力欄を常設しない。1721行ぶんの入力欄を置くと、開くだけで重くなる。
     焦点が入った1行にだけ、頁に1つだけ作った入力欄を差し込む。
@@ -2776,8 +2877,21 @@
   function rowNode(line, locale) {
     var row = document.createElement("div");
     row.className = "row" + (line.editable ? "" : " not-editable");
+    /* 行の ID。行を引くのはこれで、行番号では引かない（state の注記を見よ）。 */
+    row.dataset.id = String(line.id);
 
-    row.appendChild(span("cell num", line.n));
+    /*
+      行番号の欄。最初の物理行を主にし、行をまたぐレコードでは下に小さく「〜M」
+      （最後の物理行）を添える（決まったことのそのほか 3）。エディターで開いたときの
+      行番号と照らし合わせるための値で、行の同定には使わない。区切りの字も文言
+      なので、目録から引く（ui.line_end）。
+    */
+    var num = span("cell num", "");
+    num.appendChild(span("num-start", line.n));
+    if (line.end) {
+      num.appendChild(span("num-end", t("ui.line_end", { line: line.end })));
+    }
+    row.appendChild(num);
 
     var badges = document.createElement("div");
     badges.className = "cell badges";
@@ -2785,9 +2899,16 @@
 
     row.appendChild(span("cell speaker", line.speaker));
 
-    /* 原文は常に英語。右から左の訳に引きずられて崩れないよう ltr に固定する。 */
+    /*
+      原文は常に英語。右から左の訳に引きずられて崩れないよう ltr に固定し、lang も
+      en にする。付けずにいたころは、日本語の画面では英文が日本語の声で読まれた。
+      値の中の改行と空行はそのまま描く（app.css の .source の pre-wrap）。
+      id は、入力欄の説明（aria-describedby）から指すために振る（openEditor）。
+    */
     var source = span("cell source", line.source);
     source.dir = "ltr";
+    source.lang = "en";
+    source.id = "source-" + line.id;
     row.appendChild(source);
 
     var value = span("cell translation", line.translation);
@@ -2812,12 +2933,17 @@
     var note = document.createElement("div");
     note.className = "cell row-note";
     note.hidden = true;
+    /* 原文と同じく、入力欄の説明から指すための id。 */
+    note.id = "note-" + line.id;
     row.appendChild(note);
 
     var entry = {
-      line: line.n,
+      id: line.id,
+      /* 最初の物理行。表示（読み上げの名前、まだ入っていない訳の目印）にだけ使う。 */
+      n: line.n,
       row: row,
       value: value,
+      source: source,
       badges: badges,
       note: note,
       /* キーは行の同定に使う。409 のあとに編集を載せ直すのはこれが頼り。 */
@@ -2842,7 +2968,7 @@
       ).toLowerCase(),
       low: ""
     };
-    state.rows.set(line.n, entry);
+    state.rows.set(line.id, entry);
     entry.low = value.textContent.toLowerCase();
     renderBadges(entry, line.badges);
     if (!line.editable && line.reason) {
@@ -2855,19 +2981,19 @@
         Tab で行から行へ移れるので、キーボードだけでも打っていける。
       */
       value.tabIndex = 0;
-      value.dataset.line = String(line.n);
-      setShownText(entry, shownValue(line.n, entry.saved));
+      value.dataset.id = String(line.id);
+      setShownText(entry, shownValue(line.id, entry.saved));
     }
     /*
       保存できなかった行は、描き直しても理由を出し直す。控えは state.failed に
       あるので出せる。出さないと、行は「保存できない」色と枠のままなのに、
       なぜ保存できないかが画面のどこにも無くなる。
     */
-    var bad = state.failed.get(line.n);
+    var bad = state.failed.get(line.id);
     if (bad) {
       setRowNote(entry, t("ui.row_error", { reason: bad.reason }));
     }
-    if (state.mine && state.mine.has(line.n)) {
+    if (state.mine && state.mine.has(line.id)) {
       /*
         競合中の行。ファイルの値と自分の値を両方出す。どちらを残すか選ぶのは
         人で、画面はそのための材料を並べるだけ。
@@ -2887,22 +3013,43 @@
       clear(note);
       note.hidden = false;
       note.appendChild(icon("code-merge"));
-      /* 文はまとめて1つの span に入れる。1言は flex なので、ばらすと隙間が空く。 */
-      var body = span(null, "");
-      body.appendChild(span("note-label", t("ui.conflict_file") + ": "));
-      body.appendChild(span("note-value", entry.saved));
-      body.appendChild(span("note-label", " / " + t("ui.conflict_mine") + ": "));
-      body.appendChild(span("note-value", state.mine.get(line.n)));
-      body.appendChild(span("note-locked", " " + t("ui.conflict_locked")));
+      /*
+        文はまとめて1つの箱に入れる。1言は flex なので、ばらすと隙間が空く。
+        箱の中は、ファイルの訳・あなたの訳・断りの3段にする（notePair）。
+      */
+      var body = document.createElement("div");
+      body.className = "note-body";
+      body.appendChild(notePair(t("ui.conflict_file"), entry.saved, locale));
+      body.appendChild(notePair(t("ui.conflict_mine"), state.mine.get(line.id), locale));
+      body.appendChild(span("note-locked", t("ui.conflict_locked")));
       note.appendChild(body);
     }
     markRow(entry);
     return row;
   }
 
+  /*
+    見出し（ファイルにあるコメント行）を組む。
+
+    節（# =====）と節点（# ---）は、読み上げの見出しにする（role="heading"。節は
+    aria-level 2、節点は 3 で、頁の題の h1 の下に来る）。付けずにいたころは、
+    見出しで移る操作で節から節へ飛べず、1700行を超える一覧を1行ずつ読み進める
+    しかなかった。どちらの印も無いコメント行（翻訳者のメモなど）は見出しにしない。
+    文書の構造ではないからである。h2・h3 ではなく role にするのは、既定の字の
+    大きさと余白を打ち消さずに済むためである。深さは待ち受けが付けたもの
+    （headingLevel）をそのまま使う。
+
+    引用符で囲んだ値の中の '#' の行は、待ち受けがレコードの値として返すので、
+    ここへは来ない（見出しにならない）。
+  */
   function headingNode(line) {
     var e = document.createElement("div");
-    e.className = "heading " + (line.heading || "other");
+    var level = headingLevel(line);
+    e.className = "heading " + level;
+    if (level !== "other") {
+      e.setAttribute("role", "heading");
+      e.setAttribute("aria-level", level === "section" ? "2" : "3");
+    }
     e.appendChild(icon("hashtag"));
     /* ファイルにあるコメント行をそのまま出す。組み直さない。 */
     e.appendChild(span(null, line.text));
@@ -2944,7 +3091,7 @@
         return;
       }
       fragment.appendChild(rowNode(line, data.locale));
-      var entry = state.rows.get(line.n);
+      var entry = state.rows.get(line.id);
       state.items.push({ entry: entry });
       if (entry.key) {
         var same = state.byKey.get(entry.key);
@@ -3198,7 +3345,7 @@
           注記が避けている「開けない行で行き止まる」形と同じ）。読めたときは一覧を
           描き直すので、焦点の載った欄はもう無い。
         */
-        var focused = lineOf(document.activeElement);
+        var focused = idOf(document.activeElement);
         if (focused !== null) {
           openEditor(focused);
         }

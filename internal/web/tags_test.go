@@ -51,12 +51,12 @@ func newCountsGameWithTranslation(t *testing.T, translation string) string {
 	return game
 }
 
-// lineOf はそのキーのデータ行の行番号を返す。
-func lineOf(t *testing.T, lines []lineView, k string) int {
+// idOf はそのキーのデータ行の ID を返す。
+func idOf(t *testing.T, lines []lineView, k string) int {
 	t.Helper()
 	for _, l := range lines {
 		if l.Kind == lineKindData && l.Key == k {
-			return l.Number
+			return l.ID
 		}
 	}
 	t.Fatalf("キー %s の行が無い", k)
@@ -72,11 +72,11 @@ func TestSaveRejudgesTagBalance(t *testing.T) {
 	if !was.Judged || was.Count != 0 {
 		t.Fatalf("起動時は1件も無いはず: %+v", was)
 	}
-	line := lineOf(t, before.Lines, key.For(srcDone))
+	line := idOf(t, before.Lines, key.For(srcDone))
 
 	// 閉じ忘れて保存する。その行にバッジが付き、件数も行数も1増える。
 	rec := save(t, s, "ja", before.Version,
-		rowEdit{Line: line, Key: key.For(srcDone), Translation: "<i>もしもし？"})
+		rowEdit{ID: line, Key: key.For(srcDone), Translation: "<i>もしもし？"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -106,7 +106,7 @@ func TestSaveRejudgesTagBalance(t *testing.T) {
 	// 読み直しても同じ判定が付いている。起動時のスナップショットへ戻らない。
 	again := getLines(t, s, "ja")
 	for _, l := range again.Lines {
-		if l.Number != line {
+		if l.ID != line {
 			continue
 		}
 		if _, ok := tagBadge(l.Badges); !ok {
@@ -119,7 +119,7 @@ func TestSaveRejudgesTagBalance(t *testing.T) {
 
 	// 閉じて保存し直す。バッジが外れ、件数も行数も戻る。
 	rec = save(t, s, "ja", broken.Version,
-		rowEdit{Line: line, Key: key.For(srcDone), Translation: "<i>もしもし？</i>"})
+		rowEdit{ID: line, Key: key.For(srcDone), Translation: "<i>もしもし？</i>"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -144,11 +144,11 @@ func TestStartupTagBadgeFollowsTheSavedText(t *testing.T) {
 	if was.Count != 1 || was.Rows != 1 {
 		t.Fatalf("起動時に1件1行のはず: %+v", was)
 	}
-	line := lineOf(t, before.Lines, key.For(srcDone))
+	line := idOf(t, before.Lines, key.For(srcDone))
 
 	// 別の形で壊したまま。件数は動かず、注記だけがいまの訳のものになる。
 	rec := save(t, s, "ja", before.Version,
-		rowEdit{Line: line, Key: key.For(srcDone), Translation: "もしもし？</i>"})
+		rowEdit{ID: line, Key: key.For(srcDone), Translation: "もしもし？</i>"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -166,7 +166,7 @@ func TestStartupTagBadgeFollowsTheSavedText(t *testing.T) {
 
 	// 直す。起動時の判定に引きずられず、バッジも件数も消える。
 	rec = save(t, s, "ja", still.Version,
-		rowEdit{Line: line, Key: key.For(srcDone), Translation: "もしもし？"})
+		rowEdit{ID: line, Key: key.For(srcDone), Translation: "もしもし？"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}

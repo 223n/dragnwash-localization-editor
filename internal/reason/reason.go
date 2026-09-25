@@ -241,12 +241,10 @@ const (
 	// EditBadHeader はヘッダーが受理される4種のいずれでもないこと。
 	// 置換は line（行番号）と text（そのヘッダー行）。
 	EditBadHeader = "edit_bad_header"
-	// EditNotRecord はその行がレコードとして読まれないこと。
-	EditNotRecord = "edit_not_record"
 	// EditFieldCount はフィールド数がヘッダーと合わないこと。
 	// 置換は header（ヘッダーの列数）と row（その行の列数）。
 	EditFieldCount = "edit_field_count"
-	// EditNoSuchLine はその行番号が無いこと。
+	// EditNoSuchLine はその ID の行が無いこと。
 	EditNoSuchLine = "edit_no_such_line"
 	// EditNotDataLine はデータ行でないこと。置換は kind（行の種類）。
 	EditNotDataLine = "edit_not_data_line"
@@ -256,13 +254,39 @@ const (
 	EditNoNUL = "edit_no_nul"
 	// EditBadUTF8 は訳が正しいUTF-8でないこと。
 	EditBadUTF8 = "edit_bad_utf8"
-	// EditMultiline はその行が、複数の物理行にまたがるレコードに属すること。
-	// 置換は line と end（レコードの最初と最後の物理行）。保存は物理行の単位なので、
-	// レコードの単位で書けるようになるまで（PR3）編集させない。
-	EditMultiline = "edit_multiline"
+	// EditMultilineTranslation は訳に改行（CR か LF）があること。訳への改行の
+	// 入力を足すまで（PR4）編集させない。いまの画面は改行を空白に置き換えるので、
+	// 開いて1字打つと、翻訳者が見ていない改行まで消える。
+	EditMultilineTranslation = "edit_multiline_translation"
 	// EditUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
 	// 置換は line（引用符が開いた物理行）。ファイル全体を読み取り専用にする。
 	EditUnclosedQuote = "edit_unclosed_quote"
+	// EditCROnly は、ファイルの行の区切りがすべて単独の CR であること。ゲームの
+	// 読み方（CsvReader）は引用の外の CR を捨てるので、このファイルを1行と読む。
+	// ファイル全体を読み取り専用にする。
+	EditCROnly = "edit_cr_only"
+	// EditSwallow は、行をまたぐレコードが後ろの行を値に飲み込んだと見られること
+	// （引用符の閉じ誤りの疑い。csvfile.FindSwallows）。置換は line（飲み込まれたと
+	// 疑う物理行）。
+	EditSwallow = "edit_swallow"
+	// EditGameDisagrees は、ゲームの読み方（CsvReader の移植）で読むと、そのレコードの
+	// 値が違って読まれること（csvfile.CSharpDisagreements）。置換は column（食い違った
+	// 最初の列）。
+	EditGameDisagrees = "edit_game_disagrees"
+	// EditGameMissesRecord は、ゲームの読み方でそのレコードが見つからないこと
+	// （csvfile.CSharpDisagreements の Column が空）。
+	EditGameMissesRecord = "edit_game_misses_record"
+	// EditNoKeyOrSource は、原文（source_en 列。無い形のファイルでは空と同じ）が空で、
+	// key 列（前後の空白を除く）が16桁のキー（小文字にして16桁の16進）でも台詞ID でも
+	// なく、publish がキーを決められないこと。publish はこのレコードを捨てる（移植仕様
+	// R17。判定は publish.Keyless）ので、書いた訳は公開されない（決まったことの 24）。
+	// 識別子の名前は、key 列も原文も空のレコードだけを当てていたころのもので、画面と
+	// 目録が使うので変えていない。
+	EditNoKeyOrSource = "edit_no_key_or_source"
+	// EditRecheckFailed は、書く前の事後確認（決まったことのそのほか 4）が外れたこと。
+	// 書き換えたレコードを読み直すと、書いた訳のほかの値や、ほかの行まで変わって
+	// 読める。置換は line（そのレコードの最初の物理行）。
+	EditRecheckFailed = "edit_recheck_failed"
 )
 
 // 書き出すと訳が失われる理由（internal/publish の guard.go）。
@@ -356,9 +380,10 @@ var all = []string{
 
 	NoteTagMissing, NoteTagExtra, NoteTagMissingExtra,
 
-	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
+	EditNoHeader, EditBadHeader, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
-	EditMultiline, EditUnclosedQuote,
+	EditMultilineTranslation, EditUnclosedQuote, EditCROnly, EditSwallow,
+	EditGameDisagrees, EditGameMissesRecord, EditNoKeyOrSource, EditRecheckFailed,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 

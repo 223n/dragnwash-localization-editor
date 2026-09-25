@@ -30,14 +30,19 @@ const maxRowsEdits = 20000
 
 // rowEdit は1行ぶんの書き換え要求。
 type rowEdit struct {
-	// Line は1始まりの物理行番号。書き込む先はこれで決める。
-	// クライアントにパスは書かせない。
-	Line int `json:"line"`
+	// ID は行（レコード）の ID（[edit.Line.ID]、lineView の id）。書き込む先はこれで
+	// 決める。クライアントにパスは書かせない。
+	//
+	// 物理行の番号では引かない。引用符で囲んだ値に改行があるレコードは複数の
+	// 物理行にまたがり、ほかのレコードの値の改行が増えれば、後ろのレコードの行番号が
+	// ずれる。ID はセグメントの通し番号で、自分の保存では変わらない
+	// （internal/edit の書く前の事後確認で確かめる）。
+	ID int `json:"id"`
 	// Key はクライアントがその行にあると思っているキー（先頭フィールド）。
 	//
-	// 行番号だけで同定すると、409 のあとが危うい。409 を受けた画面は読み直した
+	// ID だけで同定すると、409 のあとが危うい。409 を受けた画面は読み直した
 	// 内容に自分の編集を載せ直すが、そのあいだによそが行を足したり消したり
-	// していると、同じ行番号が別のキーの行を指す。訳が別の行へ入り、その行に
+	// していると、同じ ID が別のキーの行を指す。訳が別の行へ入り、その行に
 	// もとからあった訳が消える。
 	//
 	// 空なら照合しない。キーを持たない行（キー列が空の作業コピー）があるため
@@ -61,7 +66,11 @@ type rowsRequest struct {
 // 行ごとに返すのは、1行の失敗で残り全部を巻き添えにしないため。失敗した行は
 // 画面が「保存できていない行」として残し、翻訳者の入力を捨てない。
 type rowResult struct {
-	Line int `json:"line"`
+	// ID は要求の ID をそのまま返す。
+	ID int `json:"id"`
+	// Number は、その行のいまの最初の物理行。表示を差し替えるためだけの値で、
+	// 同定には使わない。そんな行が無ければ 0。
+	Number int `json:"n"`
 	// Saved はこの行が保存されたか。
 	Saved bool `json:"saved"`
 	// Translation は保存後にモデルから読み直した値。画面はこれで欄を更新する。
@@ -116,7 +125,7 @@ type errorResponse struct {
 // あればそれ、無ければ公開ファイル自身で、publish が入力に選ぶファイルと同じ。
 // 新しい訳がコミットする側へ入るのは publish を回したときである。
 //
-// publish はここでは回さない。保存は「触った行の最終フィールドだけを差し替える」
+// publish はここでは回さない。保存は「触ったレコードの最終フィールドだけを差し替える」
 // であって再生成ではない。再生成すると並びと見出しが作り直され、訳を打ち直す
 // 途中の自動保存で「訳が空になった行」が丸ごと消える。
 func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +210,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 		if !out.results[i].Saved {
 			continue
 		}
-		line, ok := out.file.Line(out.results[i].Line)
+		line, ok := out.file.Line(out.results[i].ID)
 		if !ok {
 			continue
 		}
@@ -216,7 +225,7 @@ func (s *server) handleRows(w http.ResponseWriter, r *http.Request) {
 	tags := s.tagStates(target.Locale)
 	badges := s.badgesByKey(cat, s.findings[target.Locale], filled, tags)
 	for i := range out.results {
-		if line, ok := out.file.Line(out.results[i].Line); ok {
+		if line, ok := out.file.Line(out.results[i].ID); ok {
 			out.results[i].Badges = badges[line.Key()]
 		}
 	}
@@ -259,7 +268,9 @@ type saveOutcome struct {
 // JSON になる）まで抱えると、錠の範囲が「ファイルを守る」よりずっと広く見える。
 //
 // 保存を直列にするのは、同じファイルへ同時に2つ書くと、片方の版の照合が
-// 通ったあとにもう片方が書き終える、という並びが起きうるためである。
+// 通ったあとにもう片方が書き終える、という並びが起きうるためである。この錠（saveMu）は
+// この待ち受けの中でしか効かない。ほかの dwloc edit や publish との競り合いは、
+// [edit.File.Save] が版の照合から rename までを OS の錠で囲んで防ぐ（改善の決定 3）。
 //
 // 書く先は Target.Input の1つだけである。以前はここで、ゲーム側の作業コピーと
 // コミットする側の公開ファイルの両方へ書いていたが、それは成り立たなかった。
@@ -277,31 +288,42 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 		s.logf("open failed locale=%s", target.Locale)
 		return saveOutcome{status: http.StatusInternalServerError, errKey: "error.read_failed"}
 	}
-	if file.ReadOnly() {
-		// ヘッダーが受理できないファイル。理由は internal/edit の文面をそのまま出す。
-		return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
-	}
 	if file.Version() != req.BaseVersion {
 		// 手前でファイルが変わっている。1バイトも書かずに、いまの中身を返す。
+		//
+		// 読み取り専用の判定より先に見る（決まったことのそのほか 5）。画面を開いている
+		// あいだに、ゲームや表計算ソフトがファイルを書き換えて読み取り専用の形（閉じない
+		// 引用符など）になると、先に読み取り専用で断っていたころは、画面が行ごとの理由を
+		// 持てずに送り直しを続け、載せ直しも行き先の無い訳への移動も走らなかった。
+		// 409 なら、いまの行一覧（読み取り専用の理由つき）を描き直し、載せ直せない訳を
+		// 行き先の無い訳として出し続けられる。
 		return saveOutcome{file: file, conflict: true}
+	}
+	if file.ReadOnly() {
+		// 読んだときから読み取り専用のファイル（ヘッダーが受理できない、など）。
+		// 画面は読み取り専用のファイルでは入力欄を開かないので、ふつうはここへ来ない。
+		return saveOutcome{status: http.StatusUnprocessableEntity, errKey: "error.file_readonly"}
 	}
 
 	results := make([]rowResult, 0, len(req.Edits))
 	applied := 0
 	for _, e := range req.Edits {
-		res := rowResult{Line: e.Line}
+		res := rowResult{ID: e.ID}
+		if line, ok := file.Line(e.ID); ok {
+			res.Number = line.Number
+		}
 		if !keyMatches(file, e) {
-			// その行番号には別のキーの行がある。書くと訳が別の行へ入り、
+			// その ID には別のキーの行がある。書くと訳が別の行へ入り、
 			// その行にもとからあった訳が消える。書かずに理由を返す。
 			res.Error = s.cat.T(cat, "error.row_moved")
 			results = append(results, res)
 			continue
 		}
-		switch err := file.SetTranslation(e.Line, e.Translation); {
+		switch err := file.SetTranslation(e.ID, e.Translation); {
 		case err == nil:
 			applied++
 			res.Saved = true
-			if line, ok := file.Line(e.Line); ok {
+			if line, ok := file.Line(e.ID); ok {
 				res.Translation = line.Translation()
 				if res.Translation != e.Translation {
 					// CSV として書き戻して読み直すと値が変わる場合
@@ -334,6 +356,17 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	}
 
 	if err := file.Save(); err != nil {
+		var recheck *edit.RecheckError
+		if errors.As(err, &recheck) {
+			// 書く直前にファイル全体を読み直すと、編集モデルと同じに読めなかった
+			// （書く前の事後確認の後半）。1バイトも書いていない。
+			s.logf("save check failed locale=%s line=%d", target.Locale, recheck.Line)
+			return saveOutcome{
+				results: s.recheckResults(cat, results, recheck),
+				status:  http.StatusUnprocessableEntity,
+				errKey:  "error.save_check_failed",
+			}
+		}
 		if errors.Is(err, edit.ErrConflict) {
 			// Save は書く直前にもう一度版を照合する。ここで弾かれたときも
 			// このファイルには1バイトも書いていない。手元の File はもう古いので
@@ -380,6 +413,27 @@ func (s *server) saveRows(cat *Catalog, target *publish.Target, req rowsRequest)
 	return saveOutcome{file: file, results: results, applied: applied}
 }
 
+// recheckResults は、書く前の事後確認が外れたときの行ごとの結果を作る。
+//
+// ファイルには1バイトも書いていないので、どの行の Saved も倒す（倒さずに返すと、
+// 画面が「保存できた行」と読んで未保存の控えを捨てる）。外れた行（recheck が指す ID）
+// にだけ理由を付ける。画面はその行を保存できない行にして送り直しを止め、理由の無い
+// ほかの行は未保存のまま送り直す（422 は送り直す状態コード）。次の要求には外れた行が
+// 入らないので、ほかの行は書ける。
+func (s *server) recheckResults(cat *Catalog, results []rowResult, recheck *edit.RecheckError) []rowResult {
+	why := s.cat.T(cat, "error.not_editable",
+		"line", itoa(recheck.Line), "reason", s.reasonText(cat, recheck.Cause))
+	for i := range results {
+		results[i].Saved = false
+		results[i].Translation = ""
+		results[i].Warning = ""
+		if results[i].ID == recheck.ID && results[i].Error == "" {
+			results[i].Error = why
+		}
+	}
+	return results
+}
+
 // addWarning は行の断りを1つ足す。既にあれば後ろに連ねる。
 //
 // 上書きしないのは、先に付いた断り（値を正規化した、など）が消えるためである。
@@ -406,6 +460,10 @@ func addWarning(res *rowResult, text string) {
 func (s *server) editErrorText(cat *Catalog, err error) string {
 	var notEditable *edit.NotEditableError
 	if errors.As(err, &notEditable) {
+		if notEditable.Line == 0 {
+			// そんな行が無い。外枠の「N行目は」を書けないので、理由だけを出す。
+			return s.reasonText(cat, notEditable.Cause)
+		}
 		return s.cat.T(cat, "error.not_editable",
 			"line", itoa(notEditable.Line), "reason", s.reasonText(cat, notEditable.Cause))
 	}
@@ -417,7 +475,7 @@ func (s *server) editErrorText(cat *Catalog, err error) string {
 	return err.Error()
 }
 
-// keyMatches は、要求が指す行がクライアントの思っているキーの行かを返す。
+// keyMatches は、要求の ID が指す行がクライアントの思っているキーの行かを返す。
 //
 // キーを送ってこない要求（キー列が空の行）は照合しない。行が無いときも通す。
 // 行が無いことは [edit.File.SetTranslation] が断るので、理由を2か所で作らない。
@@ -425,7 +483,7 @@ func keyMatches(file *edit.File, e rowEdit) bool {
 	if e.Key == "" {
 		return true
 	}
-	line, ok := file.Line(e.Line)
+	line, ok := file.Line(e.ID)
 	if !ok {
 		return true
 	}

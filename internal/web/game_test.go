@@ -201,7 +201,7 @@ func TestSaveWritesOnlyTheWorkingCopy(t *testing.T) {
 	version := currentVersion(t, s)
 	before := readFile(t, publishedPath(root))
 
-	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: "やあ！"})
+	rec := save(t, s, "ja", version, rowEdit{ID: 3, Key: keyKept2, Translation: "やあ！"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -237,7 +237,7 @@ func TestSaveUntranslatedRowGoesToTheWorkingCopy(t *testing.T) {
 	}
 
 	rec := save(t, s, "ja", version,
-		rowEdit{Line: 4, Key: keyOnlyInWorking, Translation: "あたらしい訳"})
+		rowEdit{ID: 4, Key: keyOnlyInWorking, Translation: "あたらしい訳"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -275,7 +275,7 @@ func TestSaveFailsWhenTheWorkingCopyCannotBeWritten(t *testing.T) {
 
 	makeReadOnly(t, workingCopyPath(game))
 
-	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: "やあ！"})
+	rec := save(t, s, "ja", version, rowEdit{ID: 3, Key: keyKept2, Translation: "やあ！"})
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -313,7 +313,7 @@ func TestSaveWithoutGameWritesOnlyOneFile(t *testing.T) {
 	version := currentVersion(t, s)
 	before := readFile(t, publishedPath(root))
 
-	rec := save(t, s, "ja", version, rowEdit{Line: 6, Key: keyOf(t, s, 6), Translation: "さようなら。"})
+	rec := save(t, s, "ja", version, rowEdit{ID: 6, Key: keyOf(t, s, 6), Translation: "さようなら。"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -336,7 +336,7 @@ func TestGameSaveLogHasNoRowContent(t *testing.T) {
 	version := currentVersion(t, s)
 
 	if rec := save(t, s, "ja", version,
-		rowEdit{Line: 3, Key: keyKept2, Translation: jaTyped}); rec.Code != http.StatusOK {
+		rowEdit{ID: 3, Key: keyKept2, Translation: jaTyped}); rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
 	// 書けなかったときの記録にも中身を出さない。
@@ -347,7 +347,7 @@ func TestGameSaveLogHasNoRowContent(t *testing.T) {
 	const retyped = "打ち直した訳。"
 	makeReadOnly(t, workingCopyPath(game))
 	version = currentVersion(t, s)
-	rec := save(t, s, "ja", version, rowEdit{Line: 3, Key: keyKept2, Translation: retyped})
+	rec := save(t, s, "ja", version, rowEdit{ID: 3, Key: keyKept2, Translation: retyped})
 	// 前提: 保存が失敗し、その記録が書かれていること。通ってしまうと、下の確かめは
 	// 書けなかったときの記録を1行も見ないまま通る。
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(log.String(), "save failed locale=ja") {
@@ -401,17 +401,17 @@ func hasNote(notes []string, text string) bool {
 	return false
 }
 
-// keyOf は行番号からその行のキーを引く。
-func keyOf(t *testing.T, s *server, line int) string {
+// keyOf は ID からその行のキーを引く。
+func keyOf(t *testing.T, s *server, id int) string {
 	t.Helper()
 
 	rec := do(t, s, http.MethodGet, "/api/lines?locale=ja", true, nil)
 	for _, l := range decode[linesResponse](t, rec.Body.Bytes()).Lines {
-		if l.Number == line {
+		if l.ID == id {
 			return l.Key
 		}
 	}
-	t.Fatalf("%d 行目が無い", line)
+	t.Fatalf("ID %d の行が無い", id)
 	return ""
 }
 
@@ -569,7 +569,7 @@ func TestEditAndPublishPickTheSameInput(t *testing.T) {
 
 	// 画面から1行保存する。6行目は訳が空の行（newEditRoot の注記）。
 	lines := getLines(t, s, "ja")
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("保存の状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}

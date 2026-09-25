@@ -341,7 +341,7 @@ func TestFindCRCuts(t *testing.T) {
 		// 改行を直した写しがほんとうに CR だけの改行になっていることも見る。当たらない
 		// 理由が「ファイルで分けたから」でなく「単独の CR が無いから」だと、試験が
 		// 何も確かめていないことになる。
-		if strings.Contains(text, "\r") && !crOnlyLineBreaks(segs) && len(segs.List) > 1 {
+		if strings.Contains(text, "\r") && !CROnlyLineBreaks(segs) && len(segs.List) > 1 {
 			t.Errorf("%s（CR だけの改行）: CR だけの改行のファイルと見ていない", c.Name)
 		}
 	}
@@ -350,7 +350,7 @@ func TestFindCRCuts(t *testing.T) {
 	// 確かめは何も守っていない。
 	for _, name := range []string{"soft-hyphen-comment", "ml-header"} {
 		segs := SplitSegments([]byte(crOnly.Replace(fixtureText(t, name))))
-		if !crOnlyLineBreaks(segs) || !nextSegmentNotRecordAfterCR(segs) {
+		if !CROnlyLineBreaks(segs) || !nextSegmentNotRecordAfterCR(segs) {
 			t.Errorf("%s（CR だけの改行）: 単独の CR の次にレコードに見えないセグメントが無い", name)
 		}
 	}
@@ -400,8 +400,8 @@ func TestCROnlyLineBreaks(t *testing.T) {
 		{"改行が無い", "key,translation", false},
 		{"空", "", false},
 	} {
-		if got := crOnlyLineBreaks(SplitSegments([]byte(tc.text))); got != tc.want {
-			t.Errorf("%s: crOnlyLineBreaks = %v, want %v", tc.name, got, tc.want)
+		if got := CROnlyLineBreaks(SplitSegments([]byte(tc.text))); got != tc.want {
+			t.Errorf("%s: CROnlyLineBreaks = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

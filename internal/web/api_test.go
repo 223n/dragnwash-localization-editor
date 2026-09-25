@@ -432,7 +432,7 @@ func TestLinesWithoutAStartupSummary(t *testing.T) {
 		t.Error("件数が無いだけで行まで出さなくなった")
 	}
 
-	rec := save(t, s, "ja", got.Version, rowEdit{Line: 6, Translation: jaTyped})
+	rec := save(t, s, "ja", got.Version, rowEdit{ID: 6, Translation: jaTyped})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("保存の状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}
@@ -474,10 +474,10 @@ func TestWriteFailureIsRecordedWithoutContent(t *testing.T) {
 		wantStatus int
 	}{
 		{"状態コード 200", func(s *server, w http.ResponseWriter) {
-			s.writeJSON(w, rowResult{Line: 6, Translation: jaTyped})
+			s.writeJSON(w, rowResult{ID: 6, Translation: jaTyped})
 		}, 0},
 		{"状態コードを指定", func(s *server, w http.ResponseWriter) {
-			s.writeJSONStatus(w, http.StatusConflict, rowResult{Line: 6, Translation: jaTyped})
+			s.writeJSONStatus(w, http.StatusConflict, rowResult{ID: 6, Translation: jaTyped})
 		}, http.StatusConflict},
 	}
 	for _, tc := range cases {

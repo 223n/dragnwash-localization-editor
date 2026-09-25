@@ -14,6 +14,8 @@
 // 「待たずに保存した」ことを遅い機械でも取り違えずに確かめられる。page.clock.install は
 // 頁を開く前に要るので、その試験は app ではなく page と server から開く。
 import { createHash } from "node:crypto";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 
 import { expect, test } from "../support/test.mjs";
 import { msg } from "../support/catalog.mjs";
@@ -180,7 +182,7 @@ test("入力欄は頁に1つだけで、綴り検査・自動修正・翻訳を�
   await expect(ed).toHaveClass(/(^|\s)notranslate(\s|$)/);
   expect(await ed.evaluate((node) => node.spellcheck)).toBe(false);
   // 名前は目録から。向きは中身から決めさせ、lang はロケール名そのまま（ヘブライ語の確認用）。
-  await expect(ed).toHaveAttribute("aria-label", msg("ja", "ui.edit_label"));
+  await expect(ed).toHaveAttribute("aria-label", msg("ja", "ui.edit_label_line", { line: SAMPLE_LINES.hello }));
   await expect(ed).toHaveAttribute("lang", "ja");
   await expect(ed).toHaveAttribute("dir", "auto");
 
@@ -489,7 +491,7 @@ test("打つたびに自動保存の時計を引き直し、止まってから 1
 
   await page.clock.runFor(1);
   await expect.poll(() => saves.length).toBe(1);
-  expect(saves[0].edits).toEqual([{ line: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "Bye" }]);
+  expect(saves[0].edits).toEqual([{ id: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "Bye" }]);
   await expect.poll(() => lineOnDisk(server, SAMPLE_LINES.goodbye)).toBe(`${dataText(ROW.goodbye, "Bye")}\n`);
   await waitForSaved(page);
   // 送ったあとに時計を進めても、同じ訳をもう一度は送らない。
@@ -830,11 +832,11 @@ test("前後に空白のある訳は、打ったとおりの値で保存され�
 
 // ---- 保存の要求と応答 ----
 
-// 行番号だけで送ると、手前でよそが行を足したり消したりしていたときに訳が別の
-// キーの行へ入る。画面は常にキーを載せ、読んだときの版（ファイル全体の SHA-256）も
-// 載せる。保存のあとは、次の要求に保存後の版を載せる。古い版のまま送ると、
-// 自分の保存に対して 409 が出る。
-test("保存の要求は行番号にキーと読んだときの版を添えて送る", async ({ app, server }) => {
+// 行は ID（レコードの通し番号）で指す。ID だけで送ると、手前でよそがレコードを足したり
+// 消したりしていたときに訳が別のキーの行へ入る。画面は常にキーを載せ、読んだときの版
+// （ファイル全体の SHA-256）も載せる。保存のあとは、次の要求に保存後の版を載せる。
+// 古い版のまま送ると、自分の保存に対して 409 が出る。
+test("保存の要求は ID（通し番号）にキーと読んだときの版を添えて送る", async ({ app, server }) => {
   const saves = trackSaves(app);
   const sha = (buf) => createHash("sha256").update(buf).digest("hex");
   const v1 = sha(await server.readRoot(workingRel));
@@ -848,7 +850,7 @@ test("保存の要求は行番号にキーと読んだときの版を添えて�
   expect(sent.postDataJSON()).toEqual({
     locale: "ja",
     baseVersion: v1,
-    edits: [{ line: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "さようなら。" }],
+    edits: [{ id: SAMPLE_LINES.goodbye, key: keyFor(SAMPLE.goodbye.source), translation: "さようなら。" }],
   });
   await waitForSaved(app);
 
@@ -859,8 +861,20 @@ test("保存の要求は行番号にキーと読んだときの版を添えて�
   await waitForSaved(app);
   expect(saves[1].baseVersion).toBe(v2);
   expect(saves[1].edits).toEqual([
-    { line: SAMPLE_LINES.hello, key: keyFor(SAMPLE.hello.source), translation: "もしもし。" },
+    { id: SAMPLE_LINES.hello, key: keyFor(SAMPLE.hello.source), translation: "もしもし。" },
   ]);
+});
+
+// 保存は書き込みの錠を取る（internal/publish の LockFile）。錠のファイルは、試験の仕組みが
+// 渡す DWLOC_LOCK_DIR で見本の一時ディレクトリに置かせ、利用者のキャッシュのフォルダーへ
+// 走らせるたびに溜めない（support/dwloc.mjs の launchDwloc）。
+test("保存の錠のファイルは見本の一時ディレクトリに置く", async ({ app, server }) => {
+  await typeTranslation(app, SAMPLE_LINES.goodbye, "さようなら。");
+  await editor(app).press("Escape");
+  await waitForSaved(app);
+  const locks = await readdir(join(server.dir, "locks"));
+  expect(locks).toHaveLength(1);
+  expect(locks[0]).toMatch(/^[0-9a-f]{24}\.lock$/);
 });
 
 // 待ち受けは保存後の行を読み直した値（translation）を返し、入力と違えば断り（warning）を
@@ -874,7 +888,7 @@ test("保存の応答が値を変えたと言ったら、その値を行に出�
     const response = await route.fetch();
     const body = await response.json();
     for (const r of body.results) {
-      if (r.line === SAMPLE_LINES.goodbye) {
+      if (r.id === SAMPLE_LINES.goodbye) {
         r.translation = shown;
         r.warning = warning;
       }
@@ -988,7 +1002,7 @@ test.describe("キーの欄が空の行がある作業コピー", () => {
     await expect.poll(() => lineOnDisk(server, 6)).toBe(line);
     await waitForSaved(app);
     expect(saves).toHaveLength(1);
-    expect(saves[0].edits).toEqual([{ line: 6, key: "", translation: typed }]);
+    expect(saves[0].edits).toEqual([{ id: 6, key: "", translation: typed }]);
     await expect(rowByLine(app, 6)).not.toHaveClass(/(^|\s)save-failed(\s|$)/);
     await expect(translationCell(app, 6)).toHaveText(typed);
     expectOnlyLines(before, await server.readRoot(workingRel), { 6: line });

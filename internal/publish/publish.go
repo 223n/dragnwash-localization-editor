@@ -186,6 +186,27 @@ func rowKey(rec csvfile.Row) (string, keyOutcome) {
 	}
 }
 
+// Keyless は、publish がレコード rec のキーを決められずに捨てるか（移植仕様 R17）を
+// 返す。原文（source_en。トリムしない）が空で、key 列（前後の空白を除く）が台詞ID でも、
+// 小文字にして16桁のキーの形でもないレコードで、訳を書いても公開されない。source_en
+// 列の無い形（公開ファイルの6列・3列・2列）では、原文は空と同じに見る。
+//
+// 原文があって key 列と合わないレコード（R15）は含めない。それも捨てられるが、原文の
+// 書き換えに古いキーが追いついていない行を見つけるための仕掛けで、diff が「捨てられる
+// 行」として別に知らせる。
+//
+// 画面の保存（internal/edit）は、これに当たるレコードを編集させない。判定は [rowKey]
+// に任せ、規則を2か所に書かない。書くと、編集させない行と publish が捨てる行
+// （集計の malformed dropped）が食い違う。
+//
+// 入力と書き出し先が同じとき（作業コピーの無いロケールで、公開ファイル自身が入力の
+// とき）は、訳の入ったこのレコードを [CheckLoss] が失われる訳と数え、publish は
+// 止まる。黙って捨てて通るのは、入力が作業コピーのときである。
+func Keyless(rec csvfile.Row) bool {
+	_, how := rowKey(rec)
+	return how == keyDropped && rec.Get(colSourceEn) == ""
+}
+
 // Build は公開CSVのバイト列を1ファイル分組み立てる。
 //
 // data は script_order.csv と level_flow.csv を読んだもの。nil を渡すと再生順が
