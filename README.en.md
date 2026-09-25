@@ -936,7 +936,7 @@ If you do want a line break at the end, add it with `Shift+Enter` after pasting.
 A translation with a line break is written as a quoted value.  
 The line breaks inside the value are `LF`.  
 Even when the working copy separates its rows with `CRLF`, the line breaks inside a value are `LF` (the same shape as the working copy the game writes).  
-If a line from the second line of the translation on looks like a record when read on its own (a line starting with a 16-digit key or a line ID, or a line with as many commas as the header has columns), that translation is not written.  
+If a line from the second line of the translation on looks like a record when read on its own (a line starting with a 16-digit key or a line ID, or a line that splits at its commas into as many columns as the header has, such as a line with six commas in a seven-column working copy), that translation is not written.  
 `publish` would stop on it, taking it for a quote closed in the wrong place that swallows the lines after it.  
 The row shows the reason "Line N of the translation looks like a record when read on its own", and what you typed stays on the screen.  
 Change how that line is written (its commas and so on), then type it again.

@@ -403,6 +403,27 @@ func TestSetTranslationRefusesLinesThatLookLikeRecords(t *testing.T) {
 	}
 }
 
+// TestSetTranslationCountsColumnsLikeTheHeader は、訳の2行目以降がレコードに見えるかを、
+// カンマで区切った列の数がヘッダーの列の数と同じかで決めることを、7列の作業コピー（実物と
+// 同じ形）で見る。カンマの数では、ヘッダーの列の数より1つ少ない6個で断り、5個と7個は書く。
+// README（ja・en）の「7列の作業コピーならカンマ6個」と同じ数え方である（検証の指摘。以前の
+// README は「カンマの数がヘッダーの列と同じ」と書いていた）。
+func TestSetTranslationCountsColumnsLikeTheHeader(t *testing.T) {
+	for commas, refused := range map[int]bool{5: false, 6: true, 7: false} {
+		value := "いち\n" + strings.Repeat("x,", commas) + "x"
+		f := Parse([]byte(mlWorking))
+		err := f.SetTranslation(4, value)
+		var invalid *InvalidValueError
+		switch {
+		case refused && (!errors.As(err, &invalid) || invalid.Cause.ID != reason.EditLineLooksLikeRecord ||
+			argOf(invalid.Cause, "line") != "2"):
+			t.Errorf("カンマ %d 個: SetTranslation = %v、訳の2行目がレコードに見える理由を期待", commas, err)
+		case !refused && err != nil:
+			t.Errorf("カンマ %d 個: 書けない: %v", commas, err)
+		}
+	}
+}
+
 // gameShiftWorking は、キーも原文も空のレコード（ID 3）の訳を書き換えると、ゲームの
 // 読み方（CsvReader）で後ろのレコード（ID 4）が見つからなくなる2列の作業コピー。
 //
