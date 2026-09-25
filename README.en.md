@@ -900,6 +900,11 @@ A record whose source text spans lines can be edited as long as the translation 
 The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row can be translated too.  
 A line inside a value that starts with `#` is not made a heading.
 
+The line-number column shows the line in the file where the record starts.  
+Only for a record that spans lines, the line where it ends is added below it in small type, after a dash (for `1865` to `1867`, `–1867` appears under `1865`).  
+It is there to compare with the line numbers you see when you open the file in an editor.  
+The source text column shows the line breaks and blank lines inside a value as they are.
+
 The row to save is named by the record's sequence number and its key, not by its line number in the file.  
 A record that spans lines shifts the line numbers of the records after it.  
 Your own saves do not change the sequence numbers.  
@@ -1081,14 +1086,16 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 
 | What the screen says | What happened |
 | ---- | ---- |
-| Some translations have nowhere to go. Note them down and reload | That row disappeared from the file, or the same key now appears more than once |
+| Some translations have nowhere to go. Note them down and reload | That row disappeared from the file, the same key now appears more than once, or the row can no longer be edited |
 | This row has shifted. A different key now sits in that position, so nothing was written | A row with a different key now has the same position (sequence number) |
 
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
 
 When the file changes into a shape that cannot be edited while it is open (a quote that is never closed, and so on), that is treated as a conflict as well.  
-The screen shows the reloaded list with the reason it cannot be edited, and keeps showing any translation with no place to go as a translation that has nowhere to go.
+The screen shows the reloaded list with the reason it cannot be edited, and keeps showing any translation with no place to go as a translation that has nowhere to go.  
+A translation on a row whose key column is empty is put back on the row with the same sequence number.  
+If a different row that has a key now sits at that number, it is not put there; it is listed as a translation that has nowhere to go, with its line number.
 
 Saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
 The span from checking the version to finishing the write is wrapped in an OS lock.  
@@ -1146,6 +1153,16 @@ Hovering over a condition chip shows the same text as the counts column.
 While you are composing text (building characters with an `IME`), it does not intercept your keys.  
 The `Enter` that immediately follows committing a composition is not used to move to the next row either.  
 That is so that committing alone does not jump you to the next row.
+
+With a screen reader, the input box is read as "Translation (line N)".  
+The row's source text and any note shown on the row (such as the reason it cannot be saved) are read after it.  
+The source text is read as English.  
+Comment lines for sections (`# =====`) and nodes (`# ---`) are treated as headings, so you can jump from section to section by heading.  
+A comment line with neither mark (a memo, for example) is not made a heading.  
+This has been checked through the attributes only, not with an actual screen reader.
+
+So that a long list does not freeze, rows outside the screen are drawn only when they come into view.  
+The height of a row not drawn yet is an estimate, so the scrollbar length and the row you land on after a big jump can be slightly off until it is drawn.
 
 ### The order to run things in
 
