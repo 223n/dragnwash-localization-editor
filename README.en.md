@@ -675,7 +675,7 @@ With a line break there, a heading line of the published file splits in two, and
 The upstream tool breaks in the same way.
 
 A swallowed line is spotted by whether a continuation line of a value that spans lines looks like a record on its own.  
-If it starts with a key, or has as many separators as the header has columns, a forgotten closing quote is suspected.  
+If it starts with a key, or splits at its commas into as many columns as the header has (six commas in a seven-column working copy), a forgotten closing quote is suspected.  
 To fix it, check where the quotes close, and add the `"` that closes the value if it is missing.  
 Write a `"` inside a value as two, `""`.
 
