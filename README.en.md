@@ -922,9 +922,14 @@ In each of them, `publish` or the game would read what you write as a different 
 | The translation contains a line break | The translation contains a line break (a translation with line breaks cannot be changed from the screen yet) |
 | A quote seems to be closed on another line and to swallow the lines after it | Line N looks swallowed into this record's value (a quote may be closed in the wrong place) |
 | The game's reader (`CsvReader`) reads a value differently (a `"` in the middle of a value, and so on) | The game's reader (CsvReader) reads the (column name) column of this record differently |
+| The game's reader (`CsvReader`) does not find the record | The game's reader (CsvReader) does not find this record |
 
 A translation with a line break cannot be edited because the screen replaces line breaks with spaces for now.  
 Opening it and typing one character would drop line breaks you cannot see.  
+The game's reader does not find a record when it takes that row into the value of another row.  
+This happens when the game starts a quote at a `"` in the middle of a value on an earlier row, or when a lone `CR` is mixed in at the end of lines (the game drops a `CR` outside quotes and joins the row to the next one).  
+In a file with a line of only full-width spaces or `NO-BREAK SPACE` before the header, the game reads that line as the header, so every row shows this reason.  
+Deleting that line fixes it.  
 A swallowed line is spotted in the same way as where `publish` stops.  
 It can also hit a valid multi-line value, but the screen has no way to let it through.  
 Check it with `dwloc publish` and let it through with `--accept-multiline`.

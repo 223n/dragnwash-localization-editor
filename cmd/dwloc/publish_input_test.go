@@ -315,6 +315,32 @@ func TestPublishStopsWhenTheOutputCannotBeReadAgain(t *testing.T) {
 	checkContains(t, "stderr", stderr, []string{"Translations/ja/strings.csv を読み直せないので、1バイトも書きませんでした"})
 }
 
+// TestUsageSaysPublishStopsWhenFilesChange は、使い方の説明（dwloc publish -h と
+// dwloc help）が、組み立てたあとに入力か書き出し先が変わって止まる場合（終了コード 1）と、
+// 書く直前の錠と読み直しを書いていることを見る。README の終了コードの7つと合わせる。
+// 説明に無いと、端末で説明を読んだ人は、終了コード1と「組み立てたあとに入力か書き
+// 出し先が変わったので…」の出力を結び付けられない。
+func TestUsageSaysPublishStopsWhenFilesChange(t *testing.T) {
+	code, stdout, stderr := runCLI("publish", "-h")
+	if code != exitOK {
+		t.Fatalf("publish -h の終了コード = %d\n%s", code, stderr)
+	}
+	checkContains(t, "publish -h", stdout, []string{
+		"書き込みの錠を\n掛けてから",
+		"入力・書き出し先・ゲーム側の公開ファイルを\n読み直します",
+		"または組み立てたあとに入力か書き出し先が変わったので止めた",
+	})
+	code, stdout, stderr = runCLI("help")
+	if code != exitOK {
+		t.Fatalf("help の終了コード = %d\n%s", code, stderr)
+	}
+	checkContains(t, "help", stdout, []string{
+		"diff が閉じない引用符のファイルを読めず判定して",
+		"「読み違える\n      形のファイルがある」",
+		"「組み立てたあとに\n      入力か書き出し先が変わった」",
+	})
+}
+
 // TestPublishLocksTheSameInputOnce は、--path に同じファイルを2度渡しても、錠を
 // 1度だけ掛けて書けることを見る。同じ錠を同じプロセスの中で2度取ろうとすると、
 // 自分を待って上限まで止まり、書けない。

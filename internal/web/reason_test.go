@@ -1001,3 +1001,41 @@ func publishBaseReasons(t *testing.T) []reason.Reason {
 	}
 	return []reason.Reason{publish.BaseReason(res.Locale, res.Count)}
 }
+
+// TestReadmeListsTheRowReasons は、README（ja・en）の「書き換えられない行」の表が、画面が
+// 行ごとに出す読み取り専用の理由をすべて載せていることを見る。表は「出る理由」の列に
+// 画面の文面を並べる。載っていない理由が画面に出ると、翻訳者は README でその理由と
+// 直し方を引けない（PR3 の検証で、reason.edit_game_misses_record が抜けていた）。
+//
+// 置換は表の書き方にそろえる（{line} は N、{column} は ja が「（列名）」、en が
+// 「(column name)」）。
+func TestReadmeListsTheRowReasons(t *testing.T) {
+	s := newTestServer(t, Options{})
+	for _, tc := range []struct {
+		readme, lang string
+		// column は、目録の文面の {column}（ja は前後の空白を含む）を表の書き方に直す。
+		column *strings.Replacer
+	}{
+		{"README.md", "ja", strings.NewReplacer(" \x00 ", "（列名）")},
+		{"README.en.md", "en", strings.NewReplacer("\x00", "(column name)")},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", tc.readme))
+		if err != nil {
+			t.Fatal(err)
+		}
+		readme := string(data)
+		cat := s.cat.lookup(tc.lang)
+		for _, id := range []string{
+			reason.EditMultilineTranslation,
+			reason.EditSwallow,
+			reason.EditGameDisagrees,
+			reason.EditGameMissesRecord,
+		} {
+			text := s.cat.T(cat, "reason."+id, "line", "N", "column", "\x00")
+			text = tc.column.Replace(text)
+			if !strings.Contains(readme, "| "+text) {
+				t.Errorf("%s の表に reason.%s（%q）が無い", tc.readme, id, text)
+			}
+		}
+	}
+}
