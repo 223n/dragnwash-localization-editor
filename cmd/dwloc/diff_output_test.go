@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -170,6 +173,95 @@ func TestRunDiffOutputRefusesALinkIntoTranslations(t *testing.T) {
 	checkContains(t, "標準エラー", stderr, []string{"--output には、diff が読むフォルダーの中を指定できません"})
 	if got := readFile(t, root, "Translations/ja/strings.csv"); got != before {
 		t.Errorf("リンク先の公開ファイルが書き換わった:\n%s", got)
+	}
+}
+
+// linkDir は、フォルダー target を指すリンク link を作る。シンボリックリンクを
+// 作れない環境（権限の無い Windows）では、ジャンクションで作る。ジャンクションは
+// 管理者の権限が無くても作れる。どちらも作れなければ飛ばす。
+//
+// 作ったリンクは、t.TempDir の後片付けより先に外す。後片付けがリンクをたどって
+// リンク先の中身を消さないように、リンクそのものだけを消す。
+func linkDir(t *testing.T, target, link string) {
+	t.Helper()
+	err := os.Symlink(target, link)
+	if err != nil && runtime.GOOS == "windows" {
+		var out []byte
+		out, err = exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+		if err != nil {
+			err = fmt.Errorf("%w: %s", err, out)
+		}
+	}
+	if err != nil {
+		t.Skipf("フォルダーのリンクを作れない: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+}
+
+// TestRunDiffOutputRefusesANewNameThroughAFolderLink は、Translations の中のフォルダーを
+// 指すリンク（シンボリックリンクかジャンクション）の下の、まだ無い名前へ書かない
+// ことを見る。
+//
+// まだ無い名前はリンクをたどれない（filepath.EvalSymlinks が失敗する）。書き出し先の
+// 字面の親（リンクとその上）をたどるだけでは、どれも守りのフォルダーではないので通り、
+// Translations/<ロケール>/ の中に報告ができる。親のフォルダーのリンクを解いてから
+// 見る。名前は、dwloc が読む名前ではないもの（report.csv）にして、名前の守りでは
+// 止まらないようにしてある。
+func TestRunDiffOutputRefusesANewNameThroughAFolderLink(t *testing.T) {
+	root := recordDiffTree(t)
+	link := filepath.Join(t.TempDir(), "jja")
+	linkDir(t, filepath.Join(root, "Translations", "ja"), link)
+	code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv",
+		"--output", filepath.Join(link, "report.csv"))
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--output には、diff が読むフォルダーの中を指定できません"})
+	if _, err := os.Stat(filepath.Join(root, "Translations", "ja", "report.csv")); err == nil {
+		t.Error("リンクの先の Translations/ja に報告ができている")
+	}
+}
+
+// TestRunDiffOutputRefusesALocaleLinkedFromElsewhere は、Translations の中のロケールが
+// ほかの場所へのリンクのとき、リンク先のフォルダーにも書かないことを見る。publish と
+// validate はリンクをたどってロケールを読むので、リンク先はロケールの中身である。
+func TestRunDiffOutputRefusesALocaleLinkedFromElsewhere(t *testing.T) {
+	root := recordDiffTree(t)
+	elsewhere := t.TempDir()
+	linkDir(t, elsewhere, filepath.Join(root, "Translations", "fr"))
+	code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv",
+		"--output", filepath.Join(elsewhere, "report.csv"))
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--output には、diff が読むフォルダーの中を指定できません"})
+	if names, err := os.ReadDir(elsewhere); err != nil || len(names) > 0 {
+		t.Errorf("リンク先のロケールに書いている: %v %v", names, err)
+	}
+}
+
+// TestRunDiffOutputRefusesAHardLink は、ほかの名前（ハードリンク）があるファイルへ
+// 書かないことを見る。
+//
+// 書き出し（publish.WriteBytes）は、名前が2つ以上あるファイルをその場で書き直す。
+// rename で置き換えると、ほかの名前が古い中身のまま残るからである。ほかの名前が
+// 公開ファイルなら、公開ファイルが報告で上書きされる。ほかの名前がどこにあるかは
+// 安く調べられないので、ハードリンクなら書かない。名前は、dwloc が読む名前では
+// ないもの（hl.csv）にしてある。
+func TestRunDiffOutputRefusesAHardLink(t *testing.T) {
+	root := recordDiffTree(t)
+	before := readFile(t, root, "Translations/ja/strings.csv")
+	hl := filepath.Join(t.TempDir(), "hl.csv")
+	if err := os.Link(filepath.Join(root, "Translations", "ja", "strings.csv"), hl); err != nil {
+		t.Skipf("ハードリンクを作れない: %v", err)
+	}
+	code, stdout, stderr := runCLI("diff", "--root", root, "--no-game", "--format", "csv", "--output", hl)
+	if code != exitError {
+		t.Fatalf("終了コード = %d, 期待 %d\nstdout:\n%s\nstderr:\n%s", code, exitError, stdout, stderr)
+	}
+	checkContains(t, "標準エラー", stderr, []string{"--output のファイルには、ほかの名前（ハードリンク）があります"})
+	if got := readFile(t, root, "Translations/ja/strings.csv"); got != before {
+		t.Errorf("ハードリンクの先の公開ファイルが書き換わった:\n%s", got)
 	}
 }
 

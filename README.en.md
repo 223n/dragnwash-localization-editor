@@ -339,8 +339,10 @@ With `--format csv` it adds a BOM so that spreadsheet software can tell the file
 The path is relative to the current directory.  
 It does not create the folder to write into.  
 It cannot write inside `Translations` or `data` of the translation repository, or inside `Translations` of the game, so as not to overwrite files that `diff`, `publish` and `edit` read.  
+Pointing inside these folders through a link or a junction is refused as well.  
 Wherever the path points, it cannot use a name that `dwloc` reads (`strings.csv`, `<locale>.working.csv`, `layout_risks.csv`, `script_order.csv`, `level_flow.csv`).  
-This keeps it from overwriting the game's working copy even with `--no-game` or when the game is not found.
+This keeps it from overwriting the game's working copy even with `--no-game` or when the game is not found.  
+It does not write to a file that has another name (a hard link) either, because the content under the other name would change too.
 
 ### What dwloc prints is in Japanese
 

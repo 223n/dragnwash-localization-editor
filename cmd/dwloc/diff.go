@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +85,8 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         （strings.csv、<ロケール>.working.csv、layout_risks.csv、
         script_order.csv、level_flow.csv）でも書けません。--no-game の
         ときや、ゲームが見つからないときも、ゲームの作業コピーを
-        上書きしないためです。
+        上書きしないためです。ほかの名前（ハードリンク）があるファイル
+        にも書きません。書くと、ほかの名前の中身も書き換わるためです。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
@@ -369,7 +371,8 @@ func checkDiffOutput(root, game, out string, stderr io.Writer) int {
 	}
 	// 書き出し先がリンクなら、たどった先も見ます。publish.WriteBytes はリンクを
 	// 残したままリンク先へ書くので、リンクの置き場だけを見ると、公開ファイルを指す
-	// リンクを渡されたときに公開ファイルを上書きします。
+	// リンクを渡されたときに公開ファイルを上書きします。書き出し先のフォルダーが
+	// リンクのとき（まだ無い名前を含む）は、within がたどった先のフォルダーで比べます。
 	target := abs
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		target = resolved
@@ -384,6 +387,15 @@ func checkDiffOutput(root, game, out string, stderr io.Writer) int {
 		fmt.Fprintf(stderr,
 			"dwloc: --output には、dwloc が読むファイルの名前を使えません（%s）。別の名前にしてください: %s\n",
 			strings.Join(dwlocReadNames(), "、"), filepath.ToSlash(out))
+		return exitError
+	}
+	if publish.LinkCount(abs) > 1 {
+		// publish.WriteBytes は、名前が2つ以上あるファイルをその場で書き直します。
+		// ほかの名前がどこにあるかは安く調べられず、公開ファイルや作業コピーかも
+		// しれないので、書きません。
+		fmt.Fprintf(stderr,
+			"dwloc: --output のファイルには、ほかの名前（ハードリンク）があります。書くとその名前の中身も書き換わるので、書きません。別の名前にしてください: %s\n",
+			filepath.ToSlash(out))
 		return exitError
 	}
 	if !isDir(filepath.Dir(abs)) {
@@ -424,15 +436,20 @@ func readByDwloc(name string) bool {
 	return false
 }
 
-// within は、path の親をたどったどれかが、dirs のどれかと同じフォルダーかを返します。
-// 無いフォルダーは比べません（path の親のうちまだ無いものと、dirs のうち無いもの）。
+// within は、path の親をたどったどれかが、dirs のフォルダーか、その中のフォルダーと
+// 同じかを返します。無いフォルダーは比べません（path の親のうちまだ無いものと、dirs の
+// うち無いもの）。
+//
+// 比べるのはフォルダーの同一性（os.SameFile）で、os.Stat はリンクとジャンクションを
+// たどります。path の親を字面でたどるだけだと、Translations/ja を指すリンクの下の
+// 新しい名前（リンク/report.csv）は通ります。リンクの字面の親は Translations では
+// ないからです。そこで、dirs の中のフォルダーを全部集めて（[guardedDirs]）、path の
+// 親（たどった先のフォルダー）がそのどれかと同じかを見ます。
+//
+// パスのリンクを解いてから比べる形にしないのは、Windows のジャンクションを
+// filepath.EvalSymlinks が解かないためです（Go 1.23 からの winsymlink の既定）。
 func within(path string, dirs []string) bool {
-	var guards []os.FileInfo
-	for _, d := range dirs {
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			guards = append(guards, info)
-		}
-	}
+	guards := guardedDirs(dirs)
 	for cur := filepath.Dir(path); len(guards) > 0; {
 		if info, err := os.Stat(cur); err == nil {
 			for _, g := range guards {
@@ -448,6 +465,35 @@ func within(path string, dirs []string) bool {
 		cur = next
 	}
 	return false
+}
+
+// guardedDirs は、dirs のフォルダーと、その中のすべてのフォルダーを、同一性を比べられる
+// 形（os.FileInfo）で返します。
+//
+// dirs そのものがリンクでもたどります（名前の後ろに区切りを付けて歩くと、os.Lstat が
+// 最後のリンクをたどります）。中のリンク（シンボリックリンクとジャンクション）は、
+// たどった先のフォルダーを加えますが、その中へは降りません。ロケールをリンクで
+// 置いたとき（publish も validate もたどって読みます）のリンク先を守り、リンクの輪で
+// 止まらないようにするためです。読めないフォルダーの中は見ません。
+//
+// 翻訳リポジトリの Translations はロケールと作業コピーの置き場で、フォルダーは
+// 数十個です。書き出しの前に1回歩くだけなので、重さは気になりません。
+func guardedDirs(dirs []string) []os.FileInfo {
+	var out []os.FileInfo
+	for _, d := range dirs {
+		_ = filepath.WalkDir(d+string(filepath.Separator), func(p string, e fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if e.IsDir() || e.Type()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+				if info, err := os.Stat(p); err == nil && info.IsDir() {
+					out = append(out, info)
+				}
+			}
+			return nil
+		})
+	}
+	return out
 }
 
 // diffExitCode は報告から終了コードを決めます。
