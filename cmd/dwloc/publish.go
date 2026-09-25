@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -99,6 +100,11 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
         Translations の走査をやめて、指定したファイルだけを変換します。
         入力と出力が同じファイルになります。複数回指定できます。
         --locale と同時には使えません。
+        パスはカレントディレクトリからの相対です（--root からではありません。
+        tools/hash-strings.ps1 の -Path と同じです）。
+        渡すのは公開ファイル（Translations/<ロケール>/strings.csv）です。
+        ヘッダーに source_en 列のあるファイル（作業コピー）を渡すと、原文の列と
+        訳の無い行が消えた形に書き換わるので、書かずに止まります（終了コード 2）。
   --accept-multiline <ロケール>:<key>
         行をまたぐ値の続きの行がそれだけでレコードに見える形を、確かめたうえで
         正しい複数行の値として通します。指定はレコード単位です。<key> はその
@@ -139,8 +145,8 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
       翻訳が古い、または組み立てたあとに入力か書き出し先が変わったので止めた
       （どれも1バイトも書いていません）
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、
-      --accept-multiline の指定が通せる行に当たらない、書き込みの錠を取れない、
-      など）
+      --accept-multiline の指定が通せる行に当たらない、--path に作業コピーを
+      渡した、書き込みの錠を取れない、など）
 `
 
 // publishLossText は、書くと訳が失われると分かったときの見出しです。
@@ -153,6 +159,25 @@ dwloc:       いまの公開ファイルに入っている訳が、新しい出�
 dwloc:       入力にした作業コピーが途中までになっていないか、壊れていないかを確かめてください。
 dwloc:       ゲーム内で F1 → Translation → Export working copy を押すと、作業コピーを作り直せます。
 `
+
+// publishPathWorkingText は、--path に作業コピー（ヘッダーに source_en 列のある
+// ファイル）を渡されたときの案内です。%s には渡されたファイルが入ります。
+//
+// 作業コピーから公開ファイルを作るのは、--path を付けない publish の仕事です。
+// そちらは作業コピーを入力にして、Translations/<ロケール>/strings.csv を書きます。
+const publishPathWorkingText = `dwloc: %s は作業コピーです（ヘッダーに source_en 列があります）。1バイトも書きませんでした。
+dwloc:       --path には公開ファイル（Translations/<ロケール>/strings.csv）を渡してください。
+dwloc:       --path は入力と書き出し先が同じファイルなので、作業コピーを渡すと、原文の列と訳の無い行が消えた公開の形に書き換わります。
+dwloc:       作業コピーから公開ファイルを作るときは、--path を付けずに dwloc publish を実行します（--locale で絞れます）。
+`
+
+// publishPathRelativeText は、--path に渡した相対パスのファイルが見つからなかった
+// ときに添える1行です。
+//
+// --path は、上流の tools/hash-strings.ps1 の -Path と同じくカレントディレクトリから
+// 解きます（改善の決定 11）。--root から解くと思って打った人に、どこから探したかを
+// 伝えます。
+const publishPathRelativeText = "dwloc:       --path はカレントディレクトリからの相対です（--root からではありません）。"
 
 // publishLossListMax は、失われる行を何件まで並べるかです。
 //
@@ -510,9 +535,28 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めないので、訳が失われないことを確かめられません: %w",
 				displayPath(*root, shapeErrorPath(err, t.Output)), err))
+			if len(paths) > 0 && errors.Is(err, iofs.ErrNotExist) && !filepath.IsAbs(t.Input) {
+				// --root と一緒に相対パスを打った人は、--root から解くと思っている
+				// ことがある。見つからないとだけ言うと、どこを探したのかが分からない。
+				fmt.Fprintln(stderr, publishPathRelativeText)
+			}
 			return exitError
 		}
 		files[i] = f
+	}
+
+	// --path に作業コピーを渡されたら、書かずに止めます（改善の決定 11）。--path は
+	// 入力と書き出し先が同じファイルなので、そのまま進むと作業コピーを公開の形に
+	// 書き換え、source_en 列と訳の無い行が消えます。形の確かめ（reportShape）より
+	// 先に見るのは、渡すファイルの種類を取り違えているので、形の直し方を並べても
+	// 当たらないからです。
+	if len(paths) > 0 {
+		for i, t := range targets {
+			if publish.HasSourceColumn(files[i].Input) {
+				fmt.Fprintf(stderr, publishPathWorkingText, displayPath(*root, t.Input))
+				return exitError
+			}
+		}
 	}
 
 	if len(data.Entries) == 0 {

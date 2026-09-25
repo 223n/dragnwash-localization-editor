@@ -1346,7 +1346,13 @@ Each locale it wrote is printed as one line on standard output.
 All of them passed the checks above, so no translation is lost.
 
 You can narrow what it targets with `--locale`.  
-With `--path` it stops scanning `Translations` and converts only the file you name.
+With `--path` it stops scanning `Translations` and converts only the file you name.  
+The input and the output are the same file.  
+The path is relative to the current directory, not to `--root` (the same as `-Path` of `tools/hash-strings.ps1`).  
+Give it a published file (`Translations/<locale>/strings.csv`).  
+A file whose header has a `source_en` column (a working copy) would be rewritten without the source text column and without the untranslated rows.  
+So it stops without writing (exit code `2`).  
+To make the published file from a working copy, run `dwloc publish` without `--path`.
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
