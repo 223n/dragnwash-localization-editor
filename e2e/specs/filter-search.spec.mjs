@@ -17,7 +17,6 @@ import { keyFor, publishedFile, record, scriptOrder, workingCopy } from "../supp
 import {
   editor,
   openApp,
-  openEditor,
   rowByLine,
   saveState,
   translationCell,
@@ -678,8 +677,13 @@ test("保存のたびには当て直さず、訳し終えた行は一覧に残�
 
 // 入力欄を閉じたあと、その行がもう条件に当たらないのに残っていると、「表示中 N 行」も
 // その行を数えたままになり、翻訳者が次に条件を触るまで食い違う（reviewClosed の注記）。
-// マウスで別の行へ移る道も、Escape で閉じる道も、閉じたところで照らし直す。
-test("閉じた行がもう条件に当たらなければ、閉じたところで隠れる", async ({ page, server }) => {
+// マウスで別の行へ移る道は、閉じたところで照らし直す。Escape で閉じる道は、その行の訳の
+// 欄に焦点が留まる（改善の決定 19）ので、焦点が欄から離れたところで照らし直す（前は
+// Escape を押したところで隠れた）。
+test("閉じた行がもう条件に当たらなければ、閉じたところ（Escape なら焦点が離れたところ）で隠れる", async ({
+  page,
+  server,
+}) => {
   await openPaused(page, server);
   const before = await server.readRoot(workingRel);
   await chipBox(page, cat("untranslated")).check();
@@ -699,11 +703,15 @@ test("閉じた行がもう条件に当たらなければ、閉じたところ�
   await expect(visibleRows(page)).toHaveText(["13"]);
   await expect(shown(page)).toHaveText(shownText(1));
 
-  // 13行目も訳して保存し、Escape で閉じると隠れて、一覧は0行になる。
+  // 13行目も訳して保存し、Escape で閉じる。焦点は13行目の訳の欄に留まるので、まだ隠さない。
   await editor(page).fill("石けんはどこ？");
   await page.clock.runFor(autosaveDelay + 100);
   await waitForSaved(page);
   await editor(page).press("Escape");
+  await expect(translationCell(page, LINE.soap)).toBeFocused();
+  await expect(visibleRows(page)).toHaveText(["13"]);
+  // 焦点が離れると隠れて、一覧は0行になる。
+  await page.locator("#search").focus();
   await expect(visibleRows(page)).toHaveCount(0);
   await expect(shown(page)).toHaveText(shownText(0));
   await expect(page.locator("#empty")).toHaveText(msg("ja", "ui.no_rows"));
@@ -724,12 +732,15 @@ test("Enter の行送りでは次の行を開いてから照らし直し、入�
   await chipBox(page, cat("untranslated")).check();
   await expect(visibleRows(page)).toHaveText(["6", "13"]);
 
-  // 6行目と13行目を訳す。どちらも閉じる時点では未保存なので、一覧に残る。
+  // 6行目と13行目を訳す。どちらも閉じる時点では未保存なので、一覧に残る。13行目は、
+  // マウスで6行目へ戻って閉じる（Escape で閉じると、焦点が13行目の訳の欄に留まり、
+  // 欄から離れたところで照らし直して隠れる。改善の決定 19）。
   await typeTranslation(page, LINE.goodbye, "さようなら。");
   await editor(page).press("Enter");
   await expect(rowByLine(page, LINE.soap).locator("textarea.editor")).toHaveCount(1);
   await editor(page).fill("石けんはどこ？");
-  await editor(page).press("Escape");
+  await translationCell(page, LINE.goodbye).click();
+  await expect(rowByLine(page, LINE.goodbye).locator("textarea.editor")).toHaveCount(1);
   await expect
     .poll(
       async () => {
@@ -745,8 +756,8 @@ test("Enter の行送りでは次の行を開いてから照らし直し、入�
   // どちらももう「未翻訳」ではないが、保存では当て直さないので出ている。
   await expect(visibleRows(page)).toHaveText(["6", "13"]);
 
-  // 6行目を開いて Enter。次の行（13行目）は条件に当たらない行である。
-  await openEditor(page, LINE.goodbye);
+  // 開いている6行目で Enter。次の行（13行目）は条件に当たらない行である。
+  await expect(editor(page)).toBeFocused();
   await editor(page).press("Enter");
 
   // 開いた13行目は出ていて、入力欄は見えて焦点もある。閉じた6行目は隠れる。
