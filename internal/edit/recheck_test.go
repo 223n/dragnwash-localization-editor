@@ -99,10 +99,12 @@ func TestSetTranslationRefusesWhatDoesNotReadBack(t *testing.T) {
 func TestSaveRechecksTheWholeFile(t *testing.T) {
 	tests := []struct {
 		name string
-		// breakModel は、ID 2（添字 1）を書き換えたあとのモデルを壊す。
+		// edits は書き換えるレコードの ID。空なら ID 2 だけ。
+		edits []int
+		// breakModel は、書き換えたあとのモデルを壊す。
 		breakModel func(f *File)
-		// blame は誤りが指すレコードの ID。
-		blame int
+		// blame は誤りが指すレコードの ID、line はその最初の物理行（0 なら 2）。
+		blame, line int
 	}{
 		{
 			// 書き換えたレコードの終わりの改行を消し、後ろのレコードと1つになる形。
@@ -153,6 +155,35 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			},
 			blame: 2,
 		},
+		{
+			// 書き換えたレコードの物理行の数が変わる形。モデルの値もそろえてあるので、
+			// バイト列と値の比べでは見つからない。後ろのレコードの行番号がずれる。
+			name: "書き換えたレコードの物理行の数が変わる",
+			breakModel: func(f *File) {
+				line := &f.lines[1]
+				line.Text = line.body()[:line.last] + "\"新\nしい\"" + line.term
+				line.Fields[len(line.Fields)-1] = "新\nしい"
+			},
+			blame: 2,
+		},
+		{
+			// 触っていない行の種類だけがモデルで変わる形。バイト列は同じ。
+			name: "種類だけが違う",
+			breakModel: func(f *File) {
+				f.lines[3].Kind = KindComment
+			},
+			blame: 2,
+		},
+		{
+			// 2つのレコードを書き換え、後ろ（ID 4）の側で外れる形。指すのは、外れた
+			// ところより前で最も近い書き換えの ID 4 で、最初の書き換えの ID 2 ではない。
+			name:  "後ろの書き換えで外れる",
+			edits: []int{2, 4},
+			breakModel: func(f *File) {
+				f.lines[3].Fields[len(f.lines[3].Fields)-1] = "別の訳"
+			},
+			blame: 4, line: 5,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,8 +192,17 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := f.SetTranslation(2, "新しい"); err != nil {
-				t.Fatal(err)
+			edits, line := tt.edits, tt.line
+			if edits == nil {
+				edits = []int{2}
+			}
+			if line == 0 {
+				line = 2
+			}
+			for _, id := range edits {
+				if err := f.SetTranslation(id, "新しい"); err != nil {
+					t.Fatal(err)
+				}
 			}
 			tt.breakModel(f)
 
@@ -171,8 +211,8 @@ func TestSaveRechecksTheWholeFile(t *testing.T) {
 			if !errors.As(err, &recheck) || !errors.Is(err, ErrRecheck) {
 				t.Fatalf("Save = %v、*RecheckError を期待", err)
 			}
-			if recheck.ID != tt.blame || recheck.Cause.ID != reason.EditRecheckFailed || recheck.Line != 2 {
-				t.Errorf("誤り = %+v、ID %d を期待", recheck, tt.blame)
+			if recheck.ID != tt.blame || recheck.Cause.ID != reason.EditRecheckFailed || recheck.Line != line {
+				t.Errorf("誤り = %+v、ID %d（%d行目）を期待", recheck, tt.blame, line)
 			}
 			if want := "保存しない: " + recheck.Cause.Text; err.Error() != want {
 				t.Errorf("Error() = %q、%q を期待", err.Error(), want)
@@ -361,6 +401,35 @@ func TestRecheckReasonMatchesTheCatalog(t *testing.T) {
 	}
 	if got := strings.ReplaceAll(text, "{line}", "12"); got != why.Text {
 		t.Errorf("目録は %q、元の文面は %q", got, why.Text)
+	}
+}
+
+// TestSaveAgainOnTheSameFile は、同じ File で別々のレコードを続けて保存できることを見る。
+//
+// 書く直前の確かめは、触っていない行を「読み込んだとき（または最後に保存したとき）の
+// バイト列」と比べる。保存したあとにその基準を新しくしないと、2回目の保存で、1回目に
+// 書いた行を「触っていない行が変わった」として断る。画面の待ち受けは要求のたびに
+// ファイルを開き直すので表には出ないが、このパッケージを直に使う側では起きる。
+func TestSaveAgainOnTheSameFile(t *testing.T) {
+	path := writeTemp(t, recheckWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int{2, 4, 3} {
+		if err := f.SetTranslation(id, "訳"+string(rune('0'+id))); err != nil {
+			t.Fatalf("ID %d: %v", id, err)
+		}
+		if err := f.Save(); err != nil {
+			t.Fatalf("ID %d の保存に失敗した: %v", id, err)
+		}
+	}
+	want := "key,section,node,order,speaker,source_en,translation\r\n" +
+		key.For("one") + ",UI,,,UI,one,訳2\r\n" +
+		key.For("two\nlines") + ",UI,,,UI,\"two\nlines\",訳3\r\n" +
+		key.For("three") + ",UI,,,UI,three,訳4\r\n"
+	if got := readFile(t, path); got != want {
+		t.Errorf("保存後の中身 = %q", got)
 	}
 }
 
