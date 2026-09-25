@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
+	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
 // TestSetTranslationAgreesAcrossReaders は、書いた訳を3つの読み手が同じ値として
@@ -434,25 +435,37 @@ func TestTranslationHidesMiscountedColumns(t *testing.T) {
 	}
 }
 
-// TestRefreshRecomputesKind は、訳を消した結果その行がレコードでなくなったとき、
-// モデルと読み直しが食い違わないことを確かめる。
+// TestClearingTranslationKeepsTheRecord は、訳を消してもその行はレコードのまま（空行
+// 相当にならない）で、モデルと読み直しが食い違わないことを確かめる。
 //
-// 2列のヘッダーでキーが空の行を空にすると "," になり、これはレコードとして
-// 読まれない。Kind を据え置くと「モデルはデータ行、読み直すと空行」になる。
-func TestRefreshRecomputesKind(t *testing.T) {
+// 2列のヘッダーでキーが空の行の訳を消すと "," になり、これはレコードとして読まれない。
+// PR3 のはじめはこの行を書かせ、モデルの側も空行相当に直していた（そのころの名前は
+// TestRefreshRecomputesKind）。いまは key 列も原文も空の行を編集させない（決まったことの
+// 24）ので、訳を消せるレコードには key 列か原文が残り、行の種類は変わらない。
+func TestClearingTranslationKeepsTheRecord(t *testing.T) {
+	for _, data := range []string{
+		"key,translation\n0123456789abcdef,古い\n",
+		"key,section,node,order,speaker,source_en,translation\n,UI,,,UI,Start,古い\n",
+	} {
+		f := Parse([]byte(data))
+		if err := f.SetTranslation(2, ""); err != nil {
+			t.Fatalf("%q: SetTranslation が失敗した: %v", data, err)
+		}
+		after, _ := f.Line(2)
+		reloaded, _ := Parse(f.Bytes()).Line(2)
+		if after.Kind != KindData || reloaded.Kind != KindData {
+			t.Errorf("%q: Kind が 編集後 %v、読み直し %v。どちらもデータ行を期待", data, after.Kind, reloaded.Kind)
+		}
+		if !after.Editable || !reloaded.Editable {
+			t.Errorf("%q: Editable が 編集後 %v、読み直し %v", data, after.Editable, reloaded.Editable)
+		}
+	}
+
+	// キーの空いた2列の行は、訳を消す前に断る。
 	f := Parse([]byte("key,translation\n,古い\n"))
-	if err := f.SetTranslation(2, ""); err != nil {
-		t.Fatalf("SetTranslation が失敗した: %v", err)
-	}
-
-	after, _ := f.Line(2)
-	reloaded, _ := Parse(f.Bytes()).Line(2)
-
-	if after.Kind != reloaded.Kind {
-		t.Errorf("Kind が食い違う: 編集後 %v, 読み直し %v", after.Kind, reloaded.Kind)
-	}
-	if after.Editable != reloaded.Editable {
-		t.Errorf("Editable が食い違う: 編集後 %v, 読み直し %v", after.Editable, reloaded.Editable)
+	var notEditable *NotEditableError
+	if err := f.SetTranslation(2, ""); !errors.As(err, &notEditable) || notEditable.Cause.ID != reason.EditNoKeyOrSource {
+		t.Errorf("SetTranslation = %v、key 列も原文も空の理由を期待", err)
 	}
 }
 

@@ -241,8 +241,6 @@ const (
 	// EditBadHeader はヘッダーが受理される4種のいずれでもないこと。
 	// 置換は line（行番号）と text（そのヘッダー行）。
 	EditBadHeader = "edit_bad_header"
-	// EditNotRecord はその行がレコードとして読まれないこと。
-	EditNotRecord = "edit_not_record"
 	// EditFieldCount はフィールド数がヘッダーと合わないこと。
 	// 置換は header（ヘッダーの列数）と row（その行の列数）。
 	EditFieldCount = "edit_field_count"
@@ -278,6 +276,10 @@ const (
 	// EditGameMissesRecord は、ゲームの読み方でそのレコードが見つからないこと
 	// （csvfile.CSharpDisagreements の Column が空）。
 	EditGameMissesRecord = "edit_game_misses_record"
+	// EditNoKeyOrSource は、key 列（前後の空白を除く）も原文（source_en 列。無い形の
+	// ファイルでは空と同じ）も空で、訳を引く鍵が無いこと。publish はこのレコードを
+	// 捨てる（移植仕様 R17）ので、書いた訳は公開されない（決まったことの 24）。
+	EditNoKeyOrSource = "edit_no_key_or_source"
 	// EditRecheckFailed は、書く前の事後確認（決まったことのそのほか 4）が外れたこと。
 	// 書き換えたレコードを読み直すと、書いた訳のほかの値や、ほかの行まで変わって
 	// 読める。置換は line（そのレコードの最初の物理行）。
@@ -375,10 +377,10 @@ var all = []string{
 
 	NoteTagMissing, NoteTagExtra, NoteTagMissingExtra,
 
-	EditNoHeader, EditBadHeader, EditNotRecord, EditFieldCount,
+	EditNoHeader, EditBadHeader, EditFieldCount,
 	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
 	EditMultilineTranslation, EditUnclosedQuote, EditCROnly, EditSwallow,
-	EditGameDisagrees, EditGameMissesRecord, EditRecheckFailed,
+	EditGameDisagrees, EditGameMissesRecord, EditNoKeyOrSource, EditRecheckFailed,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,
 

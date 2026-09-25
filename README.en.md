@@ -945,14 +945,15 @@ A record that spans lines shifts the line numbers of the records after it.
 Your own saves do not change the sequence numbers.  
 Before writing, it reads back the rewritten record and then the whole file, and checks that nothing but the translation reads differently.  
 It checks this with the way the game reads the file, not only with the way `publish` reads it.  
-In some files, rewriting the translation on a row whose key column and source are both empty makes the game lose track of other rows.  
+In some files, rewriting the translation on a row whose key column and source are both empty made the game lose track of other rows.  
+Such rows can no longer be edited (see the table below), so this check is a safeguard that catches shapes that slipped through.  
 If that check fails, it writes nothing and marks the row as one that could not be saved.  
 When rows you typed one after another are sent together, it checks them again one at a time and marks only the row that causes the failure.  
 The other rows are sent again and saved.
 
 The following rows cannot be edited.  
 They show a lock icon and the reason.  
-In each of them, `publish` or the game would read what you write as a different value from the one on the screen.
+In each of them, `publish` or the game would read what you write as a different value from the one on the screen, or `publish` would drop it.
 
 | Row | Reason shown |
 | ---- | ---- |
@@ -960,6 +961,7 @@ In each of them, `publish` or the game would read what you write as a different 
 | A quote seems to be closed on another line and to swallow the lines after it | Line N looks swallowed into this record's value (a quote may be closed in the wrong place) |
 | The game's reader (`CsvReader`) reads a value differently (a `"` in the middle of a value, and so on) | The game's reader (CsvReader) reads the (column name) column of this record differently |
 | The game's reader (`CsvReader`) does not find the record | The game's reader (CsvReader) does not find this record |
+| Both the `key` column and the source text (`source_en`) are empty (`,UI,,,UI,,訳`, and so on) | Both the key column and the source text (source_en) are empty (publish drops this record, so a translation written here is never published) |
 
 A translation with a line break cannot be edited because the screen replaces line breaks with spaces for now.  
 Opening it and typing one character would drop line breaks you cannot see.  
@@ -972,7 +974,10 @@ It can also hit a valid multi-line value, but the screen has no way to let it th
 Check it with `dwloc publish` and let it through with `--accept-multiline`.
 
 A row whose columns are all empty, such as `,,,,,,`, is not listed.  
-It has neither a key nor a source text, so `publish` drops it and a translation typed into it would silently disappear.
+It has neither a key nor a source text, so `publish` drops it and a translation typed into it would silently disappear.  
+A row with neither a key nor a source text but with a value in another column (such as the translation) is listed, but cannot be edited for the same reason (the last row of the table).  
+In the form of the published file (without a `source_en` column), that is a row whose `key` column is empty.  
+To keep that translation, move it to the row that has the key, then delete the row you no longer need.
 
 A file whose line breaks are `CR` only cannot be edited at all.  
 The game does not treat `CR` as a line break and reads the whole file as one line.  

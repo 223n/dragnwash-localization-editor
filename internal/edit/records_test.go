@@ -2,6 +2,7 @@ package edit
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,7 +23,8 @@ PR3 の最初のコミットでは、切り替える前の結果を名前の末�
     なり、訳が1行に収まるかぎり書ける（以前は物理行で並び、行をまたぐレコードの
     どの物理行も編集できなかった）。
   - カンマだけの行（",,,,,,"）は空行相当で、編集させない（以前はキーの空いた編集できる
-    行だった。改善の ui-15）。
+    行だった。改善の ui-15）。key 列も原文も空のレコード（",UI,,,UI,,訳" など）も、
+    理由を付けて編集させない（以前は編集できた。決まったことの 24）。
   - 行の区切りが CR だけのファイルは全体を読み取り専用にし、ゲームの読み方と値が割れる
     レコードは編集させない（以前はどちらも編集できた）。
   - 飲み込みの疑いのあるレコードは、飲み込まれたと疑う物理行を添えて編集させない
@@ -176,21 +178,104 @@ func TestEditCommaOnlyRowIsBlank(t *testing.T) {
 			}
 		})
 	}
+	// 訳だけが入った行（",,,,,,古い"）は、値がどれも空ではないので空行相当にはならず、
+	// key 列も原文も空の理由で編集させない（TestEditRowWithoutKeyOrSourceIsReadOnly）。
+}
 
-	// 訳だけが入った行は、いままでどおり書ける（publish は捨てるが、訳は失われない）。
-	// 訳を消すと空行相当になる。消すことは断らない。
-	f := Parse([]byte(header + ",,,,,,古い\n"))
-	if l, _ := f.Line(2); l.Kind != KindData || !l.Editable {
-		t.Fatalf("訳だけの行 = %+v、編集できる行を期待", l)
+// TestEditRowWithoutKeyOrSourceIsReadOnly は、key 列も原文も空のレコード（`,UI,,,UI,,訳`、
+// 2列の `,訳` など）を、理由を付けて編集させないことを見る（決まったことの 24）。publish は
+// このレコードを捨てる（移植仕様 R17）ので、書いた訳は公開されず、黙って落ちる。値がどれも
+// 空のレコード（改善の ui-15）と同じ理由である。
+//
+// PR3 のはじめは、訳だけが入った行はいままでどおり書けて、訳を消すと空行相当になった
+// （消すことは断らなかった。そのころは TestEditCommaOnlyRowIsBlank の後半と
+// TestRefreshRecomputesKind が見ていた）。
+func TestEditRowWithoutKeyOrSourceIsReadOnly(t *testing.T) {
+	const working = "key,section,node,order,speaker,source_en,translation\n"
+	tests := []struct {
+		name, data string
+	}{
+		{"作業コピーで訳だけ", working + ",UI,,,UI,,訳\n"},
+		{"作業コピーで訳も空", working + ",UI,,,UI,,\n"},
+		{"作業コピーで値がみな空で訳だけ", working + ",,,,,,古い\n"},
+		{"key 列が空白だけ", working + "\"  \",UI,,,UI,,訳\n"},
+		{"2列で訳だけ", "key,translation\n,訳\n"},
+		{"3列で訳だけ", "key,speaker,translation\n,Fern,訳\n"},
+		{"公開ファイルの6列で訳だけ", "key,section,node,order,speaker,translation\n,UI,,,UI,訳\n"},
 	}
-	if err := f.SetTranslation(2, ""); err != nil {
-		t.Fatalf("訳を消せない: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := Parse([]byte(tt.data))
+			l, ok := f.Line(2)
+			if !ok || l.Kind != KindData || l.Editable || l.Cause.ID != reason.EditNoKeyOrSource || l.Text == "" {
+				t.Fatalf("ID 2 = %+v、key 列も原文も空の理由を期待", l)
+			}
+			var notEditable *NotEditableError
+			if err := f.SetTranslation(2, "新しい訳"); !errors.As(err, &notEditable) || notEditable.Cause.ID != reason.EditNoKeyOrSource {
+				t.Errorf("書けてしまう、または理由が違う: %v", err)
+			}
+			if err := f.SetTranslation(2, ""); !errors.As(err, &notEditable) {
+				t.Errorf("訳を消せてしまう: %v", err)
+			}
+			if f.Dirty() || string(f.Bytes()) != tt.data {
+				t.Error("断ったのにモデルが変わった")
+			}
+		})
 	}
-	if l, _ := f.Line(2); l.Kind != KindBlank || l.Editable || l.Cause.ID != reason.EditNotRecord {
-		t.Errorf("訳を消したあと = %+v、空行相当を期待", l)
+
+	// どちらかがあれば書ける。key 列が空でも原文があれば publish は原文からキーを作り
+	// （移植仕様 R15）、原文が空でも key 列があれば、そのキーで引く（R16）。
+	f := Parse([]byte(working + ",UI,,,UI,Start,はじめる\n" + "0123456789abcdef,UI,,,UI,,おわる\n"))
+	for _, id := range []int{2, 3} {
+		if l, _ := f.Line(id); !l.Editable {
+			t.Errorf("ID %d = %+v、編集できる行を期待", id, l)
+		}
 	}
-	if again, _ := Parse(f.Bytes()).Line(2); again.Kind != KindBlank {
-		t.Errorf("読み直すと %v、空行相当を期待", again.Kind)
+}
+
+// TestEditReasonOrderWithoutKeyOrSource は、key 列も原文も空のレコードがほかの理由にも
+// 当たるとき、直す先を指す順（列の数、飲み込み、ゲームの読み方との食い違い、key 列も
+// 原文も空、訳の改行）で理由を1つだけ付けることを見る（[File.judge] の注記）。
+func TestEditReasonOrderWithoutKeyOrSource(t *testing.T) {
+	const working = "key,section,node,order,speaker,source_en,translation\n"
+	tests := []struct {
+		name, data, want string
+		args             []string
+	}{
+		{
+			// 列の数が合わない行は、key 列や原文の列に見えている値が、その列の値とは限らない。
+			name: "列の数が合わない",
+			data: "key,translation\n,訳,余り\n",
+			want: reason.EditFieldCount, args: []string{"header", "2", "row", "3"},
+		},
+		{
+			// 訳の開き引用符が閉じず、次のキーの形の行を飲み込む。先に引用符を直す。
+			name: "飲み込みの疑い",
+			data: working + ",UI,,,UI,,\"訳\n" + key.For("two") + ",UI,,,UI,two,に\"\n",
+			want: reason.EditSwallow, args: []string{"line", "3"},
+		},
+		{
+			// 値の途中の '"' はゲームの読み方と割れる形だが、食い違いの判定は鍵のある
+			// レコードだけを見るので、同時には当たらない。
+			name: "ゲームの読み方と割れる形",
+			data: working + ",UI,,,UI,,い\"ろ\"は\n",
+			want: reason.EditNoKeyOrSource,
+		},
+		{
+			// 訳の改行は改行の入力を足すまで（PR4）の制限で、鍵が無いことはそのあとも残る。
+			name: "訳の改行",
+			data: working + ",UI,,,UI,,\"い\nち\"\n",
+			want: reason.EditNoKeyOrSource,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := Parse([]byte(tt.data))
+			l, _ := f.Line(2)
+			if l.Editable || l.Cause.ID != tt.want || !slices.Equal(l.Cause.Args, tt.args) {
+				t.Errorf("ID 2 = %+v、理由 %s %q を期待", l, tt.want, tt.args)
+			}
+		})
 	}
 }
 

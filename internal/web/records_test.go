@@ -224,6 +224,8 @@ func TestLineBreaksInValuesAreSentAsLF(t *testing.T) {
 //     飲み込んでいる疑い。原文の側で飲み込み、訳は1行に収まる形。
 //   - ゲームの読み方との食い違い（csvfile.CSharpDisagreements）: フィールドの途中の '"'。
 //   - ",,,,,," の行（改善の ui-15）: 空行相当として並べない。
+//   - key 列も原文も空の行（決まったことの 24）: publish が捨てるので、書いた訳は公開
+//     されない。
 //
 // 行の区切りが CR だけのファイルは、ファイル全体を読み取り専用にする。
 func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
@@ -233,15 +235,16 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 		key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan,\"" + srcHello + "\n" +
 		key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + "\"," + jaHello + "\n" +
 		",,,,,,\n" +
-		key.For("Start") + ",UI,,,UI,Start,は\"じ\"める\n"
+		key.For("Start") + ",UI,,,UI,Start,は\"じ\"める\n" +
+		",UI,,,UI,,訳だけ\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s := newTestServer(t, Options{Root: root, UILang: "ja"})
 	ja := s.cat.lookup("ja")
 	lines := getLines(t, s, "ja")
-	if len(lines.Lines) != 2 || lines.Rows != 2 {
-		t.Fatalf("並べた行 = %+v、カンマだけの行を除いた2行を期待", lines.Lines)
+	if len(lines.Lines) != 3 || lines.Rows != 3 {
+		t.Fatalf("並べた行 = %+v、カンマだけの行を除いた3行を期待", lines.Lines)
 	}
 	wants := []struct {
 		id     int
@@ -249,6 +252,7 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 	}{
 		{2, s.cat.T(ja, "reason."+reason.EditSwallow, "line", "3")},
 		{4, s.cat.T(ja, "reason."+reason.EditGameDisagrees, "column", "translation")},
+		{5, s.cat.T(ja, "reason."+reason.EditNoKeyOrSource)},
 	}
 	for i, w := range wants {
 		l := lines.Lines[i]
@@ -257,7 +261,7 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 		}
 	}
 	before := readFile(t, path)
-	for _, id := range []int{2, 3, 4} {
+	for _, id := range []int{2, 3, 4, 5} {
 		if rec := save(t, s, "ja", lines.Version, rowEdit{ID: id, Translation: jaTyped}); rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("ID %d: 状態コードが %d、422 を期待", id, rec.Code)
 		}
@@ -275,12 +279,14 @@ func TestRowsThatCannotBeWrittenSafelyAreReadOnly(t *testing.T) {
 	}
 }
 
-// TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords は、キーも原文も空の行の訳を
-// 書き換えると、ゲームの読み方（CsvReader）で後ろの行が見つからなくなるとき、1バイトも
-// 書かずに 422（error.save_check_failed）を返し、その行に理由を付けることを見る
-// （PR3 の検証の指摘）。書くと 200 の saved が返り、ホットリロードのあと、ゲームは後ろの
-// 行の訳を出さなくなっていた。
-func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
+// TestRowWithoutKeyOrSourceIsReadOnly は、key 列も原文も空の行を、行一覧で理由を付けて
+// 読み取り専用にし、保存の要求を断ることを見る（決まったことの 24）。publish はこの行を
+// 捨てる（移植仕様 R17）ので、書いた訳は公開されない。同じ要求に入ったほかの行は保存する。
+//
+// 見本は PR3 の検証の形である。この行（ID 3）の訳を書き換えると、ゲームの読み方
+// （CsvReader）で後ろの行（ID 4）が見つからなくなった。そのころは書く直前の確かめ（422
+// error.save_check_failed）で断っていたが、いまはその前に、行そのものを編集させない。
+func TestRowWithoutKeyOrSourceIsReadOnly(t *testing.T) {
 	root := newEditRoot(t)
 	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
 	body := "key,translation\r\n" +
@@ -293,22 +299,28 @@ func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
 	s := newTestServer(t, Options{Root: root, UILang: "ja"})
 	ja := s.cat.lookup("ja")
 	lines := getLines(t, s, "ja")
-	keyless := false
+	why := s.cat.T(ja, "reason."+reason.EditNoKeyOrSource)
+	found := false
 	for _, l := range lines.Lines {
-		keyless = keyless || l.ID == 3 && l.Key == "" && l.Editable
+		if l.ID == 3 {
+			found = true
+			if l.Editable || l.Key != "" || l.Reason != why || l.Text != ",p\"q" {
+				t.Errorf("ID 3 = %+v、理由 %q を期待", l, why)
+			}
+		}
 	}
-	if !keyless {
-		t.Fatalf("前提が崩れている。ID 3 はキーの空いた編集できる行のはず: %+v", lines.Lines)
+	if !found {
+		t.Fatalf("ID 3 が並んでいない: %+v", lines.Lines)
 	}
+	want := s.cat.T(ja, "error.not_editable", "line", "3", "reason", why)
 
+	// ID 3 だけを送ると、1行も書かずに 422（error.no_row_saved）で、その行に理由が付く。
 	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 3, Translation: jaTyped})
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
 	}
 	got := decode[errorResponse](t, rec.Body.Bytes())
-	why := reason.New(reason.EditRecheckFailed, "", "line", "3")
-	want := s.cat.T(ja, "error.not_editable", "line", "3", "reason", s.reasonText(ja, why))
-	if got.Message != s.cat.T(ja, "error.save_check_failed") || len(got.Results) != 1 ||
+	if got.Message != s.cat.T(ja, "error.no_row_saved") || len(got.Results) != 1 ||
 		got.Results[0].Saved || got.Results[0].Error != want {
 		t.Errorf("応答 = %+v、ID 3 に理由 %q を期待", got, want)
 	}
@@ -316,26 +328,64 @@ func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
 		t.Error("断ったのにファイルが変わった")
 	}
 
-	// 同じ要求に、後ろの bbbb…（ID 4）の訳も入った場合（画面の自動保存は、続けて打った
-	// 行を1つの要求にまとめる）。外れるのは ID 4 の食い違いとしてだが、理由は原因の
-	// ID 3 に付け、ID 4 には付けない。画面は ID 3 の送り直しを止め、ID 4 を送り直す。
-	// 以前は理由が ID 4 に付き、単独なら書ける ID 4 を打ち直すまで保存しなかった
-	// （PR3 の検証の指摘）。
-	for _, edits := range [][]rowEdit{
-		{{ID: 3, Translation: jaTyped}, {ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped}},
-		{{ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped}, {ID: 3, Translation: jaTyped}},
-	} {
+	// 後ろの bbbb…（ID 4）と同じ要求に入った場合（画面の自動保存は、続けて打った行を1つの
+	// 要求にまとめる）。ID 4 は保存し、ID 3 には理由を付ける。
+	rec = save(t, s, "ja", lines.Version,
+		rowEdit{ID: 3, Translation: jaTyped}, rowEdit{ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	saved := decode[rowsResponse](t, rec.Body.Bytes())
+	if len(saved.Results) != 2 || saved.Results[0].Saved || saved.Results[0].Error != want ||
+		!saved.Results[1].Saved || saved.Results[1].Error != "" {
+		t.Errorf("結果 = %+v", saved.Results)
+	}
+	if after := strings.Replace(body, "bbbbbbbbbbbbbbbb,ok", "bbbbbbbbbbbbbbbb,"+jaTyped, 1); readFile(t, path) != after {
+		t.Errorf("保存後の中身 = %q", readFile(t, path))
+	}
+}
+
+// TestSaveCheckFailureFromARequest は、編集できる行に送った訳が、書く直前のファイル全体の
+// 確かめ（書く前の事後確認の後半）で外れるとき、1バイトも書かずに 422
+// （error.save_check_failed）を返し、その行にだけ理由を付けることを、要求から見る。
+//
+// 形は internal/edit の swallowOnWrite と同じである。speaker の値が改行で終わるレコード
+// （ID 2）に、カンマで始まる訳を書くと、続きの物理行を単独で読んだときヘッダーと同じ列の
+// 数に見え、飲み込みの疑いに当たる。差し替えたレコードだけを読み直す確かめは通る。同じ
+// 要求に入ったほかの行（ID 3）には理由を付けない。画面は ID 2 の送り直しを止め、ID 3 を
+// 送り直す。
+func TestSaveCheckFailureFromARequest(t *testing.T) {
+	root := newEditRoot(t)
+	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+	body := "key,speaker,translation\r\n" +
+		"aaaaaaaaaaaaaaaa,\"Fern\r\n\",\r\n" +
+		"bbbbbbbbbbbbbbbb,Kobold,ok\r\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Root: root, UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	lines := getLines(t, s, "ja")
+	if len(lines.Lines) != 2 || !lines.Lines[0].Editable || lines.Lines[0].ID != 2 || lines.Lines[0].End != 3 {
+		t.Fatalf("前提が崩れている。ID 2 は2〜3行目の編集できる行のはず: %+v", lines.Lines)
+	}
+	bad := rowEdit{ID: 2, Key: "aaaaaaaaaaaaaaaa", Translation: ",訳,"}
+	good := rowEdit{ID: 3, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped}
+	why := reason.New(reason.EditRecheckFailed, "", "line", "2")
+	want := s.cat.T(ja, "error.not_editable", "line", "2", "reason", s.reasonText(ja, why))
+
+	for _, edits := range [][]rowEdit{{bad}, {bad, good}, {good, bad}} {
 		rec := save(t, s, "ja", lines.Version, edits...)
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
 		}
 		got := decode[errorResponse](t, rec.Body.Bytes())
-		if len(got.Results) != 2 {
-			t.Fatalf("結果 = %+v", got.Results)
+		if got.Message != s.cat.T(ja, "error.save_check_failed") || len(got.Results) != len(edits) {
+			t.Fatalf("応答 = %+v", got)
 		}
 		for _, r := range got.Results {
 			wantErr := ""
-			if r.ID == 3 {
+			if r.ID == 2 {
 				wantErr = want
 			}
 			if r.Saved || r.Error != wantErr {
@@ -346,15 +396,13 @@ func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
 			t.Error("断ったのにファイルが変わった")
 		}
 	}
-	rec = save(t, s, "ja", lines.Version, rowEdit{ID: 4, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped})
+
+	rec := save(t, s, "ja", lines.Version, good)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ID 4 だけを送り直すと状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
+		t.Fatalf("ID 3 だけを送り直すと状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
 	}
-	if got := decode[rowsResponse](t, rec.Body.Bytes()); len(got.Results) != 1 || !got.Results[0].Saved {
-		t.Errorf("ID 4 だけの結果 = %+v", got.Results)
-	}
-	if want := strings.Replace(body, "bbbbbbbbbbbbbbbb,ok", "bbbbbbbbbbbbbbbb,"+jaTyped, 1); readFile(t, path) != want {
-		t.Errorf("ID 4 を送り直したあとの中身 = %q", readFile(t, path))
+	if after := strings.Replace(body, "Kobold,ok", "Kobold,"+jaTyped, 1); readFile(t, path) != after {
+		t.Errorf("ID 3 を送り直したあとの中身 = %q", readFile(t, path))
 	}
 }
 
@@ -363,8 +411,8 @@ func TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords(t *testing.T) {
 // 付ける。画面はその行を保存できない行にして送り直しを止め、理由の無い行は送り直す。
 //
 // ここでは、2行以上の結果のうち外れた行にだけ理由を付けることを、誤りを作って見る。
-// 要求から 422 になる道そのものは TestSaveRefusesWhatChangesHowTheGameReadsOtherRecords が
-// 見る（外れることそのものは internal/edit の TestSaveRechecksTheWholeFile も見ている）。
+// 要求から 422 になる道そのものは TestSaveCheckFailureFromARequest が見る（外れること
+// そのものは internal/edit の TestSaveRechecksTheWholeFile も見ている）。
 func TestSaveCheckFailureNamesTheRow(t *testing.T) {
 	s := newTestServer(t, Options{UILang: "en"})
 	en := s.cat.lookup("en")

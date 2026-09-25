@@ -487,12 +487,9 @@ func editReasons(t *testing.T) []reason.Reason {
 		t.Fatal("2行目が無い")
 	}
 
-	// 訳を消すとレコードでなくなる行（キーも空の2列）。
-	blankable := edit.Parse([]byte("key,translation\n,v\n"))
-	if err := blankable.SetTranslation(2, ""); err != nil {
-		t.Fatalf("空にできない: %v", err)
-	}
-	if line, ok := blankable.Line(2); ok {
+	// key 列も原文も空の行（2列で訳だけ）。
+	keyless := edit.Parse([]byte("key,translation\n,v\n"))
+	if line, ok := keyless.Line(2); ok {
 		out = append(out, line.Cause)
 	} else {
 		t.Fatal("2行目が無い")
@@ -1030,6 +1027,7 @@ func TestReadmeListsTheRowReasons(t *testing.T) {
 			reason.EditSwallow,
 			reason.EditGameDisagrees,
 			reason.EditGameMissesRecord,
+			reason.EditNoKeyOrSource,
 		} {
 			text := s.cat.T(cat, "reason."+id, "line", "N", "column", "\x00")
 			text = tc.column.Replace(text)
