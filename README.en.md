@@ -1561,7 +1561,12 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
    However, if `main` has required checks or approval rules, it may stop before the merge.  
    The pull request's runs stay unapproved, so the required checks cannot be satisfied.  
    When it can tell that the merge is blocked, it stops without cancelling the runs waiting for approval.  
-   When it stops, a person pressing `Approve workflows to run` and merging once CI passes takes it through to publication
+   It also stops, leaving the pull request open, when CI fails or does not finish within 30 minutes.  
+   When it stops, a person pressing `Approve workflows to run` and merging once CI passes takes it through to publication.  
+   If you merge without approving, the waiting runs stay behind as expired failures.  
+   When it stopped because CI was flaky, you can also press `Re-run failed jobs` on the "Release" run.  
+   It runs CI again and, once it passes, cancels the runs waiting for approval and goes on to merge and publish.  
+   `Re-run all jobs` stops at the check before branching, because the `release/vX.Y.Z` branch is still there
 1. The workflow first confirms that CI (`ci.yml`) passed on the latest commit of `develop`.  
    If CI is still running, it waits up to 30 minutes for it to finish.  
    If CI failed, was cancelled, or has no run at all, it stops here.  
