@@ -421,6 +421,18 @@
       "as": "working",
       "text": "key,source_en,translation\n7692c3ad3540bb80,one,いち\n",
       "published": "key,section,node,order,speaker,translation\n# Language: Testish\n0123456789abcdef,UI,,,UI,a\n"
+    },
+    {
+      "name": "ml-edit-working-crlf",
+      "note": "画面の保存（dwloc edit）が訳に改行を入れて書いた作業コピーの形。区切りは CRLF、値の中は LF。訳が改行で終わる、改行で始まる、引用符とカンマと前後の空白を含む、'#' の行と空行を含む（key 列が空で原文からキーを作る行）。",
+      "as": "working",
+      "text": "key,section,node,order,speaker,source_en,translation\r\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,one,\"いち\n\"\r\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,two,\"\nに\"\r\n8b5b9db0c13db242,L01 Ember,Ember_1_outro,3,Ember,three,\"「さ\"\"ん」、\n  よん, ご  \n\"\"ろく\"\"\"\r\n,UI,,,UI,Four.,\"し\n# ご\n\nはち\"\r\n"
+    },
+    {
+      "name": "ml-edit-published-lf",
+      "note": "作業コピーの無いロケールで、画面が公開ファイル自身に訳の改行を書いた形（入力と書き出し先が同じ、区切りは LF）。空行で始まり改行で終わる訳と、カンマを含む行。",
+      "as": "published",
+      "text": "key,section,node,order,speaker,translation\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\nに\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,\"\n\nに,さん\n\"\n"
     }
   ]
 }

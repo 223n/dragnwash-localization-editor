@@ -503,7 +503,7 @@ func TestSelectLocales(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := selectLocales(targets, tt.want)
+			got, err := selectLocales(targets, nil, tt.want)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("エラーになるはずが %v を受け入れた", got)

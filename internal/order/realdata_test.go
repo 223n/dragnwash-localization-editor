@@ -9,51 +9,29 @@ import (
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/key"
+	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
 
-// sourceRepoEnv は元実装のリポジトリの場所を上書きする環境変数。
-const sourceRepoEnv = "DRAGNWASH_SOURCE_REPO"
-
-// sourceRepoCandidates は環境変数が無いときに探す場所。
-var sourceRepoCandidates = []string{
-	`C:\dev\223n\dragnwash-localization\.claude\worktrees\translator-editor-research-fdf740`,
-	`C:\dev\223n\dragnwash-localization`,
-}
-
-// 実データの件数。いずれも元ファイルを数えて得た値。
-const (
-	// data/script_order.csv は1840物理行 = ヘッダ1 + データ1839。key が空の行は無い。
-	scriptOrderEntries = 1839
-	// data/level_flow.csv は16物理行 = ヘッダ1 + データ15（level 0..14）。BOM付き。
-	levelFlowLevels = 15
-	// script_order.csv の key は1602種。speaker が空の行が無いので話者表も1602件。
-	distinctKeys = 1602
-	// うち話者が2人以上のキーは29種。
-	sharedKeys = 29
-	// セクションは18種。公開CSVの "# =====" 行（UI 見出しを除く）と同数。
-	distinctSections = 18
-)
+// 実データの試験は上流 main に追従する（改善の決定 31）。件数や行の値は決め打ちにせず、
+// 入力の物理行（sourcerepo.ContentLines）をカンマで分けたものから求める。
+// data/ の2ファイルには引用符・コメント行・空行が1つも無い（TestRealDataLoadersAgree の
+// 前提）ので、カンマで分けた値が、そのまま読み手の読むべき値になる。
+//
+// 以前は上流 003ed1e に固有の値（1839 行、15 レベル、1602 種のキー、先頭と末尾の行、
+// 8 列で norm・fp・nlen の無い形）を決め打ちにしていた。いまの main は norm・fp・nlen の
+// 3列を足した 11 列で、先頭と末尾の行の Norm と FP が空でないので落ちていた。
+// 8 列の形を読むことは TestLoadPowerShellOlderShapes（合成の見本）が見る。
 
 // uiSectionTitle は公開CSVの最後に出る見出し。セクション名から作られるものではなく、
 // 出力側が書く固定文字列なので、このパッケージの対象外。
 const uiSectionTitle = "UI and other text (not part of the dialogue script)"
 
-// sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
+// sourceRepo は元実装のリポジトリの場所を返す。環境変数（sourcerepo.Env）で指定した
+// 場所に無ければ落とし、指定していなくて見つからなければ飛ばす（sourcerepo.Find）。
 // CI には元リポジトリが無いので、飛ばせることが必須。
 func sourceRepo(t *testing.T) string {
 	t.Helper()
-
-	candidates := sourceRepoCandidates
-	if env := os.Getenv(sourceRepoEnv); env != "" {
-		candidates = []string{env}
-	}
-	for _, root := range candidates {
-		if _, err := os.Stat(filepath.Join(root, "data", "script_order.csv")); err == nil {
-			return root
-		}
-	}
-	t.Skipf("元実装のリポジトリが見つからないので飛ばす（%s で場所を指定できる）", sourceRepoEnv)
-	return ""
+	return sourcerepo.Find(t, "data", "script_order.csv")
 }
 
 func readSourceFile(t *testing.T, parts ...string) []byte {
@@ -79,33 +57,63 @@ func loadRealData(t *testing.T) *Data {
 	return data
 }
 
-// TestRealDataLoad は実データの件数と、先頭・末尾の行の中身を確かめる。
+// plainTable は、引用符の無い CSV の data を、列名から値を引ける行の並びにする。
+// 読み手（internal/csvfile）を通さずに期待値を作るためにある。引用符のある行が
+// あれば落とす（data/ の2ファイルには無い）。
+func plainTable(t *testing.T, data []byte) (lines []sourcerepo.Line, rows []map[string]string) {
+	t.Helper()
+	content := sourcerepo.ContentLines(data)
+	if len(content) < 2 {
+		t.Fatalf("ヘッダーとデータの行が無い（%d 行）", len(content))
+	}
+	header, ok := sourcerepo.PlainFields(content[0].Text)
+	if !ok {
+		t.Fatalf("ヘッダーに引用符がある: %s", content[0].Text)
+	}
+	for _, line := range content[1:] {
+		fields, ok := sourcerepo.PlainFields(line.Text)
+		if !ok {
+			t.Fatalf("%d行目に引用符がある。カンマで分けて期待値を作れない", line.Number)
+		}
+		row := make(map[string]string, len(header))
+		for i, name := range header {
+			if i < len(fields) {
+				row[strings.ToLower(name)] = fields[i]
+			}
+		}
+		lines = append(lines, line)
+		rows = append(rows, row)
+	}
+	return lines, rows
+}
+
+// TestRealDataLoad は実データの件数と、すべての行の中身を、入力の物理行をカンマで
+// 分けた値と突き合わせる。
 func TestRealDataLoad(t *testing.T) {
 	data := loadRealData(t)
+	lines, rows := plainTable(t, readSourceFile(t, "data", "script_order.csv"))
+	levelLines, _ := plainTable(t, readSourceFile(t, "data", "level_flow.csv"))
 
-	if len(data.Entries) != scriptOrderEntries {
-		t.Errorf("Entries = %d件, want %d", len(data.Entries), scriptOrderEntries)
+	if len(data.Entries) != len(rows) {
+		t.Fatalf("Entries = %d件, want %d（script_order.csv のデータ行）", len(data.Entries), len(rows))
 	}
-	if len(data.Levels) != levelFlowLevels {
-		t.Errorf("Levels = %d件, want %d", len(data.Levels), levelFlowLevels)
-	}
-
-	first := Entry{
-		Section: "L01 Ryan", HasSection: true, Phase: "intro", Node: "Ryan_1_intro", HasNode: true,
-		Order: 1, OrderText: "1", LineID: "line:a8779ebf",
-		Key: "0da72197e898ebe1", Speaker: "Ryan",
-	}
-	if data.Entries[0] != first {
-		t.Errorf("先頭 = %+v, want %+v", data.Entries[0], first)
+	// level_flow.csv の level はどの行も整数なので、捨てられる行は無い。
+	if len(data.Levels) != len(levelLines) {
+		t.Errorf("Levels = %d件, want %d（level_flow.csv のデータ行）", len(data.Levels), len(levelLines))
 	}
 
-	last := Entry{
-		Section: "Unused", HasSection: true, Node: "Start", HasNode: true,
-		Order: 24, OrderText: "24", LineID: "line:1772a124",
-		Key: "add98a1ef99b1290", Speaker: "Start",
-	}
-	if got := data.Entries[len(data.Entries)-1]; got != last {
-		t.Errorf("末尾 = %+v, want %+v", got, last)
+	for i, e := range data.Entries {
+		row := rows[i]
+		want := Entry{
+			Section: row["section"], HasSection: true, Phase: row["phase"], Node: row["node"], HasNode: true,
+			Order: parseOrder(row["order"]), OrderText: row["order"], LineID: row["line_id"],
+			Key: strings.ToLower(strings.TrimSpace(row["key"])), Speaker: row["speaker"], Condition: row["condition"],
+			Norm: row["norm"], FP: row["fp"], NLen: parseNLen(row["nlen"]),
+		}
+		if e != want {
+			// 値は出さない。行番号と、どの列かだけにする。
+			t.Errorf("%d行目の Entry が、カンマで分けた値と違う", lines[i].Number)
+		}
 	}
 }
 
@@ -129,21 +137,17 @@ func TestRealDataLoadersAgree(t *testing.T) {
 
 // TestRealDataSectionTitles は実データから作った見出し文言が、公開ずみの
 // Translations/ja/strings.csv の "# ===== ... =====" 行と一致することを確かめる。
-// 仕様書の実出力例（Level 5 / Level 9 / Level 10）もここに含まれる。
 func TestRealDataSectionTitles(t *testing.T) {
 	data := loadRealData(t)
 
 	// script_order.csv のセクションを初出順に集める。公開CSVの見出しは
 	// セクションが変わるたびに出るので、セクションが飛び飛びに再登場しない
-	// かぎりこの並びと一致する（実データでは再登場しない＝18種18見出し）。
+	// かぎりこの並びと一致する（実データでは再登場しない）。
 	var sections []string
 	for _, e := range data.Entries {
 		if !slices.Contains(sections, e.Section) {
 			sections = append(sections, e.Section)
 		}
-	}
-	if len(sections) != distinctSections {
-		t.Fatalf("セクション = %d種, want %d", len(sections), distinctSections)
 	}
 
 	got := make([]string, 0, len(sections))
@@ -152,6 +156,9 @@ func TestRealDataSectionTitles(t *testing.T) {
 	}
 
 	want := publishedSectionTitles(t)
+	if len(want) == 0 {
+		t.Fatal("公開ファイルに見出しの行が1つも無い")
+	}
 	if !slices.Equal(got, want) {
 		t.Errorf("見出し文言が公開ファイルと食い違う\n got = %q\nwant = %q", got, want)
 	}
@@ -179,107 +186,106 @@ func publishedSectionTitles(t *testing.T) []string {
 	return titles
 }
 
-// TestRealDataLevelHeaders はレベル15件の見出しを1つずつ確かめる。
-// 天気だけ・sets だけ・ends だけ・全部そろい、の4通りが実データに揃っている。
+// TestRealDataLevelHeaders は、level_flow.csv のどのレベルも、そのセクション名で
+// 見出しを引けることを確かめる。
+//
+// 見出しの書き方（天気だけ・sets だけ・ends だけ・全部そろい）は TestLevelMetaHeader が
+// 合成の見本で見る。ここは、実データのセクション名から LevelFor で引き当てられる
+// ことを見る。見出しの文言そのものは TestRealDataSectionTitles が公開ファイルと
+// 突き合わせる。
 func TestRealDataLevelHeaders(t *testing.T) {
 	data := loadRealData(t)
-
-	tests := []struct {
-		section string
-		want    string
-	}{
-		{"L01 Ryan", "Level 1: Ryan (Sunny) | sets level_1 | ends level_1_complete"},
-		{"L02 Conrad", "Level 2: Conrad (Sunny)"},
-		{"L03 Alexander", "Level 3: Alexander (Sunny)"},
-		{"L04 Ryan", "Level 4: Ryan (Sunny)"},
-		{"L05 Conrad", "Level 5: Conrad (Rainy) | sets level_5 | ends MedkitCompleted, level_5_complete"},
-		{"L06 Alexander", "Level 6: Alexander (Night) | sets level_6_started"},
-		{"L07 Ryan", "Level 7: Ryan (Sunny)"},
-		{"L08 Conrad", "Level 8: Conrad (Sunny) | sets DeliveredMountFrame"},
-		{"L09 Alexander", "Level 9: Alexander (Sunny)"},
-		{"L10 Ryan", "Level 10: Ryan (Sunny) | ends PicnicCompleted"},
-		{"L11 Conrad", "Level 11: Conrad (Sunny)"},
-		{"L12 Alexander", "Level 12: Alexander (Rainy)"},
-		{"L13 Ryan", "Level 13: Ryan (Sunny)"},
-		{"L14 Conrad", "Level 14: Conrad (Night)"},
-		{"L15 Alexander", "Level 15: Alexander (Sunny)"},
+	if len(data.Levels) == 0 {
+		t.Fatal("レベルが1つも無い")
 	}
-	for _, tt := range tests {
-		t.Run(tt.section, func(t *testing.T) {
-			if got := data.SectionTitle(tt.section); got != tt.want {
-				t.Errorf("SectionTitle(%q) = %q, want %q", tt.section, got, tt.want)
-			}
-			meta, ok := data.LevelFor(tt.section)
-			if !ok {
-				t.Fatalf("LevelFor(%q) が引けない", tt.section)
-			}
-			if meta.Section() != tt.section {
-				t.Errorf("Section() = %q, want %q", meta.Section(), tt.section)
-			}
-		})
+	for _, level := range data.Levels {
+		section := level.Section()
+		meta, ok := data.LevelFor(section)
+		if !ok {
+			t.Errorf("LevelFor(%q) が引けない", section)
+			continue
+		}
+		if meta.Section() != section {
+			t.Errorf("Section() = %q, want %q", meta.Section(), section)
+		}
+		if got := data.SectionTitle(section); got != meta.Header() {
+			t.Errorf("SectionTitle(%q) = %q, want %q", section, got, meta.Header())
+		}
 	}
 }
 
-// TestRealDataSpeakers は話者表を実データで確かめる。
+// TestRealDataSpeakers は話者表を実データで確かめる。期待値は、script_order.csv の
+// 行をカンマで分けて、キーごとに初出順で重ねずに並べたもの（元実装の BuildSpeakers と
+// 同じ作り方）である。
 func TestRealDataSpeakers(t *testing.T) {
 	data := loadRealData(t)
+	_, rows := plainTable(t, readSourceFile(t, "data", "script_order.csv"))
 
-	tests := []struct {
-		name     string
-		key      string
-		want     string
-		isShared bool
-	}{
-		{"1人だけ", "0da72197e898ebe1", "Ryan", false},
-		{"最多の29回出るキー", "ab5df625bc76dbd4", "Phone/Ryan/Alexander/Conrad/Kobold", true},
-		{"知らないキー", strings.Repeat("f", key.Length), "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := data.SpeakersFor(tt.key); got != tt.want {
-				t.Errorf("SpeakersFor(%q) = %q, want %q", tt.key, got, tt.want)
-			}
-			if got := data.IsShared(tt.key); got != tt.isShared {
-				t.Errorf("IsShared(%q) = %t, want %t", tt.key, got, tt.isShared)
-			}
-		})
-	}
-
-	var keys, shared int
-	seen := make(map[string]bool)
-	for _, e := range data.Entries {
-		if seen[e.Key] {
-			continue
+	want := make(map[string][]string)
+	var keys []string
+	for _, row := range rows {
+		k := strings.ToLower(strings.TrimSpace(row["key"]))
+		if _, seen := want[k]; !seen {
+			keys = append(keys, k)
+			want[k] = nil
 		}
-		seen[e.Key] = true
-		keys++
-		if data.IsShared(e.Key) {
+		if s := row["speaker"]; s != "" && !slices.Contains(want[k], s) {
+			want[k] = append(want[k], s)
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatal("キーが1つも無い")
+	}
+	shared := 0
+	for _, k := range keys {
+		if got := data.SpeakersFor(k); got != strings.Join(want[k], SpeakerSeparator) {
+			t.Errorf("SpeakersFor(%q) = %q, want %q", k, got, strings.Join(want[k], SpeakerSeparator))
+		}
+		if got := data.IsShared(k); got != (len(want[k]) > 1) {
+			t.Errorf("IsShared(%q) = %t, want %t", k, got, len(want[k]) > 1)
+		}
+		if len(want[k]) > 1 {
 			shared++
 		}
 	}
-	if keys != distinctKeys {
-		t.Errorf("キー = %d種, want %d", keys, distinctKeys)
+	// 知らないキーは空。
+	unknown := strings.Repeat("f", key.Length)
+	if _, ok := want[unknown]; !ok {
+		if got := data.SpeakersFor(unknown); got != "" || data.IsShared(unknown) {
+			t.Errorf("知らないキーの SpeakersFor = %q, IsShared = %t", got, data.IsShared(unknown))
+		}
 	}
-	if shared != sharedKeys {
-		t.Errorf("2人以上が話すキー = %d種, want %d", shared, sharedKeys)
-	}
+	t.Logf("キー %d 種、うち2人以上が話すキー %d 種", len(keys), shared)
 }
 
 // TestRealDataSpeakerColumn は公開ずみ Translations/ja/strings.csv の speaker 列と
 // SpeakersFor の結果を突き合わせる。元実装のハッシュ行は
 // `$speakers[$k] -join '/'` をそのまま speaker 列に書いているので、
-// 話者表の作り方が違えばここで落ちる（1570行を照合する）。
+// 話者表の作り方が違えばここで落ちる。
+//
+// 照合する行の数は、公開ファイルの物理行から数える（キーが16桁で section が UI でない
+// 行）。キーと section の列には引用符が入らないので、頭の2つのカンマで分ければ足りる。
 func TestRealDataSpeakerColumn(t *testing.T) {
 	data := loadRealData(t)
+	raw := readSourceFile(t, "Translations", "ja", "strings.csv")
 
-	f, err := csvfile.ReadPowerShell(readSourceFile(t, "Translations", "ja", "strings.csv"))
+	wantChecked := 0
+	for _, line := range sourcerepo.ContentLines(raw)[1:] {
+		parts := strings.SplitN(line.Text, ",", 3)
+		if len(parts) == 3 && key.LooksLike(parts[0]) && parts[1] != "UI" {
+			wantChecked++
+		}
+	}
+	if wantChecked == 0 {
+		t.Fatal("照合できる行が公開ファイルに1つも無い")
+	}
+
+	f, err := csvfile.ReadPowerShell(raw)
 	if err != nil {
 		t.Fatalf("ja/strings.csv が読めない: %v", err)
 	}
-	rows := f.Rows()
-
 	checked := 0
-	for _, row := range rows {
+	for _, row := range f.Rows() {
 		k := row.Get("key")
 		// 台詞ID行（line:...）の speaker 列はその出現の話者1人なので対象外。
 		// UI 行は script_order.csv に無いキーなので対象外。
@@ -291,7 +297,7 @@ func TestRealDataSpeakerColumn(t *testing.T) {
 			t.Errorf("key %s の speaker = %q, want %q", k, got, row.Get("speaker"))
 		}
 	}
-	if checked != 1570 {
-		t.Errorf("照合した行 = %d, want 1570", checked)
+	if checked != wantChecked {
+		t.Errorf("照合した行 = %d, want %d（公開ファイルの物理行から数えた数）", checked, wantChecked)
 	}
 }

@@ -487,6 +487,12 @@ func (r *Report) writeTextFooter(b *strings.Builder) {
 	b.WriteString("\n")
 	rows := r.RowCountByStatus(StatusReview)
 	switch {
+	case len(r.Locales) == 0 && len(r.ReportedEmpty) > 0:
+		// --locale で、公開ファイルも作業コピーも無いロケールだけを指したとき。
+		// 「報告するロケールがありません」と書くと、何も無かったように読める。
+		// 訳が1件も無いのは、そのロケールのいちばん大きい要作業である。
+		fmt.Fprintf(b, "報告するロケールは、訳が1件もないロケール（%s）だけです。（--strict で終了コード 1）\n",
+			strings.Join(r.ReportedEmpty, "、"))
 	case len(r.Locales) == 0:
 		b.WriteString("報告するロケールがありません。\n")
 	case rows > 0:

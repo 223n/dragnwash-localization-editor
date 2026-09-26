@@ -275,6 +275,39 @@ func TestLoadWithoutLevelFlow(t *testing.T) {
 	})
 }
 
+// TestLoadPowerShellOlderShapes は、上流の古い版（003ed1e）の形の data/ の2ファイルを
+// 読めることを、合成の見本で確かめる。
+//
+// 実データの試験（realdata_test.go）は上流 main に追従する（改善の決定 31）ので、
+// いまの main に無い形はそちらでは確かめられない。003ed1e の script_order.csv は
+// norm・fp・nlen の無い8列、level_flow.csv は BOM 付きだった。
+func TestLoadPowerShellOlderShapes(t *testing.T) {
+	const orderCSV = "section,phase,node,order,line_id,key,speaker,condition\n" +
+		"L04 Conrad,intro,Conrad_4_intro,2,line:0000abcd,0123456789ABCDEF,Conrad,\n"
+	// BOM の直後の列を level にして、BOM が残ると level を引けない（Index が 0 に
+	// 落ちる）形にする。
+	const levelsCSV = "\xef\xbb\xbflevel,dragon,weather\n" + "3,Conrad,Rainy\n"
+
+	data, err := LoadPowerShell([]byte(orderCSV), []byte(levelsCSV))
+	if err != nil {
+		t.Fatalf("LoadPowerShell が失敗した: %v", err)
+	}
+	want := Entry{
+		Section: "L04 Conrad", HasSection: true, Phase: "intro", Node: "Conrad_4_intro", HasNode: true,
+		Order: 2, OrderText: "2", LineID: "line:0000abcd", Key: "0123456789abcdef", Speaker: "Conrad",
+	}
+	if len(data.Entries) != 1 || data.Entries[0] != want {
+		t.Errorf("Entries = %+v, want [%+v]（norm・fp・nlen の無い8列では空と0）", data.Entries, want)
+	}
+	wantLevel := LevelMeta{Index: 3, Dragon: "Conrad", Weather: "Rainy"}
+	if len(data.Levels) != 1 || data.Levels[0] != wantLevel {
+		t.Errorf("Levels = %+v, want [%+v]（BOM を剥がして level を引く）", data.Levels, wantLevel)
+	}
+	if got := data.SectionTitle("L04 Conrad"); got != "Level 4: Conrad (Rainy)" {
+		t.Errorf("SectionTitle = %q", got)
+	}
+}
+
 // TestLoadPowerShellDuplicateColumn はヘッダーの列名が重複していると
 // エラーになることを確かめる。元実装では処理全体が止まる箇所。
 func TestLoadPowerShellDuplicateColumn(t *testing.T) {
