@@ -117,28 +117,17 @@ dwloc_0.5.0_windows_amd64/
 ### macOSで実行する
 
 > [!WARNING]
-> 現在、macOSでDrag'n Wash Localizationは、動作しません。  
-> 以下、[Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization/blob/main/README.ja.md)の内容を引用しています。
->
-> **macOS では現在動作しません。**  
-> Drag'n Wash は Unity 6.3 で作られていて、BepInEx 5.4.23.5 が macOS で使う読み込み役（Doorstop）が、  
-> まだ Unity 6.3 のゲームに割り込めません（[NeighTools/UnityDoorstop#108](https://github.com/NeighTools/UnityDoorstop/issues/108)）。  
-> Doorstop 自体はゲームに読み込まれますが BepInEx が起動せず、  
-> `BepInEx/LogOutput.log` も `BepInEx/config` も作られないまま、ゲームは英語で始まります。  
-> Apple M3 Pro / macOS 26.6 で、Apple シリコンのままでも Rosetta でも同じ結果になることを確認しました。  
-> BepInEx 側の問題なので、この Mod からは回避できません。  
-> 修正の入った BepInEx が出たら、あらためて macOS で試します。  
-> その日のために、**実験的な** macOS 用インストールスクリプトを  
-> リポジトリに置いてあります: [`installer/experimental/install-macos.sh`](https://github.com/TomXV/dragnwash-localization/blob/main/installer/experimental/install-macos.sh)。  
-> Steam Deck 用スクリプトと同じく、macOS 版 BepInEx・Mod・言語・Steam の起動オプションを設定し、  
-> ゲームを起動したあとで Mod が読み込まれたかを確かめる **動作確認** もできます。  
-> Mac ではまだ一度も実行しておらず、導入前に上の不具合について確認を出します。  
-> リリースの zip には入っていません。
+> macOSでは、Drag'n Wash Localization（ゲーム内のMod）は、今のところ実験的な方法でしか動きません。  
+> 元のリポジトリにある実験的なインストールスクリプト[`installer/experimental/install-macos.sh`](https://github.com/TomXV/dragnwash-localization/blob/main/installer/experimental/install-macos.sh)で入れます。  
+> スクリプトはリリースのzipには入っていません。  
+> macOS版のBepInEx 5.4.23.5に、UnityDoorstopの`ci`プレリリースにあるDoorstop（4.6.0のビルドに固定）を組み合わせて入れ、ゲームをRosetta（x86_64）で動かします。  
+> ゲームはSteamから起動します。ターミナルから起動すると、セーブが見つかりません。  
+> 固定するDoorstopは、安定版が出たら切り替わる予定です。  
+> 最新の状況と注意は、[Drag'n Wash LocalizationのREADME](https://github.com/TomXV/dragnwash-localization/blob/main/README.ja.md)の注意書きを見てください。
 
-Modが読み込まれないので、macOSのゲームは作業コピーを書き出しません。  
-そのため`dwloc`が動いても、原文の欄は空のまま、「未翻訳」の判定もできません。  
-原文まで見たいときは、Windowsで書き出した`<ロケール>.working.csv`を持ってきて、  
-`<翻訳リポジトリ>/Translations/_discovered/`へ置いてください。
+Modを入れていないMacでも、`dwloc`自身は動きます。  
+ただしゲームが作業コピーを書き出さないので、原文の欄は空のままで、「未翻訳」の判定もできません。  
+くわしくは下の「macOSで探す場所」を見てください。
 
 ターミナルを開き、ダウンロードしたフォルダーで次を実行します。
 
@@ -832,25 +821,26 @@ Modは「いま読み込んでいる訳」を作業コピーへ書き出しま�
 そのときは画面に「保存できませんでした」と出て、送り直しを続けます。  
 ファイルは1バイトも変わりません。
 
-#### macOSでは見つかりません
+#### macOSで探す場所
 
-macOSには、ゲームのフォルダーがありません。  
-プラグインと作業コピーも作られません。  
-ゲーム内のModがmacOSで動かないためです。  
-くわしくは上の「macOSで実行する」の警告を見てください。
+macOSでは、Steamを入れた既定の場所`~/Library/Application Support/Steam`と、そこに登録されたライブラリを探します。  
+探し方はWindowsとLinuxと同じで、`<ライブラリ>/steamapps/common/<ゲーム>/BepInEx/plugins/<プラグイン>`の`Translations/_discovered`を目印にします。  
+元のリポジトリの実験的なインストールスクリプトも、BepInExをこの並びで置きます。
 
-`dwloc`自身はmacOSでも動きます。  
-動かないのは、ゲームと繋がる部分だけです。
+ただし、見つかるのはModを入れてあるときだけです。  
+macOSでModが動くのは、今のところ上の「macOSで実行する」に書いた実験的な方法だけです。  
+入れていなければ、プラグインのフォルダーと作業コピーは作られません。
 
-| macOSで                       | どうなるか                                |
+| Modを入れていないMacで        | どうなるか                                |
 |-------------------------------|-------------------------------------------|
 | `publish`、`validate`、`diff` | 使えます                                  |
 | `edit`                        | 使えます。ただし原文の欄は空のままです    |
 | `--game auto`                 | 何も見つからず、終了コード`2`で止まります |
 
-`--game auto`と打つと、空振りした理由を標準エラーへ出して止まります。  
-`edit`は`--game`を省いても探すので、そのときは探して無かったことを3行出してから、原文の欄が空のまま始めます。  
 ほかのPCで書き出した作業コピーを持ってきたときは、`--game`でそのフォルダーを指定できます。
+
+> [!NOTE]
+> 実験的な方法でModを入れたMacのゲームを、`dwloc`が見つけて読み書きできるかは、まだ確かめていません。
 
 ### 画面で訳を書き換える
 
