@@ -169,6 +169,10 @@ func TestSaveChangesOnlyTheTouchedLine(t *testing.T) {
 	if got.Version == "" || got.Version == lines.Version {
 		t.Errorf("版が %q（保存で変わるはず）", got.Version)
 	}
+	// 1行の訳では行番号は変わらないので、行番号の対応を返さない。
+	if got.Numbers != nil {
+		t.Errorf("行番号の対応 = %+v、無しを期待", got.Numbers)
+	}
 
 	after := readFile(t, path)
 	beforeLines := strings.Split(before, "\n")
@@ -321,8 +325,9 @@ func TestWriteNeedsTheCookie(t *testing.T) {
 }
 
 func TestSaveRejectsValuesTheFileCannotHold(t *testing.T) {
-	// 改行と NUL は internal/edit が拒む。拒まれた行は保存されず、
-	// 1バイトも書かれない（この要求には他の行が無いため）。
+	// NUL と、書くと訳の行がレコードに見える値（飲み込みの疑い）は internal/edit が拒む。
+	// 拒まれた行は保存されず、1バイトも書かれない（この要求には他の行が無いため）。
+	// 改行は PR4 から書ける（TestSaveWritesLineBreaks）。
 	s := newTestServer(t, Options{Root: newEditRoot(t)})
 	path := inputPath(t, s, "ja")
 	before := readFile(t, path)
@@ -332,10 +337,8 @@ func TestSaveRejectsValuesTheFileCannotHold(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"LF", "上\n下"},
-		{"CR", "上\r下"},
-		{"CRLF", "上\r\n下"},
 		{"NUL", "あ\x00い"},
+		{"訳の2行目がキーの形", "上\n0123456789abcdef,UI,,,UI,x,y"},
 	}
 	for _, tc := range cases {
 		rec := save(t, s, "ja", lines.Version, rowEdit{ID: 6, Translation: tc.value})
@@ -350,6 +353,192 @@ func TestSaveRejectsValuesTheFileCannotHold(t *testing.T) {
 		if after := readFile(t, path); after != before {
 			t.Fatalf("%s: 拒んだのにファイルが変わった", tc.name)
 		}
+	}
+}
+
+// TestSaveWritesLineBreaks は、訳の改行を書けることを見る（決まったことの 1）。
+//
+// LF はそのまま書き、CRLF と単独の CR は LF にそろえて書く。そろえた行には、値が
+// 変わったという断り（warn.value_normalized）を付ける。画面は送る前に LF へそろえるので
+// ふつうは付かないが、API を直に使う側には、送った値とファイルの値が違うことを知らせる。
+// 改行の入った訳は引用符で囲み、変わるのはそのレコードの最終フィールドだけである。
+func TestSaveWritesLineBreaks(t *testing.T) {
+	s := newTestServer(t, Options{Root: newEditRoot(t), UILang: "ja"})
+	ja := s.cat.lookup("ja")
+	path := inputPath(t, s, "ja")
+	before := readFile(t, path)
+	lines := getLines(t, s, "ja")
+
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし\nもしもし"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[rowsResponse](t, rec.Body.Bytes())
+	if r := got.Results[0]; !r.Saved || r.Translation != "もしもし\nもしもし" || r.Warning != "" || r.Number != 5 {
+		t.Errorf("LF の結果 = %+v", r)
+	}
+	// 行番号が変わったデータ行を、いまの行番号で返す。書いた行は2物理行になり、後ろの行は
+	// 1つ下がる。ファイルの物理行の数（数えたもの）も数え直す。
+	fileLines := func(got rowsResponse) int {
+		for _, st := range got.Stats {
+			if st.Label == s.cat.T(ja, "stats.file_lines") {
+				return st.Value
+			}
+		}
+		return -1
+	}
+	if want := []lineNumber{{ID: 5, Number: 5, End: 6}, {ID: 6, Number: 7}}; !slices.Equal(got.Numbers, want) {
+		t.Errorf("行番号 = %+v、%+v を期待", got.Numbers, want)
+	}
+	if n := fileLines(got); n != 7 {
+		t.Errorf("ファイルの物理行の数 = %d、7 を期待", n)
+	}
+	hello := key.For(srcHello) + ",L01 Ryan,Ryan_1_intro,1,Ryan," + srcHello + ","
+	want := strings.Replace(before, hello+jaHello+"\n", hello+"\"もしもし\nもしもし\"\n", 1)
+	if after := readFile(t, path); after != want {
+		t.Fatalf("書いた結果が違う\n got %q\nwant %q", after, want)
+	}
+
+	rec = save(t, s, "ja", got.Version, rowEdit{ID: 6, Key: key.For(srcBye), Translation: "さよう\r\nなら\rです"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	got = decode[rowsResponse](t, rec.Body.Bytes())
+	if r := got.Results[0]; !r.Saved || r.Translation != "さよう\nなら\nです" ||
+		r.Warning != s.cat.T(ja, "warn.value_normalized") || r.Number != 7 {
+		t.Errorf("CRLF と CR の結果 = %+v", r)
+	}
+	if want := []lineNumber{{ID: 6, Number: 7, End: 9}}; !slices.Equal(got.Numbers, want) {
+		t.Errorf("行番号 = %+v、%+v を期待", got.Numbers, want)
+	}
+	if n := fileLines(got); n != 9 {
+		t.Errorf("ファイルの物理行の数 = %d、9 を期待", n)
+	}
+	bye := key.For(srcBye) + ",L01 Ryan,Ryan_1_intro,2,Ryan," + srcBye + ","
+	want = strings.Replace(want, bye+"\n", bye+"\"さよう\nなら\nです\"\n", 1)
+	if after := readFile(t, path); after != want {
+		t.Fatalf("書いた結果が違う\n got %q\nwant %q", after, want)
+	}
+
+	// 1回の要求で、前の行の改行を減らし、後ろの行の改行も減らす。後ろの行は ID で引くので、
+	// 前の行の書き換えで行番号がずれても、正しいレコードに入る。
+	rec = save(t, s, "ja", got.Version,
+		rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし。"},
+		rowEdit{ID: 6, Key: key.For(srcBye), Translation: "さよう\nなら"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	got = decode[rowsResponse](t, rec.Body.Bytes())
+	if want := []lineNumber{{ID: 5, Number: 5}, {ID: 6, Number: 6, End: 7}}; !slices.Equal(got.Numbers, want) {
+		t.Errorf("1回の要求の行番号 = %+v、%+v を期待", got.Numbers, want)
+	}
+	if n := fileLines(got); n != 7 {
+		t.Errorf("ファイルの物理行の数 = %d、7 を期待", n)
+	}
+	want = strings.Replace(before, hello+jaHello+"\n", hello+"もしもし。\n", 1)
+	want = strings.Replace(want, bye+"\n", bye+"\"さよう\nなら\"\n", 1)
+	if after := readFile(t, path); after != want {
+		t.Fatalf("1回の要求で書いた結果が違う\n got %q\nwant %q", after, want)
+	}
+	rec = save(t, s, "ja", got.Version,
+		rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし\nもしもし"},
+		rowEdit{ID: 6, Key: key.For(srcBye), Translation: "さよう\nなら\nです"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+
+	// 読み直すと、どちらも改行ごと訳として並び、後ろの行の行番号がずれている。
+	lines = getLines(t, s, "ja")
+	var data []lineView
+	for _, l := range lines.Lines {
+		if l.Kind == lineKindData {
+			data = append(data, l)
+		}
+	}
+	if len(data) != 2 || data[0].ID != 5 || data[0].Number != 5 || data[0].End != 6 || data[0].Translation != "もしもし\nもしもし" ||
+		data[1].ID != 6 || data[1].Number != 7 || data[1].End != 9 || data[1].Translation != "さよう\nなら\nです" ||
+		!data[0].Editable || !data[1].Editable {
+		t.Errorf("読み直した行 = %+v", data)
+	}
+}
+
+// TestSaveNamesRejectedRowsByTheLineNumberInTheFile は、1回の要求で断った行の理由と
+// rowResult.n が、応答を受けた時点のファイルの行番号を言うことを見る。書けたなら書いた
+// あとの行番号（応答の numbers と同じ）、書けなかったなら読んだときの行番号である。
+//
+// 画面は未保存の控えに入った順に送るので、下の行が、訳に改行を足す上の行より先に並ぶことが
+// ある（検証の指摘）。行を差し替えるループの中で理由を組んでいたころは、下の行の理由が
+// 上の行でずれる前の行番号（6行目）を言い、保存のあとの行番号の欄（7）と食い違った。
+// 逆の並びで書けなかったとき（503）は、ずらしたあとの行番号（7行目）を言い、1バイトも
+// 書いていないファイル（6行目）と食い違った。
+//
+// 断る理由は2つ見る。書けない値（ID 6。訳の2行目がキーの形）と、編集できない行（ID 7。
+// 見本の末尾に足したコメント行）である。
+func TestSaveNamesRejectedRowsByTheLineNumberInTheFile(t *testing.T) {
+	top := rowEdit{ID: 5, Key: key.For(srcHello), Translation: "もしもし\nもしもし"}
+	bottom := rowEdit{ID: 6, Key: key.For(srcBye), Translation: "上\n0123456789abcdef,UI,,,UI,x,y"}
+	blank := rowEdit{ID: 7, Translation: jaTyped}
+	cases := []struct {
+		name  string
+		edits []rowEdit
+		// readOnly なら作業コピーを書けなくする（503）。
+		readOnly bool
+		// line は、ID 6 の理由と n に出る行番号。ID 7 はその次の行。
+		line int
+	}{
+		{"下の行が先", []rowEdit{bottom, blank, top}, false, 7},
+		{"上の行が先", []rowEdit{top, bottom, blank}, false, 7},
+		{"書けないとき・上の行が先", []rowEdit{top, bottom, blank}, true, 6},
+		{"書けないとき・下の行が先", []rowEdit{blank, bottom, top}, true, 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newEditRoot(t)
+			working := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
+			if err := os.WriteFile(working, []byte(readFile(t, working)+"# 架空のメモ\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s := newTestServer(t, Options{Root: root, UILang: "ja", Stderr: io.Discard})
+			ja := s.cat.lookup("ja")
+			path := inputPath(t, s, "ja")
+			lines := getLines(t, s, "ja")
+			if tc.readOnly {
+				makeReadOnly(t, path)
+			}
+			rec := save(t, s, "ja", lines.Version, tc.edits...)
+			var results []rowResult
+			switch {
+			case !tc.readOnly && rec.Code == http.StatusOK:
+				got := decode[rowsResponse](t, rec.Body.Bytes())
+				if want := []lineNumber{{ID: 5, Number: 5, End: 6}, {ID: 6, Number: 7}}; !slices.Equal(got.Numbers, want) {
+					t.Errorf("行番号 = %+v、%+v を期待", got.Numbers, want)
+				}
+				results = got.Results
+			case tc.readOnly && rec.Code == http.StatusServiceUnavailable:
+				results = decode[errorResponse](t, rec.Body.Bytes()).Results
+			default:
+				t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+			}
+			invalid := reason.New(reason.EditLineLooksLikeRecord, "", "line", "2")
+			notData := reason.New(reason.EditNotDataLine, "", "kind", edit.KindComment.String())
+			want := map[int]rowResult{
+				top.ID: {Number: 5, Saved: !tc.readOnly},
+				bottom.ID: {Number: tc.line, Error: s.cat.T(ja, "error.invalid_value",
+					"line", itoa(tc.line), "reason", s.reasonText(ja, invalid))},
+				blank.ID: {Number: tc.line + 1, Error: s.cat.T(ja, "error.not_editable",
+					"line", itoa(tc.line+1), "reason", s.reasonText(ja, notData))},
+			}
+			if len(results) != len(tc.edits) {
+				t.Fatalf("結果 = %+v", results)
+			}
+			for _, r := range results {
+				w, ok := want[r.ID]
+				if !ok || r.Saved != w.Saved || r.Number != w.Number || r.Error != w.Error {
+					t.Errorf("ID %d の結果 = {n:%d saved:%v error:%q}、{n:%d saved:%v error:%q} を期待",
+						r.ID, r.Number, r.Saved, r.Error, w.Number, w.Saved, w.Error)
+				}
+			}
+		})
 	}
 }
 
@@ -621,12 +810,12 @@ func TestReadOnlyFileCannotBeSaved(t *testing.T) {
 }
 
 // TestMultilineRecordIsOneRow は、複数の物理行にまたがるレコードを1行として並べ、
-// 訳が1行に収まるかぎり書けることを見る。
+// 訳を書けることを見る（訳の改行も書ける。PR4）。
 //
 // PR2 までは保存が物理行の単位だったので、行をまたぐレコードのどの物理行も編集
 // させていなかった（TestMultilineRecordIsReadOnly）。いまはレコードの最終フィールドを
 // 差し替えるので、原文が行をまたぐ訳の空いたレコード（実物の作業コピーにある形）も
-// 訳せる。訳に改行があるレコードは、改行の入力を足すまで（PR4）読み取り専用にする。
+// 訳せる。訳に改行があるレコードも、PR4 から書ける。
 //
 // 行は ID で指し、行番号（n と end）は表示のためだけに持つ。値の中の '#' で始まる行は
 // 見出しにせず、値の中の空行も並べない。
@@ -645,7 +834,6 @@ func TestMultilineRecordIsOneRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newTestServer(t, Options{Root: root, UILang: "ja"})
-	ja := s.cat.lookup("ja")
 	lines := getLines(t, s, "ja")
 	if lines.ReadOnlyReason != "" {
 		t.Fatalf("ファイル全体を読み取り専用にしている: %s", lines.ReadOnlyReason)
@@ -666,29 +854,17 @@ func TestMultilineRecordIsOneRow(t *testing.T) {
 	if !slices.ContainsFunc(para.Badges, func(b badgeView) bool { return b.Category == "untranslated" }) {
 		t.Errorf("未翻訳のバッジが無い: %+v", para.Badges)
 	}
-	why := s.cat.T(ja, "reason."+reason.EditMultilineTranslation)
+	// 訳が行をまたぐレコードも書ける（PR4。PR3 のあいだは reason.edit_multiline_translation で
+	// 読み取り専用にしていた）。訳は改行ごと渡し、生の行は渡さない。
 	bye := lines.Lines[2]
-	if bye.ID != 4 || bye.Number != 6 || bye.End != 7 || bye.Editable || bye.Reason != why ||
-		bye.Translation != "" || bye.Text != key.For(srcBye)+",L01 Ryan,Ryan_1_intro,2,Ryan,"+srcBye+",\"さよう\n# なら\"" {
+	if bye.ID != 4 || bye.Number != 6 || bye.End != 7 || !bye.Editable || bye.Reason != "" ||
+		bye.Translation != "さよう\n# なら" || bye.Text != "" {
 		t.Errorf("訳が行をまたぐレコード = %+v", bye)
 	}
 
-	// 訳が行をまたぐレコードには書かせない。
-	before := readFile(t, path)
-	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 4, Key: key.For(srcBye), Translation: jaTyped})
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("状態コードが %d、422 を期待", rec.Code)
-	}
-	if got := decode[errorResponse](t, rec.Body.Bytes()); len(got.Results) != 1 ||
-		got.Results[0].ID != 4 || got.Results[0].Number != 6 || !strings.Contains(got.Results[0].Error, why) {
-		t.Errorf("理由が違う: %+v", got.Results)
-	}
-	if after := readFile(t, path); after != before {
-		t.Error("断ったのにファイルが変わった")
-	}
-
 	// 原文が行をまたぐレコードには書ける。変わるのは5行目の最終フィールドだけ。
-	rec = save(t, s, "ja", lines.Version, rowEdit{ID: 3, Key: key.For(multi), Translation: jaTyped})
+	before := readFile(t, path)
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 3, Key: key.For(multi), Translation: jaTyped})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
 	}
@@ -902,14 +1078,14 @@ func TestEditErrorTextKeepsUnknownErrors(t *testing.T) {
 	en := s.cat.lookup("en")
 
 	unknown := errors.New("unexpected: disk full")
-	if got := s.editErrorText(en, unknown); got != unknown.Error() {
+	if got := s.editErrorText(en, unknown, 0); got != unknown.Error() {
 		t.Errorf("知らない誤りが %q、%q を期待", got, unknown.Error())
 	}
 
 	why := reason.New(reason.EditNoSuchLine, "そんな行番号は無い")
 	wrapped := fmt.Errorf("save: %w", &edit.NotEditableError{Line: 3, Reason: why.Text, Cause: why})
 	want := s.cat.T(en, "error.not_editable", "line", "3", "reason", s.reasonText(en, why))
-	if got := s.editErrorText(en, wrapped); got != want {
+	if got := s.editErrorText(en, wrapped, 0); got != want {
 		t.Errorf("包まれた NotEditableError が %q、%q を期待", got, want)
 	}
 	if hasJapanese(want) {

@@ -680,7 +680,7 @@ With a line break there, a heading line of the published file splits in two, and
 The upstream tool breaks in the same way.
 
 A swallowed line is spotted by whether a continuation line of a value that spans lines looks like a record on its own.  
-If it starts with a key, or has as many separators as the header has columns, a forgotten closing quote is suspected.  
+If it starts with a key, or splits at its commas into as many columns as the header has (six commas in a seven-column working copy), a forgotten closing quote is suspected.  
 To fix it, check where the quotes close, and add the `"` that closes the value if it is missing.  
 Write a `"` inside a value as two, `""`.
 
@@ -944,26 +944,42 @@ You can fix a translation that does not fit the column while seeing all of it, w
 
 ![A translation column opened as an input box. The save state at the top right reads "unsaved: 1"](docs/images/edit-editing-en.png)
 
-A translation cannot contain a line break.  
-`Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
-There is no way to enter a line break into a translation yet.
+To put a line break into a translation, press `Shift+Enter`.  
+It works on any row.  
+`Enter` still moves to the next row.  
+The `Shift+Enter` right after you commit a composition does not add a line break (so that committing alone never adds one).  
+Line breaks in pasted text are kept as well.  
+`CRLF` and a lone `CR` become `LF`.  
+One line break at the end of pasted text is dropped.  
+Copying a spreadsheet cell or a line from an editor brings the line break at its end along.  
+If you do want a line break at the end, add it with `Shift+Enter` after pasting.
+
+A translation with a line break is written as a quoted value.  
+The line breaks inside the value are `LF`.  
+Even when the working copy separates its rows with `CRLF`, the line breaks inside a value are `LF` (the same shape as the working copy the game writes).  
+If a line from the second line of the translation on looks like a record when read on its own (a line starting with a 16-digit key or a line ID, or a line that splits at its commas into as many columns as the header has, such as a line with six commas in a seven-column working copy), that translation is not written.  
+`publish` would stop on it, taking it for a quote closed in the wrong place that swallows the lines after it.  
+The row shows the reason "Line N of the translation looks like a record when read on its own", and what you typed stays on the screen.  
+Change how that line is written (its commas and so on), then type it again.
 
 Like `publish`, the screen reads the whole file as one text and lists one record as one row.  
 A record whose quoted value spans lines (one record over several lines) is one row too.  
 Saving rewrites only the translation column (the last column) of that record and leaves the other columns and the other rows byte for byte as they were.  
 The line break that ends the record (`CRLF` or `LF`) is kept as well.  
-A record whose source text spans lines can be edited as long as the translation fits on one line.  
+A record whose source text spans lines can be edited, and so can a record whose translation has line breaks.  
 The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row can be translated too.  
 A line inside a value that starts with `#` is not made a heading.
 
 The line-number column shows the line in the file where the record starts.  
 Only for a record that spans lines, the line where it ends is added below it in small type, after a dash (for `1865` to `1867`, `–1867` appears under `1865`).  
 It is there to compare with the line numbers you see when you open the file in an editor.  
-The source text column shows the line breaks and blank lines inside a value as they are.
+When you save after adding or removing line breaks in a translation, the line numbers of that record and the records after it shift.  
+The screen corrects the shifted line numbers, and the "physical lines in the file" under "Measured", on every save.  
+The source text column and the translation column show the line breaks and blank lines inside a value as they are.
 
 The row to save is named by the record's sequence number and its key, not by its line number in the file.  
 A record that spans lines shifts the line numbers of the records after it.  
-Your own saves do not change the sequence numbers.  
+Your own saves do not change the sequence numbers, even when they add line breaks to a translation.  
 Before writing, it reads back the rewritten record and then the whole file, and checks that nothing but the translation reads differently.  
 It checks this with the way the game reads the file, not only with the way `publish` reads it.  
 In some files, rewriting the translation on a row whose key column and source are both empty made the game lose track of other rows.  
@@ -978,14 +994,11 @@ In each of them, `publish` or the game would read what you write as a different 
 
 | Row | Reason shown |
 | ---- | ---- |
-| The translation contains a line break | The translation contains a line break (a translation with line breaks cannot be changed from the screen yet) |
 | A quote seems to be closed on another line and to swallow the lines after it | Line N looks swallowed into this record's value (a quote may be closed in the wrong place) |
 | The game's reader (`CsvReader`) reads a value differently (a `"` in the middle of a value, and so on) | The game's reader (CsvReader) reads the (column name) column of this record differently |
 | The game's reader (`CsvReader`) does not find the record | The game's reader (CsvReader) does not find this record |
 | The `key` column is neither a 16-digit key nor a line ID, and the source text (`source_en`) is empty (`hello,訳`, `,UI,,,UI,,訳`, and so on) | The key column is neither a 16-digit key nor a line ID, and the source text (source_en) is empty (publish drops this record, so a translation written here is never published) |
 
-A translation with a line break cannot be edited because the screen replaces line breaks with spaces for now.  
-Opening it and typing one character would drop line breaks you cannot see.  
 The game's reader does not find a record when it takes that row into the value of another row.  
 This happens when the game starts a quote at a `"` in the middle of a value on an earlier row, or when a lone `CR` is mixed in at the end of lines (the game drops a `CR` outside quotes and joins the row to the next one).  
 In a file with a line of only full-width spaces or `NO-BREAK SPACE` before the header, the game reads that line as the header, so every row shows this reason.  
@@ -1038,7 +1051,8 @@ The controls on the screen are as follows.
 | Left column | The button at the top (the three lines) folds the filter and explanation column away and brings it back. On a narrow screen it becomes a drawer |
 | Clear conditions | Clears the filter and the search together |
 | `Enter` | Commits the translation and opens the input box on the next (currently listed) row. On the last listed row it stays there without closing |
-| `Escape` | Closes the input box. What you typed is kept |
+| `Shift+Enter` | Puts a line break into the translation. It does not move to another row. It adds nothing right after you commit a composition. With `Ctrl` or `Alt` held as well, it adds no line break and moves to the next row like `Enter` |
+| `Escape` | Closes the input box and stays on that row's translation column. What you typed is kept. Press `Enter` there to open it again |
 | `Tab` | Moves to the next row |
 | `/` | Moves to the search box. On a narrow screen it opens the left column (drawer) first |
 | Locale box | Loads a moment (0.4 seconds) after you choose. Moving through it with the arrow keys only loads the locale you stop on. To open the list before choosing, press `Alt+Down` |
@@ -1219,11 +1233,14 @@ After a restart the `URL` changes, and the old tab can no longer send them.
 On the new screen, typing the key into the search box brings up the row.
 
 Rows with an unsaved translation, rows that could not be saved, and the row whose input box is currently open are not hidden even when they do not match the conditions.  
+Nor is the row you closed with `Escape` while the focus stays on its translation column.  
 Hiding them would make the row you need to fix, and the row you are touching, vanish from the screen.
 
 When you close the input box, the row is hidden there and then if it does not match the conditions.  
 It is not hidden while you work down the rows with `Enter`.  
-At the moment you close it, it is still unsaved, so it stays as a "row with an unsaved translation".
+At the moment you close it, it is still unsaved, so it stays as a "row with an unsaved translation".  
+When you close it with `Escape`, the row is hidden once the focus leaves its translation column.  
+Hiding the column the focus stays on would leave the focus nowhere to go, and `Enter` could no longer open the row again.
 
 For the filter conditions built from the counts at startup, each carries how many rows of that condition are in the list currently shown.  
 If "dialogue rows not in the script" says 17, then 17 rows in this list carry that badge.  

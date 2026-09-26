@@ -88,6 +88,8 @@ cp /tmp/expected.json testdata/upstream/expected.json
 手元のpwsh 7.6.6（Windows、`ja-JP`）で作った結果とも比べました。
 違ったのは、pwshの版の記録と、例外の文面の言語だけでした。
 例外の文面は比べる対象にしていません。
+訳への改行の入力（PR4）で、画面が訳に改行を入れて書いた形（`ml-edit-working-crlf`と`ml-edit-published-lf`）を足し、同じ2つの版で作り直しました。
+この2つの入力が画面の保存の書く形そのものであることは、`internal/edit`の`TestEditWritesTheUpstreamCases`が確かめます。
 
 入力を足したら、正解を作り直してからGoの試験を走らせます。
 新しい入力が上流と違えば、試験が違い方を出して落ちます。

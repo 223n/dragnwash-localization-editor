@@ -503,11 +503,11 @@ func editReasons(t *testing.T) []reason.Reason {
 		line  int
 		value string
 	}{
-		{0, "x"},      // そんな行番号は無い
-		{2, "x"},      // データ行ではない
-		{3, "a\nb"},   // 訳に改行
-		{3, "a\x00b"}, // 訳に NUL
-		{3, "a\xffb"}, // 不正なUTF-8
+		{0, "x"},                     // そんな行番号は無い
+		{2, "x"},                     // データ行ではない
+		{3, "a\nfedcba9876543210,b"}, // 訳の2行目がレコードに見える
+		{3, "a\x00b"},                // 訳に NUL
+		{3, "a\xffb"},                // 不正なUTF-8
 	}
 	for _, tc := range refuse {
 		err := f.SetTranslation(tc.line, tc.value)
@@ -524,14 +524,7 @@ func editReasons(t *testing.T) []reason.Reason {
 		out = append(out, causeOf(t, err))
 	}
 
-	// 訳が行をまたぐレコードと、閉じない引用符のファイルと、行の区切りが CR だけの
-	// ファイル。
-	multi := edit.Parse([]byte("key,translation\n0123456789abcdef,\"い\nち\"\n"))
-	if err := multi.SetTranslation(2, "x"); err == nil {
-		t.Error("訳が行をまたぐレコードが書けてしまった")
-	} else {
-		out = append(out, causeOf(t, err))
-	}
+	// 閉じない引用符のファイルと、行の区切りが CR だけのファイル。
 	out = append(out, edit.Parse([]byte("key,translation\nk,\"い\n")).ReadOnlyCause())
 	out = append(out, edit.Parse([]byte("key,translation\rk,い\r")).ReadOnlyCause())
 
@@ -1025,7 +1018,6 @@ func TestReadmeListsTheRowReasons(t *testing.T) {
 		readme := string(data)
 		cat := s.cat.lookup(tc.lang)
 		for _, id := range []string{
-			reason.EditMultilineTranslation,
 			reason.EditSwallow,
 			reason.EditGameDisagrees,
 			reason.EditGameMissesRecord,

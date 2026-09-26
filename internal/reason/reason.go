@@ -248,16 +248,15 @@ const (
 	EditNoSuchLine = "edit_no_such_line"
 	// EditNotDataLine はデータ行でないこと。置換は kind（行の種類）。
 	EditNotDataLine = "edit_not_data_line"
-	// EditNoNewline は訳に改行が入っていること。
-	EditNoNewline = "edit_no_newline"
 	// EditNoNUL は訳に NUL が入っていること。
 	EditNoNUL = "edit_no_nul"
 	// EditBadUTF8 は訳が正しいUTF-8でないこと。
 	EditBadUTF8 = "edit_bad_utf8"
-	// EditMultilineTranslation は訳に改行（CR か LF）があること。訳への改行の
-	// 入力を足すまで（PR4）編集させない。いまの画面は改行を空白に置き換えるので、
-	// 開いて1字打つと、翻訳者が見ていない改行まで消える。
-	EditMultilineTranslation = "edit_multiline_translation"
+	// EditLineLooksLikeRecord は、書こうとした訳の行（多くは改行の後ろの行）が、その
+	// 行だけで読むとレコードに見えること（キーの形で始まるか、列の数がヘッダーと同じ。
+	// csvfile.FindSwallows）。publish は引用符の閉じ誤りの疑いとして止めるので、書かない。
+	// 置換は line（訳の何行目か。1始まり）。
+	EditLineLooksLikeRecord = "edit_line_looks_like_record"
 	// EditUnclosedQuote は、開いた引用符がファイルの終わりまで閉じないこと。
 	// 置換は line（引用符が開いた物理行）。ファイル全体を読み取り専用にする。
 	EditUnclosedQuote = "edit_unclosed_quote"
@@ -381,8 +380,8 @@ var all = []string{
 	NoteTagMissing, NoteTagExtra, NoteTagMissingExtra,
 
 	EditNoHeader, EditBadHeader, EditFieldCount,
-	EditNoSuchLine, EditNotDataLine, EditNoNewline, EditNoNUL, EditBadUTF8,
-	EditMultilineTranslation, EditUnclosedQuote, EditCROnly, EditSwallow,
+	EditNoSuchLine, EditNotDataLine, EditNoNUL, EditBadUTF8,
+	EditLineLooksLikeRecord, EditUnclosedQuote, EditCROnly, EditSwallow,
 	EditGameDisagrees, EditGameMissesRecord, EditNoKeyOrSource, EditRecheckFailed,
 
 	PublishRowGone, PublishTranslationCleared, PublishBaseDrift,

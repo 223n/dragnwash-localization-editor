@@ -475,13 +475,14 @@ func TestClearingTranslationKeepsTheRecord(t *testing.T) {
 // internal/validate は doc コメントで「不正なUTF-8でエラーにしない」
 // 「NUL の _csv.Error を再現しない」と明言している。ここで止めないと、
 // 壊れた値が誰にも気づかれずに公開ファイルまで届く。
+//
+// 改行（LF・CR）は PR4 から書ける（決まったことの 1。CR は LF にそろえる）ので、
+// ここには無い。書けることは TestSetTranslationWritesLineBreaks が見る。
 func TestSetTranslationRejectsUnwritableValues(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string
 	}{
-		{"改行", "前\n後"},
-		{"復帰", "前\r後"},
 		{"NUL", "前\x00後"},
 		{"不正なUTF-8", "\xff\xfe壊れた"},
 	}

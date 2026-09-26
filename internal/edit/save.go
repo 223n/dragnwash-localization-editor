@@ -111,9 +111,11 @@ func (f *File) writeLocked(out []byte) error {
 
 // saved は、いまの中身を保存したものとして覚える。書き換えた印を下ろし、どの行も
 // いまのバイト列を「読み込んだときのバイト列」にする（[File.verify] が比べる相手）。
+// 物理行の数も、いまのものを覚える（訳の改行で変わる）。
 func (f *File) saved() {
 	for i := range f.touched {
-		f.lines[i].orig = f.lines[i].Text
+		line := &f.lines[i]
+		line.orig, line.origSpan = line.Text, line.EndNumber-line.Number
 	}
 	f.touched = nil
 }

@@ -68,7 +68,8 @@ var ErrRecheck = errors.New("書く前に読み直して確かめると合わな
 type RecheckError struct {
 	// ID は書き換えたレコードの ID（[Line.ID]）。
 	ID int
-	// Line はそのレコードの最初の物理行（1始まり）。
+	// Line はそのレコードの最初の物理行（1始まり）。1バイトも書いていないので、ファイルに
+	// いまある行番号で言う（訳の改行でずらす前のもの）。
 	Line int
 	// Cause は理由（reason.EditRecheckFailed）。文面は Cause.Text。
 	Cause reason.Reason

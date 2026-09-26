@@ -6,8 +6,8 @@
 //
 //   行をまたぐレコード   1行として並べ、行番号の欄に最初の物理行と「〜最後の物理行」を
 //                        出す。値の中の改行と空行はそのまま描き、値の中の '#' の行は
-//                        見出しにしない。訳が1行に収まるかぎり書ける。保存は最終
-//                        フィールドだけを差し替える。
+//                        見出しにしない。訳に改行があるレコードも書ける（訳への改行の
+//                        入力は newline.spec.mjs）。保存は最終フィールドだけを差し替える。
 //   行は ID で指す       ID はセグメントの通し番号。行をまたぐレコードの後ろでは、ID と
 //                        物理行の番号がずれる。保存の要求も、入力欄の行き先も ID で決め、
 //                        読み上げの名前にだけ行番号を使う。
@@ -89,9 +89,10 @@ function trackSaves(page) {
 
 // conflictWith は、次からの保存に、いまのファイルの行一覧を change で書き換えた 409 を返す。
 //
-// よそが書き換えた場面を、待ち受けの応答だけで作る。訳に改行が入ったレコードを待ち受けは
-// 読み取り専用で返す（改行の入力を足すまで）ので、複数行の訳を持つ競合は、いまはファイルを
-// 書き換えても作れない。画面がその形を描けることを、応答を差し替えて先に確かめておく。
+// よそが書き換えた場面を、待ち受けの応答だけで作る。PR3 のあいだは、訳に改行が入った
+// レコードを待ち受けが読み取り専用で返したので、複数行の訳を持つ競合はファイルを書き換えても
+// 作れず、画面がその形を描けることを応答の差し替えで確かめていた。訳への改行の入力（PR4）の
+// あとは、ファイルを書き換える本物の流れを newline.spec.mjs が見る。
 async function conflictWith(page, server, change) {
   await page.route("**/api/rows", async (route) => {
     const res = await page.request.get(`${server.origin}/api/lines?locale=ja`);
@@ -284,6 +285,39 @@ test.describe("行をまたぐレコード", () => {
     const label = await item.locator(".note-label").boundingBox();
     const value = await item.locator(".note-value").boundingBox();
     expect(value.y).toBeGreaterThanOrEqual(label.y + label.height - 1);
+    expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
+  });
+});
+
+test.describe("訳が行をまたぐレコード", () => {
+  // 行番号と ID（区切りは CRLF、値の中は LF）:
+  //   1 ヘッダー / 2 hello（ID 2） / 3〜4 TWO_LINES の訳のレコード（ID 3） / 5 wonderful（ID 4）
+  const twoLines = ui("One.", "いち\nに");
+  test.use({
+    repo: sampleRepo({
+      workingCopy: workingCopy(
+        [{ ...SAMPLE.hello, translation: SAMPLE.hello.ja }, twoLines, { ...SAMPLE.wonderful, translation: SAMPLE.wonderful.ja }],
+        { eol: "\r\n" },
+      ),
+    }),
+  });
+
+  // 訳に改行があるレコードも編集できる行として並べる（PR4。PR3 のあいだは
+  // reason.edit_multiline_translation で読み取り専用にしていた）。訳の欄は改行をそのまま描く。
+  test("訳に改行があるレコードも編集できる行として並べ、訳の改行をそのまま描く", async ({ app, server }) => {
+    const before = await server.readRoot(workingRel);
+    const row = rowById(app, 3);
+    await expect(row).not.toHaveClass(/(^|\s)not-editable(\s|$)/);
+    await expect(row.locator(".num-start")).toHaveText("3");
+    await expect(row.locator(".num-end")).toHaveText(msg("ja", "ui.line_end", { line: 4 }));
+    await expect(row.locator(".row-note")).toBeHidden();
+    expect(await drawnText(translationCell(app, 3))).toBe(twoLines.translation);
+
+    // Enter は訳に改行がある行にも進む。
+    await openEditor(app, 2);
+    await editor(app).press("Enter");
+    await expect(rowById(app, 3).locator("textarea.editor")).toBeFocused();
+    await expect(editor(app)).toHaveValue(twoLines.translation);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
 });
