@@ -190,7 +190,9 @@ func TestOneRequestWritesEachEditToItsRecord(t *testing.T) {
 
 // TestLineBreaksInValuesAreSentAsLF は、値の中の改行を LF にそろえて渡すことを見る
 // （model.go の lfLineBreaks）。表計算ソフトなどで保存し直すと、値の中の改行が CRLF に
-// なることがある。そろえるのは描くための値だけで、ファイルは変えない。
+// なることがある。読んだだけではファイルを変えない。訳が行をまたぐレコードも書ける
+// （PR4）ので、訳も LF にそろえて渡す（入力欄の起点になる）。その訳を書き換えると、
+// 値の中の改行は LF で書く。
 func TestLineBreaksInValuesAreSentAsLF(t *testing.T) {
 	root := newEditRoot(t)
 	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
@@ -208,11 +210,24 @@ func TestLineBreaksInValuesAreSentAsLF(t *testing.T) {
 	if l := lines.Lines[0]; l.Source != "para1\n\npara2" || !l.Editable || l.End != 4 {
 		t.Errorf("原文が行をまたぐレコード = %+v", l)
 	}
-	if l := lines.Lines[1]; l.Editable || l.Text != key.For("two")+",UI,,,UI,two,\"に\nさん\"" {
+	if l := lines.Lines[1]; !l.Editable || l.Translation != "に\nさん" || l.Text != "" || l.End != 6 {
 		t.Errorf("訳が行をまたぐレコード = %+v", l)
 	}
 	if readFile(t, path) != body {
 		t.Error("ファイルが変わった")
+	}
+
+	// 画面から届いた（LF にそろえた）訳で書くと、値の中の改行は LF になる。
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 3, Key: key.For("two"), Translation: "に\nさん\nよん"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状態コードが %d\n%s", rec.Code, rec.Body.String())
+	}
+	if got := decode[rowsResponse](t, rec.Body.Bytes()).Results[0]; got.Translation != "に\nさん\nよん" || got.Warning != "" {
+		t.Errorf("結果 = %+v", got)
+	}
+	want := strings.Replace(body, "\"に\r\nさん\"\r\n", "\"に\nさん\nよん\"\r\n", 1)
+	if got := readFile(t, path); got != want {
+		t.Errorf("書いた結果 = %q、%q を期待", got, want)
 	}
 }
 
@@ -432,16 +447,20 @@ func TestRowWithANonKeyIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestSaveCheckFailureFromARequest は、編集できる行に送った訳が、書く直前のファイル全体の
-// 確かめ（書く前の事後確認の後半）で外れるとき、1バイトも書かずに 422
-// （error.save_check_failed）を返し、その行にだけ理由を付けることを、要求から見る。
+// TestValueLookingLikeRecordFromARequest は、編集できる行に送った訳の行が、その行だけで
+// 読むとレコードに見える（飲み込みの疑いに当たる）とき、その行だけを書かずに、訳の何行目か
+// を添えた理由を返すことを、要求から見る。同じ要求に入ったほかの行は書く。
 //
-// 形は internal/edit の swallowOnWrite と同じである。speaker の値が改行で終わるレコード
-// （ID 2）に、カンマで始まる訳を書くと、続きの物理行を単独で読んだときヘッダーと同じ列の
-// 数に見え、飲み込みの疑いに当たる。差し替えたレコードだけを読み直す確かめは通る。同じ
-// 要求に入ったほかの行（ID 3）には理由を付けない。画面は ID 2 の送り直しを止め、ID 3 を
-// 送り直す。
-func TestSaveCheckFailureFromARequest(t *testing.T) {
+// ID 2 は swallowOnWrite（internal/edit）と同じ形で、speaker の値が改行で終わるので、訳の
+// 1行目が続きの物理行に入る。カンマで始まる訳を書くと、その物理行がヘッダーと同じ3列に
+// 見える。ID 3 は1物理行のレコードで、訳の改行の後ろの行がキーの形で始まる。
+//
+// PR3 では、この形は書く直前のファイル全体の確かめで外れ、要求全体を 422
+// （error.save_check_failed）で断っていた（理由は書く前の事後確認の一般の文）。訳に改行を
+// 入れられるようになって、この形が訳の2行目以降で起きうるので、差し替えたレコードを
+// ヘッダーと並べて先に確かめる（internal/edit の SetTranslation）。書く直前の確かめが
+// 外れたときの行ごとの結果は TestSaveCheckFailureNamesTheRow が見る。
+func TestValueLookingLikeRecordFromARequest(t *testing.T) {
 	root := newEditRoot(t)
 	path := filepath.Join(root, filepath.FromSlash("Translations/_discovered/ja.working.csv"))
 	body := "key,speaker,translation\r\n" +
@@ -456,27 +475,31 @@ func TestSaveCheckFailureFromARequest(t *testing.T) {
 	if len(lines.Lines) != 2 || !lines.Lines[0].Editable || lines.Lines[0].ID != 2 || lines.Lines[0].End != 3 {
 		t.Fatalf("前提が崩れている。ID 2 は2〜3行目の編集できる行のはず: %+v", lines.Lines)
 	}
+	wantErr := func(line, trLine string) string {
+		why := reason.New(reason.EditLineLooksLikeRecord, "", "line", trLine)
+		return s.cat.T(ja, "error.invalid_value", "line", line, "reason", s.reasonText(ja, why))
+	}
 	bad := rowEdit{ID: 2, Key: "aaaaaaaaaaaaaaaa", Translation: ",訳,"}
+	badLine := rowEdit{ID: 3, Key: "bbbbbbbbbbbbbbbb", Translation: "訳\nfedcba9876543210,x"}
 	good := rowEdit{ID: 3, Key: "bbbbbbbbbbbbbbbb", Translation: jaTyped}
-	why := reason.New(reason.EditRecheckFailed, "", "line", "2")
-	want := s.cat.T(ja, "error.not_editable", "line", "2", "reason", s.reasonText(ja, why))
 
-	for _, edits := range [][]rowEdit{{bad}, {bad, good}, {good, bad}} {
+	// 書ける行が1つも無ければ 422（error.no_row_saved）で、1バイトも書かない。
+	for _, edits := range [][]rowEdit{{bad}, {badLine}, {bad, badLine}} {
 		rec := save(t, s, "ja", lines.Version, edits...)
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
 		}
 		got := decode[errorResponse](t, rec.Body.Bytes())
-		if got.Message != s.cat.T(ja, "error.save_check_failed") || len(got.Results) != len(edits) {
+		if got.Message != s.cat.T(ja, "error.no_row_saved") || len(got.Results) != len(edits) {
 			t.Fatalf("応答 = %+v", got)
 		}
 		for _, r := range got.Results {
-			wantErr := ""
-			if r.ID == 2 {
-				wantErr = want
+			want := wantErr("2", "1")
+			if r.ID == 3 {
+				want = wantErr("4", "2")
 			}
-			if r.Saved || r.Error != wantErr {
-				t.Errorf("ID %d の結果 = %+v、理由 %q を期待", r.ID, r, wantErr)
+			if r.Saved || r.Error != want {
+				t.Errorf("ID %d の結果 = %+v、理由 %q を期待", r.ID, r, want)
 			}
 		}
 		if readFile(t, path) != body {
@@ -484,12 +507,18 @@ func TestSaveCheckFailureFromARequest(t *testing.T) {
 		}
 	}
 
-	rec := save(t, s, "ja", lines.Version, good)
+	// ほかの行と一緒に送ると、ほかの行は書き、断った行にだけ理由を付ける。
+	rec := save(t, s, "ja", lines.Version, bad, good)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ID 3 だけを送り直すと状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
+		t.Fatalf("状態コードが %d、200 を期待\n%s", rec.Code, rec.Body.String())
+	}
+	got := decode[rowsResponse](t, rec.Body.Bytes())
+	if len(got.Results) != 2 || got.Results[0].Saved || got.Results[0].Error != wantErr("2", "1") ||
+		!got.Results[1].Saved || got.Results[1].Error != "" {
+		t.Errorf("結果 = %+v", got.Results)
 	}
 	if after := strings.Replace(body, "Kobold,ok", "Kobold,"+jaTyped, 1); readFile(t, path) != after {
-		t.Errorf("ID 3 を送り直したあとの中身 = %q", readFile(t, path))
+		t.Errorf("ID 3 を書いたあとの中身 = %q", readFile(t, path))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -17,7 +18,7 @@ import (
 )
 
 // publishUsage は publish の説明。
-const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>:<key>] [--dry-run]
+const publishUsage = `使い方: dwloc publish [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--path <ファイル>] [--accept-multiline <ロケール>:<key>] [--dry-run] [--check]
 
 <ルート>/Translations 配下の各ロケールについて、公開用の strings.csv を作り直します。
 tools/hash-strings.ps1 と同じ出力です。
@@ -93,10 +94,17 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
   --locale <ロケール>
         対象のロケール。複数回指定するか、カンマ区切りで並べられます。
         省略すると Translations 配下のすべてが対象になります。
+        公開ファイルも作業コピーも無いロケールは、書き出す元が無いので
+        指定できません（終了コード 2）。
   --path <ファイル>
         Translations の走査をやめて、指定したファイルだけを変換します。
         入力と出力が同じファイルになります。複数回指定できます。
         --locale と同時には使えません。
+        パスはカレントディレクトリからの相対です（--root からではありません。
+        tools/hash-strings.ps1 の -Path と同じです）。
+        渡すのは公開ファイル（Translations/<ロケール>/strings.csv）です。
+        ヘッダーに source_en 列のあるファイル（作業コピー）を渡すと、原文の列と
+        訳の無い行が消えた形に書き換わるので、書かずに止まります（終了コード 2）。
   --accept-multiline <ロケール>:<key>
         行をまたぐ値の続きの行がそれだけでレコードに見える形を、確かめたうえで
         正しい複数行の値として通します。指定はレコード単位です。<key> はその
@@ -123,6 +131,12 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
         通せる行に当たらない指定は誤りにします。
   --dry-run
         何をするかを表示するだけで、ファイルは書きません。
+  --check
+        書き換えが要るかだけを確かめます。ファイルは書きません。報告は
+        --dry-run と同じで、書き換えが要るロケール（出力がいまの公開ファイルと
+        1バイトでも違うか、公開ファイルがまだ無い）が1つでもあれば終了コード 1、
+        無ければ 0 を返します。CI や、publish し忘れていないかの確かめに使います。
+        上の確認は同じにかけ、止まるときはその理由で 1 を返します。
 
 すべての対象を先に組み立ててから書き出します。組み立てで1件でも失敗すれば
 何も書きません。書き出しの途中で失敗したとき（書き込みの権限が無い、ディスクが
@@ -135,10 +149,11 @@ set_flags・end_flags 列）に改行があるときは、同じように止ま�
   0   成功
   1   書くと訳が失われる、読み違える形のファイルがある、ゲームに入っている
       翻訳が古い、または組み立てたあとに入力か書き出し先が変わったので止めた
-      （どれも1バイトも書いていません）
+      （どれも1バイトも書いていません）。
+      --check では、書き換えが要るロケールがあるときも 1 です
   2   実行時のエラー（Translations が読めない、指定したロケールが無い、
-      --accept-multiline の指定が通せる行に当たらない、書き込みの錠を取れない、
-      など）
+      --accept-multiline の指定が通せる行に当たらない、--path に作業コピーを
+      渡した、書き込みの錠を取れない、など）
 `
 
 // publishLossText は、書くと訳が失われると分かったときの見出しです。
@@ -151,6 +166,25 @@ dwloc:       いまの公開ファイルに入っている訳が、新しい出�
 dwloc:       入力にした作業コピーが途中までになっていないか、壊れていないかを確かめてください。
 dwloc:       ゲーム内で F1 → Translation → Export working copy を押すと、作業コピーを作り直せます。
 `
+
+// publishPathWorkingText は、--path に作業コピー（ヘッダーに source_en 列のある
+// ファイル）を渡されたときの案内です。%s には渡されたファイルが入ります。
+//
+// 作業コピーから公開ファイルを作るのは、--path を付けない publish の仕事です。
+// そちらは作業コピーを入力にして、Translations/<ロケール>/strings.csv を書きます。
+const publishPathWorkingText = `dwloc: %s は作業コピーです（ヘッダーに source_en 列があります）。1バイトも書きませんでした。
+dwloc:       --path には公開ファイル（Translations/<ロケール>/strings.csv）を渡してください。
+dwloc:       --path は入力と書き出し先が同じファイルなので、作業コピーを渡すと、原文の列と訳の無い行が消えた公開の形に書き換わります。
+dwloc:       作業コピーから公開ファイルを作るときは、--path を付けずに dwloc publish を実行します（--locale で絞れます）。
+`
+
+// publishPathRelativeText は、--path に渡した相対パスのファイルが見つからなかった
+// ときに添える1行です。
+//
+// --path は、上流の tools/hash-strings.ps1 の -Path と同じくカレントディレクトリから
+// 解きます（改善の決定 11）。--root から解くと思って打った人に、どこから探したかを
+// 伝えます。
+const publishPathRelativeText = "dwloc:       --path はカレントディレクトリからの相対です（--root からではありません）。"
 
 // publishLossListMax は、失われる行を何件まで並べるかです。
 //
@@ -347,7 +381,7 @@ func parseLocaleAccept(targets []publish.Target, v string) (acceptSpec, error) {
 	if !ok || locale == "" || k == "" {
 		return acceptSpec{}, fmt.Errorf("--accept-multiline はレコード単位で指定してください: %s（%s）", v, acceptFormText)
 	}
-	found, err := matchLocales(targets, []string{locale}, "--accept-multiline")
+	found, err := matchLocales(targets, nil, []string{locale}, "--accept-multiline")
 	if err != nil {
 		return acceptSpec{}, err
 	}
@@ -415,6 +449,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	fs.Var(&accepts, "accept-multiline", "確かめたうえで複数行の値として通すレコード（<ロケール>:<key>。--path では <ファイル>:<key>）")
 	noGame := fs.Bool("no-game", false, "ゲームのフォルダーを探しも読みもしない")
 	dryRun := fs.Bool("dry-run", false, "書き込まずに内容だけ表示する")
+	check := fs.Bool("check", false, "書き換えが要るかを終了コードで返す（書かない）")
 	if code, ok := parseFlags(fs, args, publishUsage, stdout, stderr); !ok {
 		return code
 	}
@@ -459,15 +494,8 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	// 再生順は全ロケールで共通なので1回だけ読む。
 	data, err := publish.LoadOrder(*root)
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: 再生順のデータを読めません: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "再生順のデータを読めません: %w", err))
 		return exitError
-	}
-	if len(data.Entries) == 0 {
-		// 再生順が空でも生成はできるが、見出しが全て消えて全行が UI 見出しの下へ
-		// 回るため、差分が全面的になる。黙って進めると事故になるので必ず伝える。
-		fmt.Fprintf(stderr,
-			"dwloc: 警告: %s に再生順の行がありません。見出しは出ず、すべての行が UI の下に並びます。\n",
-			displayPath(*root, data.Source))
 	}
 
 	var targets []publish.Target
@@ -480,10 +508,10 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	} else {
 		found, err := publish.DiscoverTargetsWithGame(*root, gamePath)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: Translations を読めません: %v\n", err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めません: %w", publish.TranslationsDir, err))
 			return exitError
 		}
-		found, err = selectLocales(found, locales)
+		found, err = selectLocales(found, emptyLocalesFor(*root, found, locales), locales)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %v\n", err)
 			return exitError
@@ -513,11 +541,42 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	for i, t := range targets {
 		f, err := publish.ReadFiles(t)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
-				displayPath(*root, shapeErrorPath(err, t.Output)), shapeErrorCause(err))
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めないので、訳が失われないことを確かめられません: %w",
+				displayPath(*root, shapeErrorPath(err, t.Output)), err))
+			if len(paths) > 0 && errors.Is(err, iofs.ErrNotExist) && !filepath.IsAbs(t.Input) {
+				// --root と一緒に相対パスを打った人は、--root から解くと思っている
+				// ことがある。見つからないとだけ言うと、どこを探したのかが分からない。
+				fmt.Fprintln(stderr, publishPathRelativeText)
+			}
 			return exitError
 		}
 		files[i] = f
+	}
+
+	// --path に作業コピーを渡されたら、書かずに止めます（改善の決定 11）。--path は
+	// 入力と書き出し先が同じファイルなので、そのまま進むと作業コピーを公開の形に
+	// 書き換え、source_en 列と訳の無い行が消えます。形の確かめ（reportShape）より
+	// 先に見るのは、渡すファイルの種類を取り違えているので、形の直し方を並べても
+	// 当たらないからです。
+	if len(paths) > 0 {
+		for i, t := range targets {
+			if publish.HasSourceColumn(files[i].Input) {
+				fmt.Fprintf(stderr, publishPathWorkingText, displayPath(*root, t.Input))
+				return exitError
+			}
+		}
+	}
+
+	if len(data.Entries) == 0 {
+		// 再生順が空でも生成はできるが、見出しが全て消えて全行が UI 見出しの下へ
+		// 回るため、差分が全面的になる。黙って進めると事故になるので必ず伝える。
+		//
+		// 対象を決めて読んだあとで出します。Translations を読めないとき（--root の
+		// 打ち間違いなど）は再生順も無いので、先に出すと、止まった本当の理由の前に
+		// 的外れな警告が並びます。
+		fmt.Fprintf(stderr,
+			"dwloc: 警告: %s に再生順の行がありません。見出しは出ず、すべての行が UI の下に並びます。\n",
+			displayPath(*root, data.Source))
 	}
 
 	// 入力・いまの公開ファイル・ゲーム側の公開ファイルが、読むと訳や原文を取り違える
@@ -545,7 +604,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	for i, t := range targets {
 		out, st, err := publish.Build(data, files[i].Input, files[i].Output)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を変換できません: %v\n", displayPath(*root, t.Input), err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を変換できません: %w", displayPath(*root, t.Input), err))
 			return exitError
 		}
 		built[i], stats[i] = out, st
@@ -574,7 +633,15 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 		return code
 	}
 
-	if *dryRun {
+	if *dryRun || *check {
+		// --check は --dry-run と同じ報告を出し、書き換えの要否を終了コードで返します
+		// （改善の調査の cli-15）。--dry-run は変更があっても 0 なので、CI やリリースの
+		// 確かめが「publish し忘れていないか」を見るには、出力の文言を読むしか
+		// ありませんでした。
+		mark := "[dry-run]"
+		if *check {
+			mark = "[check]"
+		}
 		changed := 0
 		for i, t := range targets {
 			note := "変更なし"
@@ -582,11 +649,20 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 				note = fmt.Sprintf("変更あり: %d バイト", len(built[i]))
 				changed++
 			}
-			fmt.Fprintf(stdout, "[dry-run] %s [%s]\n",
+			fmt.Fprintf(stdout, "%s %s [%s]\n", mark,
 				stats[i].LogLine(displayPath(*root, t.Output), displayPath(*root, t.Input)), note)
 		}
-		fmt.Fprintf(stdout, "[dry-run] %d 件中 %d 件が変わります。ファイルは書いていません。\n",
-			len(targets), changed)
+		switch {
+		case !*check:
+			fmt.Fprintf(stdout, "[dry-run] %d 件中 %d 件が変わります。ファイルは書いていません。\n",
+				len(targets), changed)
+		case changed > 0:
+			fmt.Fprintf(stdout, "[check] %d 件中 %d 件が変わります。ファイルは書いていません。dwloc publish で書き換えてください。\n",
+				len(targets), changed)
+			return exitProblems
+		default:
+			fmt.Fprintf(stdout, "[check] %d 件中 0 件が変わります。書き換えは要りません。\n", len(targets))
+		}
 		return exitOK
 	}
 
@@ -604,7 +680,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	beforePublishWrite()
 	unlock, err := lockTargets(targets)
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: 入力と書き出し先の錠を取れないので、1バイトも書きませんでした: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "入力と書き出し先の錠を取れないので、1バイトも書きませんでした: %w", err))
 		return exitError
 	}
 	defer unlock()
@@ -615,7 +691,7 @@ func runPublish(args []string, defaultRoot, defaultGame string, stdout, stderr i
 	for i, t := range targets {
 		out := displayPath(*root, t.Output)
 		if err := publish.WriteBytes(t.Output, built[i]); err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を書き出せません: %v\n", out, err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を書き出せません: %w", out, err))
 			return exitError
 		}
 		// 元実装の Write-Host と同じ1行。数値の並びも同じなので、
@@ -929,12 +1005,8 @@ func reportShape(root string, targets []publish.Target, files []publish.Files, a
 func reportOrderShape(root string, stderr io.Writer) int {
 	hazards, err := publish.CheckOrderShape(root)
 	if err != nil {
-		path := root
-		var shapeErr *publish.ShapeError
-		if errors.As(err, &shapeErr) {
-			path, err = shapeErr.Path, shapeErr.Err
-		}
-		fmt.Fprintf(stderr, "dwloc: 再生順のデータを読めません: %s: %v\n", displayPath(root, path), err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "再生順のデータを読めません: %s: %w",
+			displayPath(root, shapeErrorPath(err, root)), err))
 		return exitError
 	}
 	if len(hazards) == 0 {
@@ -1023,9 +1095,9 @@ func reportBaseDrift(root string, targets []publish.Target, files []publish.File
 		}
 		res, err := publish.CheckBaseBytes(t.Locale, files[i].Output, files[i].GameBase)
 		if err != nil {
-			fmt.Fprintf(stderr,
-				"dwloc: %s を読めないので、ゲーム側とそろっているか確かめられません: %v\n",
-				t.GameBase, err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root,
+				"%s を読めないので、ゲーム側とそろっているか確かめられません: %w",
+				displayPath(root, t.GameBase), err))
 			return exitError
 		}
 		if res.Count > 0 {
@@ -1071,7 +1143,7 @@ func reportSourceLineEnds(root string, targets []publish.Target, files []publish
 	for i, t := range targets {
 		hints, err := publish.SourceLineEndHintsIn(files[i].Input)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を読めません: %v\n", displayPath(root, t.Input), err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "%s を読めません: %w", displayPath(root, t.Input), err))
 			return exitError
 		}
 		if len(hints) == 0 {
@@ -1117,9 +1189,9 @@ func reportLosses(root string, targets []publish.Target, files []publish.Files, 
 		if err != nil {
 			// いまの公開ファイルを解釈できない。失われないことを確かめられていないので、
 			// 書かずに終わります。
-			fmt.Fprintf(stderr,
-				"dwloc: %s を読めないので、訳が失われないことを確かめられません: %v\n",
-				displayPath(root, t.Output), err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root,
+				"%s を読めないので、訳が失われないことを確かめられません: %w",
+				displayPath(root, t.Output), err))
 			return exitError
 		}
 		found[i] = losses
@@ -1178,19 +1250,46 @@ func localePrefix(locale string) string {
 // pt-BR や zh-Hant のように大文字を含むロケール名があり、Windows では
 // ディレクトリ名の大小が保たれないまま打たれることがあるためです。
 // 既に存在するディレクトリの中から選ぶだけなので、緩めても新しい行き先は増えません。
-func selectLocales(targets []publish.Target, want []string) ([]publish.Target, error) {
+//
+// empty は、公開ファイルも作業コピーも無いロケール（publish.EmptyLocales）です。
+// 対象にはできませんが、ディレクトリは実在するので、当たったら「ありません」ではなく、
+// 何が無いかと作業コピーの作り方を伝えます（改善の調査の cli-7）。
+func selectLocales(targets []publish.Target, empty, want []string) ([]publish.Target, error) {
 	if len(want) == 0 {
 		return targets, nil
 	}
-	return matchLocales(targets, want, "--locale")
+	return matchLocales(targets, empty, want, "--locale")
+}
+
+// emptyLocaleText は、公開ファイルも作業コピーも無いロケールを --locale で指されたときの
+// 文です。%s にはロケール名が入ります。
+const emptyLocaleText = "%s には公開ファイルも作業コピーもありません" +
+	"（ゲーム内でその言語を選び、F1 → Translation → Export working copy を押すと作業コピーができます）"
+
+// emptyLocalesFor は、--locale の照合に使う、公開ファイルも作業コピーも無いロケールを
+// 返します。want が空なら照合しないので、読みません。
+//
+// 読めなければ nil を返し、当たらない名前は「指定したロケールがありません」の文に
+// 落とします。直前に同じディレクトリを読めているので、ふつうは起きません。
+func emptyLocalesFor(root string, targets []publish.Target, want []string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	empty, err := publish.EmptyLocales(root, targets)
+	if err != nil {
+		return nil
+	}
+	return empty
 }
 
 // matchLocales は want に並べたロケール名に当たる対象を返します。照合の仕方は
 // [selectLocales] に書いたとおりで、当たらない名前があれば、flag（指定の名前）を
 // 添えた誤りを返します。--locale と --accept-multiline が同じ照合を使うためです。
-func matchLocales(targets []publish.Target, want []string, flag string) ([]publish.Target, error) {
+// empty（公開ファイルも作業コピーも無いロケール）に当たった名前は、[emptyLocaleText] の
+// 文で断ります。
+func matchLocales(targets []publish.Target, empty, want []string, flag string) ([]publish.Target, error) {
 	keep := make([]bool, len(targets))
-	var missing []string
+	var missing, emptyHit []string
 	for _, name := range want {
 		found := false
 		for i, t := range targets {
@@ -1207,17 +1306,31 @@ func matchLocales(targets []publish.Target, want []string, flag string) ([]publi
 				}
 			}
 		}
-		if !found {
-			missing = append(missing, name)
+		if found {
+			continue
 		}
+		if hit, ok := matchName(empty, name); ok {
+			if !slices.Contains(emptyHit, hit) {
+				emptyHit = append(emptyHit, hit)
+			}
+			continue
+		}
+		missing = append(missing, name)
 	}
+	var msgs []string
 	if len(missing) > 0 {
 		available := "対象にできるロケールがありません"
 		if len(targets) > 0 {
 			available = "対象にできるのは " + strings.Join(localeNames(targets), ", ")
 		}
-		return nil, fmt.Errorf("%s に指定したロケールがありません: %s（%s）",
-			flag, strings.Join(missing, ", "), available)
+		msgs = append(msgs, fmt.Sprintf("%s に指定したロケールがありません: %s（%s）",
+			flag, strings.Join(missing, ", "), available))
+	}
+	if len(emptyHit) > 0 {
+		msgs = append(msgs, fmt.Sprintf(emptyLocaleText, strings.Join(emptyHit, ", ")))
+	}
+	if len(msgs) > 0 {
+		return nil, errors.New(strings.Join(msgs, "\ndwloc: "))
 	}
 
 	out := make([]publish.Target, 0, len(targets))
@@ -1227,6 +1340,20 @@ func matchLocales(targets []publish.Target, want []string, flag string) ([]publi
 		}
 	}
 	return out, nil
+}
+
+// matchName は names の中から name に当たるものを返します。照合は [selectLocales] と
+// 同じで、完全一致を先に見て、外れたら大文字小文字を無視します。
+func matchName(names []string, name string) (string, bool) {
+	if slices.Contains(names, name) {
+		return name, true
+	}
+	for _, n := range names {
+		if strings.EqualFold(n, name) {
+			return n, true
+		}
+	}
+	return "", false
 }
 
 // localeNames は targets のロケール名を並び順のまま取り出します。

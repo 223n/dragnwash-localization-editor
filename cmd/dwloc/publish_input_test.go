@@ -347,7 +347,12 @@ func TestUsageSaysPublishStopsWhenFilesChange(t *testing.T) {
 // 1度だけ掛けて書けることを見る。同じ錠を同じプロセスの中で2度取ろうとすると、
 // 自分を待って上限まで止まり、書けない。
 func TestPublishLocksTheSameInputOnce(t *testing.T) {
-	root := publishTree(t, "ja")
+	// --path に渡すのは公開ファイルの形（source_en 列の無いもの）。作業コピーの形は
+	// 書かずに止まる（TestPublishPathRefusesAWorkingCopy）。
+	root := makeTree(t, map[string]string{
+		"data/script_order.csv":       scriptOrderCSV,
+		"Translations/ja/strings.csv": publishedHello,
+	})
 	path := filepath.Join(root, "Translations", "ja", "strings.csv")
 	start := time.Now()
 	code, stdout, stderr := runCLI("publish", "--root", root, "--path", path, "--path", filepath.Join(filepath.Dir(path), ".", "strings.csv"))

@@ -16,7 +16,7 @@
     "os": "linux",
     "culture": ""
   },
-  "cases_sha256": "720bc9b2b02a93c50f0ff2eb7476f8b8609b1360a0e2a11a5608284a44f32b11",
+  "cases_sha256": "b14af73f9e85a30a85221b6122d4cf3ab3ac7b39d261ecc9522e60a7cdcccad1",
   "cases": [
     {
       "name": "plain-working-crlf",
@@ -2151,6 +2151,80 @@
           "other": 1
         },
         "output": "key,section,node,order,speaker,translation\n# Language: Testish\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,いち\n\n# ===== UI and other text (not part of the dialogue script) =====\n0123456789abcdef,UI,,,UI,a\n"
+      }
+    },
+    {
+      "name": "ml-edit-working-crlf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "source_en", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "one", "いち\n"]
+          },
+          {
+            "line": 4,
+            "end": 5,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "two", "\nに"]
+          },
+          {
+            "line": 6,
+            "end": 8,
+            "values": ["8b5b9db0c13db242", "L01 Ember", "Ember_1_outro", "3", "Ember", "three", "「さ\"ん」、\n  よん, ご  \n\"ろく\""]
+          },
+          {
+            "line": 9,
+            "end": 12,
+            "values": ["", "UI", "", "", "UI", "Four.", "し\n# ご\n\nはち"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 4,
+          "already_hashed": 0,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 3,
+          "other": 1
+        },
+        "output": "key,section,node,order,speaker,translation\n# Language: Testish (fictional)\n# provisional: a note kept under the header\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\n\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,\"\nに\"\n# --- outro: Ember_1_outro | if $met_moss ---\n8b5b9db0c13db242,L01 Ember,Ember_1_outro,3,Ember,\"「さ\"\"ん」、\n  よん, ご  \n\"\"ろく\"\"\"\n\n# ===== UI and other text (not part of the dialogue script) =====\n2f7820a5325de015,UI,,,UI,\"し\n# ご\n\nはち\"\n"
+      }
+    },
+    {
+      "name": "ml-edit-published-lf",
+      "read": {
+        "error": null,
+        "columns": ["key", "section", "node", "order", "speaker", "translation"],
+        "records": [
+          {
+            "line": 2,
+            "end": 3,
+            "values": ["7692c3ad3540bb80", "L01 Ember", "Ember_1_intro", "1", "Ember", "いち\nに"]
+          },
+          {
+            "line": 4,
+            "end": 7,
+            "values": ["3fc4ccfe745870e2", "L01 Ember", "Ember_1_intro", "2", "Moss", "\n\nに,さん\n"]
+          }
+        ]
+      },
+      "run": {
+        "error": null,
+        "summary": {
+          "converted": 0,
+          "already_hashed": 2,
+          "per_line": 0,
+          "malformed_dropped": 0,
+          "kept_from_published": 0,
+          "in_play_order": 2,
+          "other": 0
+        },
+        "output": "key,section,node,order,speaker,translation\n\n# ===== Level 1: Ember (Rainy) =====\n# --- intro: Ember_1_intro ---\n7692c3ad3540bb80,L01 Ember,Ember_1_intro,1,Ember,\"いち\nに\"\n3fc4ccfe745870e2,L01 Ember,Ember_1_intro,2,Moss,\"\n\nに,さん\n\"\n"
       }
     }
   ]

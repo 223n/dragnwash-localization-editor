@@ -220,3 +220,24 @@ func TestWriteBytesKeepsThePermission(t *testing.T) {
 		t.Errorf("新しいファイルの権限が %v。0644 を期待", got)
 	}
 }
+
+// TestLinkCount は、LinkCount がファイルの名前の数を返し、無いファイルと
+// フォルダーでは 1 を返すことを見る。diff --output はこれが 2 以上なら書かない。
+func TestLinkCount(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain.csv")
+	writeFile(t, plain, "中身\n")
+	if got := LinkCount(plain); got != 1 {
+		t.Errorf("ハードリンクの無いファイル: LinkCount = %d, want 1", got)
+	}
+	if got := LinkCount(filepath.Join(dir, "missing.csv")); got != 1 {
+		t.Errorf("無いファイル: LinkCount = %d, want 1", got)
+	}
+	if got := LinkCount(dir); got != 1 {
+		t.Errorf("フォルダー: LinkCount = %d, want 1", got)
+	}
+	linkOrSkip(t, plain, filepath.Join(dir, "other.csv"))
+	if got := LinkCount(plain); got != 2 {
+		t.Errorf("ハードリンクのあるファイル: LinkCount = %d, want 2", got)
+	}
+}

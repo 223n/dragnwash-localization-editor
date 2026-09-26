@@ -70,18 +70,31 @@ func TestRowsAreAddressedByID(t *testing.T) {
 // TestRowNumberShowsTheRange は、行番号の欄に最初の物理行を出し、行をまたぐレコード
 // だけ最後の物理行を添えることを見る（決まったことのそのほか 3）。区切りの字も目録から
 // 引く。画面に「〜」を直に書くと、英語の画面にも残る。
+//
+// 欄の中身は fillNum が入れる。組むとき（rowNode）と、訳の改行で行番号がずれた保存の
+// あと（applyNumbers。応答の numbers）の両方から呼ぶ。片方にだけ組み方を書くと、保存の
+// あとだけ範囲の出し方が変わる。
 func TestRowNumberShowsTheRange(t *testing.T) {
 	js := uiSource(t, "ui/app.js")
 	css := uiSource(t, "ui/app.css")
 
-	row := functionBody(t, js, "rowNode")
+	fill := functionBody(t, js, "fillNum")
 	for _, want := range []string{
-		`num.appendChild(span("num-start", line.n));`,
-		"if (line.end) {",
-		`t("ui.line_end", { line: line.end })`,
+		`num.appendChild(span("num-start", n));`,
+		"if (end) {",
+		`t("ui.line_end", { line: end })`,
 	} {
-		if !strings.Contains(row, want) {
-			t.Errorf("rowNode に %q が無い", want)
+		if !strings.Contains(fill, want) {
+			t.Errorf("fillNum に %q が無い", want)
+		}
+	}
+	if !strings.Contains(functionBody(t, js, "rowNode"), "fillNum(num, line.n, line.end);") {
+		t.Error("rowNode が行番号の欄を fillNum で組んでいない")
+	}
+	numbers := functionBody(t, js, "applyNumbers")
+	for _, want := range []string{"fillNum(entry.num, x.n, x.end);", "entry.n = x.n;", `"ui.edit_label_line"`} {
+		if !strings.Contains(numbers, want) {
+			t.Errorf("applyNumbers に %q が無い", want)
 		}
 	}
 	if !strings.Contains(cssRule(t, css, ".num-start,\n.num-end"), "display: block;") {

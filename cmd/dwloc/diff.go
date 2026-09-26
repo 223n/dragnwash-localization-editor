@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/223n/dragnwash-localization-editor/internal/diff"
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
@@ -13,7 +18,7 @@ import (
 )
 
 // diffUsage は diff の説明。
-const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--raw-csv] [--strict]
+const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <フォルダー>] [--no-game] [--locale <ロケール>] [--no-working] [--all] [--limit <件数>] [--format text|csv] [--raw-csv] [--output <ファイル>] [--strict]
 
 <ルート>/Translations の公開ファイルと data/script_order.csv を突き合わせ、
 翻訳者が次にやることと、確かめたほうがよい行を並べます。
@@ -69,9 +74,28 @@ const diffUsage = `使い方: dwloc diff [--root <ディレクトリ>] [--game <
         --format csv の値に ' を付けず、そのまま書きます。機械と
         突き合わせるときに使います。表計算で開くと式として読まれる
         ことがあります。--format csv と一緒に使います。
+  --output <ファイル>
+        結果を標準出力の代わりにファイルへ書きます。バイト列をそのまま
+        書くので、リダイレクト（>）と違って文字が化けません。
+        Windows PowerShell 5.1 の > は日本語を化けさせ、化けた字が改行を
+        飲み込んで csv の行がつながります。ファイルに残すときはこちらを
+        使ってください。csv には BOM を付け（表計算ソフトが UTF-8 と
+        見分けられるように）、text には付けません。パスはカレント
+        ディレクトリからの相対です。書き出し先のフォルダーは作りません。
+        翻訳リポジトリの Translations と data、ゲームの Translations の
+        中には書けません（diff・publish・edit が読むファイルを上書き
+        しないためです）。場所に関わらず、dwloc が読むファイルの名前
+        （strings.csv、<ロケール>.working.csv、layout_risks.csv、
+        script_order.csv、level_flow.csv）でも書けません。--no-game の
+        ときや、ゲームが見つからないときも、ゲームの作業コピーを
+        上書きしないためです。ほかの名前（ハードリンク）があるファイル
+        にも書きません。書くと、ほかの名前の中身も書き換わるためです。
   --strict
         要作業（未翻訳・他のロケールにあって無い行）があるときも
         終了コードを1にします。CI 向けです。
+        訳が1件もないロケール（ディレクトリだけがあり、公開ファイルも
+        作業コピーも無いロケール）も要作業に数えます。--locale で報告から
+        外したロケールは数えません。
 
 ゲームが更新されて英文が変わると、その行のキーも変わります。旧キーの訳を
 どの新キーへ移せばよいかの見当を「引き継ぎ候補」として出します。訳は
@@ -146,6 +170,7 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	format := fs.String("format", diffFormatText, "出力の形式（text または csv）")
 	rawCSV := fs.Bool("raw-csv", false, "csv の値に ' を付けずにそのまま書く")
 	strict := fs.Bool("strict", false, "要作業があるときも終了コードを1にする")
+	output := fs.String("output", "", "結果を標準出力の代わりに書くファイル")
 	if code, ok := parseFlags(fs, args, diffUsage, stdout, stderr); !ok {
 		return code
 	}
@@ -173,22 +198,37 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	if !ok {
 		return exitError
 	}
+	if *output != "" {
+		// 読む前に確かめます。書き出し先が誤っていると分かっているのに、読んで
+		// 報告を組み立ててから止めると、止まった理由の前に警告が並びます。
+		if code := checkDiffOutput(*root, gamePath, *output, stderr); code != exitOK {
+			return code
+		}
+	}
 
 	repo, err := diff.LoadWith(*root, diff.Options{Working: !*noWorking, Game: gamePath})
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: %s\n", diffErrorText(*root, err))
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorText(*root, err))
 		return exitError
 	}
-	if len(repo.EmptyLocales) > 0 {
+	// 報告だけを絞ります。比較の母集合は Compare が常に全ロケールから作ります。
+	// 当たらない名前は Compare が黙って無視するので、下の checkDiffLocales が断ります。
+	// 先に組み立てるのは、報告するロケールのうち訳が1件も無いもの（ReportedEmpty）を、
+	// 下の警告にも使うためです。
+	report := diff.Compare(repo, locales)
+
+	if len(report.ReportedEmpty) > 0 {
 		// 公開ファイルも作業コピーも無いロケールです。publish は対象にしないので、
-		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。
+		// 黙っていると「訳が1件も無い」という最大の要作業が消えます。--strict では
+		// 要作業に数えます（diffExitCode）。--locale で報告から外したロケールは、
+		// --strict が数えないので、ここでも名指ししません。
 		//
 		// 再生順の警告より先に出します。csv 形式では、再生順の警告のあとに
 		// 判定を保留したカテゴリの行と、字下げした締めの1行が続きます
 		// （warnHeldCategories）。あいだにこの行が挟まると、締めがこの行の
 		// 続きに読めてしまいます。
 		fmt.Fprintf(stderr, "dwloc: 訳が1件もないロケールがあります: %s\n",
-			strings.Join(repo.EmptyLocales, ", "))
+			strings.Join(report.ReportedEmpty, ", "))
 	}
 	if repo.LevelFlowUnclosed > 0 {
 		// 見出しの表の閉じない引用符は、diff の判定に使わないので終了コードを変えません
@@ -222,9 +262,6 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		return exitError
 	}
 
-	// 報告だけを絞ります。比較の母集合は Compare が常に全ロケールから作ります。
-	report := diff.Compare(repo, locales)
-
 	// 閉じない引用符で読めなかったファイルは、形式に関わらず標準エラーへ書きます。
 	// text 形式の本文もロケールごとに書きますが、--locale で絞ると、ほかのロケールの
 	// 公開ファイルが原因で止めたカテゴリの、原因のファイルが本文に出ません。
@@ -243,28 +280,264 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 
 	// 報告の本文は原文と訳を含むので、記録（logs/dwloc_<日付>.log）へは写しません。
 	// csv は1行も写さず、text は見出しと件数と理由の行だけを写します（record.go）。
+	//
+	// --output のときは、本文を標準出力の代わりにファイルへ書きます（改善の決定 8）。
+	// いったん全部を組み立ててから書くので、途中で失敗しても半端なファイルは
+	// 残りません（publish.WriteBytes は一時ファイルから置き換えます）。
+	keep := diffHeadingLine
 	if *format == diffFormatCSV {
-		body := newUnrecorded(stdout, nil)
-		defer body.Close()
+		keep = nil
+	}
+	var file bytes.Buffer
+	var body *unrecorded
+	if *output != "" {
+		if *format == diffFormatCSV {
+			// 表計算ソフトが UTF-8 と見分けられるよう、csv には BOM を付けます。
+			// 付けないと、Excel はダブルクリックで開いたときに Shift_JIS として
+			// 読むことがあります。text は付けません（ほかの道具で読むときに、
+			// 1行目の頭に見えない3バイトが残らないように）。
+			file.WriteString(utf8BOMText)
+		}
+		body = newUnrecordedTo(&file, stdout, keep)
+	} else {
+		body = newUnrecorded(stdout, keep)
+	}
+	// 記録に残す「本文を省いた」の1行は、--output のファイルを書けたかどうかが
+	// 決まってから書きます。書けなかったのに「--output のファイルに書きました」と
+	// 残すと、記録を添えた報告を読む人がファイルができたと読みます。
+	written := false
+	defer func() {
+		if *output != "" && !written {
+			body.Unwritten()
+		}
+		body.Close()
+	}()
+	var werr error
+	if *format == diffFormatCSV {
 		write := report.WriteCSV
 		if *rawCSV {
 			write = report.WriteCSVRaw
 		}
-		if err := write(body); err != nil {
-			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
-			return exitError
-		}
+		werr = write(body)
 	} else {
-		body := newUnrecorded(stdout, diffHeadingLine)
-		defer body.Close()
-		opt := diff.TextOptions{Root: *root, All: *all, Limit: *limit}
-		if err := report.WriteText(body, opt); err != nil {
-			fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", err)
+		werr = report.WriteText(body, diff.TextOptions{Root: *root, All: *all, Limit: *limit})
+	}
+	if werr != nil {
+		fmt.Fprintf(stderr, "dwloc: 結果を書き出せません: %v\n", werr)
+		return exitError
+	}
+	if *output != "" {
+		if err := publish.WriteBytes(*output, file.Bytes()); err != nil {
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "結果を %s に書き出せません: %w", filepath.ToSlash(*output), err))
+			if heldOpen(runtime.GOOS, *output, err) {
+				fmt.Fprintln(stderr, outputHeldOpenText)
+			}
 			return exitError
 		}
+		written = true
+		fmt.Fprintf(stderr, "dwloc: 結果を %s に書きました。\n", filepath.ToSlash(*output))
 	}
 
 	return diffExitCode(report, *strict)
+}
+
+// utf8BOMText は UTF-8 の BOM です。diff --output が csv の頭に付けます。
+const utf8BOMText = "\xef\xbb\xbf"
+
+// outputHeldOpenText は、--output の先をほかのプログラムが開いているために書けなかった
+// かもしれないときに、誤りの文の次に添える1行です。
+const outputHeldOpenText = "dwloc:       ほかのプログラム（表計算ソフトなど）でこのファイルを開いていれば、閉じてからもう一度実行してください。"
+
+// Windows の誤りの番号のうち、ほかのプロセスがファイルを開いているときに返るもの。
+// syscall は Windows でもこの2つの名前を持たないので、番号で置きます。
+const (
+	errorSharingViolation syscall.Errno = 32 // ERROR_SHARING_VIOLATION
+	errorLockViolation    syscall.Errno = 33 // ERROR_LOCK_VIOLATION
+)
+
+// heldOpen は、diff --output の書き出しの誤り err が、ほかのプログラムがファイルを
+// 開いているために起きたのかもしれないかを返します。goos は runtime.GOOS です
+// （試験でほかの OS の扱いを確かめられるように受けます）。
+//
+// Windows では、ほかのプロセスが削除の共有（FILE_SHARE_DELETE）を許さずに開いている
+// ファイルは、rename で置き換えられず、ERROR_ACCESS_DENIED が返ります。Excel は
+// CSV をそう開きます。--output は Excel で開く前提で BOM を付けるので、開いたまま
+// 回し直す人が出ます。理由の文は「権限がありません」になり、権限の問題に見えるので、
+// 閉じればよいことを添えます。開き方によっては共有違反か錠の違反にもなります。
+//
+// 添えるのは、書き出し先に普通のファイルがあるときだけです。無いときやフォルダーの
+// ときの「権限がありません」は、開いていることとは関係がありません。Linux と macOS は、
+// 開いているファイルも rename で置き換えられるので添えません。
+func heldOpen(goos, path string, err error) bool {
+	if goos != "windows" {
+		return false
+	}
+	if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && (errno == errorSharingViolation || errno == errorLockViolation) {
+		return true
+	}
+	return errors.Is(err, fs.ErrPermission)
+}
+
+// checkDiffOutput は、diff --output の書き出し先を確かめます。書いてよければ exitOK です。
+//
+// 翻訳リポジトリの Translations と data、ゲームの Translations の中には書きません。
+// そこは diff・publish・edit が読む場所で、公開ファイルや作業コピーを報告で
+// 上書きすると訳を失います。まだ無い名前でも、書くと次の実行から公開ファイルや
+// 作業コピーとして読まれます（Translations/<新しい名前>/strings.csv なら新しい
+// ロケールになります）。フォルダーの照合はファイルの同一性（os.SameFile）で見るので、
+// 大文字小文字の違い、リンク、8.3 形式の短い名前で書いても当たります。
+//
+// 場所に関わらず、dwloc が読むファイルの名前（[readByDwloc]）でも書きません。
+// --no-game のときと、ゲームが見つからないときは、ゲームの Translations を守りの
+// フォルダーに数えられません。それでも、作業コピーの名前をそのまま打つと、
+// 作業コピーが報告に置き換わって訳を失います。守るためだけにゲームを探すことは
+// しません。--no-game は「探しも読みもしない」指定で、探す先も自動検出が見つける
+// 1か所だけだからです。
+//
+// 書き出し先のフォルダーが無いときも止めます。作ると、打ち間違えた名前の
+// フォルダーへ黙って書くことになります。
+func checkDiffOutput(root, game, out string, stderr io.Writer) int {
+	abs, err := filepath.Abs(out)
+	if err != nil {
+		fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "--output のパスを解けません: %w", err))
+		return exitError
+	}
+	guarded := []string{
+		filepath.Join(root, publish.TranslationsDir),
+		filepath.Dir(publish.ScriptOrderPath(root)),
+	}
+	if game != "" {
+		guarded = append(guarded, filepath.Join(game, publish.TranslationsDir))
+	}
+	// 書き出し先がリンクなら、たどった先も見ます。publish.WriteBytes はリンクを
+	// 残したままリンク先へ書くので、リンクの置き場だけを見ると、公開ファイルを指す
+	// リンクを渡されたときに公開ファイルを上書きします。書き出し先のフォルダーが
+	// リンクのとき（まだ無い名前を含む）は、within がたどった先のフォルダーで比べます。
+	target := abs
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		target = resolved
+	}
+	if within(abs, guarded) || within(target, guarded) {
+		fmt.Fprintf(stderr,
+			"dwloc: --output には、diff が読むフォルダーの中を指定できません（翻訳リポジトリの Translations と data、ゲームの Translations）: %s\n",
+			filepath.ToSlash(out))
+		return exitError
+	}
+	if readByDwloc(filepath.Base(abs)) || readByDwloc(filepath.Base(target)) {
+		fmt.Fprintf(stderr,
+			"dwloc: --output には、dwloc が読むファイルの名前を使えません（%s）。別の名前にしてください: %s\n",
+			strings.Join(dwlocReadNames(), "、"), filepath.ToSlash(out))
+		return exitError
+	}
+	if publish.LinkCount(abs) > 1 {
+		// publish.WriteBytes は、名前が2つ以上あるファイルをその場で書き直します。
+		// ほかの名前がどこにあるかは安く調べられず、公開ファイルや作業コピーかも
+		// しれないので、書きません。
+		fmt.Fprintf(stderr,
+			"dwloc: --output のファイルには、ほかの名前（ハードリンク）があります。書くとその名前の中身も書き換わるので、書きません。別の名前にしてください: %s\n",
+			filepath.ToSlash(out))
+		return exitError
+	}
+	if !isDir(filepath.Dir(abs)) {
+		fmt.Fprintf(stderr, "dwloc: --output の書き出し先のフォルダーがありません: %s\n", filepath.ToSlash(filepath.Dir(out)))
+		return exitError
+	}
+	return exitOK
+}
+
+// dwlocReadNames は、dwloc が読むファイルの名前を、使い方と誤りの文に並べる形で返します。
+// 作業コピーは「<ロケール>.working.csv」です。
+func dwlocReadNames() []string {
+	return []string{
+		publish.StringsFile,
+		"<ロケール>" + publish.WorkingSuffix,
+		diff.LayoutRisksFile,
+		filepath.Base(publish.ScriptOrderPath("")),
+		filepath.Base(publish.LevelFlowPath("")),
+	}
+}
+
+// readByDwloc は、name（パスの最後の要素）が、dwloc の読むファイルの名前かを返します。
+//
+// 大文字小文字は区別しません。Windows と macOS の既定のファイルシステムは同じ
+// ファイルとして開きます。名前の後ろの点と空白も落として比べます。Windows は
+// 「strings.csv. 」を strings.csv として開くためです。どちらも、区別する
+// ファイルシステムで断りすぎるだけで、報告の名前を変えれば済みます。
+func readByDwloc(name string) bool {
+	name = strings.ToLower(strings.TrimRight(name, ". "))
+	if strings.HasSuffix(name, publish.WorkingSuffix) {
+		return true
+	}
+	for _, n := range dwlocReadNames() {
+		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
+// within は、path の親をたどったどれかが、dirs のフォルダーか、その中のフォルダーと
+// 同じかを返します。無いフォルダーは比べません（path の親のうちまだ無いものと、dirs の
+// うち無いもの）。
+//
+// 比べるのはフォルダーの同一性（os.SameFile）で、os.Stat はリンクとジャンクションを
+// たどります。path の親を字面でたどるだけだと、Translations/ja を指すリンクの下の
+// 新しい名前（リンク/report.csv）は通ります。リンクの字面の親は Translations では
+// ないからです。そこで、dirs の中のフォルダーを全部集めて（[guardedDirs]）、path の
+// 親（たどった先のフォルダー）がそのどれかと同じかを見ます。
+//
+// パスのリンクを解いてから比べる形にしないのは、Windows のジャンクションを
+// filepath.EvalSymlinks が解かないためです（Go 1.23 からの winsymlink の既定）。
+func within(path string, dirs []string) bool {
+	guards := guardedDirs(dirs)
+	for cur := filepath.Dir(path); len(guards) > 0; {
+		if info, err := os.Stat(cur); err == nil {
+			for _, g := range guards {
+				if os.SameFile(info, g) {
+					return true
+				}
+			}
+		}
+		next := filepath.Dir(cur)
+		if next == cur {
+			break
+		}
+		cur = next
+	}
+	return false
+}
+
+// guardedDirs は、dirs のフォルダーと、その中のすべてのフォルダーを、同一性を比べられる
+// 形（os.FileInfo）で返します。
+//
+// dirs そのものがリンクでもたどります（名前の後ろに区切りを付けて歩くと、os.Lstat が
+// 最後のリンクをたどります）。中のリンク（シンボリックリンクとジャンクション）は、
+// たどった先のフォルダーを加えますが、その中へは降りません。ロケールをリンクで
+// 置いたとき（publish も validate もたどって読みます）のリンク先を守り、リンクの輪で
+// 止まらないようにするためです。読めないフォルダーの中は見ません。
+//
+// 翻訳リポジトリの Translations はロケールと作業コピーの置き場で、フォルダーは
+// 数十個です。書き出しの前に1回歩くだけなので、重さは気になりません。
+func guardedDirs(dirs []string) []os.FileInfo {
+	var out []os.FileInfo
+	for _, d := range dirs {
+		_ = filepath.WalkDir(d+string(filepath.Separator), func(p string, e fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if e.IsDir() || e.Type()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+				if info, err := os.Stat(p); err == nil && info.IsDir() {
+					out = append(out, info)
+				}
+			}
+			return nil
+		})
+	}
+	return out
 }
 
 // diffExitCode は報告から終了コードを決めます。
@@ -279,11 +552,17 @@ func runDiff(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 // そのファイルに依るカテゴリは判定していないので、要確認が1件も無くても
 // 「要確認なし」とは言えません。0 で終わると、CI は直すべきファイルを見逃します。
 // 2 にしないのは、実行そのものは最後まで済み、報告も出ているからです。
+//
+// --strict では、報告するロケールに訳が1件もないロケール（公開ファイルも作業コピーも
+// 無いロケール）があるときも 1 にします（改善の調査の cli-7）。そのロケールには
+// 比べる行が無いので Finding は1件も出ませんが、訳が1件も無いことは、その
+// ロケールのいちばん大きい要作業です。数えないと、diff --strict を CI の関門に
+// したとき、訳の無いロケールが通ります。
 func diffExitCode(report *diff.Report, strict bool) int {
 	if report.Status() == diff.StatusReview || len(report.Unclosed) > 0 {
 		return exitProblems
 	}
-	if strict && report.CountByStatus(diff.StatusTodo) > 0 {
+	if strict && (report.CountByStatus(diff.StatusTodo) > 0 || len(report.ReportedEmpty) > 0) {
 		return exitProblems
 	}
 	return exitOK
@@ -311,7 +590,7 @@ func checkDiffLocales(found []diff.Locale, empty []string, want []string) error 
 	for _, name := range empty {
 		targets = append(targets, publish.Target{Locale: name})
 	}
-	_, err := selectLocales(targets, want)
+	_, err := selectLocales(targets, nil, want)
 	return err
 }
 
@@ -326,19 +605,6 @@ func hasOrderKeys(repo *diff.Repo) bool {
 		}
 	}
 	return false
-}
-
-// diffErrorText は読み込みの失敗を、ルートからの相対パスで書き直します。
-//
-// internal/diff は表示の基準になるルートを知らないので、パスを持ったまま
-// エラーを返します（diff.FileError）。手元の絶対パスには利用者名が入ることが
-// あり、CIのログや不具合報告へ貼られるとそのまま漏れます。
-func diffErrorText(root string, err error) string {
-	var fileErr *diff.FileError
-	if errors.As(err, &fileErr) {
-		return fmt.Sprintf("%s: %v", displayPath(root, fileErr.Path), fileErr.Err)
-	}
-	return err.Error()
 }
 
 // warnUnclosed は、閉じない引用符で読めなかったファイルを、どの行で開いたかと

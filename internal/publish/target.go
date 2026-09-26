@@ -133,6 +133,46 @@ func discover(root, game string) ([]Target, error) {
 	return targets, nil
 }
 
+// EmptyLocales は Translations 直下のロケールのうち、targets（[DiscoverTargetsWithGame] が
+// 返した対象）に入らなかったもの、つまり公開ファイルも作業コピーも無いロケールの
+// 名前を返す。ディレクトリ名順。
+//
+// publish は書き出す元が無いので、これらを対象にしない。diff は「訳が1件も無い」と
+// いう最大の要作業として名前を出し、publish と edit は --locale で指されたときに、
+// 「ありません」ではなく、何が無いかを伝える。3つとも同じ判断にするため、走査の
+// 規則は [discover] と同じにし、ここでは「discover が返さなかったディレクトリ」を
+// 拾うだけにする。
+func EmptyLocales(root string, targets []Target) ([]string, error) {
+	dir := filepath.Join(root, TranslationsDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	covered := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		covered[t.Locale] = struct{}{}
+	}
+
+	var out []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, localeSkipPrefix) {
+			continue
+		}
+		if _, ok := covered[name]; ok {
+			continue
+		}
+		// ディレクトリでないものは discover も見ない。調べられないものも
+		// 「無かった」側に倒す。ここで止めると、読めないファイルが1つあるだけで
+		// 報告そのものが出なくなる。
+		if !isDir(filepath.Join(dir, name)) {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 // workingCopy は locale の作業コピーを探す。探す順はゲーム、リポジトリの順。
 // 第2戻り値は、当たったのがゲーム側かどうか。
 //

@@ -32,6 +32,21 @@ func resolveLink(path string) (string, error) {
 	return resolved, nil
 }
 
+// LinkCount は、path のファイルの名前の数（ハードリンクの数）を返す。シンボリック
+// リンクは、たどった先のファイルを数える。path が無いとき、普通のファイルでない
+// とき、数えられないときは 1 を返す。
+//
+// diff --output が、ほかの名前のあるファイルへ書かないために使う。[WriteBytes] は
+// そうしたファイルをその場で書き直すので、ほかの名前（公開ファイルかもしれない）の
+// 中身も書き換わる。
+func LinkCount(path string) uint64 {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return 1
+	}
+	return linkCount(path, info)
+}
+
 // overwrite は path の中身を、その場で out に書き直す。
 //
 // ハードリンクのあるファイルのためにある。rename で置き換えると、書いた名前だけが

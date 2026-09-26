@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/publish"
 	"github.com/223n/dragnwash-localization-editor/internal/web"
@@ -78,6 +79,8 @@ OS の錠で囲むので、同じ環境で dwloc edit を2つ動かしても、p
         --game と一緒には指定できません。
   --locale <ロケール>
         最初に出すロケール。省略すると画面で選びます。
+        公開ファイルも作業コピーも無いロケールは、並べる行が無いので
+        指定できません（終了コード 2）。
   --port <番号>
         待ち受けるポート（既定 0 で、空いているものを自動で取ります）。
         指定しても束ねる先は 127.0.0.1 のままです。
@@ -176,10 +179,11 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 	if *locale != "" {
 		targets, err := publish.DiscoverTargetsWithGame(*root, gamePath)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: Translations を読めません: %v\n", err)
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(*root, "%s を読めません: %w", publish.TranslationsDir, err))
 			return exitError
 		}
-		found, err := selectLocales(targets, []string{*locale})
+		want := []string{*locale}
+		found, err := selectLocales(targets, emptyLocalesFor(*root, targets, want), want)
 		if err != nil {
 			fmt.Fprintf(stderr, "dwloc: %v\n", err)
 			return exitError
@@ -210,8 +214,24 @@ func runEdit(args []string, defaultRoot, defaultGame string, stdout, stderr io.W
 		HideFromRecord: hideFromRecord,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "dwloc: %v\n", err)
+		fmt.Fprintf(stderr, "dwloc: %s\n", editErrorText(*root, *uiLang, err))
 		return exitError
 	}
 	return exitOK
+}
+
+// editErrorText は、待ち受けを始められなかった誤りを文にします。
+//
+// パスは、ほかのサブコマンドと同じくルートからの相対にします（[errorText]）。
+// OS の理由を日本語に言い換えるのは、黒い窓の文が日本語のとき（--ui-lang を省いたか
+// ja を指定したとき）だけです。待ち受けの側（internal/web）の誤りの文は --ui-lang の
+// 言語に従うので、英語を選んだ人には OS の文のまま出します。--ui-lang の値は、
+// ここへ来る前に web.CheckUILang が ja か en（大文字小文字と地域の付いた形を含む）に
+// 絞っています。
+func editErrorText(root, uiLang string, err error) string {
+	lang := strings.ToLower(strings.TrimSpace(uiLang))
+	if lang == "" || lang == "ja" || strings.HasPrefix(lang, "ja-") {
+		return errorText(root, err)
+	}
+	return errorTextKeepingReason(root, err)
 }
