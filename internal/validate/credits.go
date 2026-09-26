@@ -14,10 +14,11 @@ const CreditsFile = "credits.txt"
 
 // creditStatuses は credits.txt の最初の行に書ける状態語。
 // 並びは上流の CREDIT_STATUSES のままで、報告の文面にもこの順で出る。
-var creditStatuses = []string{"supervised", "proofread", "converted", "provisional", "fun"}
+// native（ネイティブが訳したパック）は上流の caa470b で supervised の次に入った。
+var creditStatuses = []string{"supervised", "native", "proofread", "converted", "provisional", "fun"}
 
-// checkCredits は credits.txt の中身を検査する。上流 dev の check_credits
-// （912f519）に当たる。
+// checkCredits は credits.txt の中身を検査する。上流の check_credits
+// （912f519、状態語の native は caa470b）に当たる。
 //
 // 最初の行が状態語で、そのあとの行に確かめた人の名前を1人1行で書く。見るのは
 // 最初の行の状態語だけで、名前の行は見ない。空行と '#' で始まる行（前後の空白を

@@ -473,7 +473,7 @@ PR0 では「引用符で囲まない値の中の単独の CR」もこの表に�
 
 ## 形式検証
 
-この節の R1〜R24 と境界条件は、003ed1e の`tools/check-translations.py`から抽出したものである。その後の上流の変更（f816618、c8fda90、cc01bfc、912f519）で読み方が変わり、検査が増えた。dwloc は上流の dev に合わせてある。変わった点はこの節の最後の「上流 dev への追従」にまとめた。食い違う箇所は、そちらが正しい。
+この節の R1〜R24 と境界条件は、003ed1e の`tools/check-translations.py`から抽出したものである。その後の上流の変更（f816618、c8fda90、cc01bfc、912f519、caa470b）で読み方が変わり、検査が増えた。dwloc は上流の dev に合わせてある。変わった点はこの節の最後の「上流 dev への追従」にまとめた。食い違う箇所は、そちらが正しい。
 
 ### データ構造
 
@@ -919,11 +919,11 @@ return 0
 
 ### 上流 dev への追従
 
-この節だけは抽出結果ではない。003ed1e のあとに上流の`tools/check-translations.py`へ入った変更を、上流の dev（upstream/dev 9249232。origin/dev 63816a0 と`tools/`は同じ）で読み、Python 3.12.3（上流の CI と同じ Ubuntu 24.04）と 3.14.6 で実測して反映した。上の R1〜R24 や境界条件と食い違う場合は、こちらが正しい。
+この節だけは抽出結果ではない。003ed1e のあとに上流の`tools/check-translations.py`へ入った変更を、上流の dev（upstream/dev 9249232。origin/dev 63816a0 と`tools/`は同じ）で読み、Python 3.12.3（上流の CI と同じ Ubuntu 24.04）と 3.14.6 で実測して反映した。そのあとの caa470b（credits.txt の状態語 native）は upstream/dev 5e14be8 で読み、Python 3.9.6 で実測して反映した（2026-09-27）。いま合わせてある`tools/check-translations.py`は blob 3948566 で、upstream/dev 5e14be8 と upstream/main 4e8a2e8 のどちらもこの版である。上の R1〜R24 や境界条件と食い違う場合は、こちらが正しい。
 
-基準は main ではなく dev に置いた。上流はこれまで dev をまとめて main へマージしてきた（56420df、#44）ので、dev の版は次のリリースでも main に入る見込みであり、その版に先に合わせておくためである。上流の現行の文書に、そう約束する記載があるわけではない。翻訳者の Pull Request は、これまでどおりフォークから main へ出す（上流 130d57e、2026-09-23。dev はメンテナーの作業をためる場所）。そのため Pull Request の CI は main の版で走る。main と dev の`tools/check-translations.py`の差は 912f519（credits.txt の状態語）だけで、ほかの変更は main にも入っている。
+基準は main ではなく dev に置いた。上流はこれまで dev をまとめて main へマージしてきた（56420df、#44）ので、dev の版は次のリリースでも main に入る見込みであり、その版に先に合わせておくためである。上流の現行の文書に、そう約束する記載があるわけではない。翻訳者の Pull Request は、これまでどおりフォークから main へ出す（上流 130d57e、2026-09-23。dev はメンテナーの作業をためる場所）。そのため Pull Request の CI は main の版で走る。912f519 は #49、caa470b は #50 で main にも入り、いまは main と dev の`tools/check-translations.py`に差は無い。
 
-したがって dwloc は、版の差の分（credits.txt の状態語）だけ main の CI より厳しい。ほかに、下の「写さなかった上流の不具合」にあたる入力（コメント行の引用符など）でも、dwloc だけが問題を報告する。main の CI が通す credits.txt を、dwloc は問題として報告することがある。いまの影響は小さい。upstream/main 56420df には credits.txt が1件も無く（upstream/dev は16件）、上流 dev の CONTRIBUTING は credits.txt をメンテナーが更新するものとしている。
+dev だけが先に進んでいるあいだは、その差の分だけ dwloc と main の CI の判定が割れる。912f519 が dev だけにあったあいだは、main の CI が通す credits.txt を dwloc が問題として報告することがあった。いまは main と dev が同じなので、割れるのは下の「写さなかった上流の不具合」にあたる入力（コメント行の引用符など）だけで、そこでは dwloc だけが問題を報告する。逆に、上流の変更に dwloc が追いつくまでは、上流が通す入力を dwloc だけが問題として報告する。caa470b の native がそれで、追いつく前の dwloc は upstream/dev 5e14be8 の`Translations/tr/credits.txt`を問題として報告した。上流の dev と main の credits.txt はどちらも17件で、上流の CONTRIBUTING は credits.txt をメンテナーが更新するものとしている。
 
 判定が割れる入力は、`internal/validate/upstream_test.go`に表として固定した。環境変数`DWLOC_UPSTREAM_CHECKER`に上流のスクリプトを渡すと、上流を実際に走らせて突き合わせる。
 
@@ -946,14 +946,15 @@ CSV として読めないのは、既定の dialect では「フィールドが`
 - `comment_lines`の行の数え方。上流は`text.splitlines()`で行番号を振るので、U+2028、U+2029、U+0085、`\v`、`\f`、`\x1c`〜`\x1e`でも行が割れ、csv.reader の行番号（`\r`と`\n`だけで割る）とずれる。コメント行がデータとして検査されたり（誤報）、データ行が検査から漏れたり（見逃し）する。dwloc は`\r\n` / `\n` / `\r`だけで割る
 - 00e927e の GitHub Actions の注釈（`::error file=...`）。dwloc は上流の CI で動かないので写さない。標準出力と終了コードは変わらない。なお、環境変数`GITHUB_ACTIONS=true`を立てて上流を走らせると、注釈のパスの先頭に`Translations/`が二重に付く（事前の調査で確認。上流の CI の中で注釈が出ているかは確かめていない）
 
-#### credits.txt（912f519、dev のみ）
+#### credits.txt（912f519、caa470b）
 
 `Translations/<ロケール>/credits.txt`があれば、`strings.csv`の次に検査する。`strings.csv`が無いロケールでも見る。
 
 - 文字コードは utf-8-sig、行は Python のテキストモードと同じく`\r\n` / `\n` / `\r`で分ける
 - 各行の前後の空白を`str.strip()`と同じく落とし、空の行と '#' で始まる行を飛ばす。前に空白のある ` # x` もコメントになる（strings.csv と違う）
-- 残らなければ`{表示パス}: empty; the first line is the status (supervised, proofread, converted, provisional, fun)`
-- 最初に残った行を小文字にして、`supervised`、`proofread`、`converted`、`provisional`、`fun`のどれでもなければ`{表示パス}:{行番号}: "{値}" is not a status; use one of supervised, proofread, converted, provisional, fun`。値は repr ではなく、そのまま二重引用符で囲む
+- 残らなければ`{表示パス}: empty; the first line is the status (supervised, native, proofread, converted, provisional, fun)`
+- 最初に残った行を小文字にして、`supervised`、`native`、`proofread`、`converted`、`provisional`、`fun`のどれでもなければ`{表示パス}:{行番号}: "{値}" is not a status; use one of supervised, native, proofread, converted, provisional, fun`。値は repr ではなく、そのまま二重引用符で囲む
+- 状態語の並びは上流の`CREDIT_STATUSES`のままで、報告の文面にもこの順で出る。`native`（ネイティブが訳したパック）は caa470b で`supervised`の次に入った
 - 問題は多くても1件。2行目より後（確かめた人の名前）は見ない
 - 小文字にするのは ASCII だけでよい。Python の`lower()`で ASCII になる非 ASCII の文字はケルビン記号（U+212A → k）だけで、状態語に k は無い。Go の`strings.ToLower`は 'İ'（U+0130）を 'i' にして`provİsional`を通してしまうが、Python は2文字の`i̇`にするので通さない
 

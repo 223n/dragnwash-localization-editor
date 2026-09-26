@@ -14,17 +14,17 @@ const validateUsage = `使い方: dwloc validate [--root <ディレクトリ>] [
 tools/check-translations.py（翻訳リポジトリの dev ブランチの版）と同じ検査を行い、
 同じ文面を標準出力へ書きます。
 翻訳の Pull Request は main へ出すので、その CI は main の版で走ります。
-main と dev の版の差は credits.txt の検査だけで、その分 dwloc validate のほうが
-厳しくなります。上流の不具合を写していない入力（コメント行の引用符など）でも、
-dwloc validate だけが問題を報告することがあります。上流はこれまで dev を
-まとめて main へ入れてきたので、dev の版は次のリリースで main に入る見込みです。
+いまは main と dev の版が同じです。上流はこれまで dev をまとめて main へ
+入れてきたので、dev が先に進んでも、次のリリースで main に入る見込みです。
+上流の不具合を写していない入力（コメント行の引用符など）では、
+dwloc validate だけが問題を報告することがあります。
 
 検査する内容:
   - Translations/_discovered 配下がコミットされていないこと
   - 各ロケールの strings.local.csv がコミットされていないこと
   - 各ロケールに strings.csv があり、ヘッダーと各行の形が正しいこと
   - credits.txt があれば、最初の行が状態語
-    （supervised、proofread、converted、provisional、fun）であること
+    （supervised、native、proofread、converted、provisional、fun）であること
   - textures/ があれば、中身が .png と credits.csv と fallback.txt だけであること。
     絵は小文字の .png、8MB 以下、4096x4096 以下の PNG で、credits.csv に
     1枚1行（file,author,note）の出典があり、fallback.txt に書いたロケールが
