@@ -1768,10 +1768,11 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
    Do not include the `v` (for example `1.2.0`, `1.2.0-rc.1`)
 1. Turning on `auto_merge` merges without pausing for a review of the pull request and goes all the way to publication.  
    Instead of a person pressing `Approve workflows to run`, the workflow approves the pull request's runs that are waiting for approval through the API.  
+   It approves them with `GITHUB_TOKEN`.  
+   With v0.12.1, it was confirmed that the approval goes through and the runs start.  
    Once the CI run starts, it waits up to 30 minutes for it to pass and then merges.  
    If the approval is refused, it runs CI (`ci.yml`) on the `release/vX.Y.Z` branch instead, waits up to 30 minutes for it to pass, and then merges.  
    In that case the pull request's runs stay waiting for approval and remain as expired failures after the merge.  
-   Whether `GITHUB_TOKEN` can approve them has not been confirmed yet.  
    Which of the two happened appears in the summary of that run.  
    If `main` has required checks or approval rules, it may stop at the merge.  
    It also stops, leaving the pull request open, when CI fails or does not finish within 30 minutes.  
@@ -1895,14 +1896,20 @@ Approving with the user's `gh` token started the same run again as its second at
 This was confirmed on the three runs of the pull request that merged v0.12.0 back into `develop`.  
 The one who triggered that attempt (`triggering_actor`) becomes the person who approved it.
 
-Whether `GITHUB_TOKEN` can approve them has not been confirmed yet.  
-GitHub's documentation describes the approval API as being for pull requests from first-time contributors on public forks.  
-On the other hand, its table of permissions lists it as usable with GitHub App installation tokens, needing write access to Actions.  
-`GITHUB_TOKEN` is one of those tokens, but the documentation does not say whether it can approve the runs of a pull request the workflow itself opened.  
-The `auto_merge` path does not stop when the approval is refused; it runs CI on the `release/vX.Y.Z` branch instead.  
+`GITHUB_TOKEN` can approve them too.  
+In the `auto_merge` of v0.12.1, it approved the three runs of the release pull request (CI, CodeQL and "Check the PR head branch").  
+All three started again as their second attempt, and the one who triggered that attempt was `github-actions[bot]`.  
+All three passed, and no expired failures were left behind.  
+CI was not run on the `release/vX.Y.Z` branch that time, so CI on the tree being released ran only once.
+
+However, this is not a behaviour that GitHub's documentation describes.  
+The documentation describes the approval API as being for pull requests from first-time contributors on public forks.  
+Its table of permissions lists it as usable with GitHub App installation tokens (`GITHUB_TOKEN` is one of them), needing write access to Actions.  
+It does not say whether the runs of a pull request the workflow itself opened can be approved.  
+If GitHub changes this behaviour, the approval may start being refused.  
+That is why the `auto_merge` path does not stop when the approval is refused; it runs CI on the `release/vX.Y.Z` branch instead.  
 The same goes when the approval is accepted but the runs do not start.  
-The result appears in the summary of that run, as the number of runs approved and started and the number refused.  
-Check this summary the next time you release with `auto_merge`.
+The result appears in the summary of that run, as the number of runs approved and started and the number refused.
 
 To approve by hand, use these commands.  
 The pull request that merges back into `develop` can be approved the same way.
