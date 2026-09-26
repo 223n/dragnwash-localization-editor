@@ -1211,3 +1211,28 @@ func TestCheckOrderShape(t *testing.T) {
 		}
 	})
 }
+
+// TestHasSourceColumn は、ヘッダーに source_en 列があるか（作業コピーの形か）の
+// 見分けを見る。publish --path が、作業コピーを渡されたら書かずに止めるのに使う。
+func TestHasSourceColumn(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"公開ファイル", shapeH6 + shapeK1 + ",L01,N,1,A,訳\n", false},
+		{"2列の作業コピー", "source_en,translation\nAn invented line,訳\n", true},
+		{"7列の作業コピー", "key,section,node,order,speaker,source_en,translation\n", true},
+		{"列名の大文字小文字は区別しない", "key,Source_EN,translation\n", true},
+		{"コメントと空行の後ろのヘッダー", "# memo\n\nkey,source_en,translation\n", true},
+		{"空のファイル", "", false},
+		{"ヘッダーの中で引用符が閉じない", "key,\"source_en,translation\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasSourceColumn([]byte(tt.data)); got != tt.want {
+				t.Errorf("HasSourceColumn = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

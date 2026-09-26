@@ -54,8 +54,8 @@ func reportFilesChanged(root string, targets []publish.Target, before []publish.
 	for i, t := range targets {
 		now, err := publish.ReadFiles(t)
 		if err != nil {
-			fmt.Fprintf(stderr, "dwloc: %s を読み直せないので、1バイトも書きませんでした: %v\n",
-				displayPath(root, shapeErrorPath(err, t.Input)), shapeErrorCause(err))
+			fmt.Fprintf(stderr, "dwloc: %s\n", errorf(root, "%s を読み直せないので、1バイトも書きませんでした: %w",
+				displayPath(root, shapeErrorPath(err, t.Input)), err))
 			return exitError
 		}
 		for _, p := range publish.ChangedPaths(t, before[i], now) {
@@ -74,20 +74,13 @@ func reportFilesChanged(root string, targets []publish.Target, before []publish.
 
 // shapeErrorPath は、publish.ReadFiles の誤り err が指すファイルを返す。どのファイルか
 // 分からなければ fallback を返す。
+//
+// 報告の頭にこのファイルを出し、誤りの本文からは同じパスを落とす（[errorText] が、
+// 前置きに出ているパスを重ねない）。
 func shapeErrorPath(err error, fallback string) string {
 	var shapeErr *publish.ShapeError
 	if errors.As(err, &shapeErr) {
 		return shapeErr.Path
 	}
 	return fallback
-}
-
-// shapeErrorCause は、publish.ReadFiles の誤り err から、ファイルの名前を除いた元の
-// 誤りを返す。報告の頭にファイルの名前を出すので、2度出さない。
-func shapeErrorCause(err error) error {
-	var shapeErr *publish.ShapeError
-	if errors.As(err, &shapeErr) {
-		return shapeErr.Err
-	}
-	return err
 }

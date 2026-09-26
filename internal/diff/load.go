@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/223n/dragnwash-localization-editor/internal/csvfile"
 	"github.com/223n/dragnwash-localization-editor/internal/order"
@@ -273,9 +272,12 @@ func LoadWith(root string, opt Options) (*Repo, error) {
 		repo.Locales = append(repo.Locales, loc)
 	}
 
-	empty, err := emptyLocales(root, targets)
+	// 走査そのものを publish と重ねているのは、両者の判定が食い違うと「publish を
+	// 回すとどうなるか」という主張が崩れるため。拾うのは「DiscoverTargets が
+	// 返さなかったディレクトリ」だけで、判定の規則はこのパッケージに作らない。
+	empty, err := publish.EmptyLocales(root, targets)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s を読めません: %w", publish.TranslationsDir, err)
 	}
 	repo.EmptyLocales = empty
 	return repo, nil
@@ -340,44 +342,6 @@ func hasLineIDKeys(data *order.Data) bool {
 		}
 	}
 	return false
-}
-
-// emptyLocales は Translations 直下のロケールのうち、publish が対象にしなかった
-// ものを返す。ディレクトリ名順。
-//
-// 走査そのものを publish.DiscoverTargets と重ねているのは、両者の判定が食い違うと
-// 「publish を回すとどうなるか」という主張が崩れるため。ここで見るのは
-// 「DiscoverTargets が返さなかったディレクトリ」だけで、判定の規則は作らない。
-func emptyLocales(root string, targets []publish.Target) ([]string, error) {
-	dir := filepath.Join(root, publish.TranslationsDir)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("%s を読めません: %w", publish.TranslationsDir, err)
-	}
-	covered := make(map[string]struct{}, len(targets))
-	for _, t := range targets {
-		covered[t.Locale] = struct{}{}
-	}
-
-	var out []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "_") {
-			continue
-		}
-		if _, ok := covered[name]; ok {
-			continue
-		}
-		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil || !info.IsDir() {
-			// ディレクトリでないものは publish も見ない。stat に失敗したものも
-			// 「無かった」側に倒す。ここで止めると、読めないファイルが1つあるだけで
-			// 報告そのものが出なくなる。
-			continue
-		}
-		out = append(out, name)
-	}
-	return out, nil
 }
 
 // readRowsFile はCSVファイルを読んで [Row] に直す。

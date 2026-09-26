@@ -6,45 +6,24 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
 
-// sourceRepoEnv は元実装のリポジトリの場所を上書きする環境変数。
-const sourceRepoEnv = "DRAGNWASH_SOURCE_REPO"
+// 実データの試験は上流 main に追従する（改善の決定 31）。行数は決め打ちにせず、
+// コメントと空行を除いた物理行（sourcerepo.ContentLines）から数え、読んだ値は
+// 引用符の無い行をカンマで分けたもの（sourcerepo.PlainFields）と突き合わせる。
+// 以前は上流 003ed1e に固有の値（ja/strings.csv の 1721 行、BOM 付きの level_flow.csv、
+// 先頭の行の値）を決め打ちにしていたので、いまの main（ja は 1738 行、level_flow.csv に
+// BOM が無い）を渡すと落ちていた。BOM を剥がすことは TestReadPowerShellRows の
+// 「BOMを剥がす」が、合成の見本で見る。
 
-// sourceRepoCandidates は環境変数が無いときに探す場所。
-var sourceRepoCandidates = []string{
-	`C:\dev\223n\dragnwash-localization\.claude\worktrees\translator-editor-research-fdf740`,
-	`C:\dev\223n\dragnwash-localization`,
-}
-
-// 実データの件数。いずれも元ファイルを数えて得た値。
-const (
-	// ja/strings.csv は1943物理行（コメント202、空行19）。
-	// 残る1722行のうち先頭がヘッダーなので、データ行は1721。
-	jaContentLines = 1722
-	jaDataRows     = jaContentLines - 1
-	// data/level_flow.csv は16物理行 = ヘッダ1 + データ15（level 0..14）。BOM付き。
-	levelFlowRows = 15
-	// data/script_order.csv は1840物理行 = ヘッダ1 + データ1839。
-	scriptOrderRows = 1839
-)
-
-// sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
+// sourceRepo は元実装のリポジトリの場所を返す。環境変数（sourcerepo.Env）で指定した
+// 場所に無ければ落とし、指定していなくて見つからなければ飛ばす（sourcerepo.Find）。
 // CI には元リポジトリが無いので、飛ばせることが必須。
 func sourceRepo(t *testing.T) string {
 	t.Helper()
-
-	candidates := sourceRepoCandidates
-	if env := os.Getenv(sourceRepoEnv); env != "" {
-		candidates = []string{env}
-	}
-	for _, root := range candidates {
-		if _, err := os.Stat(filepath.Join(root, "Translations")); err == nil {
-			return root
-		}
-	}
-	t.Skipf("元実装のリポジトリが見つからないので飛ばす（%s で場所を指定できる）", sourceRepoEnv)
-	return ""
+	return sourcerepo.Find(t, "Translations")
 }
 
 func readSourceFile(t *testing.T, parts ...string) []byte {
@@ -57,25 +36,63 @@ func readSourceFile(t *testing.T, parts ...string) []byte {
 	return data
 }
 
+// contentLines は data のコメントと空行を除いた物理行を、ヘッダーとデータに分けて返す。
+func contentLines(t *testing.T, data []byte) (header sourcerepo.Line, rows []sourcerepo.Line) {
+	t.Helper()
+	lines := sourcerepo.ContentLines(data)
+	if len(lines) < 2 {
+		t.Fatalf("ヘッダーとデータの行が無い（%d 行）", len(lines))
+	}
+	return lines[0], lines[1:]
+}
+
+// checkPlainRow は、読み手が読んだ行 row の値を、元の物理行 line をカンマで分けた値と
+// 突き合わせる。引用符のある行は分け方が読み手と同じになる保証が無いので比べない。
+// 比べたら true を返す。落ちたときに出すのは行番号と列名だけで、値は出さない。
+func checkPlainRow(t *testing.T, columns []string, row interface{ Get(string) string }, line sourcerepo.Line) bool {
+	t.Helper()
+	fields, ok := sourcerepo.PlainFields(line.Text)
+	if !ok {
+		return false
+	}
+	for c, name := range columns {
+		want := ""
+		if c < len(fields) {
+			want = fields[c]
+		}
+		if row.Get(name) != want {
+			t.Errorf("%d行目の %s が、カンマで分けた値と違う", line.Number, name)
+		}
+	}
+	return true
+}
+
 // TestRealDataJaStrings は公開ファイル Translations/ja/strings.csv を3方式すべてで読み、
 // 同じ行数・同じ内容になることを確かめる。
 func TestRealDataJaStrings(t *testing.T) {
 	data := readSourceFile(t, "Translations", "ja", "strings.csv")
 	columns := []string{"key", "section", "node", "order", "speaker", "translation"}
+	header, lines := contentLines(t, data)
+	if header.Text != strings.Join(columns, ",") {
+		t.Fatalf("ヘッダーの行 = %q, want %q", header.Text, strings.Join(columns, ","))
+	}
 
 	t.Run("C#方式", func(t *testing.T) {
 		rows := ReadCSharpRows(data)
-		if len(rows) != jaDataRows {
-			t.Fatalf("行数 = %d, want %d", len(rows), jaDataRows)
+		if len(rows) != len(lines) {
+			t.Fatalf("行数 = %d, want %d（コメントと空行を除いた物理行）", len(rows), len(lines))
 		}
 		if got := rows[0].Columns(); !slices.Equal(got, columns) {
 			t.Errorf("ヘッダー = %q, want %q", got, columns)
 		}
-		want := []string{"0da72197e898ebe1", "L01 Ryan", "Ryan_1_intro", "1", "Ryan", "もしもし？"}
-		for i, name := range columns {
-			if got := rows[0].Get(name); got != want[i] {
-				t.Errorf("1行目の %s = %q, want %q", name, got, want[i])
+		compared := 0
+		for i, row := range rows {
+			if checkPlainRow(t, columns, row, lines[i]) {
+				compared++
 			}
+		}
+		if compared == 0 {
+			t.Error("カンマで分けて比べられた行が1つも無い")
 		}
 	})
 
@@ -84,8 +101,8 @@ func TestRealDataJaStrings(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadPowerShellRows が失敗した: %v", err)
 		}
-		if len(rows) != jaDataRows {
-			t.Fatalf("行数 = %d, want %d", len(rows), jaDataRows)
+		if len(rows) != len(lines) {
+			t.Fatalf("行数 = %d, want %d", len(rows), len(lines))
 		}
 	})
 
@@ -95,8 +112,8 @@ func TestRealDataJaStrings(t *testing.T) {
 			t.Fatalf("ReadPythonRecords が失敗した: %v", err)
 		}
 		// 空白だけの行は無いので、コメントと空行を捨てたレコードは内容行と同じ数になる。
-		if len(records) != jaContentLines {
-			t.Fatalf("レコード数 = %d, want %d（ヘッダーを含む）", len(records), jaContentLines)
+		if len(records) != len(lines)+1 {
+			t.Fatalf("レコード数 = %d, want %d（ヘッダーを含む）", len(records), len(lines)+1)
 		}
 		if got := records[0].Fields; !slices.Equal(got, columns) {
 			t.Errorf("ヘッダー = %q, want %q", got, columns)
@@ -108,8 +125,10 @@ func TestRealDataJaStrings(t *testing.T) {
 			}
 		}
 		// 報告用の行番号が物理行番号と一致していること。
-		if records[1].Number != 5 {
-			t.Errorf("最初のデータ行の行番号 = %d, want 5", records[1].Number)
+		for i, r := range records[1:] {
+			if r.Number != lines[i].Number {
+				t.Fatalf("%d件目の行番号 = %d, want %d", i+1, r.Number, lines[i].Number)
+			}
 		}
 	})
 
@@ -138,7 +157,8 @@ func TestRealDataJaStrings(t *testing.T) {
 	})
 
 	// 読んだ値を書き戻すと元の行に戻る。エスケープ規則（移植仕様 R3 / R14）を
-	// 実データで裏付ける。ja/strings.csv には引用符を含む行が8行ある。
+	// 実データで裏付ける。引用符付きで書き出される行の数は、元の物理行のうち
+	// 引用符を含む行の数と同じになる（引用符が要るのは訳の列だけ）。
 	t.Run("読み書きの往復で元の行に戻る", func(t *testing.T) {
 		records, err := ReadPythonRecords(data)
 		if err != nil {
@@ -147,128 +167,106 @@ func TestRealDataJaStrings(t *testing.T) {
 		// 各レコードの元の物理行。実データの値は1行に収まっているので、
 		// レコードの先頭行がそのままその行の全体になる。
 		physical := SplitPythonLines(data)
-		lines := make([]Line, 0, len(records))
+		recLines := make([]Line, 0, len(records))
 		for _, r := range records {
-			lines = append(lines, physical[r.Number-1])
+			recLines = append(recLines, physical[r.Number-1])
 		}
 		rows := ReadCSharpRows(data)
-		if len(lines) != len(rows)+1 {
-			t.Fatalf("物理行とレコードの数が揃わない: %d と %d", len(lines), len(rows))
+		if len(recLines) != len(rows)+1 {
+			t.Fatalf("物理行とレコードの数が揃わない: %d と %d", len(recLines), len(rows))
 		}
 
-		quoted := 0
+		quoted, wantQuoted := 0, 0
+		for _, l := range lines {
+			if strings.Contains(l.Text, `"`) {
+				wantQuoted++
+			}
+		}
 		for i, row := range rows {
 			fields := make([]string, 0, len(columns))
 			for _, name := range columns {
 				fields = append(fields, row.Get(name))
 			}
 			got := string(AppendLine(nil, fields...))
-			want := lines[i+1].Text
+			want := recLines[i+1].Text
 			if got != want {
-				t.Fatalf("%d行目の書き戻しが元と違う\n got  %q\n want %q", lines[i+1].Number, got, want)
+				t.Fatalf("%d行目の書き戻しが元と違う\n got  %q\n want %q", recLines[i+1].Number, got, want)
 			}
 			if len(fields[5]) != len(EscapeField(fields[5])) {
 				quoted++
 			}
 		}
-		if quoted != 8 {
-			t.Errorf("引用符付きで書き出される訳文の行数 = %d, want 8", quoted)
+		if quoted != wantQuoted {
+			t.Errorf("引用符付きで書き出される訳文の行数 = %d, want %d（引用符を含む物理行の数）", quoted, wantQuoted)
 		}
 	})
 }
 
-// TestRealDataLevelFlow は data/level_flow.csv を読む。このファイルだけ BOM 付きなので、
-// BOM を剥がせているかがそのまま列引きの成否になる。
+// TestRealDataLevelFlow は data/level_flow.csv を読む。
+//
+// 上流の版によって BOM の有無が違う（003ed1e は BOM 付き、main は BOM 無し）。
+// どちらでも、最初の列を含むすべての列を引けることを見る。BOM が残ると、最初の列
+// だけが引けなくなる。
 func TestRealDataLevelFlow(t *testing.T) {
 	data := readSourceFile(t, "data", "level_flow.csv")
-	if len(data) < 3 || string(data[:3]) != "\xef\xbb\xbf" {
-		t.Fatalf("このファイルはBOM付きのはずだが先頭が %x になっている", data[:min(3, len(data))])
+	header, lines := contentLines(t, data)
+	columns, ok := sourcerepo.PlainFields(header.Text)
+	if !ok {
+		t.Fatalf("ヘッダーに引用符がある: %s", header.Text)
 	}
 
 	rows, err := ReadPowerShellRows(data)
 	if err != nil {
 		t.Fatalf("ReadPowerShellRows が失敗した: %v", err)
 	}
-	if len(rows) != levelFlowRows {
-		t.Fatalf("行数 = %d, want %d", len(rows), levelFlowRows)
+	if len(rows) != len(lines) {
+		t.Fatalf("行数 = %d, want %d（コメントと空行を除いた物理行）", len(rows), len(lines))
 	}
-
-	// BOM が残っていると flow_asset だけが引けなくなる。
-	if got, ok := rows[0].Lookup("flow_asset"); !ok || got != "LevelFlow" {
-		t.Errorf("Lookup(flow_asset) = (%q, %v), want (\"LevelFlow\", true)", got, ok)
-	}
-	for i, want := range []struct{ level, dragon, weather string }{
-		{"0", "Ryan", "Sunny"},
-		{"14", "Alexander", "Sunny"},
-	} {
-		row := rows[0]
-		if i == 1 {
-			row = rows[len(rows)-1]
+	for i, row := range rows {
+		// 列があることも見る。値が空の列（末尾カンマ）でも、列そのものは引ける。
+		for _, name := range columns {
+			if _, ok := row.Lookup(name); !ok {
+				t.Errorf("%d行目で %s 列を引けない", lines[i].Number, name)
+			}
 		}
-		if got := row.Get("level"); got != want.level {
-			t.Errorf("level = %q, want %q", got, want.level)
-		}
-		if got := row.Get("dragon"); got != want.dragon {
-			t.Errorf("dragon = %q, want %q", got, want.dragon)
-		}
-		if got := row.Get("weather"); got != want.weather {
-			t.Errorf("weather = %q, want %q", got, want.weather)
-		}
-	}
-	// 最終行の player_spawn は空（末尾カンマ）。列はあるが値が空、という区別を確かめる。
-	last := rows[len(rows)-1]
-	if got, ok := last.Lookup("player_spawn"); !ok || got != "" {
-		t.Errorf("Lookup(player_spawn) = (%q, %v), want (\"\", true)", got, ok)
+		checkPlainRow(t, columns, row, lines[i])
 	}
 
 	// C#方式でも同じ件数になる。
-	if got := len(ReadCSharpRows(data)); got != levelFlowRows {
-		t.Errorf("C#方式の行数 = %d, want %d", got, levelFlowRows)
+	if got := len(ReadCSharpRows(data)); got != len(lines) {
+		t.Errorf("C#方式の行数 = %d, want %d", got, len(lines))
 	}
 }
 
 // TestRealDataScriptOrder は data/script_order.csv を読む。出力順の権威になるファイル。
+//
+// section にはスペースが含まれる。引用符なしフィールドの空白の扱いを間違えると、
+// "L01" や "L01 " に化けて、カンマで分けた値と食い違う。
 func TestRealDataScriptOrder(t *testing.T) {
 	data := readSourceFile(t, "data", "script_order.csv")
+	header, lines := contentLines(t, data)
+	columns, ok := sourcerepo.PlainFields(header.Text)
+	if !ok {
+		t.Fatalf("ヘッダーに引用符がある: %s", header.Text)
+	}
+	for _, name := range []string{"section", "phase", "node", "order", "line_id", "key", "speaker", "condition"} {
+		if !slices.Contains(columns, name) {
+			t.Errorf("ヘッダーに %s 列が無い", name)
+		}
+	}
 
 	rows, err := ReadPowerShellRows(data)
 	if err != nil {
 		t.Fatalf("ReadPowerShellRows が失敗した: %v", err)
 	}
-	if len(rows) != scriptOrderRows {
-		t.Fatalf("行数 = %d, want %d", len(rows), scriptOrderRows)
+	if len(rows) != len(lines) {
+		t.Fatalf("行数 = %d, want %d（コメントと空行を除いた物理行）", len(rows), len(lines))
 	}
-
-	want := map[string]string{
-		"section":   "L01 Ryan",
-		"phase":     "intro",
-		"node":      "Ryan_1_intro",
-		"order":     "1",
-		"line_id":   "line:a8779ebf",
-		"key":       "0da72197e898ebe1",
-		"speaker":   "Ryan",
-		"condition": "",
+	for i, row := range rows {
+		checkPlainRow(t, columns, row, lines[i])
 	}
-	for name, value := range want {
-		got, ok := rows[0].Lookup(name)
-		if !ok {
-			t.Errorf("1行目に %s 列が無い", name)
-			continue
-		}
-		if got != value {
-			t.Errorf("1行目の %s = %q, want %q", name, got, value)
-		}
-	}
-
-	// section にはスペースが含まれる。引用符なしフィールドの空白の扱いを
-	// 間違えると、ここで "L01" や "L01 " に化ける。
-	for _, row := range rows {
-		if section := row.Get("section"); section == "" {
-			t.Fatal("section が空の行がある")
-		}
-	}
-	if got := len(ReadCSharpRows(data)); got != scriptOrderRows {
-		t.Errorf("C#方式の行数 = %d, want %d", got, scriptOrderRows)
+	if got := len(ReadCSharpRows(data)); got != len(lines) {
+		t.Errorf("C#方式の行数 = %d, want %d", got, len(lines))
 	}
 }
 
@@ -285,20 +283,11 @@ func TestRealDataScriptOrder(t *testing.T) {
 // 落ちたときに出すのは件数と物理行の番号とキーと列名だけにする。値は出さない。
 func TestRealDataWholeReaderAgrees(t *testing.T) {
 	root := sourceRepo(t)
-	entries, err := os.ReadDir(filepath.Join(root, "Translations"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	files := [][]string{{"data", "script_order.csv"}, {"data", "level_flow.csv"}}
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), "_") {
-			files = append(files, []string{"Translations", e.Name(), "strings.csv"})
-		}
-	}
-	// 13 は、元リポジトリのどのチェックアウトにもあったロケールの数（internal/edit の
-	// minPublishedLocales と同じ）。0 どうしで一致してしまうのを防ぐ。
-	if locales := len(files) - 2; locales < 13 {
-		t.Fatalf("公開ファイルが %d しか無い", locales)
+	// ロケールは入力から数える。少なすぎれば（Translations を読めていなければ）
+	// sourcerepo.Locales が落とす。0 どうしで一致してしまうのを防ぐ。
+	for _, locale := range sourcerepo.Locales(t, root) {
+		files = append(files, []string{"Translations", locale, "strings.csv"})
 	}
 	for _, parts := range files {
 		t.Run(strings.Join(parts, "/"), func(t *testing.T) {

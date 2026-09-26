@@ -220,6 +220,13 @@ type Report struct {
 	// EmptyLocales は公開ファイルも作業コピーも無いロケールの名前
 	// （[Repo.EmptyLocales]）。--locale で絞っても全件入る。
 	EmptyLocales []string
+	// ReportedEmpty は EmptyLocales のうち、報告するロケール（--locale で絞った
+	// 範囲）に入るもの。絞っていなければ EmptyLocales と同じ。
+	//
+	// 訳が1件も無いのは、そのロケールのいちばん大きい要作業なので、dwloc diff --strict は
+	// これを要作業に数える（改善の調査の cli-7）。[Report.Locales] に入らないのは、
+	// 比べる公開ファイルが無く、要約を作れないからである。
+	ReportedEmpty []string
 	// OrderUnclosed は [Repo.OrderUnclosed]。
 	OrderUnclosed int
 	// Unclosed は、閉じない引用符で読めず、報告するロケールのどれかの判定を止めた
@@ -406,6 +413,7 @@ func Compare(r *Repo, report []string) *Report {
 		OrderLineIDs:  len(idx.lineIDs),
 		ReadLocales:   len(r.Locales),
 		EmptyLocales:  r.EmptyLocales,
+		ReportedEmpty: reportedEmpty(r.EmptyLocales, report),
 		OrderUnclosed: r.OrderUnclosed,
 	}
 	if r.Order != nil {
@@ -501,7 +509,17 @@ func unclosedFiles(r *Repo, want []bool) []publish.UnclosedFile {
 
 // reportedLocales はどのロケールを報告するかを決める。
 func reportedLocales(locales []Locale, report []string) []bool {
-	want := make([]bool, len(locales))
+	names := make([]string, len(locales))
+	for i, loc := range locales {
+		names[i] = loc.Name
+	}
+	return reportedNames(names, report)
+}
+
+// reportedNames は names のうち、report に当たるものに印を付ける。report が空なら
+// すべてに付ける。照合は完全一致を先に試し、外れたら大文字小文字を無視する。
+func reportedNames(names []string, report []string) []bool {
+	want := make([]bool, len(names))
 	if len(report) == 0 {
 		for i := range want {
 			want[i] = true
@@ -510,8 +528,8 @@ func reportedLocales(locales []Locale, report []string) []bool {
 	}
 	for _, name := range report {
 		found := false
-		for i, loc := range locales {
-			if loc.Name == name {
+		for i, n := range names {
+			if n == name {
 				want[i] = true
 				found = true
 			}
@@ -519,13 +537,25 @@ func reportedLocales(locales []Locale, report []string) []bool {
 		if found {
 			continue
 		}
-		for i, loc := range locales {
-			if strings.EqualFold(loc.Name, name) {
+		for i, n := range names {
+			if strings.EqualFold(n, name) {
 				want[i] = true
 			}
 		}
 	}
 	return want
+}
+
+// reportedEmpty は、公開ファイルも作業コピーも無いロケールのうち、報告するものを
+// 返す。並びは empty のまま。
+func reportedEmpty(empty []string, report []string) []string {
+	var out []string
+	for i, want := range reportedNames(empty, report) {
+		if want {
+			out = append(out, empty[i])
+		}
+	}
+	return out
 }
 
 // hashKeySet は公開行のハッシュキーの集合を作る。

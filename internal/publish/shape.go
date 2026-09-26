@@ -256,6 +256,23 @@ func CheckShape(data []byte) []Hazard {
 	return out
 }
 
+// HasSourceColumn は、data のヘッダーに source_en 列があるか（作業コピーの形か）を返す。
+// 列名の照合は [headerHazards] と同じく大文字小文字を区別しない。ヘッダーが無いか、
+// ヘッダーの中で開いた引用符が閉じないときは false を返す（形の確かめに任せる）。
+//
+// cmd/dwloc の publish --path が使う。--path は入力と書き出し先が同じファイルなので、
+// 作業コピーを渡すと、その作業コピーを source_en 列と訳の無い行の消えた公開の形に
+// 書き換える（改善の決定 11）。上流の tools/hash-strings.ps1 は、-Path には公開の
+// strings.csv を渡すよう書いたうえで、作業コピーも黙って書き換える。
+func HasSourceColumn(data []byte) bool {
+	h := csvfile.ReadPowerShellMarked(data).Header
+	if h.ID == 0 || h.Unclosed {
+		return false
+	}
+	want := csvfile.FoldASCII(colSourceEn)
+	return slices.ContainsFunc(h.Fields, func(c string) bool { return csvfile.FoldASCII(c) == want })
+}
+
 // headerHazards は (a) を確かめる。ヘッダーが無いファイルは (d) に任せる。
 //
 // ヘッダーの中で開いた引用符が閉じないときは見ない。列名にファイルの終わりまでが

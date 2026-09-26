@@ -308,11 +308,13 @@ The options you will use most are these.
 | ---- | ---- | ---- |
 | `--locale <locale>` | `publish` `diff` | Narrows to the given locales. You can list several, separated by commas |
 | `--dry-run` | `publish` | Only shows what it would do and writes no file. The safety checks are the same |
+| `--check` | `publish` | Gives the same report as `--dry-run`, and returns exit code `1` if rewriting is needed. Writes no file. Meant for CI |
 | `--no-working` | `diff` | Does not read the working copy even when there is one. Shows what can be said from the published file alone |
 | `--all` / `--limit` | `diff` | Also lists the informational categories / changes the cap per category (20 by default, `0` for all) |
 | `--format csv` | `diff` | Prints an 11-column CSV. You can paste it straight into a spreadsheet. A category it did not judge simply has no rows, so it writes that category and the reason to standard error |
 | `--raw-csv` | `diff` | Writes the `--format csv` values as they are, without adding `'`. Use it when comparing against a machine |
-| `--strict` | `diff` | Returns exit code `1` even when there is only work to do. Meant for CI |
+| `--output <file>` | `diff` | Writes the result to a file instead of standard output. Characters do not get garbled. `csv` gets a BOM |
+| `--strict` | `diff` | Returns exit code `1` even when there is only work to do. A locale with no translation at all counts as work to do too. Meant for CI |
 | `--port` / `--no-browser` | `edit` | Chooses the port to listen on / does not open the browser automatically |
 | `--ui-lang ja` | `edit` | Chooses the language of the screen and of the messages `edit` prints in the black window |
 | `--idle-timeout` | `edit` | How long after the last activity it shuts down (`30m` by default, `0` never) |
@@ -327,6 +329,21 @@ Translations come from the published files, so a translation someone else added 
 Even without bad intent, a line of dialogue starting with `-` turns into `#NAME?` or the like.  
 When you do not want the `'` (when comparing against a machine), add `--raw-csv`.  
 The published files that `publish` writes and the exports from the screen do not get it, because they need the same bytes as the upstream tools.
+
+To keep the result of `diff` in a file, use `--output <file>`.  
+If you send it to a file with `>` in Windows PowerShell 5.1, which comes with Windows, the Japanese gets garbled.  
+The garbled characters swallow line breaks, so CSV rows run together as well.  
+`--output` writes the bytes as they are, so nothing is garbled.  
+With `--format csv` it adds a BOM so that spreadsheet software can tell the file is UTF-8. `text` does not get one.  
+`>` in PowerShell 7 and in the Command Prompt does not garble the text, but the CSV gets no BOM.  
+The path is relative to the current directory.  
+It does not create the folder to write into.  
+If the file is still open in spreadsheet software or another program, Windows does not let it be replaced and `dwloc` stops (the reason reads `権限がありません`, "No permission"). Close it and run the command again.  
+It cannot write inside `Translations` or `data` of the translation repository, or inside `Translations` of the game, so as not to overwrite files that `diff`, `publish` and `edit` read.  
+Pointing inside these folders through a link or a junction is refused as well.  
+Wherever the path points, it cannot use a name that `dwloc` reads (`strings.csv`, `<locale>.working.csv`, `layout_risks.csv`, `script_order.csv`, `level_flow.csv`).  
+This keeps it from overwriting the game's working copy even with `--no-game` or when the game is not found.  
+It does not write to a file that has another name (a hard link) either, because the content under the other name would change too.
 
 ### What dwloc prints is in Japanese
 
@@ -356,9 +373,19 @@ The table below gives English translations of the first lines you are most likel
 | `dwloc: 記録を残せません（…）。このまま続けます。` | It cannot keep a log (…). It carries on without one. | [Logs](#logs) |
 | `操作がないまま 30m0s たちました。待ち受けを終えます。` | No activity for 30m0s. Stopping. | [The simplest way to start](#the-simplest-way-to-start) |
 
+When a file cannot be read or written, the line ends with the path and one of these reasons.  
+Other reasons are the English text from the OS.
+
+| Reason it prints | In English |
+| ---- | ---- |
+| `見つかりません` | Not found |
+| `権限がありません` | No permission |
+| `フォルダーではありません` | Not a folder |
+| `フォルダーです（ファイルを指定してください）` | It is a folder (give a file) |
+
 The exit code tells you the same thing without reading the text.  
 `0` means it succeeded.  
-`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, or `publish` stopped without writing).  
+`1` means it ran, but something is left for a person to look at (`validate` found a problem, `diff` found rows worth checking, `publish` stopped without writing, or `publish --check` found a locale that needs rewriting).  
 `2` means it could not run (a wrong argument, a file it cannot read, and so on).
 
 ### The two buttons inside the game
@@ -1128,6 +1155,13 @@ When the working copy cannot be read, "untranslated", "rows dropped by `publish`
 That is why the same 32 appear as "rows with no translation in any locale".  
 If you want to read the reasons too, run `dwloc diff --all`.
 
+A locale that has only a folder, with neither a published file nor a working copy, falls into none of the thirteen.  
+There is not a single row to compare.  
+`diff` names it as a locale with no translation at all, and `--strict` counts it as work to do (exit code `1`).  
+A locale you left out of the report with `--locale` is not counted.  
+Given such a locale with `--locale`, `publish` and `edit` say what is missing and stop (exit code `2`).  
+Choose that language in the game and press `F1 → Translation → Export working copy` to make a working copy.
+
 The filter and the search are in the left column.  
 If you want to reach them from the middle of the list, press `/`.  
 On a wide screen the column sticks under the top bar, and on a narrow screen (900px or less) it becomes a drawer.  
@@ -1367,11 +1401,17 @@ Each locale it wrote is printed as one line on standard output.
 All of them passed the checks above, so no translation is lost.
 
 You can narrow what it targets with `--locale`.  
-With `--path` it stops scanning `Translations` and converts only the file you name.
+With `--path` it stops scanning `Translations` and converts only the file you name.  
+The input and the output are the same file.  
+The path is relative to the current directory, not to `--root` (the same as `-Path` of `tools/hash-strings.ps1`).  
+Give it a published file (`Translations/<locale>/strings.csv`).  
+A file whose header has a `source_en` column (a working copy) would be rewritten without the source text column and without the untranslated rows.  
+So it stops without writing (exit code `2`).  
+To make the published file from a working copy, run `dwloc publish` without `--path`.
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these seven cases.
+1 comes back in these eight cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
@@ -1380,10 +1420,15 @@ As for exit codes, 0 is success and 2 is a runtime error.
 - When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
 - When `publish` judges that the input or the output changed after it was assembled and stops
+- When `publish --check` finds a locale that needs rewriting
 
-The four for `publish` are separate checks.  
+The four stops of `publish` are separate checks.  
 The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.  
 When the input or the output changed, just run it again.
+
+`publish --check` goes through the four checks and then tells you by the exit code whether rewriting is needed.  
+It writes nothing.  
+Use it in CI to catch a forgotten `publish`.
 
 #### Committing and opening a pull request
 
@@ -1434,6 +1479,12 @@ When you report something that did not work, please attach that day's file.
 In the log, your home folder path (`C:\Users\<name>` or `/home/<name>`) is replaced with `~`.  
 This is because the path contains your user name.  
 The screen shows it as it is.
+
+When a file cannot be read or written, the error names a path inside the translation repository relative to `--root`.  
+Common reasons from the OS (not found, no permission, pointed at a folder, and so on) are given in Japanese.  
+For example, a mistyped `--root` stops with `dwloc: Translations を読めません: 見つかりません` ("cannot read Translations: not found").  
+A path outside the translation repository (the game folder, for instance) is shown as it is.  
+With `--ui-lang en`, `edit` leaves the reason from the OS in English.
 
 The list and CSV from `diff`, and the translation heads and mismatch samples that `publish` shows, are printed on screen only.  
 The log keeps only the counts, keys, line numbers, reasons and headings, plus how many lines were left out.  
@@ -1595,7 +1646,14 @@ CI builds all six targets, so writing anything that uses `CGO` will pass locally
 
 There are tests that refer to the original repository.  
 They run when you put its path in `DRAGNWASH_SOURCE_REPO`.  
-Without it, they look in the default location and are skipped if nothing is found.
+Without it, they look in the default location and are skipped if nothing is found.  
+If you set it and there is no translation repository at that location, they fail instead of being skipped.  
+This is so that a mistyped path does not let them pass without checking the real data even once.
+
+These tests follow the upstream `main`.  
+They do not hard-code the number of locales or rows; they count them from the repository they read.  
+The default location is also the author's checkout of the upstream `main`.  
+Shapes that only some versions have (the `level_flow.csv` with a BOM and the `script_order.csv` without columns such as `norm` in upstream `003ed1e`) are checked by tests with synthetic samples.
 
 ### Tests and coverage
 
@@ -1762,7 +1820,7 @@ It checks three things.
 
 - `dwloc version` prints the version being released
 - On a copy of the sample (`samples/harbor`), `dwloc validate` ends with exit code 0
-- On the same copy, `dwloc publish --no-game --dry-run` ends with no changes
+- On the same copy, `dwloc publish --no-game --check` ends with exit code 0 (no rewriting needed)
 
 It also checks that the checksum list matches the archives.  
 For all six archives, it also checks the list of contents.  

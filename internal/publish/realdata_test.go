@@ -5,75 +5,29 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
+
+	"github.com/223n/dragnwash-localization-editor/internal/sourcerepo"
 )
-
-// sourceRepoEnv は元実装のリポジトリの場所を上書きする環境変数。
-const sourceRepoEnv = "DRAGNWASH_SOURCE_REPO"
-
-// sourceRepoCandidates は環境変数が無いときに探す場所。
-var sourceRepoCandidates = []string{
-	`C:\dev\223n\dragnwash-localization\.claude\worktrees\translator-editor-research-fdf740`,
-	`C:\dev\223n\dragnwash-localization`,
-}
-
-// minPublishedLocales は Translations 直下にあるロケールの数の下限。
-//
-// 数を書き定めていた（13）が、それは「いまワークツリーに何ロケールあるか」で
-// あって、この実装の性質ではない。本体のチェックアウトには16ロケールあり、
-// DRAGNWASH_SOURCE_REPO をそちらへ向けると、16ロケールとも入力とバイト一致して
-// いるのに、ロケール数の照合だけで落ちていた。ロケールは増えるものなので、
-// 突き合わせる相手はそのリポジトリ自身から数える（[localeDirs]）。
-//
-// 下限も見る。0 と 0 が一致してしまうと、Translations をそもそも読めていない
-// ことに気づけない。13 は、このリポジトリのどのチェックアウトにもあった数である。
-const minPublishedLocales = 13
 
 // localeDirs は root/Translations 直下のロケールの数を数える。
 //
-// 数え方は [DiscoverTargets] と同じで、ディレクトリだけを見て、名前が '_' で
-// 始まるものを飛ばす。ignore.txt はファイルなので数に入らない。
+// ロケールの数は決め打ちにせず、そのリポジトリ自身から数える（sourcerepo.Locales。
+// 数え方は [DiscoverTargets] と同じで、少なすぎれば落とす）。ロケールは増えるもので、
+// 上流 main は 16、以前の基準の 003ed1e は 13 だった。数を書き定めていたころは、
+// DRAGNWASH_SOURCE_REPO を main へ向けると、16ロケールとも入力とバイト一致して
+// いるのに、ロケール数の照合だけで落ちていた。
 func localeDirs(t *testing.T, root string) int {
 	t.Helper()
-
-	dir := filepath.Join(root, TranslationsDir)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("%s を読めない: %v", dir, err)
-	}
-	n := 0
-	for _, entry := range entries {
-		if !isDir(filepath.Join(dir, entry.Name())) {
-			continue
-		}
-		if strings.HasPrefix(entry.Name(), localeSkipPrefix) {
-			continue
-		}
-		n++
-	}
-	if n < minPublishedLocales {
-		t.Fatalf("ロケールが %d しかない。Translations を読めていない: %s", n, dir)
-	}
-	return n
+	return len(sourcerepo.Locales(t, root))
 }
 
-// sourceRepo は元実装のリポジトリの場所を返す。見つからなければテストを飛ばす。
+// sourceRepo は元実装のリポジトリの場所を返す。環境変数（sourcerepo.Env）で指定した
+// 場所に無ければ落とし、指定していなくて見つからなければ飛ばす（sourcerepo.Find）。
 // CI には元リポジトリが無いので、飛ばせることが必須。
 func sourceRepo(t *testing.T) string {
 	t.Helper()
-
-	candidates := sourceRepoCandidates
-	if env := os.Getenv(sourceRepoEnv); env != "" {
-		candidates = []string{env}
-	}
-	for _, root := range candidates {
-		if _, err := os.Stat(filepath.Join(root, "data", "script_order.csv")); err == nil {
-			return root
-		}
-	}
-	t.Skipf("元実装のリポジトリが見つからないので飛ばす（%s で場所を指定できる）", sourceRepoEnv)
-	return ""
+	return sourcerepo.Find(t, "data", "script_order.csv")
 }
 
 // TestRealDataRoundTrip は元リポジトリの各ロケールの strings.csv を入力にして

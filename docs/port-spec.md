@@ -422,6 +422,7 @@ publish の読み方を全体を解釈する読み手へ移す作業（PR0〜PR4
 | 飲み込み（引用符が別の行で閉じる） | 後ろの行（英語の原文やキー）を訳に取り込んで書く | 飲み込みの確かめ (f) で止める（csvfile.FindSwallows）。入力・いまの公開ファイル・入力と書き出し先が同じファイルのどの経路でも止める | swallow-3col、swallow-7col-hash-close、swallow-2col-hash-close、swallow-7col-empty-key-english、swallow-6col-published、swallow-2col-own-quote、swallow-7col-empty-key-own-quote、swallow-6col-published-own-quote |
 | 正しい複数行の値でも飲み込みの確かめが当たる形 | 正しい値として書く | 続きの行が単独で読むとレコードに見えるので (f) で止める（原文の2行目がカンマを多く含み7列、2列の作業コピーで原文が行をまたぐ）。確かめたうえで、止めたときの直し方に出るレコード単位の指定（dwloc publish --accept-multiline <ロケール>:<key>）を付けると、上流と同じバイトを書く | ml-continuation-looks-like-row、ml-source-translated-2col |
 | ヘッダーに key 列も source_en 列も無いか、translation 列が無い | すべての行を捨て、ヘッダーとコメントだけを書く | 形の確かめ (a) で止める | ml-header、hash-header-unquoted |
+| -Path（dwloc の --path）に作業コピー（ヘッダーに source_en 列のあるファイル）を渡す | その作業コピーを公開の形に書き換える。source_en 列と訳の無い行が消える（.PARAMETER Path は公開の strings.csv を渡すよう書いている） | 書かずに止め、公開ファイルを渡すか、--path を付けずに publish を回すよう案内する（終了コード2。改善の決定 11、publish.HasSourceColumn）。パスは上流と同じくカレントディレクトリから解く | （入力の表は --path を使わないので置いていない。cmd/dwloc の TestPublishPathRefusesAWorkingCopy で固定） |
 | 再生順のデータの、そのまま書く値の改行 | 見出しの行と order 列へそのまま書く。見出しの2行目が '#' で始まらない行になり、次に読むときデータの行として読まれる | 形の確かめ (h) で止める（publish.CheckOrderShape。決まったことのそのほか 8）。再生順のデータの閉じない引用符も、読み込みの誤り（終了コード2）ではなく (e) として、直し方とともに終了コード1で止める。画面の書き出しも同じ | （入力の表は再生順のデータを全入力で共通にしているので置いていない。cmd/dwloc の TestPublishStopsOnOrderShape と internal/publish の TestCheckOrderShape で固定） |
 | 集計の1行の kept from the published file | いまの公開ファイルから引き継いだ行の数を、9項目目として出す | この項目を持たない。publish の試験は、この項目を除いた6項目を比べる | （すべての入力） |
 
@@ -1789,6 +1790,8 @@ Emit 内: `if (src != null) resolved++; else unresolved++;`（sources に key �
 - TmpTextHook.TryGetTrackedSource / IgnoreRules の詳細は生成側の話として概要のみ確認した。Go ツールが原文の再収集を行わない前提なら不要だが、もし「作業コピーの source_en を検証する」要件があるなら、どの文字列が意図的に除外されているかを別途仕様化する必要がある。
 
 ## 実データの形式
+
+この節の件数と形（1839件、15件、BOM付き、8列など）は、移植の基準にした上流 003ed1e のものである。上流 main（dc55c9e、2026-09-25 に確かめた）では、ロケールが16になり、data/script_order.csv に norm・fp・nlen の3列が足されて11列になり、data/level_flow.csv に BOM が無い。実データの試験（internal の各 realdata_test.go）は上流 main に追従し、件数と形を読んだリポジトリから数える（改善の決定 31。internal/sourcerepo）。003ed1e に固有の形（8列の再生順、BOM付きの level_flow.csv）は、合成の見本の試験（internal/order の TestLoadPowerShellOlderShapes、internal/csvfile の TestReadPowerShellRows「BOMを剥がす」）で確かめる。
 
 ### データ構造
 
