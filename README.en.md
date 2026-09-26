@@ -1382,8 +1382,9 @@ Running it locally before you send anything lets you fix things before the autom
 The checks follow the version on the `dev` branch of the translation repository.  
 Upstream has so far merged `dev` into `main` as a whole, so that version is expected to go into `main` with the next release.  
 Pull requests go to `main`, so for now the automated check runs the version on `main`.  
-The only difference between the versions on `main` and `dev` is the `credits.txt` check, and `dwloc validate` is stricter by that much.  
-Apart from that, `dwloc validate` alone may report a problem for inputs where it does not copy an upstream bug (such as a quote in a comment line).
+As of 27 September 2026, the versions on `main` and `dev` are the same.  
+Both accept the `credits.txt` status `native`.  
+For inputs where it does not copy an upstream bug (such as a quote in a comment line), `dwloc validate` alone may report a problem.
 
 | What to do | Where it is written |
 | ---- | ---- |
