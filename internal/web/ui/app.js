@@ -38,8 +38,8 @@
   - カテゴリの一覧も名前も、待ち受けが返した件数から取る。画面で定義し直さない。
   - 変換中（compositionstart から compositionend、e.isComposing、keyCode 229）は
     キーを1つも横取りしない。確定の直後（composedGrace）に来た Enter も
-    行送りには使わない。ja / ko / zh-Hans / zh-Hant のためにこの入力方式を
-    選んでいる。
+    行送りには使わず、Shift+Enter も改行には使わない。ja / ko / zh-Hans /
+    zh-Hant のためにこの入力方式を選んでいる。
   - 絞り込みの一帯は貼り付けない。貼り付けると、その高さぶんだけ競合の引き止めの
     ボタンが .top の中で押し出され、押せなくなる。
 */
@@ -225,6 +225,16 @@
     chipRows: new Map(),
     gen: 0,
     editing: null,
+    /*
+      Escape で入力欄を閉じたあと、焦点を置いてある訳の欄の行の ID（rest を見よ）。
+      焦点がその欄から離れたら null に戻す。
+    */
+    rest: null,
+    /*
+      焦点を訳の欄へ戻す最中の印（rest を見よ）。立っているあいだの focusin では
+      入力欄を開き直さない。
+    */
+    resting: false,
     composing: false,
     /*
       変換が確定した時刻（performance.now）。確定の Enter を行送りに使わないために
@@ -350,7 +360,8 @@
   var localeDelay = 400;
 
   /*
-    変換が確定してから、Enter を行送りに使わないでおく長さ。
+    変換が確定してから、Enter を行送りに使わないでおく長さ。Shift+Enter の改行
+    （insertLineBreak）にも同じ長さをかける（決まったことの 1）。
 
     見張りが3つ（state.composing / e.isComposing / keyCode 229）あっても、
     compositionend が確定の keydown より先に届く並びだと全部すり抜ける。
@@ -1027,16 +1038,14 @@
     入力欄。頁に1つだけ作り、いま触っている行へ差し込む。
 
     textarea にしてあるのは、欄の幅に収まらない訳を折り返して全部見せるため
-    である。input だと1行へ流れ、打っている場所の前後しか見えない。出ている
-    側の欄（.value）は white-space: pre-wrap で折り返しているので、input の
-    ままだと、打ち始めた瞬間に見え方まで変わることになる。
+    と、訳に改行を入れられるようにするためである。input だと1行へ流れ、打っている
+    場所の前後しか見えない。出ている側の欄（.value）は white-space: pre-wrap で
+    折り返し、値の中の改行もそのまま描く。
 
-    値が複数行になる道は開けていない。Enter は行送りに使っており（keydown で
-    preventDefault）、貼り付けも改行を空白へ置き換える（sanitize）。textarea に
-    したのは折り返しのためだけで、internal/edit が CR / LF を含む値を拒む
-    という前提はそのままである。訳にもう改行があるレコードは、待ち受けが
-    読み取り専用で返す（reason.edit_multiline_translation）。開けると、1字打った
-    瞬間に sanitize が改行を空白へ潰して保存してしまうためである。
+    訳の改行は Shift+Enter で入れる（決まったことの 1。どの行でも）。Enter は
+    いままでどおり次の行へ進む（keydown）。貼り付けた改行も残す（CRLF と単独の CR
+    は LF にそろえる。sanitize と pasted）。待ち受けと internal/edit も改行を受け付け、
+    値の中の改行は LF で書く。
 
     高さは中身に合わせて伸ばす（fitEditor）。rows は伸ばす前の下限にあたる。
   */
@@ -1089,16 +1098,31 @@
   window.addEventListener("resize", fitEditor);
 
   /*
-    訳に入れられない字を落とす。
+    訳の改行を LF にそろえ、入れられない字を落とす。
 
-    改行は空白へ置き換える。読み手はファイル全体を解釈するので、引用符で囲めば
-    値に改行を入れても読めるが、訳への改行の入力はまだ入れていない。internal/edit も
-    CR / LF を含む値を拒むので、拒まれる値を送らない。入ってくるのはほとんど
-    貼り付けなので、落とすのではなく空白にしてその行に収める。
-    NUL も internal/edit が拒む値なので、同じく落とす。
+    改行は残す（決まったことの 1）。CRLF と単独の CR は LF にそろえる。待ち受け
+    （internal/edit）も書く前に LF へそろえるが、そろえると「保存した値が入力と違う」
+    という断り（warn.value_normalized）が付く。送る前にそろえておけば、画面の値と
+    ファイルの値が初めから同じになる。入力欄（textarea）の値はブラウザーが LF に
+    そろえるので、CR が来るのは貼り付け（clipboardData.getData は CRLF を保つ）である。
+    NUL は internal/edit が拒む値なので落とす。
   */
   function sanitize(value) {
-    return String(value).replace(/[\r\n]+/g, " ").replace(/\u0000/g, "");
+    return String(value).replace(/\r\n?/g, "\n").replace(/\u0000/g, "");
+  }
+
+  /*
+    貼り付けた文を、入力欄へ差し込む形にする。
+
+    改行を LF にそろえ（sanitize）、末尾の改行を1つだけ落とす。表計算ソフトのセルや
+    エディターの行を写すと、行の終わりの改行が付いてくる（Windows の表計算ソフトの
+    セルは「字 + CRLF」になる）。入力欄では末尾の改行は見えにくく、そのまま保存すると
+    ゲームで訳の下に空の行が出る。落とすのは1つだけで、2つ以上あれば残りは残す
+    （空行で終わる段落を写したとき）。末尾に改行が要るなら、Shift+Enter で足せる。
+    文の途中の改行と先頭の改行は残す。
+  */
+  function pasted(text) {
+    return sanitize(text).replace(/\n$/, "");
   }
 
   /*
@@ -1161,12 +1185,16 @@
     （＝未保存でない）その行を閉じて隠した。焦点は body へ落ち、以後打った字は
     どこにも入らないのに、保存の欄は「保存済み」のままだった（実際に起きた）。
     触っている行は、条件に合わなくても隠さない。
+
+    Escape で入力欄を閉じて、焦点がその行の訳の欄に留まっているあいだ
+    （state.rest）も隠さない。隠すと焦点が body へ落ち、Enter で開き直せなくなる
+    （rest を見よ）。焦点が欄から離れたら照らし直す。
   */
   function keepAlways(id) {
     if (state.pending.has(id) || state.failed.has(id)) {
       return true;
     }
-    if (state.editing === id) {
+    if (state.editing === id || state.rest === id) {
       return true;
     }
     return Boolean(state.mine && state.mine.has(id));
@@ -1575,7 +1603,11 @@
     }
     var clean = sanitize(editor.value);
     if (clean !== editor.value) {
-      var caret = editor.selectionStart;
+      /*
+        キャレットは、その手前の字を同じように落とした長さの位置に置く。落とした字
+        （NUL）の数だけ前へ寄せないと、キャレットが後ろの字を越える。
+      */
+      var caret = sanitize(editor.value.slice(0, editor.selectionStart)).length;
       editor.value = clean;
       editor.setSelectionRange(caret, caret);
     }
@@ -1659,22 +1691,31 @@
     }
     if (e.key === "Enter") {
       /*
-        改行は入れない。確定して、次の（いま出ている）編集できる行を開く。
-        上から順に打っていける形にする。これが翻訳作業のいちばん太い道になる。
+        Enter は確定して、次の（いま出ている）編集できる行を開く。上から順に
+        打っていける形にする。これが翻訳作業のいちばん太い道になる。
+        Shift+Enter は訳に改行を入れる（下の insertLineBreak）。
 
         次の行を先に決めてから閉じる。閉じると state.editing が空になるので、
         順番を逆にすると「次」が分からなくなる。打った訳は onInput のときに
         未保存の控えへ入っており、閉じるときの flush がまとめて送る。
+
+        既定の動作（textarea に改行を入れる）はどちらでも止める。改行は
+        insertLineBreak が自分で入れる。
       */
       e.preventDefault();
       /*
-        変換を確定した Enter は行送りに使わない。compositionend が確定の
+        変換を確定した Enter は、行送りにも改行にも使わない。compositionend が確定の
         keydown より先に届く並びだと、上の3つの見張りを全部すり抜けて
-        （composing も isComposing も false、keyCode は 13）行が飛ぶ。
+        （composing も isComposing も false、keyCode は 13）行が飛ぶ。Shift+Enter で
+        確定する IME では、同じ並びで改行が入る。
         改行が入らないよう preventDefault だけはして、ここで戻す。
         待ちの長さと理由は composedGrace に書いてある。
       */
       if (performance.now() - state.composedAt < composedGrace) {
+        return;
+      }
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        insertLineBreak();
         return;
       }
       var from = state.editing;
@@ -1704,20 +1745,75 @@
       return;
     }
     if (e.key === "Escape") {
-      /* 閉じるだけ。入力は消さない（消すと黙って破棄したことになる）。 */
+      /* 閉じて、その行に留まる。入力は消さない（消すと黙って破棄したことになる）。 */
       e.preventDefault();
-      editor.blur();
+      rest();
     }
   });
 
   /*
-    貼り付け。ブラウザー任せにすると改行の扱いが実装ごとに違う（落とすもの、
-    詰めるものがある）。空白へ置き換えると決めて、ここで差し込む。
+    訳に改行（LF）を入れる。選んでいる字があれば、それを改行に置き換える。
+
+    setRangeText で入れる。既定の動作（textarea が自分で入れる改行）に任せないのは、
+    確定の直後の猶予（composedGrace）で止めたいときと入れたいときを、ここで1つの
+    分かれ道にしておくためである。入れるのは LF だけで、ブラウザーや OS で変わらない。
+    setRangeText は input の事象を出さないので、onInput を自分で呼ぶ（貼り付けと同じ）。
+  */
+  function insertLineBreak() {
+    editor.setRangeText("\n", editor.selectionStart, editor.selectionEnd, "end");
+    onInput();
+  }
+
+  /*
+    Escape。入力欄を閉じて保存へ回し、焦点はその行の訳の欄に残す（改善の決定 19）。
+
+    以前は入力欄から焦点を外す（blur）だけで、焦点は body へ落ちた。キーボードだけで
+    打っている人は、閉じたあと自分がどの行にいるか分からず、Tab でたどり直すしか
+    なかった。いまは訳の欄に焦点が残るので、そこから Tab で次の行へ進むことも、
+    Enter で同じ行を開き直すことも（el.list の keydown）できる。
+
+    焦点を戻すときに、訳の欄の focusin が入力欄を開き直さないよう、state.resting を
+    立てておく（focus は focusin をその場で出す）。欄に焦点があるあいだ、その行は
+    条件に当たらなくても隠さない（keepAlways の state.rest）。
+  */
+  function rest() {
+    var id = state.editing;
+    closeEditor();
+    flush();
+    restOn(id);
+  }
+
+  /*
+    ID が id の行の訳の欄に焦点を置き、その行に留まる（rest）。焦点を置けない行（無い、
+    編集できない、隠れている、競合している）なら何もせず false を返す。
+
+    Escape で閉じたとき（rest）と、留まっているあいだに 409 で一覧を描き直したとき
+    （onConflict）に使う。描き直すと欄の要素が作り直され、焦点は body へ落ちる。
+  */
+  function restOn(id) {
+    var entry = id === null ? null : state.rows.get(id);
+    if (!entry || !entry.editable || entry.row.hidden || isLocked(id)) {
+      return false;
+    }
+    state.rest = id;
+    state.resting = true;
+    try {
+      entry.value.focus();
+    } finally {
+      state.resting = false;
+    }
+    return true;
+  }
+
+  /*
+    貼り付け。ブラウザー任せにすると改行の扱いが実装ごとに違う（CRLF のまま
+    入れるもの、改行を落とすものがある）。改行を LF にそろえ、末尾の改行を1つ
+    落として（pasted）、ここで差し込む。
   */
   editor.addEventListener("paste", function (e) {
     var text = e.clipboardData ? e.clipboardData.getData("text") : "";
     e.preventDefault();
-    editor.setRangeText(sanitize(text), editor.selectionStart, editor.selectionEnd, "end");
+    editor.setRangeText(pasted(text), editor.selectionStart, editor.selectionEnd, "end");
     onInput();
   });
 
@@ -1803,12 +1899,51 @@
     openEditor(id);
   });
 
-  /* Tab で移ってきたとき。こちらはブラウザーが焦点を移し終えている。 */
+  /*
+    Tab で移ってきたとき。こちらはブラウザーが焦点を移し終えている。
+
+    Escape で閉じた行の訳の欄へ焦点を戻すとき（rest）は開かない。開くと、閉じた
+    そばから開き直す。
+  */
   el.list.addEventListener("focusin", function (e) {
+    var id = idOf(e.target);
+    if (id === null || state.resting) {
+      return;
+    }
+    openEditor(id);
+  });
+
+  /*
+    Escape で閉じて留まっていた訳の欄から、焦点が離れたとき。留まっているあいだは
+    条件に当たらなくても隠さなかった（keepAlways）ので、ここで照らし直す。
+    Enter で開き直したときも通るが、そのときは入力欄が開いている行として出したままになる。
+  */
+  el.list.addEventListener("focusout", function (e) {
+    var id = idOf(e.target);
+    if (id === null || id !== state.rest) {
+      return;
+    }
+    state.rest = null;
+    reviewClosed(id);
+  });
+
+  /*
+    訳の欄で Enter を押したら、その行の入力欄を開く。Escape で閉じて留まった行を
+    開き直す道である（rest）。Tab で来た欄はその場で開くので、ふだんはここを通らない。
+
+    入力欄の keydown もここへ上がってくるが、入力欄は訳の欄ではない（idOf が null を
+    返す）ので何もしない。変換中は横取りしない（入力欄の外では起きないが、同じ見張りを
+    置く）。
+  */
+  el.list.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" || state.composing || e.isComposing || e.keyCode === 229) {
+      return;
+    }
     var id = idOf(e.target);
     if (id === null) {
       return;
     }
+    e.preventDefault();
     openEditor(id);
   });
 
@@ -2207,9 +2342,12 @@
       state.saveError = false;
       state.stall = null;
       applyResults(body.results || [], sent);
+      applyNumbers(body.numbers);
       state.version = body.version;
       showMessage("");
       renderCounts(body.counts);
+      /* ファイルの物理行の数は、訳の改行で変わる。 */
+      renderStats(body.stats);
       /*
         条件は組み直さず、チップの数だけ写す。組み直すと、触っている最中の
         選択が跳ねる。写さないと、訳を入れた行のバッジだけが消えて、チップの
@@ -2260,6 +2398,76 @@
     updateStatus();
   }
 
+  /*
+    保存できた行に、ファイルから読み直した値（r.translation）を出し、行に添える1言を
+    返す（改善の ui-16）。
+
+    入力欄を開いていない行は、訳の欄にファイルの値を出す。ただし、送ったあとに打ち直した
+    訳が未保存として残っていれば、そちらを出す（shownValue）。行には「未保存」の印が
+    付いたままで、次の保存で送るのもそちらである。ファイルの値で描き直すと、欄と入力欄と
+    送り直している訳が別物になり、次の保存が落ちたときに翻訳者が見ている訳がどこにも
+    無い値になる。
+
+    入力欄を開いている行は、入力欄の値をいつもは触らない（打っている字を動かさない）。
+    書いた値が送った値と違うという断り（r.warning。待ち受けが訳の改行を LF にそろえたとき）が
+    来て、送ったあとに打ち直していなければ、入力欄もファイルの値にする。以前は1言だけを
+    出し、入力欄は打った値のままだったので、「ファイルにある値を出しています」という1言と
+    画面が食い違った。
+
+    断りは、出している値がファイルの値のときだけ出す。送ったあとに打ち直した値を出して
+    いるときに出すと、同じ食い違いになる（打ち直した値は次の保存で送られ、その応答が
+    改めて断る）。
+  */
+  function showSaved(entry, r, sentValue) {
+    var shown;
+    if (state.editing === r.id) {
+      if (r.warning && editor.value === sentValue) {
+        setEditorValue(r.translation);
+        setShownText(entry, r.translation);
+      }
+      shown = editor.value;
+    } else {
+      shown = shownValue(r.id, r.translation);
+      setShownText(entry, shown);
+    }
+    return r.warning && shown === r.translation ? r.warning : "";
+  }
+
+  /*
+    入力欄の値を入れ替える。キャレットは同じ位置（値が短くなれば末尾）に置き、高さを
+    測り直す。値を入れ替えると、キャレットは既定では末尾へ飛ぶ。
+  */
+  function setEditorValue(value) {
+    var at = Math.min(editor.selectionStart, value.length);
+    editor.value = value;
+    editor.setSelectionRange(at, at);
+    fitEditor();
+  }
+
+  /*
+    保存の応答の numbers（行番号が変わった行のいまの行番号）で、行番号の欄を直す。
+
+    訳に改行を足したり消したりすると、そのレコードの物理行の数が変わり、後ろの行の
+    行番号がずれる（ID は変わらない）。行番号は照合と読み上げの名前にだけ使う値で、
+    行は ID で引くので、ずれても保存の行き先は変わらない。ただ、直さないと、画面の
+    行番号がエディターで開いたファイルの行番号と食い違う。数えるのは待ち受けで、
+    画面は写すだけである。入力欄を開いている行なら、読み上げの名前（「訳（N行目）」）も
+    直す。
+  */
+  function applyNumbers(numbers) {
+    (numbers || []).forEach(function (x) {
+      var entry = state.rows.get(x.id);
+      if (!entry) {
+        return;
+      }
+      entry.n = x.n;
+      fillNum(entry.num, x.n, x.end);
+      if (state.editing === x.id) {
+        editor.setAttribute("aria-label", t("ui.edit_label_line", { line: x.n }));
+      }
+    });
+  }
+
   /* 行ごとの理由だけを取り出す。値は欄に残したまま、自動保存の対象から外す。 */
   function applyRowErrors(results) {
     results.forEach(function (r) {
@@ -2308,8 +2516,8 @@
   /*
     200 のときだけ呼ぶ。saved はファイルに入ったことを意味する。
 
-    結果は ID で引く。結果の n（いまの最初の物理行）は使わない。訳に改行を入れられない
-    いまは、自分の保存で物理行の数は変わらず、行番号もずれない。
+    結果は ID で引く。結果の n は使わない。訳の改行で行番号が変わった行は、応答の
+    numbers でまとめて直す（applyNumbers）。
   */
   function applyResults(results, sent) {
     results.forEach(function (r) {
@@ -2321,20 +2529,8 @@
         state.failed.delete(r.id);
         if (entry) {
           entry.saved = r.translation;
-          if (state.editing !== r.id) {
-            /*
-              ファイルから読み直した値を出す。画面とファイルを同じにする。
-
-              ただし、送ったあとに打ち直した訳が未保存として残っていれば、そちらを
-              出す（shownValue）。行には「未保存」の印が付いたままで、次の保存で
-              送るのもそちらである。ファイルの値で描き直すと、欄と入力欄と送り直して
-              いる訳が別物になり、次の保存が落ちたときに翻訳者が見ている訳が
-              どこにも無い値になる。
-            */
-            setShownText(entry, shownValue(r.id, r.translation));
-          }
           renderBadgesForKey(entry, r.badges);
-          setRowNote(entry, r.warning ? r.warning : "");
+          setRowNote(entry, showSaved(entry, r, sent.get(r.id)));
         }
       } else {
         /*
@@ -2648,6 +2844,19 @@
       });
       caret = { start: editor.selectionStart, end: editor.selectionEnd };
     }
+    /*
+      Escape で閉じて訳の欄に留まっていた（rest）ときも、その行を同じ規則で引き直し、
+      描き直したあとに焦点を戻す。戻さないと焦点は body へ落ち、Escape で「その行に
+      留まる」が 409 のたびに破れる。多くは、閉じたときの保存そのものが 409 になった場面で
+      ある。
+    */
+    var wasResting = !wasTyping && state.rest !== null && idOf(document.activeElement) === state.rest;
+    var resting = null;
+    if (wasResting) {
+      remap(new Map([[state.rest, true]]), oldKeys, body.current).edits.forEach(function (value, id) {
+        resting = id;
+      });
+    }
 
     state.mine = mine.edits.size ? mine.edits : null;
     state.pending = keep.edits;
@@ -2683,6 +2892,8 @@
         editor.setSelectionRange(caret.start, caret.end);
       }
     }
+    /* 留まっていた行へ焦点を戻す。競合した行（isLocked）には戻さない（下で枠へ移す）。 */
+    var backToRest = wasResting && restOn(resting);
     if (state.mine) {
       showMessage(body.message ? body.message : t("ui.save_conflict"));
       el.conflict.hidden = false;
@@ -2701,8 +2912,11 @@
         最初のボタンへ進める。
 
         出してから移す。hidden のままの要素には焦点が入らない。
+
+        Escape で閉じて留まっていた行が競合した（または行き先を失った）ときも同じで、
+        訳の欄へ戻せないので枠へ移す。
       */
-      if (wasTyping && state.editing === null) {
+      if ((wasTyping && state.editing === null) || (wasResting && !backToRest)) {
         el.conflict.focus();
       }
       return;
@@ -2868,6 +3082,19 @@
   }
 
   /*
+    行番号の欄の中身を入れる。最初の物理行 n を主にし、行をまたぐレコード（end が
+    ある）だけ、下に小さく「〜end」を添える。組むとき（rowNode）と、保存で行番号が
+    ずれたとき（applyNumbers）の両方から呼ぶ。
+  */
+  function fillNum(num, n, end) {
+    clear(num);
+    num.appendChild(span("num-start", n));
+    if (end) {
+      num.appendChild(span("num-end", t("ui.line_end", { line: end })));
+    }
+  }
+
+  /*
     1行を組む。1行は1レコード（またはコメント行・閉じない引用符から後ろの生の1物理行）
     で、引用符で囲んだ値に改行があるレコードも1行になる。
 
@@ -2887,10 +3114,7 @@
       なので、目録から引く（ui.line_end）。
     */
     var num = span("cell num", "");
-    num.appendChild(span("num-start", line.n));
-    if (line.end) {
-      num.appendChild(span("num-end", t("ui.line_end", { line: line.end })));
-    }
+    fillNum(num, line.n, line.end);
     row.appendChild(num);
 
     var badges = document.createElement("div");
@@ -2939,8 +3163,13 @@
 
     var entry = {
       id: line.id,
-      /* 最初の物理行。表示（読み上げの名前、まだ入っていない訳の目印）にだけ使う。 */
+      /*
+        最初の物理行。表示（読み上げの名前、まだ入っていない訳の目印）にだけ使う。
+        訳の改行で行番号がずれたら、保存の応答で直す（applyNumbers）。
+      */
       n: line.n,
+      /* 行番号の欄。直すときに引く（applyNumbers）。 */
+      num: num,
       row: row,
       value: value,
       source: source,
@@ -3069,6 +3298,8 @@
 
   function renderLines(data) {
     closeEditor();
+    /* 留まっていた訳の欄も作り直すので、印を下ろす（keepAlways の state.rest）。 */
+    state.rest = null;
     state.rows = new Map();
     /*
       描いた順をそのまま控える。絞り込みは、この並びを上から1回なぞるだけで

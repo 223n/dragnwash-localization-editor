@@ -14,8 +14,8 @@ import (
 
 // TestEditorIsTextarea は、入力欄が折り返す欄であることを見る。
 //
-// input へ戻すと、長い訳が1行へ流れて元に戻る。戻せない理由は改行が入ることでは
-// ない（Enter は行送りに使っており、貼り付けも空白へ置き換える）。
+// input へ戻すと、長い訳が1行へ流れて元に戻り、訳に改行も入れられなくなる
+// （Shift+Enter で改行を入れる。TestEditorInsertsLineBreaks）。
 func TestEditorIsTextarea(t *testing.T) {
 	js := uiSource(t, "ui/app.js")
 
@@ -130,14 +130,21 @@ func TestEditorHeightFollowsContent(t *testing.T) {
 	}
 }
 
-// TestEditorStillRejectsNewlines は、折り返す欄にしても値に改行が入らないことを見る。
+// TestEditorInsertsLineBreaks は、訳に改行を入れる道を見る（決まったことの 1）。
 //
-// internal/edit は CR / LF を含む値を拒む。公開ファイルの読み手が1物理行=1レコードで
-// 読むためで、textarea にしたのは折り返しのためだけである。
-func TestEditorStillRejectsNewlines(t *testing.T) {
+// PR3 までは、折り返す欄にしても値に改行が入らないことを見ていた（Enter は行送り、
+// 貼り付けた改行は空白へ置き換え。TestEditorStillRejectsNewlines）。いまは次のとおり。
+//
+//   - Enter はいままでどおり行送りで、既定の動作（改行）は止める。
+//   - Shift+Enter は setRangeText で LF を入れる。確定の直後の猶予（composedGrace）の
+//     見張りを、改行より前に置く（確定しただけで改行が入らないように）。
+//   - 貼り付けと入力の改行は LF にそろえて残し、NUL は落とす。貼り付けた文の末尾の
+//     改行は1つ落とす。
+//   - Escape は閉じて、その行の訳の欄に焦点を戻す（改善の決定 19）。blur で閉じるだけに
+//     戻すと、焦点が body へ落ちる。
+func TestEditorInsertsLineBreaks(t *testing.T) {
 	js := uiSource(t, "ui/app.js")
 
-	// Enter は行送り。改行は入れない。
 	start := strings.Index(js, `editor.addEventListener("keydown"`)
 	if start < 0 {
 		t.Fatal("入力欄の keydown が無い")
@@ -147,12 +154,42 @@ func TestEditorStillRejectsNewlines(t *testing.T) {
 	if enter < 0 {
 		t.Fatal("Enter の分かれ道が無い")
 	}
-	if !strings.Contains(block[enter:enter+1200], "e.preventDefault()") {
-		t.Error("Enter で preventDefault を通していない。textarea では改行が入る")
+	arm := block[enter:]
+	prevent := strings.Index(arm, "e.preventDefault()")
+	guard := strings.Index(arm, "performance.now() - state.composedAt < composedGrace")
+	shift := strings.Index(arm, "if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {")
+	next := strings.Index(arm, "nextEditable(from)")
+	if prevent < 0 || guard < 0 || shift < 0 || next < 0 {
+		t.Fatalf("Enter の分かれ道の形が違う（preventDefault %d、猶予 %d、Shift %d、行送り %d）", prevent, guard, shift, next)
+	}
+	if !(prevent < guard && guard < shift && shift < next) {
+		t.Error("preventDefault → 確定の直後の猶予 → Shift+Enter の改行 → 行送り の順になっていない")
+	}
+	if !strings.Contains(arm[shift:next], "insertLineBreak();") {
+		t.Error("Shift+Enter で改行を入れていない")
+	}
+	if !strings.Contains(functionBody(t, js, "insertLineBreak"),
+		`editor.setRangeText("\n", editor.selectionStart, editor.selectionEnd, "end");`) {
+		t.Error("改行を setRangeText で入れていない")
 	}
 
-	// 貼り付けと入力は空白へ置き換える。
-	if !strings.Contains(js, `replace(/[\r\n]+/g, " ")`) {
-		t.Error("改行を空白へ置き換えていない")
+	// 貼り付けと入力の改行は LF にそろえて残す。
+	if !strings.Contains(functionBody(t, js, "sanitize"), `replace(/\r\n?/g, "\n")`) {
+		t.Error("改行を LF にそろえていない")
+	}
+	if strings.Contains(js, `replace(/[\r\n]+/g, " ")`) {
+		t.Error("改行を空白へ置き換えている")
+	}
+	if !strings.Contains(functionBody(t, js, "pasted"), `sanitize(text).replace(/\n$/, "")`) {
+		t.Error("貼り付けた文の末尾の改行を1つ落としていない")
+	}
+
+	// Escape は閉じてその行に留まる。
+	escape := strings.Index(block, `if (e.key === "Escape") {`)
+	if escape < 0 {
+		t.Fatal("Escape の分かれ道が無い")
+	}
+	if arm := block[escape : escape+200]; !strings.Contains(arm, "rest();") || strings.Contains(arm, "editor.blur()") {
+		t.Error("Escape が閉じてその行に留まる形（rest）になっていない")
 	}
 }

@@ -163,7 +163,7 @@ func TestInvalidValueErrorCarriesOneReason(t *testing.T) {
 		value  string
 		wantID string
 	}{
-		{"改行", "前\n後", reason.EditNoNewline},
+		{"訳の行がレコードに見える", "前\nfedcba9876543210,後", reason.EditLineLooksLikeRecord},
 		{"NUL", "前\x00後", reason.EditNoNUL},
 		{"不正なUTF-8", "\xff\xfe壊れた", reason.EditBadUTF8},
 	}

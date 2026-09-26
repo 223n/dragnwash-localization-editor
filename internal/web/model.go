@@ -305,19 +305,15 @@ func (s *server) dataView(cat *Catalog, line edit.Line, idx columns, badges map[
 	return v
 }
 
-// lfLineBreaks は、値の中の CRLF と単独の CR を LF にそろえる。
+// lfLineBreaks は、値の中の CRLF と単独の CR を LF にそろえる（edit.LFLineBreaks）。
 //
 // 画面は値の中の改行を LF の改行として描く。ファイルの中の改行は、表計算ソフトなどで
 // 保存し直すと CRLF になることがあり（決まったことのそのほか 7）、CR のまま渡すと
-// 描き方がブラウザーに任される。そろえるのは描くための値だけで、ファイルは変えない。
-// 改行の入った訳はまだ編集させない（reason.EditMultilineTranslation）ので、そろえた
-// 値が保存に戻ることは無い。
-func lfLineBreaks(v string) string {
-	if !strings.Contains(v, "\r") {
-		return v
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(v, "\r\n", "\n"), "\r", "\n")
-}
+// 描き方がブラウザーに任される。そろえるのは描くための値だけで、読んだだけではファイルを
+// 変えない。訳の欄の値は入力欄の起点にもなり、書き換えて保存すると、そろえた LF のまま
+// 書く（internal/edit も書く前に LF にそろえる）。入力欄（textarea）の値もブラウザーが
+// LF にそろえるので、ここでそろえておくと、開いただけの行を「書き換えた」と取り違えない。
+func lfLineBreaks(v string) string { return edit.LFLineBreaks(v) }
 
 // keyKind はキーの形を返す。判定は internal/key に任せる。
 func keyKind(value string) string {

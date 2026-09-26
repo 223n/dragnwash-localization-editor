@@ -2,6 +2,7 @@ package edit
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,6 +28,13 @@ import (
   - 閉じない引用符: 変わらない（ファイル全体を読み取り専用にし、引用符が開いた行から
     後ろを生の行のまま並べる）。
 
+PR4（訳への改行の入力。決まったことの 1）で、次のように期待値を直した。
+
+  - 訳が行をまたぐレコード: 訳に改行がある理由 → 書ける（改行も書ける）。
+  - 訳に改行を入れると、そのレコードの物理行の数が変わり、後ろの行の行番号と
+    ファイルの物理行の数がずれる。ID は変わらない。
+  - 訳の中の CRLF と単独の CR は LF にそろえて書く。
+
 見本の英文と訳はどれも架空の文である。
 */
 
@@ -39,9 +47,9 @@ var mlWorking = "key,section,node,order,speaker,source_en,translation\r\n" +
 	key.For("two") + ",UI,,,UI,two,さん\r\n" +
 	key.For("three") + ",UI,,,UI,three,\"よん\n# ご\"\r\n"
 
-// TestParseMultilineRecords は、行をまたぐレコードを1つの行にし、訳に改行があるときは
-// 理由を付けて編集させないことを固定する。原文が行をまたぐレコードは、訳が1行に
-// 収まるかぎり書け、変わるのはそのレコードの最終フィールドだけである。
+// TestParseMultilineRecords は、行をまたぐレコードを1つの行にし、どのレコードの訳も
+// 書けることを固定する。訳に改行があるレコードも書ける（PR4）。変わるのはそのレコードの
+// 最終フィールドだけである。
 func TestParseMultilineRecords(t *testing.T) {
 	f := Parse([]byte(mlWorking))
 	if f.ReadOnly() {
@@ -59,10 +67,10 @@ func TestParseMultilineRecords(t *testing.T) {
 	}
 	wants := []want{
 		{id: 1, number: 1, end: 1, kind: KindHeader},
-		{id: 2, number: 2, end: 3, kind: KindData, key: key.For("one"), source: "one", cause: reason.EditMultilineTranslation},
+		{id: 2, number: 2, end: 3, kind: KindData, editable: true, key: key.For("one"), source: "one", translation: "いち\nに"},
 		{id: 3, number: 4, end: 6, kind: KindData, editable: true, key: key.For("para1\n\npara2"), source: "para1\n\npara2"},
 		{id: 4, number: 7, end: 7, kind: KindData, editable: true, key: key.For("two"), source: "two", translation: "さん"},
-		{id: 5, number: 8, end: 9, kind: KindData, key: key.For("three"), source: "three", cause: reason.EditMultilineTranslation},
+		{id: 5, number: 8, end: 9, kind: KindData, editable: true, key: key.For("three"), source: "three", translation: "よん\n# ご"},
 	}
 	lines := f.Lines()
 	if len(lines) != len(wants) {
@@ -83,14 +91,6 @@ func TestParseMultilineRecords(t *testing.T) {
 		t.Errorf("物理行の数 = %d、9 を期待", f.PhysicalLines())
 	}
 
-	// 訳に改行があるレコードには書かせない。
-	for _, id := range []int{2, 5} {
-		var notEditable *NotEditableError
-		if err := f.SetTranslation(id, "訳"); !errors.As(err, &notEditable) ||
-			notEditable.Cause.ID != reason.EditMultilineTranslation {
-			t.Errorf("ID %d に書けてしまう、または理由が違う: %v", id, err)
-		}
-	}
 	// 原文が行をまたぐレコードと、1物理行に収まるレコードには書ける。触っていない
 	// レコードは1バイトも変えず、レコードの終端（CRLF）も残す。
 	if err := f.SetTranslation(3, "段落"); err != nil {
@@ -118,6 +118,169 @@ func TestParseMultilineRecords(t *testing.T) {
 	}
 	if string(f.Bytes()) != mlWorking {
 		t.Errorf("元に戻らない\n got %q\nwant %q", f.Bytes(), mlWorking)
+	}
+}
+
+// TestLineBreaks は、改行を "\r\n" / "\n" / "\r" のどれも1つと数えることを見る
+// （csvfile.SplitSegments の物理行の区切りと同じ）。
+func TestLineBreaks(t *testing.T) {
+	for s, want := range map[string]int{
+		"":           0,
+		"a":          0,
+		"a\nb":       1,
+		"a\r\nb":     1,
+		"a\rb":       1,
+		"\r\r\n\n\r": 4,
+		"a,\"b\r\n":  1,
+	} {
+		if got := lineBreaks(s); got != want {
+			t.Errorf("lineBreaks(%q) = %d、%d を期待", s, got, want)
+		}
+	}
+}
+
+// lineNumbers は、ID ごとの最初と最後の物理行を並べる。
+func lineNumbers(f *File) [][3]int {
+	var out [][3]int
+	for _, l := range f.Lines() {
+		out = append(out, [3]int{l.ID, l.Number, l.EndNumber})
+	}
+	return out
+}
+
+// TestSetTranslationWritesLineBreaks は、訳に改行を入れて書けることを見る（決まったことの 1）。
+//
+//   - 改行の入った訳は引用符で囲んで書き、値の中の改行は LF にする。レコードの終端
+//     （この見本では CRLF）は元のまま。CRLF と単独の CR は LF にそろえる。
+//   - 変わるのはそのレコードの最終フィールドだけで、ほかは1バイトも変えない。
+//   - 物理行の数が変わったぶん、後ろの行の行番号とファイルの物理行の数がずれる。
+//     ID は変わらない。保存して読み直しても、同じ ID が同じ行番号の範囲を指す。
+//   - 1行の訳へ戻すと、元のバイト列に戻る。
+func TestSetTranslationWritesLineBreaks(t *testing.T) {
+	path := writeTemp(t, mlWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ID 4（7行目）に2行、ID 2（2〜3行目）に3行の訳を入れる。ID 3 の原文は行をまたぐ。
+	tests := []struct {
+		id    int
+		value string
+		// stored は書いたあとの訳（改行を LF にそろえたもの）。
+		stored string
+	}{
+		{4, "さん\nさん", "さん\nさん"},
+		{2, "いち\r\nに\rさん", "いち\nに\nさん"},
+		{3, "\n段落\n", "\n段落\n"},
+	}
+	for _, tt := range tests {
+		if err := f.SetTranslation(tt.id, tt.value); err != nil {
+			t.Fatalf("ID %d に書けない: %v", tt.id, err)
+		}
+		if l, _ := f.Line(tt.id); l.Translation() != tt.stored {
+			t.Errorf("ID %d の訳 = %q、%q を期待", tt.id, l.Translation(), tt.stored)
+		}
+	}
+	want := strings.Replace(mlWorking, ",two,さん\r\n", ",two,\"さん\nさん\"\r\n", 1)
+	want = strings.Replace(want, ",one,\"いち\nに\"\r\n", ",one,\"いち\nに\nさん\"\r\n", 1)
+	want = strings.Replace(want, "para2\",\r\n", "para2\",\"\n段落\n\"\r\n", 1)
+	if string(f.Bytes()) != want {
+		t.Fatalf("書いた結果が違う\n got %q\nwant %q", f.Bytes(), want)
+	}
+	// ID 2 は1行、ID 3 は2行、ID 4 は1行増えた。
+	wantNumbers := [][3]int{{1, 1, 1}, {2, 2, 4}, {3, 5, 9}, {4, 10, 11}, {5, 12, 13}}
+	if got := lineNumbers(f); !slices.Equal(got, wantNumbers) {
+		t.Errorf("行番号 = %v、%v を期待", got, wantNumbers)
+	}
+	if f.PhysicalLines() != 13 {
+		t.Errorf("物理行の数 = %d、13 を期待", f.PhysicalLines())
+	}
+	if err := f.Save(); err != nil {
+		t.Fatalf("保存に失敗した: %v", err)
+	}
+	if got := readFile(t, path); got != want {
+		t.Fatalf("保存した中身が違う\n got %q\nwant %q", got, want)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lineNumbers(again); !slices.Equal(got, wantNumbers) {
+		t.Errorf("読み直した行番号 = %v、%v を期待", got, wantNumbers)
+	}
+	for _, tt := range tests {
+		if l, _ := again.Line(tt.id); !l.Editable || l.Translation() != tt.stored {
+			t.Errorf("読み直した ID %d = %+v", tt.id, l)
+		}
+	}
+
+	// 同じ File で続けて、元の訳へ戻して保存する（保存のあとの行番号から続けてずらす）。
+	orig := Parse([]byte(mlWorking))
+	for _, id := range []int{2, 3, 4} {
+		l, _ := orig.Line(id)
+		if err := f.SetTranslation(id, l.Translation()); err != nil {
+			t.Fatalf("ID %d を戻せない: %v", id, err)
+		}
+	}
+	if err := f.Save(); err != nil {
+		t.Fatalf("戻したものの保存に失敗した: %v", err)
+	}
+	if got := readFile(t, path); got != mlWorking {
+		t.Errorf("元に戻らない\n got %q\nwant %q", got, mlWorking)
+	}
+	if got, want := lineNumbers(f), lineNumbers(orig); !slices.Equal(got, want) {
+		t.Errorf("戻したあとの行番号 = %v、%v を期待", got, want)
+	}
+}
+
+// TestSetTranslationLineBreaksInLFFile は、レコードの区切りが LF のファイル（公開ファイルの
+// 形）でも、訳の改行を LF で書き、終端を変えないことを見る。最後の行に改行が無いファイル
+// では、最後のレコードに改行を入れても、改行を足さない。
+func TestSetTranslationLineBreaksInLFFile(t *testing.T) {
+	const published = "key,section,node,order,speaker,translation\n" +
+		"0123456789abcdef,UI,,,UI,a\n" +
+		"fedcba9876543210,UI,,,UI,b"
+	path := writeTemp(t, published)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetTranslation(3, "び\r\nー"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetTranslation(2, "え\n\nー"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	want := "key,section,node,order,speaker,translation\n" +
+		"0123456789abcdef,UI,,,UI,\"え\n\nー\"\n" +
+		"fedcba9876543210,UI,,,UI,\"び\nー\""
+	if got := readFile(t, path); got != want {
+		t.Errorf("保存した中身 = %q、%q を期待", got, want)
+	}
+	if got := lineNumbers(f); !slices.Equal(got, [][3]int{{1, 1, 1}, {2, 2, 4}, {3, 5, 6}}) {
+		t.Errorf("行番号 = %v", got)
+	}
+}
+
+// TestSetTranslationEscapesQuotesWithLineBreaks は、改行と引用符とカンマを一緒に含む訳を、
+// 引用符を2つ重ねて書き、publish の読み方（区切りの関数）とゲームの読み方（CsvReader の
+// 移植）の両方で書いたとおりに読み戻せることを見る。
+func TestSetTranslationEscapesQuotesWithLineBreaks(t *testing.T) {
+	const value = "「い\"ち」、\n  に,さん  \n\"よん\""
+	f := Parse([]byte(mlWorking))
+	if err := f.SetTranslation(4, value); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := f.Line(4)
+	if want := key.For("two") + ",UI,,,UI,two,\"「い\"\"ち」、\n  に,さん  \n\"\"よん\"\"\"\r\n"; l.Text != want {
+		t.Errorf("レコード = %q、%q を期待", l.Text, want)
+	}
+	again := Parse(f.Bytes())
+	if l, _ := again.Line(4); !l.Editable || l.Translation() != value || l.Number != 7 || l.EndNumber != 9 {
+		t.Errorf("読み直したレコード = %+v", l)
 	}
 }
 
