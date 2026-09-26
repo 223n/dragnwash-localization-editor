@@ -271,14 +271,24 @@ func TestRealDataScriptOrder(t *testing.T) {
 }
 
 // TestRealDataWholeReaderAgrees は、元リポジトリの全ロケールの公開ファイルと
-// 再生順の2ファイルを、主の読み手と行単位の読み手で読み、同じ行を返すことを
-// 確かめる。
+// 再生順の2ファイルを、主の読み手と行単位の読み手で読み、1物理行に収まる
+// レコードでは同じ行を返すことを確かめる。
 //
-// 実データには行をまたぐレコードが無い。そのため、PR2 で publish・diff・order を
-// 主の読み手へ切り替えても、これらのファイルでは結果が変わらない（上流 main の
-// 16ロケールを dwloc publish に通すと、コミット済みのファイルとバイト一致する）。
-// あわせて、飲み込み・単独の CR・改行・ゲームの読み方との食い違いの検出が、
-// 実データで1件も当たらないことを見る。当たれば、正当なファイルの publish が塞がる。
+// 値が行をまたぐのは、公開ファイルの訳の列だけである。上流 main の
+// tr/strings.csv（f831c54 で入った）では、スタッフクレジットの UI の訳 7件が
+// 引用符の中で改行している。英語の原文も改行を含む正当な値である（key は原文の
+// SHA-256 の先頭16桁。7件のうち6件は原文を推して一致を確かめた。たとえば
+// 7d1d5c7f5dc48ea4 は "Dragon Designs\nDragon Models\nDragon Textures" の key である）。
+// 行単位の読み手はこれを読めず、物理行ごとに別の行へ割る。そのため、行をまたぐ
+// レコードは行単位の読み手と比べず、ゲームの読み方（[ReadCSharpRows]）と件数・値を
+// 突き合わせる。行単位の読み手だけが読んだ行は、行をまたぐレコードの物理行の中に
+// しか無いことも見る。再生順の2ファイルの値には改行が無い（publish はその値を
+// 見出しへ引用せずに書くので、改行があれば止まる）。
+//
+// PR2 で publish・diff・order を主の読み手へ切り替えても、実データで読み方が変わるのは
+// 行をまたぐ訳だけである。あわせて、飲み込み・単独の CR・ゲームの読み方との食い違いの
+// 検出が、実データで1件も当たらないことを見る。当たれば、正当なファイルの publish が
+// 塞がる。
 //
 // 落ちたときに出すのは件数と物理行の番号とキーと列名だけにする。値は出さない。
 func TestRealDataWholeReaderAgrees(t *testing.T) {
@@ -296,22 +306,44 @@ func TestRealDataWholeReaderAgrees(t *testing.T) {
 			if err != nil {
 				t.Fatalf("主の読み手が失敗した: %v", err)
 			}
-			rows, err := ReadPowerShellRows(data)
+			rows, err := ReadPowerShellRowsNumbered(data)
 			if err != nil {
 				t.Fatalf("行単位の読み手が失敗した: %v", err)
 			}
-			if len(f.Records) != len(rows) {
-				t.Fatalf("件数: 主の読み手 %d、行単位 %d", len(f.Records), len(rows))
+			byLine := make(map[int]Row, len(rows))
+			for _, row := range rows {
+				byLine[row.Line] = row.Row
 			}
-			for i, r := range f.Records {
+			// matched は突き合わせた行、spanned は行をまたぐレコードが占める物理行。
+			matched, spanned := map[int]bool{}, map[int]bool{}
+			multi := 0
+			for _, r := range f.Records {
 				if r.MultiLine() {
-					t.Errorf("行をまたぐレコードがある: %d〜%d行目", r.Line, r.EndLine)
+					multi++
+					for n := r.Line; n <= r.EndLine; n++ {
+						spanned[n] = true
+					}
+					continue
 				}
+				row, ok := byLine[r.Line]
+				if !ok {
+					t.Errorf("%d行目（key %s）を行単位の読み手が読んでいない", r.Line, r.Get("key"))
+					continue
+				}
+				matched[r.Line] = true
 				for _, col := range r.Columns() {
-					if r.Get(col) != rows[i].Get(col) {
+					if r.Get(col) != row.Get(col) {
 						t.Errorf("%d行目（key %s）の %s が行単位の読み手と違う", r.Line, r.Get("key"), col)
 					}
 				}
+			}
+			for _, row := range rows {
+				if !matched[row.Line] && !spanned[row.Line] {
+					t.Errorf("%d行目を行単位の読み手だけが読んだ", row.Line)
+				}
+			}
+			if game := ReadCSharpRows(data); len(game) != len(f.Records) {
+				t.Errorf("件数: 主の読み手 %d、ゲームの読み方 %d", len(f.Records), len(game))
 			}
 			checkSegmentInvariants(t, string(data), f.Segments)
 			if got := FindSwallows(f.Segments); got != nil {
@@ -323,13 +355,20 @@ func TestRealDataWholeReaderAgrees(t *testing.T) {
 			if got := LoneCRValues(f); got != nil {
 				t.Errorf("単独の CR を含む値がある: %+v", got)
 			}
-			if got := LineBreakValues(f); got != nil {
+			// 改行を含んでよいのは、公開ファイルの訳の列だけ。
+			columns := f.Header.Fields
+			if parts[0] == "Translations" {
+				columns = slices.DeleteFunc(slices.Clone(columns), func(c string) bool {
+					return strings.EqualFold(c, "translation")
+				})
+			}
+			if got := LineBreakValues(f, columns...); got != nil {
 				t.Errorf("改行を含む値がある: %+v", got)
 			}
 			if got := CSharpDisagreements(f); got != nil {
 				t.Errorf("ゲームの読み方と割れる: %+v", got)
 			}
-			t.Logf("%d 件", len(f.Records))
+			t.Logf("%d 件（行をまたぐもの %d）", len(f.Records), multi)
 		})
 	}
 }

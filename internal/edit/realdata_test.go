@@ -188,27 +188,28 @@ func TestRealDataSyntheticWorkingCopy(t *testing.T) {
 
 // synthesizeWorkingCopy は公開ファイルのバイト列から作業コピーを合成する。
 // 見出し・空行・改行はそのまま、データ行だけ source_en を1列足す。
+//
+// レコードは区切りの関数（csvfile.SplitSegments）で分ける。物理行で分けると、
+// 訳が行をまたぐレコード（上流 main の tr/strings.csv のクレジット）が行ごとに
+// 割れ、閉じない引用符が後ろの行を飲み込んだ作業コピーができる。
 func synthesizeWorkingCopy(t *testing.T, published []byte) []byte {
 	t.Helper()
 
+	segs := csvfile.SplitSegments(published)
 	var out bytes.Buffer
-	header := false
+	out.WriteString(segs.Text[:segs.BOM])
 	rows := 0
-	for _, line := range csvfile.SplitPythonLines(published) {
-		body, term := splitTerminator(line.Text)
-		switch {
-		case strings.HasPrefix(body, "#"), !isRecord(body):
-			out.WriteString(line.Text)
-		case !header:
-			header = true
-			out.WriteString(strings.Join(workingHeader, ",") + term)
-		default:
-			fields, _ := csvfile.ParsePowerShellRecord(body)
+	for _, seg := range segs.List {
+		switch seg.Kind {
+		case csvfile.SegmentHeader:
+			out.WriteString(strings.Join(workingHeader, ",") + string(seg.Term))
+		case csvfile.SegmentRecord:
+			fields := seg.Fields
 			for len(fields) < 6 {
 				fields = append(fields, "")
 			}
 			if len(fields) != 6 {
-				t.Fatalf("%d行目が6列でない: %q", line.Number, body)
+				t.Fatalf("%d行目が6列でない: %q", seg.Line, segs.Body(seg))
 			}
 			// source_en は原文の代わり。引用が要る値・空の値・カンマを含む値が
 			// 混ざるようにして、前半の列に引用フィールドがある行も作る。
@@ -228,7 +229,10 @@ func synthesizeWorkingCopy(t *testing.T, published []byte) []byte {
 			}
 			rows++
 			out.WriteString(csvfile.JoinFields(
-				fields[0], fields[1], fields[2], fields[3], fields[4], source, translation) + term)
+				fields[0], fields[1], fields[2], fields[3], fields[4], source, translation) + string(seg.Term))
+		default:
+			// コメント行・空行・空のレコード（"," など）は、そのまま写す。
+			out.WriteString(segs.Body(seg) + string(seg.Term))
 		}
 	}
 	if rows < minDataLines {
