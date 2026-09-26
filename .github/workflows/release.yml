@@ -705,8 +705,11 @@ jobs:
     needs: [prepare, merge]
     # GitHub の $/ 構文（自リポジトリ参照）は actionlint 1.7.12 がまだ理解しないため、./ のままにする
     uses: ./.github/workflows/release-publish.yml # zizmor: ignore[self-repository] actionlint が $/ に未対応
+    # 呼ばれる側のジョブが求める権限を、呼ぶ側でもすべて渡す。1つでも欠けると、
+    # ジョブが1つも動かないまま startup_failure で止まる（v0.12.0 の最初の実行がそうなった）
     permissions:
       contents: write
       pull-requests: write
+      actions: write         # develop へ直接戻したとき、develop の CI を workflow_dispatch で動かす
     with:
       version: ${{ needs.prepare.outputs.version }}
