@@ -118,28 +118,17 @@ Allow only that one file.
 ### Running it on macOS
 
 > [!WARNING]
-> Drag'n Wash Localization does not currently work on macOS.  
-> What follows is quoted from [Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization/blob/main/README.md).
->
-> **It does not currently work on macOS.**  
-> Drag'n Wash is built with Unity 6.3, and the loader (Doorstop) that BepInEx 5.4.23.5 uses on macOS  
-> cannot yet hook into a Unity 6.3 game ([NeighTools/UnityDoorstop#108](https://github.com/NeighTools/UnityDoorstop/issues/108)).  
-> Doorstop itself is loaded by the game, but BepInEx never starts,  
-> neither `BepInEx/LogOutput.log` nor `BepInEx/config` is created, and the game starts in English.  
-> This was confirmed on an Apple M3 Pro running macOS 26.6, with the same result on Apple silicon natively and under Rosetta.  
-> It is a problem on the BepInEx side, so this mod cannot work around it.  
-> Once a fixed BepInEx is released, macOS will be tried again.  
-> For that day, an **experimental** installation script for macOS is kept in  
-> the repository: [`installer/experimental/install-macos.sh`](https://github.com/TomXV/dragnwash-localization/blob/main/installer/experimental/install-macos.sh).  
-> Like the Steam Deck script, it sets up the macOS build of BepInEx, the mod, the language and the Steam launch options,  
-> and it can also run a **check** after starting the game to confirm whether the mod was loaded.  
-> It has never once been run on a Mac, and it warns about the problem above before it installs anything.  
-> It is not included in the release zip.
+> On macOS, Drag'n Wash Localization (the in-game mod) only works with an experimental setup for now.  
+> It is installed with the experimental script in the original repository, [`installer/experimental/install-macos.sh`](https://github.com/TomXV/dragnwash-localization/blob/main/installer/experimental/install-macos.sh).  
+> The script is not included in the release zip.  
+> It installs BepInEx 5.4.23.5 for macOS together with the Doorstop from UnityDoorstop's `ci` pre-release (pinned to its 4.6.0 build), and runs the game under Rosetta (x86_64).  
+> Start the game from Steam. Started from Terminal, it does not find your saves.  
+> The pinned Doorstop is expected to be replaced once a stable release is out.  
+> For the current state and caveats, see the note in [the README of Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization/blob/main/README.md).
 
-Because the mod is not loaded, the game on macOS does not export a working copy.  
-So even when `dwloc` runs, the source text column stays empty and the "untranslated" judgement cannot be made.  
-If you want to see the source text as well, bring over the `<locale>.working.csv` exported on Windows and  
-put it in `<translation repository>/Translations/_discovered/`.
+`dwloc` itself runs even on a Mac without the mod.  
+But then the game does not export a working copy, so the source text column stays empty and the "untranslated" judgement cannot be made.  
+For details, see "Where it looks on macOS" below.
 
 Open Terminal and run the following in the folder you downloaded into.
 
@@ -858,25 +847,26 @@ If the game is under `C:/Program Files (x86)/`, saving from `edit` may be refuse
 The screen then says the save failed, and it keeps retrying.  
 Not a single byte of the file changes.
 
-#### Nothing is found on macOS
+#### Where it looks on macOS
 
-On macOS there is no game folder.  
-No plugin and no working copy are created either.  
-That is because the in-game mod does not run on macOS.  
-For details, see the warning under "Running it on macOS" above.
+On macOS it looks in the default Steam location, `~/Library/Application Support/Steam`, and in the libraries registered there.  
+The search is the same as on Windows and Linux: it looks for `Translations/_discovered` under `<library>/steamapps/common/<game>/BepInEx/plugins/<plugin>`.  
+The experimental installation script in the original repository puts BepInEx in this layout too.
 
-`dwloc` itself does run on macOS.  
-What does not work is only the part that connects to the game.
+It only finds something when the mod is installed, though.  
+For now the mod only runs on macOS with the experimental setup described under "Running it on macOS" above.  
+Without it, neither the plugin folder nor the working copy is created.
 
-| On macOS | What happens |
+| On a Mac without the mod | What happens |
 | ---- | ---- |
 | `publish`, `validate`, `diff` | Usable |
 | `edit` | Usable, but the source text column stays empty |
 | `--game auto` | Finds nothing and stops with exit code `2` |
 
-If you type `--game auto`, it prints to standard error why it came up empty and stops.  
-`edit` searches even without `--game`, so it prints three lines saying it searched and found nothing, then starts with the source text column empty.  
 If you bring over a working copy exported on another PC, you can point `--game` at that folder.
+
+> [!NOTE]
+> Whether `dwloc` finds, reads and writes the game on a Mac with the mod installed the experimental way has not been verified yet.
 
 ### Editing translations on screen
 

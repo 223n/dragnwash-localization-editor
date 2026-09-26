@@ -149,7 +149,7 @@ jobs:
     # 翻訳者の多くは Windows で使う。Windows でだけ通る道（ドライブ文字、大文字と小文字を区別しない
     # ファイルシステム、Steam の既定の場所）は、Linux のジョブでは飛ぶか別の期待値になるため、ここで試す。
     # 変数 RUNS_ON と入力 runner は見ない。どちらも Linux のランナーを選ぶためのものである。
-    # macOS は足していない。利用先として少なく、ゲームの Mod も macOS では動かないため
+    # macOS は足していない。利用先として少なく、ゲームの Mod も macOS では実験的な方法でしか動かないため
     runs-on: windows-latest
     # Windows のランナーは Linux より遅い。手元の Windows でも、diff・cmd・web のパッケージが30〜60秒かかる
     timeout-minutes: 20
