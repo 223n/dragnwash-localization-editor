@@ -10,7 +10,7 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
-// 画面に出す行の種類。ファイルの物理行の種類（edit.Kind）を、描き方の違いだけに
+// 画面に出す行の種類。ファイルの行の種類（edit.Kind）を、描き方の違いだけに
 // まとめ直したもの。判定ではなく描き分けなので、ここで決めてよい。
 const (
 	// lineKindHeading は見出しとして描く行。ファイルにあるコメント行そのもの。
@@ -54,21 +54,30 @@ type badgeView struct {
 	Note string `json:"note,omitempty"`
 }
 
-// lineView は画面に出す1行。
+// lineView は画面に出す1行（見出しのコメント行か、レコード1つ）。
 type lineView struct {
-	// Number は1始まりの物理行番号。
+	// ID は行の ID（[edit.Line.ID]）。保存の要求（rowEdit）はこれで行を指す。
+	// 自分の保存では変わらない。
+	ID int `json:"id"`
+	// Number は最初の物理行（1始まり）。表示と報告の照合にだけ使う。
 	Number int `json:"n"`
+	// End は最後の物理行。引用符で囲んだ値に改行があって行をまたぐレコードだけに
+	// 入る。1物理行に収まる行では省く。
+	End int `json:"end,omitempty"`
 	// Kind は描き方（[lineKindHeading] か [lineKindData]）。
 	Kind string `json:"kind"`
 
 	// Heading は見出しの深さ。Kind が [lineKindHeading] のときだけ入る。
 	Heading string `json:"heading,omitempty"`
-	// Text は生テキスト（改行を除く）。書き換えずにそのまま出す。
+	// Text は生テキスト（行を終える改行を除く）。書き換えずにそのまま出す。
 	//
 	// 見出し行では見出しの文、データ行では編集できないときだけ入る。
 	// 編集できない行は [edit.Line.Translation] が空を返す（列がずれているので、
 	// 最終フィールドが訳とは限らないため）。読むための画面でその行だけ中身が
 	// 見えなくなるのは困るので、生の行をそのまま渡して画面に出せるようにする。
+	//
+	// 行をまたぐレコードでは途中の改行が入る。途中の改行は LF にそろえて渡す
+	// （[lfLineBreaks]）。Source と Translation も同じ。
 	Text string `json:"text,omitempty"`
 
 	// Key は先頭フィールド。
@@ -170,7 +179,8 @@ type linesResponse struct {
 	// ReadOnlyReason はファイル全体が読み取り専用のときの理由。
 	ReadOnlyReason string `json:"readOnlyReason,omitempty"`
 
-	// Rows はデータ行の数。画面の見出しに「行: 1721」と出す値。
+	// Rows はデータ行（レコード）の数。画面の見出しに「行: 1721」と出す値。
+	// 行をまたぐレコードも1と数える。
 	//
 	// 画面に数えさせないために、ここで数えて渡す。Lines の中を数え上げる処理を
 	// 画面側に置くと、そこが「画面が自分で数える」場所の1つ目になる。
@@ -193,7 +203,7 @@ var statusOrder = []diff.Status{diff.StatusTodo, diff.StatusReview, diff.StatusI
 
 // buildLines は1ロケール分の画面データを組む。
 //
-// 行の並びと見出しは file（＝ファイルの物理行）から、状態バッジと件数は
+// 行の並びと見出しは file（＝ファイルの行）から、状態バッジと件数は
 // sum / findings（＝internal/diff）から取る。この2つを混ぜないことがこの関数の
 // 役目で、画面に新しい判断を置かないという約束はここで守られる。
 func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.File,
@@ -237,7 +247,7 @@ func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.Fil
 
 	resp.Rows = dataRows
 	resp.Counts = s.buildCounts(cat, locale, sum, rowsByCategory(lines, badges))
-	resp.Stats = s.buildStats(cat, sum, len(lines), dataRows)
+	resp.Stats = s.buildStats(cat, sum, file.PhysicalLines(), dataRows)
 	resp.Notes = s.buildNotes(cat, target, sum, idx.source >= 0)
 	return resp
 }
@@ -246,6 +256,7 @@ func (s *server) buildLines(cat *Catalog, target *publish.Target, file *edit.Fil
 func headingView(line edit.Line) lineView {
 	body := strings.TrimRight(line.Text, "\r\n")
 	return lineView{
+		ID:      line.ID,
 		Number:  line.Number,
 		Kind:    lineKindHeading,
 		Heading: headingLevel(body),
@@ -271,23 +282,41 @@ func headingLevel(body string) string {
 // 英語の画面でその行だけ日本語になる。
 func (s *server) dataView(cat *Catalog, line edit.Line, idx columns, badges map[string][]badgeView) lineView {
 	v := lineView{
+		ID:          line.ID,
 		Number:      line.Number,
 		Kind:        lineKindData,
 		Key:         line.Key(),
 		Speaker:     idx.at(line.Fields, idx.speaker),
-		Source:      idx.at(line.Fields, idx.source),
-		Translation: line.Translation(),
+		Source:      lfLineBreaks(idx.at(line.Fields, idx.source)),
+		Translation: lfLineBreaks(line.Translation()),
 		Editable:    line.Editable,
 		Reason:      s.reasonText(cat, line.Cause),
 	}
+	if line.EndNumber > line.Number {
+		v.End = line.EndNumber
+	}
 	if !line.Editable {
-		// 訳として出せない行は、生の行を渡して読めるようにする。
-		// 改行は含めない（画面に出すのは1行ぶんの文字列）。
-		v.Text = strings.TrimRight(line.Text, "\r\n")
+		// 訳として出せない行は、生の行を渡して読めるようにする。行を終える改行は
+		// 含めない。行をまたぐレコードの途中の改行は残す。
+		v.Text = lfLineBreaks(strings.TrimRight(line.Text, "\r\n"))
 	}
 	v.KeyKind = keyKind(v.Key)
 	v.Badges = badges[v.Key]
 	return v
+}
+
+// lfLineBreaks は、値の中の CRLF と単独の CR を LF にそろえる。
+//
+// 画面は値の中の改行を LF の改行として描く。ファイルの中の改行は、表計算ソフトなどで
+// 保存し直すと CRLF になることがあり（決まったことのそのほか 7）、CR のまま渡すと
+// 描き方がブラウザーに任される。そろえるのは描くための値だけで、ファイルは変えない。
+// 改行の入った訳はまだ編集させない（reason.EditMultilineTranslation）ので、そろえた
+// 値が保存に戻ることは無い。
+func lfLineBreaks(v string) string {
+	if !strings.Contains(v, "\r") {
+		return v
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(v, "\r\n", "\n"), "\r", "\n")
 }
 
 // keyKind はキーの形を返す。判定は internal/key に任せる。
@@ -481,7 +510,7 @@ func (s *server) buildCounts(cat *Catalog, locale string, sum diff.Summary,
 }
 
 // buildStats は「数えたもの」を並べる。数はすべて [diff.Summary] か、
-// ファイルの行数そのもの。
+// ファイルの物理行の数とデータ行（レコード）の数そのもの。
 func (s *server) buildStats(cat *Catalog, sum diff.Summary, fileLines, dataRows int) []statView {
 	stats := []statView{
 		{Label: s.cat.T(cat, "stats.file_lines"), Value: fileLines},

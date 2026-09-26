@@ -10,8 +10,11 @@
 //
 // 終了コードは 0 が成功、1 が「実行はできたが、人が見るべきものが残っている」、
 // 2 が実行時のエラーです。1 を返すのは validate が問題を見つけたとき、
-// diff が要確認を見つけたとき（--strict なら要作業も）、そして publish が
-// 「書くと訳が失われる」と判断して1バイトも書かずに止まったときです。
+// diff が要確認を見つけたとき（--strict なら要作業も）、diff が閉じない引用符の
+// ファイルを読めずに判定しなかったカテゴリがあるとき、そして publish が「書くと訳が
+// 失われる」「読み違える形のファイルがある」「ゲームに入っている翻訳が古い」
+// 「組み立てたあとに入力か書き出し先が変わった」と判断して1バイトも書かずに
+// 止まったときです（README の終了コードの7つ）。
 // この3段に分けているのは、CIが「検証に落ちた」と「そもそも実行できなかった」を
 // 区別できるようにするためです。元実装の check-translations.py は前者だけを1で返し、
 // 後者はトレースバックで落ちていました（移植仕様「形式検証 / 未決の点」）。
@@ -48,8 +51,9 @@ var version = "dev"
 const (
 	// exitOK は成功。
 	exitOK = 0
-	// exitProblems は validate が問題を見つけたときと、diff が要確認を
-	// 見つけたとき。実行そのものは成功している。
+	// exitProblems は validate が問題を見つけたとき、diff が要確認を見つけたとき
+	// （判定できないカテゴリがあるときを含む）、publish が確かめで止まったとき。
+	// 実行そのものは成功している。
 	exitProblems = 1
 	// exitError は実行できなかったとき。引数の誤り、ファイルが読めない、などが入る。
 	exitError = 2
@@ -93,9 +97,11 @@ const usageText = `dwloc は Drag'n Wash の翻訳リポジトリを扱うコマ
 
 終了コード:
   0   成功
-  1   validate が問題を見つけた、diff が要確認を見つけた、または publish が
-      「書くと訳が失われる」「ゲームに入っている翻訳が古い」と判断して止まった
-      （diff --strict では要作業でも 1 になります）
+  1   validate が問題を見つけた、diff が要確認を見つけた（diff --strict では
+      要作業でも 1 になります）、diff が閉じない引用符のファイルを読めず判定して
+      いないカテゴリがある、または publish が「書くと訳が失われる」「読み違える
+      形のファイルがある」「ゲームに入っている翻訳が古い」「組み立てたあとに
+      入力か書き出し先が変わった」と判断して止まった
   2   実行時のエラー（引数の誤り、ファイルが読めない、など）
 
 記録:
@@ -427,24 +433,6 @@ dwloc:       ゲームを1度起動して、ゲーム内で F1 → Translation �
 dwloc:       場所が分かっているときは --game <フォルダー> で直に指定できます。
 `
 
-// gameNotFoundMacText は、macOS で自動検出が空振りしたときの案内です。
-//
-// 文面を分けるのは、macOS では「ゲームを1度起動して Export working copy を押して
-// ください」が実行できない案内だからです。Drag'n Wash Localization は macOS で
-// 動きません。BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに
-// 割り込めず、Mod が読み込まれないためです（元リポジトリの README による）。
-// Mod が動かない以上、プラグインのフォルダーも作業コピーも作られません。
-//
-// dwloc 自身は macOS でも動きます。動かないのはゲームと繋がる部分だけなので、
-// 何ができるかも並べて、道具ごと諦めさせないようにします。
-const gameNotFoundMacText = `dwloc: ゲームのフォルダーが見つかりません。
-dwloc:       macOS では Drag'n Wash Localization（ゲーム内のMod）がまだ動きません。
-dwloc:       BepInEx 5.4.23.5 が macOS で使う Doorstop が Unity 6.3 のゲームに割り込めないためです。
-dwloc:       Mod が動かないので、プラグインのフォルダーも作業コピーも作られません。
-dwloc:       dwloc 自身は動きます。publish / validate / diff と、原文の欄が空のままの edit は使えます。
-dwloc:       ほかのPCで書き出した作業コピーがあるときは --game <フォルダー> で指定できます。
-`
-
 // gameNotPluginText は --game に指定された場所が外れていたときの案内です。
 const gameNotPluginText = `dwloc: 指定された場所に Translations/_discovered がありません: %s
 dwloc:       ゲームのフォルダーか、その中の BepInEx/plugins/<プラグイン> を指定してください。
@@ -638,13 +626,8 @@ func writeGameError(err error, stderr io.Writer) {
 		return
 	}
 	if errors.Is(err, gamedir.ErrNotFound) {
-		// 見つからない理由が OS ごとに違うので、次にやることも分けます。
-		// 検出そのものは macOS でも走らせたままにしてあります。BepInEx が
-		// 直れば、コードを足さずにそのまま見つかるようになるためです。
-		if runtime.GOOS == "darwin" {
-			fmt.Fprint(stderr, gameNotFoundMacText)
-			return
-		}
+		// OS で文面を分けません。macOS でも Mod が（実験的な方法で）動くように
+		// なり、次にやることはほかの OS と同じ、ゲーム内での書き出しになりました。
 		fmt.Fprint(stderr, gameNotFoundText)
 		return
 	}

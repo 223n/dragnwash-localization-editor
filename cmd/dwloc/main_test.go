@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/223n/dragnwash-localization-editor/internal/gamedir"
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
 
 // TestMain は、この package の試験が実機の Steam を見に行かないようにする。
@@ -29,7 +30,24 @@ import (
 // 通る試験になる。
 func TestMain(m *testing.M) {
 	findGame = func() []gamedir.Plugin { return nil }
-	os.Exit(m.Run())
+	os.Exit(runWithLockDir(m))
+}
+
+// runWithLockDir は、書き込みの錠のファイルを試験用の一時フォルダーに置かせて
+// （publish.LockDirEnv）試験を走らせる。利用者のキャッシュのフォルダーへ、試験が
+// 作った一時パスの錠のファイルを残さない。
+func runWithLockDir(m *testing.M) int {
+	if os.Getenv(publish.LockDirEnv) != "" {
+		return m.Run()
+	}
+	dir, err := os.MkdirTemp("", "dwloc-locks-test")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv(publish.LockDirEnv, dir)
+	defer os.Unsetenv(publish.LockDirEnv)
+	return m.Run()
 }
 
 // stubFindGame は自動検出の結果を paths に差し替える。試験が終わると元へ戻す。

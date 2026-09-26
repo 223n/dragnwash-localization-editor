@@ -155,6 +155,12 @@ func TestJapaneseCatalogMatchesTheSourceText(t *testing.T) {
 	}
 
 	// 見本が痩せていないことを確かめる。[reason.All] の全部を通したい。
+	//
+	// 書く前の事後確認の理由（reason.EditRecheckFailed）だけは除く。正しく組み立てた
+	// ファイルでは立たない（編集モデルに誤りがあるときにだけ立つ）ので、実際の判定から
+	// 見本を取れない。文面が目録と同じことは、internal/edit の
+	// TestRecheckReasonMatchesTheCatalog が見ている。
+	seen[reason.EditRecheckFailed] = struct{}{}
 	for _, id := range reason.All() {
 		if _, ok := seen[id]; !ok {
 			t.Errorf("reason.%s を1度も通していない", id)
@@ -481,19 +487,18 @@ func editReasons(t *testing.T) []reason.Reason {
 		t.Fatal("2行目が無い")
 	}
 
-	// 訳を消すとレコードでなくなる行（キーも空の2列）。
-	blankable := edit.Parse([]byte("key,translation\n,v\n"))
-	if err := blankable.SetTranslation(2, ""); err != nil {
-		t.Fatalf("空にできない: %v", err)
-	}
-	if line, ok := blankable.Line(2); ok {
+	// key 列が16桁のキーでも台詞ID でもなく、原文も空の行（2列の公開ファイル）。
+	// publish が捨てる（移植仕様 R17）ので編集させない。
+	keyless := edit.Parse([]byte("key,translation\nk,v\n"))
+	if line, ok := keyless.Line(2); ok {
 		out = append(out, line.Cause)
 	} else {
 		t.Fatal("2行目が無い")
 	}
 
-	// 書き換えを断る経路。誤りの型から理由を取り出す。
-	f := edit.Parse([]byte("key,translation\n# 見出し\nk,v\n"))
+	// 書き換えを断る経路。誤りの型から理由を取り出す。key 列は16桁のキーにする
+	// （そうでないと、上の理由で先に断る）。
+	f := edit.Parse([]byte("key,translation\n# 見出し\n0123456789abcdef,v\n"))
 	refuse := []struct {
 		line  int
 		value string
@@ -519,14 +524,31 @@ func editReasons(t *testing.T) []reason.Reason {
 		out = append(out, causeOf(t, err))
 	}
 
-	// 行をまたぐレコードの行と、閉じない引用符のファイル。
-	multi := edit.Parse([]byte("key,translation\nk,\"い\nち\"\n"))
+	// 訳が行をまたぐレコードと、閉じない引用符のファイルと、行の区切りが CR だけの
+	// ファイル。
+	multi := edit.Parse([]byte("key,translation\n0123456789abcdef,\"い\nち\"\n"))
 	if err := multi.SetTranslation(2, "x"); err == nil {
-		t.Error("行をまたぐレコードの行が書けてしまった")
+		t.Error("訳が行をまたぐレコードが書けてしまった")
 	} else {
 		out = append(out, causeOf(t, err))
 	}
 	out = append(out, edit.Parse([]byte("key,translation\nk,\"い\n")).ReadOnlyCause())
+	out = append(out, edit.Parse([]byte("key,translation\rk,い\r")).ReadOnlyCause())
+
+	// 飲み込みの疑いのあるレコードと、ゲームの読み方と値が割れるレコード・ゲームの
+	// 読み方に見つからないレコード（単独の CR で終わる行の次の行）。
+	shapes := edit.Parse([]byte("key,section,node,order,speaker,source_en,translation\n" +
+		"0123456789abcdef,UI,,,UI,\"one\n" +
+		"fedcba9876543210,UI,,,UI,two\",いち\n" +
+		"1111111111111111,UI,,,UI,three,い\r" +
+		"2222222222222222,UI,,,UI,four,ろ\n"))
+	for _, id := range []int{2, 3, 4} {
+		if err := shapes.SetTranslation(id, "x"); err == nil {
+			t.Errorf("ID %d が書けてしまった", id)
+		} else {
+			out = append(out, causeOf(t, err))
+		}
+	}
 
 	return out
 }
@@ -890,14 +912,14 @@ func TestSaveErrorIsTranslated(t *testing.T) {
 		target := 0
 		for _, line := range lines.Lines {
 			if line.Kind == lineKindData && !line.Editable {
-				target = line.Number
+				target = line.ID
 			}
 		}
 		if target == 0 {
 			t.Fatalf("%s: 編集できない行が無い", lang)
 		}
 
-		rec := save(t, s, "ja", lines.Version, rowEdit{Line: target, Translation: "x"})
+		rec := save(t, s, "ja", lines.Version, rowEdit{ID: target, Translation: "x"})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%s: 状態コードが %d\n%s", lang, rec.Code, rec.Body.String())
 		}
@@ -977,4 +999,43 @@ func publishBaseReasons(t *testing.T) []reason.Reason {
 		t.Fatalf("食い違いが1件でない: %+v", res)
 	}
 	return []reason.Reason{publish.BaseReason(res.Locale, res.Count)}
+}
+
+// TestReadmeListsTheRowReasons は、README（ja・en）の「書き換えられない行」の表が、画面が
+// 行ごとに出す読み取り専用の理由をすべて載せていることを見る。表は「出る理由」の列に
+// 画面の文面を並べる。載っていない理由が画面に出ると、翻訳者は README でその理由と
+// 直し方を引けない（PR3 の検証で、reason.edit_game_misses_record が抜けていた）。
+//
+// 置換は表の書き方にそろえる（{line} は N、{column} は ja が「（列名）」、en が
+// 「(column name)」）。
+func TestReadmeListsTheRowReasons(t *testing.T) {
+	s := newTestServer(t, Options{})
+	for _, tc := range []struct {
+		readme, lang string
+		// column は、目録の文面の {column}（ja は前後の空白を含む）を表の書き方に直す。
+		column *strings.Replacer
+	}{
+		{"README.md", "ja", strings.NewReplacer(" \x00 ", "（列名）")},
+		{"README.en.md", "en", strings.NewReplacer("\x00", "(column name)")},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", tc.readme))
+		if err != nil {
+			t.Fatal(err)
+		}
+		readme := string(data)
+		cat := s.cat.lookup(tc.lang)
+		for _, id := range []string{
+			reason.EditMultilineTranslation,
+			reason.EditSwallow,
+			reason.EditGameDisagrees,
+			reason.EditGameMissesRecord,
+			reason.EditNoKeyOrSource,
+		} {
+			text := s.cat.T(cat, "reason."+id, "line", "N", "column", "\x00")
+			text = tc.column.Replace(text)
+			if !strings.Contains(readme, "| "+text) {
+				t.Errorf("%s の表に reason.%s（%q）が無い", tc.readme, id, text)
+			}
+		}
+	}
 }

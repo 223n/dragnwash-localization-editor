@@ -32,6 +32,12 @@ Dependabotの`target-branch`、ラベル同期の`--ref`、CIの`push`トリガ�
 
 どちらもheadは`release/*`か`merge/*`で、`develop`や`main`ではありません。
 
+どちらのPull RequestもGitHub Actionsが開くため、CIなどの実行は「承認待ち」で作られます。
+`Approve workflows to run`を押し、CIが通ってからマージします。
+承認せずにマージすると、承認待ちの実行が期限切れの失敗としてActionsに残ります。
+「リリース」を`auto_merge`で動かしたときは、ワークフローが`release/*`ブランチでCIを動かして待ち、承認待ちの実行を取り消してからマージします。
+詳しくは[README.md](README.md)の「ワークフローが開いたPull RequestのCI」にあります。
+
 ワークフローの外で取り込む必要があるときは、作業用のブランチを切ってからPull Requestを開きます。
 
 ```bash

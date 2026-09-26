@@ -10,11 +10,11 @@ import (
 	"github.com/223n/dragnwash-localization-editor/internal/reason"
 )
 
-// TestSaveRejectsMovedRow は、行番号の指す行が思っているキーの行でないときに
+// TestSaveRejectsMovedRow は、ID（通し番号）の指す行が思っているキーの行でないときに
 // 書かないことを確かめる。
 //
 // 409 を受けた画面は、読み直した内容に自分の編集を載せ直す。そのあいだに
-// よそが行を足したり消したりしていると、同じ行番号が別のキーの行を指す。
+// よそがレコードを足したり消したりしていると、同じ ID が別のキーの行を指す。
 // 書いてしまうと、訳が別の行へ入り、その行にもとからあった訳が消える。
 // どちらも黙って起きるので、翻訳者は気づけない。
 func TestSaveRejectsMovedRow(t *testing.T) {
@@ -23,9 +23,9 @@ func TestSaveRejectsMovedRow(t *testing.T) {
 	before := readFile(t, path)
 
 	lines := getLines(t, s, "ja")
-	// 6行目にあるのは srcBye のキー。srcHello のキーだと思って送る。
+	// ID 6（6行目）にあるのは srcBye のキー。srcHello のキーだと思って送る。
 	rec := save(t, s, "ja", lines.Version, rowEdit{
-		Line:        6,
+		ID:          6,
 		Key:         key.For(srcHello),
 		Translation: jaTyped,
 	})
@@ -57,7 +57,7 @@ func TestSaveAcceptsMatchingKey(t *testing.T) {
 
 	lines := getLines(t, s, "ja")
 	rec := save(t, s, "ja", lines.Version, rowEdit{
-		Line:        6,
+		ID:          6,
 		Key:         key.For(srcBye),
 		Translation: jaTyped,
 	})
@@ -82,8 +82,8 @@ func TestSaveMixesMovedAndGoodRows(t *testing.T) {
 
 	lines := getLines(t, s, "ja")
 	rec := save(t, s, "ja", lines.Version,
-		rowEdit{Line: 5, Key: "0000000000000000", Translation: "ずれている"},
-		rowEdit{Line: 6, Key: key.For(srcBye), Translation: jaTyped},
+		rowEdit{ID: 5, Key: "0000000000000000", Translation: "ずれている"},
+		rowEdit{ID: 6, Key: key.For(srcBye), Translation: jaTyped},
 	)
 
 	if rec.Code != http.StatusOK {
@@ -117,7 +117,7 @@ func TestUnknownLocaleMessageHasNoPlaceholder(t *testing.T) {
 	s := newTestServer(t, Options{Root: newEditRoot(t)})
 
 	for _, locale := range []string{"../he", "ja/../he", "JA", "_discovered", "xx"} {
-		rec := save(t, s, locale, strings.Repeat("0", 64), rowEdit{Line: 6, Translation: jaTyped})
+		rec := save(t, s, locale, strings.Repeat("0", 64), rowEdit{ID: 6, Translation: jaTyped})
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%q: 状態コードが %d、404 を期待", locale, rec.Code)
 		}
@@ -167,8 +167,8 @@ func TestSessionCookieIsPerPort(t *testing.T) {
 	}
 }
 
-// TestSaveToMissingRowSaysTheRowIsMissing は、キーを添えて無い行番号へ送ったときに
-// 「行が無い」と言うことを確かめる。
+// TestSaveToMissingRowSaysTheRowIsMissing は、キーを添えて無い ID へ送ったときに
+// 「行が無い」と言うことを確かめる。行が無いので「N行目は」の外枠は付けない。
 //
 // キーの照合は、行が無ければ素通しして internal/edit に断らせる。照合の側で
 // 「行がずれた」と言うと、読み直せば直る話に見えてしまい、画面はいつまでも
@@ -180,7 +180,7 @@ func TestSaveToMissingRowSaysTheRowIsMissing(t *testing.T) {
 	before := readFile(t, path)
 
 	lines := getLines(t, s, "ja")
-	rec := save(t, s, "ja", lines.Version, rowEdit{Line: 999, Key: key.For(srcBye), Translation: jaTyped})
+	rec := save(t, s, "ja", lines.Version, rowEdit{ID: 999, Key: key.For(srcBye), Translation: jaTyped})
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("状態コードが %d、422 を期待\n%s", rec.Code, rec.Body.String())
@@ -189,9 +189,9 @@ func TestSaveToMissingRowSaysTheRowIsMissing(t *testing.T) {
 	if len(got.Results) != 1 {
 		t.Fatalf("結果が %+v", got.Results)
 	}
-	why := reason.New(reason.EditNoSuchLine, "そんな行番号は無い")
-	want := s.cat.T(ja, "error.not_editable", "line", "999", "reason", s.reasonText(ja, why))
-	if got.Results[0].Error != want {
+	why := reason.New(reason.EditNoSuchLine, "そんな行は無い")
+	want := s.reasonText(ja, why)
+	if got.Results[0].Error != want || want != "そんな行は無い" || got.Results[0].ID != 999 || got.Results[0].Number != 0 {
 		t.Errorf("理由が %q、%q を期待", got.Results[0].Error, want)
 	}
 	if got.Results[0].Error == s.cat.T(ja, "error.row_moved") {

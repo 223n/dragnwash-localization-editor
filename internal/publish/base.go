@@ -74,14 +74,23 @@ type BaseResult struct {
 // ゲーム側に公開ファイルが無いときは、そろっているともいないとも言えないので
 // 何も返さない。そのロケールで訳が実際に消えるなら [CheckLoss] が捕まえる。
 func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
-	res := BaseResult{Locale: t.Locale}
 	if t.GameBase == "" {
-		return res, nil
+		return BaseResult{Locale: t.Locale}, nil
 	}
 	gameBytes, err := readIfExists(t.GameBase)
 	if err != nil {
-		return res, err
+		return BaseResult{Locale: t.Locale}, err
 	}
+	return CheckBaseBytes(t.Locale, repoCurrent, gameBytes)
+}
+
+// CheckBaseBytes は [CheckBase] と同じ確かめを、読んだ中身で行う。gameBytes は
+// ゲーム側の公開ファイルの中身で、nil（ファイルが無い）なら何も返さない。
+//
+// publish（cmd/dwloc）が、ほかの確かめと同じバイト列（[ReadFiles]）で確かめるために
+// ある。
+func CheckBaseBytes(locale string, repoCurrent, gameBytes []byte) (BaseResult, error) {
+	res := BaseResult{Locale: locale}
 	if gameBytes == nil {
 		return res, nil
 	}
@@ -110,7 +119,7 @@ func CheckBase(t Target, repoCurrent []byte) (BaseResult, error) {
 		if len(res.Sample) < baseDriftListMax {
 			repoHead, gameHead := driftHeads(mine.text, theirs.text)
 			res.Sample = append(res.Sample, BaseDrift{
-				Locale: t.Locale, Key: mine.key,
+				Locale: locale, Key: mine.key,
 				Repo: repoHead, Game: gameHead,
 			})
 		}

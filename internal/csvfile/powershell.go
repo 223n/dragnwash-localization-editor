@@ -40,8 +40,8 @@ func (e *DuplicateColumnError) Error() string {
 // 常に起きる（移植仕様「公開CSV生成 / 敵対検証」[medium] R4）。上流は f816618 で
 // 全文を1つの文字列として解釈する読み方へ移った。この移植の全体を解釈する読み手は
 // [ReadPowerShell] で、publish・diff・order は、全体を解釈する読み手へ移す作業
-// （docs/port-spec.md）の PR2 でそちらへ切り替えた。edit はこの関数を使わず、PR2 から
-// 行の種類を区切りの関数（[SplitSegments]）で決める。保存の単位をレコードへ移すのは PR3。
+// （docs/port-spec.md）の PR2 でそちらへ切り替えた。edit はこの関数を使わず、PR3 から
+// 区切りの関数（[SplitSegments]）のレコードの単位で保存する。
 //
 // 切り替えたので、この関数（と [ReadPowerShellRowsNumbered]・[ReadPowerShellTable]）は、
 // 「どのレコードも1行に収まるファイルでは、全体を解釈する読み方と結果が同じ」ことを
@@ -229,8 +229,8 @@ func checkDuplicateColumns(header []string) *DuplicateColumnError {
 //
 // この関数が読むのは1物理行である。改行を含む値のレコードは読めないので、
 // レコードを読むには全体を解釈する [ReadPowerShell] を使う。この関数を使うのは、
-// 1物理行を単独で読みたいところ（行単位の読み手、internal/edit のいまの保存、
-// publish の形の確かめ (d) の数え方、形の検出が続きの物理行を読むところ）だけである。
+// 1物理行を単独で読みたいところ（行単位の読み手、publish の形の確かめ (d) の数え方、
+// 形の検出が続きの物理行を読むところ）だけである。
 func ParsePowerShellRecord(line string) ([]string, bool) {
 	fields := parsePowerShellFields(line)
 	if len(fields) == 0 || (len(fields) == 1 && fields[0] == "") {

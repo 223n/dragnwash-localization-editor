@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -565,9 +564,9 @@ func TestEditRefusesGameAndNoGameTogether(t *testing.T) {
 // 入口から試さないのは、--game auto が gamedir.Find を直に呼び、実機の Steam を
 // 見に行くからである（[TestMain] の注意書き）。案内の選び分けだけをここで見る。
 //
-// macOS では「ゲームを起動して Export working copy を押す」が実行できない案内に
-// なる（Mod が macOS で動かない）。文面を分けたことが崩れると、押せないボタンを
-// 押させる行き止まりに戻る。
+// どの OS でも、次にやることはゲーム内での書き出しである。以前は macOS だけ
+// 「Mod が動かない」案内に分けていたが、Mod が macOS でも動くようになったので
+// 1つにそろえた。
 func TestWriteGameErrorNotFound(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -582,15 +581,13 @@ func TestWriteGameErrorNotFound(t *testing.T) {
 			writeGameError(tc.err, &buf)
 			got := buf.String()
 
-			checkContains(t, "案内", got, []string{"ゲームのフォルダーが見つかりません", "--game <フォルダー>"})
-			if runtime.GOOS == "darwin" {
-				checkContains(t, "案内", got, []string{"macOS", "dwloc 自身は動きます"})
-				return
-			}
-			// macOS 以外では、次にやることはゲーム内での書き出しである。
-			checkContains(t, "案内", got, []string{"F1 → Translation → Export working copy"})
+			checkContains(t, "案内", got, []string{
+				"ゲームのフォルダーが見つかりません", "--game <フォルダー>",
+				"F1 → Translation → Export working copy",
+			})
+			// 「Mod が動かない」という古い案内に戻っていないこと。
 			if strings.Contains(got, "macOS") {
-				t.Errorf("macOS 以外で macOS 向けの案内が出ている:\n%s", got)
+				t.Errorf("macOS 向けの古い案内が出ている:\n%s", got)
 			}
 		})
 	}

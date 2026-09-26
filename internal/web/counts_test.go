@@ -461,14 +461,14 @@ func TestSaveResponseCountsRowsToo(t *testing.T) {
 	line := 0
 	for _, l := range before.Lines {
 		if l.Kind == lineKindData && l.Key == key.For(srcTodo) {
-			line = l.Number
+			line = l.ID
 		}
 	}
 	if line == 0 {
 		t.Fatal("訳を入れる行が見つからない")
 	}
 	rec := save(t, s, "ja", before.Version,
-		rowEdit{Line: line, Key: key.For(srcTodo), Translation: "こんにちは"})
+		rowEdit{ID: line, Key: key.For(srcTodo), Translation: "こんにちは"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}
@@ -506,14 +506,14 @@ func TestDuplicateKeyRowsLoseTheBadgeTogether(t *testing.T) {
 	line := 0
 	for _, l := range before.Lines {
 		if l.Kind == lineKindData && l.Key == key.For(srcTodo) && line == 0 {
-			line = l.Number
+			line = l.ID
 		}
 	}
 	if line == 0 {
 		t.Fatal("訳を入れる行が見つからない")
 	}
 	rec := save(t, s, "ja", before.Version,
-		rowEdit{Line: line, Key: key.For(srcTodo), Translation: "こんにちは"})
+		rowEdit{ID: line, Key: key.For(srcTodo), Translation: "こんにちは"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状態コードが %d: %s", rec.Code, rec.Body.String())
 	}

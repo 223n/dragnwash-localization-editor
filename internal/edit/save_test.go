@@ -5,8 +5,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/223n/dragnwash-localization-editor/internal/publish"
 )
 
 // writeTemp はテスト用のファイルを作ってパスを返す。
@@ -261,6 +264,95 @@ func TestSaveCreatesNoLeftovers(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("余計なファイルが残った: %v", names)
+	}
+}
+
+// TestSaveWaitsForTheLock は、ほかの dwloc が書き込みの錠を持っているあいだ、保存が
+// 版の照合も書き込みも始めずに待ち、放されたら書くことを見る（改善の決定 3）。
+//
+// 錠を持つのは publish.LockFile を呼んだこの試験で、ほかの dwloc edit や publish の
+// 代わりである。錠が効いていなければ、保存は待たずに書き終える。照合が錠の中にある
+// ことは TestSaveComparesTheVersionInsideTheLock が見る。
+func TestSaveWaitsForTheLock(t *testing.T) {
+	path := writeTemp(t, sampleWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetTranslation(6, "こんにちは"); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock, err := publish.LockFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.Save() }()
+
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("錠を持っているあいだに保存が終わった: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if got := readFile(t, path); got != sampleWorking {
+		t.Fatalf("錠を持っているあいだに書いた: %q", got)
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("放したあとの保存が失敗した: %v", err)
+	}
+	if got := readFile(t, path); !strings.Contains(got, ",こんにちは\n") {
+		t.Errorf("放したあとに書いていない: %q", got)
+	}
+}
+
+// TestSaveComparesTheVersionInsideTheLock は、版の照合を錠の中で行うことを見る。
+//
+// 試験が錠を持っているあいだにファイルを書き換えてから放す。錠を持つほかの dwloc が
+// 保存した場面である。照合が錠を取る前にあると、書き換える前の中身と照合して通り、
+// 錠を待ったあとで、ほかの dwloc が書いた訳を黙って上書きする。錠の中で照合すれば、
+// 書き換えたあとの中身と比べるので、1バイトも書かずに競合を返す。
+func TestSaveComparesTheVersionInsideTheLock(t *testing.T) {
+	path := writeTemp(t, sampleWorking)
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetTranslation(6, "こんにちは"); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock, err := publish.LockFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.Save() }()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("錠を持っているあいだに保存が終わった: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// 錠を持つ側（ほかの dwloc）が、同じファイルに別の訳を保存する。
+	outside := strings.Replace(sampleWorking, ",はじめる\n", ",よその訳\n", 1)
+	if outside == sampleWorking {
+		t.Fatal("見本を書き換えられない")
+	}
+	if err := os.WriteFile(path, []byte(outside), 0o644); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+
+	if err := <-done; !errors.Is(err, ErrConflict) {
+		t.Fatalf("Save = %v、競合を期待", err)
+	}
+	if got := readFile(t, path); got != outside {
+		t.Errorf("錠を持つ側が保存した訳を上書きした: %q", got)
 	}
 }
 

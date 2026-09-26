@@ -52,6 +52,7 @@ jobs:
     permissions:
       contents: write        # タグを打ち、Release を作り、書庫を添付する
       pull-requests: write   # main を develop へ戻す PR を開く
+      actions: write         # develop へ直接戻したとき、develop の CI を workflow_dispatch で動かす
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -144,9 +145,10 @@ jobs:
 
       - name: Goのテストを通す
         # 配る木（main）そのものでテストを通してから作る。1つでも落ちたら、タグも Release も作らない。
-        # リリースの PR の CI は承認待ちのまま動かないことが多く、auto_merge の経路では main への push の
-        # CI も起きない（GITHUB_TOKEN のマージはワークフローを起こさない）。develop の CI は「リリース」が
-        # 確かめているが、main には release ブランチで取り込んだ main の中身と版の上げが加わっている。
+        # リリースの PR の CI は人が承認するまで動かず、承認せずにマージされることもある。auto_merge の経路では
+        # 「リリース」が release ブランチで CI を走らせてからマージするが、main への push の CI は起きない
+        # （GITHUB_TOKEN のマージはワークフローを起こさない）。hotfix/* の PR は「リリース」を通らない。
+        # そのため、ここを公開の前の最後の確かめとして残す。
         # E2E は含めない。ブラウザーを入れる分、公開までが長くなるためで、画面は develop の CI で見ている。
         # 元リポジトリを読む試験は、ここには元リポジトリが無いので飛ぶ
         env:
@@ -572,7 +574,12 @@ jobs:
 
       - name: mainをdevelopへ戻す
         # 版の更新を develop にも届ける。まず直接押し、保護されていて押せなければ PR を開く。
-        # 再実行しても壊れないよう、同じ PR がすでにあればそれを使う
+        # 再実行しても壊れないよう、同じ PR がすでにあればそれを使う。
+        #
+        # この PR も GITHUB_TOKEN が開くので、pull_request の実行（CI、CodeQL、branch-guard）は「承認待ち」で
+        # 作られる。人が「Approve workflows to run」を押し、CI が通ってからマージするよう、本文と要約に書く。
+        # 承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残る。
+        # この PR を自動でマージする経路は無いので、取り消しの段は置かない
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -596,6 +603,16 @@ jobs:
           if git merge --no-ff --no-edit --message "${MAIN_BRANCH} を ${DEVELOP_BRANCH} に取り込む（${TAG}）" "origin/${MAIN_BRANCH}"; then
             if git push origin "HEAD:${DEVELOP_BRANCH}"; then
               echo "- ${DEVELOP_BRANCH}: ${MAIN_BRANCH} を直接取り込んだ" >> "$GITHUB_STEP_SUMMARY"
+              # GITHUB_TOKEN の push では push の CI が起きない。次のリリースの「developのCIが
+              # 通ったことを確かめる」は、push の実行が無いとき同じ SHA の workflow_dispatch の
+              # 実行を見るので、ここで動かしておく（GITHUB_TOKEN の workflow_dispatch は実行を
+              # 作れる）。動かせなくても戻しはできているので、止めずに手で動かすよう案内する
+              if gh workflow run ci.yml --ref "${DEVELOP_BRANCH}"; then
+                echo "- ${DEVELOP_BRANCH}: CI を手で動かした（GITHUB_TOKEN の push では CI が起きないため）" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::warning::${DEVELOP_BRANCH} の CI を動かせなかった。次のリリースの前に Actions の CI を ${DEVELOP_BRANCH} で手で動かす"
+                echo "- ${DEVELOP_BRANCH}: CI を動かせなかった。次のリリースの前に手で動かす" >> "$GITHUB_STEP_SUMMARY"
+              fi
               exit 0
             fi
             echo "::warning::${DEVELOP_BRANCH} に直接押せなかった。PR で取り込む"
@@ -613,15 +630,31 @@ jobs:
           else
             git switch --create "${branch}" "origin/${MAIN_BRANCH}"
             git push --set-upstream origin "${branch}"
+            # 本文は作業ツリーの外に書く。作業ツリーの中は、このあとの段も使う
+            body="${RUNNER_TEMP:-/tmp}/back-merge-body.md"
+            {
+              echo "リリース ${TAG} で上げた版を \`${DEVELOP_BRANCH}\` にも反映します。"
+              echo "衝突があれば、この PR の上で解消してください。"
+              echo
+              echo "**マージコミット（Create a merge commit）でマージしてください。**"
+              echo
+              echo "## マージの前に"
+              echo
+              echo "この PR は GitHub Actions が開いたため、CI などの実行は「承認待ち」で作られます。"
+              echo "**「Approve workflows to run」を押し、CI が通ってからマージしてください。**"
+              echo
+              echo "- CI は、\`${MAIN_BRANCH}\` を \`${DEVELOP_BRANCH}\` に取り込んだ木で走ります"
+              echo "- 承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残ります"
+            } > "${body}"
             url="$(gh pr create \
               --base "${DEVELOP_BRANCH}" \
               --head "${branch}" \
               --title "${MAIN_BRANCH} を ${DEVELOP_BRANCH} に取り込む（${TAG}）" \
-              --body "リリース ${TAG} で上げた版を \`${DEVELOP_BRANCH}\` にも反映します。衝突があれば、この PR の上で解消してください。マージコミット（Create a merge commit）でマージしてください。")"
+              --body-file "${body}")"
             gh pr edit "${url##*/}" --add-label 'リリース' \
               || echo "::warning::ラベル「リリース」を付けられなかった"
           fi
-          echo "- ${DEVELOP_BRANCH}: PR で取り込む ${url}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${DEVELOP_BRANCH}: PR で取り込む ${url}（「Approve workflows to run」を押し、CI が通ってからマージする）" >> "$GITHUB_STEP_SUMMARY"
 
       - name: リリースブランチを消す
         # マージ済みのブランチを残すと、次のリリースの「release/* が残っていないか」の確認に引っかかる

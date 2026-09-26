@@ -20,9 +20,13 @@ on:
   schedule:
     # 毎週月曜の朝（日本時間 9:30）。CodeQL（9:00）と重ならないようにずらす
     - cron: '30 0 * * 1'
-  # 手で動かすため。
-  # GITHUB_TOKEN が開いた PR（リリースの PR など）では、pull_request の実行は「承認待ち」で作られ、
-  # 書き込み権限のある人が「Approve workflows to run」を押すまで動かない
+  # 手で動かすため。「リリース」の auto_merge も、この入口で release ブランチの CI を動かして待つ。
+  # GITHUB_TOKEN が起こすイベントのうち、workflow_dispatch は実行を作れる。
+  #
+  # GITHUB_TOKEN が開いた PR（リリースの PR と、develop へ戻す PR）では、pull_request の実行は「承認待ち」で
+  # 作られ、書き込み権限のある人が「Approve workflows to run」を押すまで動かない。承認して、CI が通ってから
+  # マージする。承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として
+  # Actions に残る（main のコミットの判定には響かない）。auto_merge の経路は、マージの前に取り消す
   workflow_dispatch:
     inputs:
       runner:
@@ -145,7 +149,7 @@ jobs:
     # 翻訳者の多くは Windows で使う。Windows でだけ通る道（ドライブ文字、大文字と小文字を区別しない
     # ファイルシステム、Steam の既定の場所）は、Linux のジョブでは飛ぶか別の期待値になるため、ここで試す。
     # 変数 RUNS_ON と入力 runner は見ない。どちらも Linux のランナーを選ぶためのものである。
-    # macOS は足していない。利用先として少なく、ゲームの Mod も macOS では動かないため
+    # macOS は足していない。利用先として少なく、ゲームの Mod も macOS では実験的な方法でしか動かないため
     runs-on: windows-latest
     # Windows のランナーは Linux より遅い。手元の Windows でも、diff・cmd・web のパッケージが30〜60秒かかる
     timeout-minutes: 20

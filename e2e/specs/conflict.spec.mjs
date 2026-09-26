@@ -394,9 +394,9 @@ test("打っていた行そのものが競合したら、焦点を引き止め�
   await expectFile(server, external);
 });
 
-// 読み直すまでのあいだに、よそが行を足すと同じ行番号が別の台詞を指す。行番号で
-// 載せ直すと、訳が別の行へ入り、その行にもとからあった訳が消える（app.js の remap に
-// 「実際に起きた」とある）。載せ直しはキーで行う。
+// 読み直すまでのあいだに、よそが行を足すと、同じ行番号と同じ ID（通し番号）が別の台詞を
+// 指す。そのまま載せ直すと、訳が別の行へ入り、その行にもとからあった訳が消える（app.js の
+// remap に「実際に起きた」とある）。載せ直しはキーで行う。
 test("よそが行を足して行番号がずれても、訳はキーで元の台詞の行へ入る", async ({ page, server }) => {
   await openPaused(page, server);
   const external = copy(hello(), extra, goodbye(), wonderful());
@@ -660,7 +660,8 @@ test.describe("キーを持たない行", () => {
 
   // キー列が空の行は、よそが書き換えたかどうかを照合できない。決められない行を
   // 黙って保存し直すより、人に見せるほうが安全である（app.js の fileChanged）。
-  // よそが触ったのが別の行でも選ばせ、載せ直しは行番号で行う。
+  // よそが触ったのが別の行でも選ばせ、載せ直しは同じ ID（通し番号）へ行う（その ID に
+  // いまキーのある行が来ていたときは、次の試験のとおり載せない）。
   test("キーを持たない行は照合できないので、よそが別の行だけを書き換えても選ばせる", async ({ page, server }) => {
     await openPaused(page, server, initial);
     const external = copy(hello(), keyless(), wonderful("最高！"));
@@ -675,6 +676,32 @@ test.describe("キーを持たない行", () => {
     expect((await saving).status()).toBe(200);
     await waitForSaved(page);
     await expectFile(server, copy(hello(), keyless("さようなら。"), wonderful("最高！")));
+  });
+
+  // キーの無い行は同じ ID へ載せ直すしかない。ただし、その ID にいまキーのある行が来て
+  // いたら、それは別の行である。載せると、「自分の訳を上に載せる」で別のレコードへ書かれる
+  // （待ち受けはキーの無い要求を照合しない）。載せずに、行番号を添えて行き先の無い訳に出す。
+  test("キーの無い行の ID に、よそが足したキーのある行が来たら載せず、行番号を添えて行き先の無い訳に出す", async ({
+    page,
+    server,
+  }) => {
+    await openPaused(page, server, initial);
+    const external = copy(hello(), extra, keyless(), wonderful());
+    await raiseConflict(page, server, L.goodbye, "さようなら。", external);
+
+    await expect(orphansBox(page)).toBeVisible();
+    await expect(page.locator("#orphans-list li")).toHaveText([
+      `${msg("ja", "ui.unsent_line", { line: L.goodbye })}: さようなら。`,
+    ]);
+    await expect(saveState(page)).toHaveText(msg("ja", "ui.save_orphans", { count: 1 }));
+    await expect(conflictBox(page)).toBeHidden();
+    // よそが足した行（いまの 6行目）にも、ずれたキーの無い行（7行目）にも載せていない。
+    await expect(translationCell(page, L.goodbye)).toHaveText(extra.translation);
+    await expect(translationCell(page, L.goodbye + 1)).toHaveText("");
+    await expect(rowByLine(page, L.goodbye)).not.toHaveClass(/(^|\s)unsaved(\s|$)/);
+    await page.clock.runFor(pastRetries);
+    expect(await rowPosts(page)).toBe(1);
+    await expectFile(server, external);
   });
 });
 

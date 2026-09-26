@@ -805,7 +805,7 @@ test.describe("ヘッダーを受理できない作業コピー", () => {
     await expect(note).toHaveText(msg("ja", "ui.not_editable", { reason: why }));
     await expect(note.locator('use[href="#i-lock"]')).toHaveCount(1);
     // 焦点を受ける欄が1つも無い（Tab でも入れない）。
-    await expect(app.locator("#list [data-line]")).toHaveCount(0);
+    await expect(app.locator("#list .cell.translation[data-id]")).toHaveCount(0);
     await expect(app.locator("#list [tabindex]")).toHaveCount(0);
 
     await row.locator(".cell.raw").click();
@@ -1624,7 +1624,7 @@ test.describe("送り終えるのを待っているあいだに、もう一度�
     const second = gate();
     const sent = [];
     await app.route(isPath("/api/rows"), async (route) => {
-      sent.push(route.request().postDataJSON().edits.map((edit) => edit.line));
+      sent.push(route.request().postDataJSON().edits.map((edit) => edit.id));
       await (sent.length === 1 ? first.promise : second.promise);
       await route.continue();
     });

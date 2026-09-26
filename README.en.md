@@ -118,28 +118,17 @@ Allow only that one file.
 ### Running it on macOS
 
 > [!WARNING]
-> Drag'n Wash Localization does not currently work on macOS.  
-> What follows is quoted from [Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization/blob/main/README.md).
->
-> **It does not currently work on macOS.**  
-> Drag'n Wash is built with Unity 6.3, and the loader (Doorstop) that BepInEx 5.4.23.5 uses on macOS  
-> cannot yet hook into a Unity 6.3 game ([NeighTools/UnityDoorstop#108](https://github.com/NeighTools/UnityDoorstop/issues/108)).  
-> Doorstop itself is loaded by the game, but BepInEx never starts,  
-> neither `BepInEx/LogOutput.log` nor `BepInEx/config` is created, and the game starts in English.  
-> This was confirmed on an Apple M3 Pro running macOS 26.6, with the same result on Apple silicon natively and under Rosetta.  
-> It is a problem on the BepInEx side, so this mod cannot work around it.  
-> Once a fixed BepInEx is released, macOS will be tried again.  
-> For that day, an **experimental** installation script for macOS is kept in  
-> the repository: [`installer/experimental/install-macos.sh`](https://github.com/TomXV/dragnwash-localization/blob/main/installer/experimental/install-macos.sh).  
-> Like the Steam Deck script, it sets up the macOS build of BepInEx, the mod, the language and the Steam launch options,  
-> and it can also run a **check** after starting the game to confirm whether the mod was loaded.  
-> It has never once been run on a Mac, and it warns about the problem above before it installs anything.  
-> It is not included in the release zip.
+> On macOS, Drag'n Wash Localization (the in-game mod) only works with an experimental setup for now.  
+> It is installed with the experimental script in the original repository, [`installer/experimental/install-macos.sh`](https://github.com/TomXV/dragnwash-localization/blob/main/installer/experimental/install-macos.sh).  
+> The script is not included in the release zip.  
+> It installs BepInEx 5.4.23.5 for macOS together with the Doorstop from UnityDoorstop's `ci` pre-release (pinned to its 4.6.0 build), and runs the game under Rosetta (x86_64).  
+> Start the game from Steam. Started from Terminal, it does not find your saves.  
+> The pinned Doorstop is expected to be replaced once a stable release is out.  
+> For the current state and caveats, see the note in [the README of Drag'n Wash Localization](https://github.com/TomXV/dragnwash-localization/blob/main/README.md).
 
-Because the mod is not loaded, the game on macOS does not export a working copy.  
-So even when `dwloc` runs, the source text column stays empty and the "untranslated" judgement cannot be made.  
-If you want to see the source text as well, bring over the `<locale>.working.csv` exported on Windows and  
-put it in `<translation repository>/Translations/_discovered/`.
+`dwloc` itself runs even on a Mac without the mod.  
+But then the game does not export a working copy, so the source text column stays empty and the "untranslated" judgement cannot be made.  
+For details, see "Where it looks on macOS" below.
 
 Open Terminal and run the following in the folder you downloaded into.
 
@@ -150,18 +139,29 @@ xattr -d com.apple.quarantine ./dwloc
 ./dwloc version
 ```
 
-The mark is attached to the `.tar.gz` you downloaded.  
-When you extract it with `tar` in a terminal, the mark usually does not carry over to `./dwloc`, and the `xattr` line prints `No such xattr`.  
+A `.tar.gz` downloaded with a browser carries the quarantine mark (`com.apple.quarantine`).  
+Even when you extract it with `tar` in a terminal, the mark carries over to `./dwloc` inside.  
+While the mark is there, Gatekeeper stops it from running.  
+So do not skip the `xattr` line.
+
+If you skip the `xattr` line and run `./dwloc version`, a window says that Apple could not verify that "dwloc" is free of malware.  
+Press "Done" there, run the `xattr` line, and then run `./dwloc version` again.  
+"Move to Trash" moves the extracted `dwloc` to the Trash.  
+If that happens, extract it from the `.tar.gz` again.
+
+A file downloaded with `gh release download` had no mark.  
+Then the `xattr` line prints `No such xattr`.  
 That is fine.  
-Just move on to the next line.  
-The line is there in case you extracted it in Finder, or the mark was carried over after all.  
-If the mark is still there, Gatekeeper stops it from running.
+Just move on to the next line.
 
 Section 5.3 of [docs/research.md](docs/research.md) notes that from macOS 15 Sequoia onwards, the workaround of opening a file with right-click → "Open" was removed.  
 The same section notes that for a command-line binary, the single `xattr` line is enough.
 
 > [!NOTE]
-> How this actually looks on macOS has not been verified with this binary either.
+> This was verified on macOS 27.2 (Apple Silicon) with the `darwin_arm64` archive of `v0.11.0` (26 September 2026).  
+> The mark a browser leaves was reproduced by adding it by hand to an archive downloaded with `gh release download`.  
+> The window was seen on a Mac set to Japanese; the English button names above were not seen.  
+> The Intel build (`darwin_amd64`) and extracting in Finder have not been verified.
 
 ### Running it on Linux
 
@@ -379,6 +379,11 @@ What creates that working copy is a button inside the game.
 
 The working copy is created only for the language selected at that moment.  
 That is because `Export working copy` exports the single locale the game currently has loaded.
+
+On a Mac keyboard, hold `fn` and press `F1`.  
+`F1` alone did not open the window (verified on a Mac with the default keyboard settings).  
+If "Use F1, F2, etc. keys as standard function keys" is on under "Keyboard" in System Settings, `fn` should not be needed.  
+That has not been verified.
 
 On the Steam Deck you cannot open the window unless you map `F1` to a button in Steam Input.  
 Even without mapping it, you can still switch the language from `Options → "Language (Mod)"`.  
@@ -780,7 +785,8 @@ If it disagrees, it stops without writing any locale (exit code `1`).
 1. Copy `Translations/<locale>/strings.csv` from the repository over the file with the same name on the game side.
    The destination is under the folder `dwloc` prints to standard error as "where it searched" (`<where it searched>/Translations/<locale>/strings.csv`)
 1. If the game is running, the hot reload picks it up in about two seconds.
-   If it is not running, start it once
+   If it is not running, start it once.
+   On macOS it may not reload while the game window is in the background (see "Editing translations on screen" below)
 1. Run `F1 → Translation → Export working copy` again in the game
 1. Run `dwloc publish` once more
 
@@ -858,25 +864,34 @@ If the game is under `C:/Program Files (x86)/`, saving from `edit` may be refuse
 The screen then says the save failed, and it keeps retrying.  
 Not a single byte of the file changes.
 
-#### Nothing is found on macOS
+#### Where it looks on macOS
 
-On macOS there is no game folder.  
-No plugin and no working copy are created either.  
-That is because the in-game mod does not run on macOS.  
-For details, see the warning under "Running it on macOS" above.
+On macOS it looks in the default Steam location, `~/Library/Application Support/Steam`, and in the libraries registered there.  
+The search is the same as on Windows and Linux: it looks for `Translations/_discovered` under `<library>/steamapps/common/<game>/BepInEx/plugins/<plugin>`.  
+The experimental installation script in the original repository puts BepInEx in this layout too.
 
-`dwloc` itself does run on macOS.  
-What does not work is only the part that connects to the game.
+It only finds something when the mod is installed, though.  
+For now the mod only runs on macOS with the experimental setup described under "Running it on macOS" above.  
+Without it, neither the plugin folder nor the working copy is created.
 
-| On macOS | What happens |
+| On a Mac without the mod | What happens |
 | ---- | ---- |
 | `publish`, `validate`, `diff` | Usable |
 | `edit` | Usable, but the source text column stays empty |
 | `--game auto` | Finds nothing and stops with exit code `2` |
 
-If you type `--game auto`, it prints to standard error why it came up empty and stops.  
-`edit` searches even without `--game`, so it prints three lines saying it searched and found nothing, then starts with the source text column empty.  
 If you bring over a working copy exported on another PC, you can point `--game` at that folder.
+
+On a Mac with the mod installed the experimental way, the following has been verified.
+
+- `--game auto` finds the game folder, and `diff` reads the working copy
+- `edit` fills the source text column, and saving changes only that line of the working copy
+- `publish --game auto` passes with exit code `0`, and the translation changed in `edit` goes into the published file
+
+> [!NOTE]
+> The environment was macOS 27.2 (Apple Silicon), Doorstop 4.6.0 and ModFramework 1.5.0 (26 September 2026).  
+> `dwloc` was a development build after `v0.11.0`.  
+> It has not been verified on an Intel Mac (`darwin_amd64`).
 
 ### Editing translations on screen
 
@@ -900,6 +915,12 @@ When it saves to the working copy, the game reloads it in about two seconds.
 You can translate, check it on screen and repeat, with no restart.  
 It works when the game is running, that language is selected, and `Developer tools` is on.  
 Whether it was applied shows up as `[reload]` in `F1 → Activity log` in the game.
+
+When this was verified on macOS, the game did not reload while its window was in the background.  
+It reloaded when the game window was brought to the front.  
+If what you typed in the browser does not show up, bring the game window to the front once.  
+Whether the same happens on Windows has not been verified.
+
 The language of the screen and the messages is decided by the `Accept-Language` your browser sends.  
 If `ja` does not match, the screen and all the guidance come out in English.  
 There is no switch inside the screen, so restart it with `--ui-lang ja`.
@@ -925,15 +946,80 @@ You can fix a translation that does not fit the column while seeing all of it, w
 
 A translation cannot contain a line break.  
 `Enter` is used to move to the next row, and a pasted line break is replaced with a space.  
-Saving from the screen rewrites the file one line at a time, so a translation containing a line break cannot be saved yet.
+There is no way to enter a line break into a translation yet.
 
-Rows whose quoted value spans lines (one record over several lines) cannot be edited on any of their lines.  
-`publish` reads such a record as one, so rewriting only its first line would leave the rest behind and break it.  
-Those rows show a lock icon and "This line belongs to a record that spans lines N to M, which cannot be edited yet".  
-The source column of the first line shows the whole source text.  
-The continuation lines are shown as they are in the file.  
-A line inside a value that starts with `#` is not made a heading.  
-The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row cannot be translated yet.
+Like `publish`, the screen reads the whole file as one text and lists one record as one row.  
+A record whose quoted value spans lines (one record over several lines) is one row too.  
+Saving rewrites only the translation column (the last column) of that record and leaves the other columns and the other rows byte for byte as they were.  
+The line break that ends the record (`CRLF` or `LF`) is kept as well.  
+A record whose source text spans lines can be edited as long as the translation fits on one line.  
+The game-side ja working copy has one row whose source text spans three lines with a blank line in between, and that row can be translated too.  
+A line inside a value that starts with `#` is not made a heading.
+
+The line-number column shows the line in the file where the record starts.  
+Only for a record that spans lines, the line where it ends is added below it in small type, after a dash (for `1865` to `1867`, `–1867` appears under `1865`).  
+It is there to compare with the line numbers you see when you open the file in an editor.  
+The source text column shows the line breaks and blank lines inside a value as they are.
+
+The row to save is named by the record's sequence number and its key, not by its line number in the file.  
+A record that spans lines shifts the line numbers of the records after it.  
+Your own saves do not change the sequence numbers.  
+Before writing, it reads back the rewritten record and then the whole file, and checks that nothing but the translation reads differently.  
+It checks this with the way the game reads the file, not only with the way `publish` reads it.  
+In some files, rewriting the translation on a row whose key column and source are both empty made the game lose track of other rows.  
+Such rows can no longer be edited (see the table below), so this check is a safeguard that catches shapes that slipped through.  
+If that check fails, it writes nothing and marks the row as one that could not be saved.  
+When rows you typed one after another are sent together, it checks them again one at a time and marks only the row that causes the failure.  
+The other rows are sent again and saved.
+
+The following rows cannot be edited.  
+They show a lock icon and the reason.  
+In each of them, `publish` or the game would read what you write as a different value from the one on the screen, or `publish` would drop it.
+
+| Row | Reason shown |
+| ---- | ---- |
+| The translation contains a line break | The translation contains a line break (a translation with line breaks cannot be changed from the screen yet) |
+| A quote seems to be closed on another line and to swallow the lines after it | Line N looks swallowed into this record's value (a quote may be closed in the wrong place) |
+| The game's reader (`CsvReader`) reads a value differently (a `"` in the middle of a value, and so on) | The game's reader (CsvReader) reads the (column name) column of this record differently |
+| The game's reader (`CsvReader`) does not find the record | The game's reader (CsvReader) does not find this record |
+| The `key` column is neither a 16-digit key nor a line ID, and the source text (`source_en`) is empty (`hello,訳`, `,UI,,,UI,,訳`, and so on) | The key column is neither a 16-digit key nor a line ID, and the source text (source_en) is empty (publish drops this record, so a translation written here is never published) |
+
+A translation with a line break cannot be edited because the screen replaces line breaks with spaces for now.  
+Opening it and typing one character would drop line breaks you cannot see.  
+The game's reader does not find a record when it takes that row into the value of another row.  
+This happens when the game starts a quote at a `"` in the middle of a value on an earlier row, or when a lone `CR` is mixed in at the end of lines (the game drops a `CR` outside quotes and joins the row to the next one).  
+In a file with a line of only full-width spaces or `NO-BREAK SPACE` before the header, the game reads that line as the header, so every row shows this reason.  
+Deleting that line fixes it.  
+A swallowed line is spotted in the same way as where `publish` stops.  
+It can also hit a valid multi-line value, but the screen has no way to let it through.  
+Check it with `dwloc publish` and let it through with `--accept-multiline`.
+
+A row whose columns are all empty, such as `,,,,,,`, is not listed.  
+It has neither a key nor a source text, so `publish` drops it and a translation typed into it would never be published.  
+A row whose source text is empty and whose `key` column is neither a 16-digit key nor a line ID (starting with `line:`) is listed, but cannot be edited for the same reason (the last row of the table).  
+`publish` cannot work out a key for that row and drops it.  
+Besides a row whose `key` column is empty, this also covers a row with a value that is not shaped like a 16-digit key, such as `hello`.  
+A 16-digit key is 16 hexadecimal digits.  
+`publish` still reads it as a 16-digit key in upper case or with spaces around it, so such a row does not get this reason.  
+However, spaces or tabs around a value that is not in quotes can make the game read it differently (a leading space or tab, two or more trailing spaces, and so on).  
+Such a row cannot be edited either, as a row where "the game's reader (`CsvReader`) reads a value differently" in the table.  
+The same goes for a line ID.  
+Removing the spaces, or putting the value in quotes, fixes it.  
+In the form of the published file (without a `source_en` column), the source text is treated as empty.  
+A row whose source text does not match its `key` column does not get this reason (`publish` drops it too, but `dwloc diff` and the filters show it under "rows dropped by `publish`").  
+To keep that translation, correct the `key` column, or move the translation to the row that has the key and then delete the row you no longer need.
+
+What `dwloc publish` does when a row with this reason has a translation depends on which file the screen has open.  
+When the screen has a working copy open, `publish` drops that row and writes the other rows.  
+It only counts the row under `malformed dropped` in its summary; it neither stops nor reports the row by itself.  
+When the screen has the published file itself open (a locale without a working copy), `publish` stops because a translation would be lost, and writes no locale (exit code `1`).  
+Saving a copy in "the form of the published file" from "Save a copy" in the top bar is refused for the same reason.  
+You cannot clear the translation of that row from the screen.  
+Open the file in an editor, and correct the `key` column or delete the row you no longer need.
+
+A file whose line breaks are `CR` only cannot be edited at all.  
+The game does not treat `CR` as a line break and reads the whole file as one line.  
+Save the file again with `LF` or `CRLF` line breaks, then reload.
 
 A file where a quote is opened and never closed before the end of the file cannot be edited at all.  
 Read as a whole, everything after it becomes one value.  
@@ -1087,11 +1173,38 @@ That happens when you redo `Export working copy` in the game, or run `publish` i
 
 | What the screen says | What happened |
 | ---- | ---- |
-| Some translations have nowhere to go. Note them down and reload | That row disappeared from the file, or the same key now appears more than once |
-| This row has shifted. A row with a different key is now at the same line number, so nothing was written | A row with a different key is now at the same line number |
+| Some translations have nowhere to go. Note them down and reload | That row disappeared from the file, the same key now appears more than once, or the row can no longer be edited |
+| This row has shifted. A different key now sits in that position, so nothing was written | A row with a different key now has the same position (sequence number) |
 
 Not a single byte of the file changes.  
 But what you typed exists only on the screen, so note it down before you reload.
+
+When the file changes into a shape that cannot be edited while it is open (a quote that is never closed, and so on), that is treated as a conflict as well.  
+The screen shows the reloaded list with the reason it cannot be edited, and keeps showing any translation with no place to go as a translation that has nowhere to go.  
+A translation on a row whose key column is empty is put back on the row with the same sequence number.  
+If a different row that has a key now sits at that number, it is not put there; it is listed as a translation that has nowhere to go, with its line number.
+
+As long as every `dwloc` runs in the same environment, saved translations are not lost even when you run two `dwloc edit` on the same file, or run `publish` at the same time.  
+The span from checking the version to finishing the write is wrapped in an OS lock.  
+`publish` takes the same lock on both its input and its output.  
+Even when the screen has the published file open (with `--no-game`, for example) and you run a `publish` that writes that published file from the working copy in the game, one of them waits.  
+The lock is taken on a file kept only for locking, in your cache folder.  
+That is `%LocalAppData%\dwloc\locks` on Windows, `$XDG_CACHE_HOME/dwloc/locks` on Linux (`~/.cache/dwloc/locks` when `XDG_CACHE_HOME` is not set), and `~/Library/Caches/dwloc/locks` on macOS.  
+Where that folder cannot be created or written to, it goes in `dwloc-locks-<user number>` in the temporary folder (`dwloc-locks` on Windows).  
+Examples are a container run as a user with no `HOME`, and a folder that a container running as `root` created first.  
+It is never put in a temporary folder that other users can write to.  
+When neither can be used, both saving and `publish` stop without writing and say which environment variable to fix.  
+There is one empty file per file being written, and it is left in place.  
+No file is added to the translation repository or to the game folder.  
+If the `dwloc` holding the lock crashes, the OS releases the lock, so a lock file left behind never stops a save.  
+The one that writes later finds that the version no longer matches what the other wrote, which is a conflict.  
+`Export working copy` in the game does not take this lock, so there only the version check catches it.
+
+The lock only works between copies of `dwloc` that use the same lock folder.  
+Even for the same user, a container and the host, WSL and Windows, or machines with a different `HOME` each use their own lock folder.  
+When they write the same file at the same time across environments, only the version check and the re-read right before writing protect it, and a translation shown as saved can be lost.  
+The same goes for writing the same file through another name (a hard link).  
+When you work across environments, quit one `dwloc` before you start the other.
 
 Saving also stops when the screen cannot reach the server, and when the server does not accept saves from this screen.
 
@@ -1139,6 +1252,19 @@ Hovering over a condition chip shows the same text as the counts column.
 While you are composing text (building characters with an `IME`), it does not intercept your keys.  
 The `Enter` that immediately follows committing a composition is not used to move to the next row either.  
 That is so that committing alone does not jump you to the next row.
+
+With a screen reader, the input box is read as "Translation (line N)".  
+The row's source text and any note shown on the row (such as the reason it cannot be saved) are read after it.  
+The source text is read as English.  
+Comment lines for sections (`# =====`) and nodes (`# ---`) are treated as headings, so you can jump from section to section by heading.  
+A comment line with neither mark (a memo, for example) is not made a heading.  
+This has been checked through the attributes only, not with an actual screen reader.
+
+Rows and headings outside the screen are always drawn as well.  
+A screen reader can read on through the source text and translation of rows outside the screen without bringing them onto the screen.  
+Its list of headings includes the sections and nodes outside the screen, with their names.  
+Both have been checked in Chromium's accessibility tree only, not with an actual screen reader.  
+In return, going back to all rows in a long list, by clearing the conditions or the search term, takes about 0.2 seconds to redraw.
 
 ### The order to run things in
 
@@ -1211,6 +1337,12 @@ If a file has a shape it would misread, it also stops without writing.
 If the translations inside the game disagree with what is committed, it likewise stops without writing (exit code `1`).  
 That is because the mod exports "the translations it currently has loaded" to the working copy, so an old game side rolls a new commit back.  
 For details, see "It stops when the translation in the game is older" above.  
+If the input or the output changed after it was assembled, it also stops without writing (exit code `1`).  
+Right before writing, it reads the input, the output and the published file in the game again, and stops if even one byte differs from what it assembled and checked.  
+That happens when a save from the screen (`dwloc edit`) or an export from the game wrote the same file while it was assembling.  
+Writing anyway would leave the translation written then out of the output, or erase the translation that went into the output.  
+From reading them again until the write is done, it holds the same OS lock on the input and the output as a save from the screen.  
+Running it again checks everything again with the changed contents.  
 Each file is written through a temporary file, so a file it could not write keeps its original content.  
 However, if writing fails partway (no write permission, not enough disk space, and so on), it does not roll back.  
 The locales it wrote before that keep their new content, and it stops with exit code `2`.  
@@ -1222,7 +1354,7 @@ With `--path` it stops scanning `Translations` and converts only the file you na
 
 As for exit codes, 0 is success and 2 is a runtime error.  
 1 means "it ran, but something is left that a person should look at".  
-1 comes back in these six cases.
+1 comes back in these seven cases.
 
 - When `validate` finds a problem
 - When `diff` finds something that needs checking (with `--strict`, something that needs work also gives 1)
@@ -1230,9 +1362,11 @@ As for exit codes, 0 is success and 2 is a runtime error.
 - When `publish` judges that writing would lose translations and stops
 - When `publish` judges that a file has a shape it would misread and stops
 - When `publish` judges that the translation in the game is older and stops
+- When `publish` judges that the input or the output changed after it was assembled and stops
 
-The last three are separate checks.  
-The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.
+The four for `publish` are separate checks.  
+The difference and the way out are in "publish does not write a file with a shape it would misread" and "It stops when the translation in the game is older" above.  
+When the input or the output changed, just run it again.
 
 #### Committing and opening a pull request
 
@@ -1352,6 +1486,7 @@ The screen for editing translations in a browser (`dwloc edit`) works too.
 
 The `edit` screen has been verified on a real Windows machine with input through an actual `IME` (`dwloc 0.4.1`, 17 September 2026).  
 Opening the folded explanations from the keyboard has been verified on a real machine too (`dwloc 0.5.0`, 18 September 2026).  
+On a real Mac, `diff`, `edit` and `publish` have been verified against a game with the mod installed the experimental way (a development build after `v0.11.0`, 26 September 2026).  
 What has not been verified yet is the `IME` for `ko`, `zh-Hans` and `zh-Hant`, Firefox and Safari, and  
 the behaviour when started from the file manager on macOS and Linux.  
 If you try it and something looks wrong, please tell us in an [issue](https://github.com/223n/dragnwash-localization-editor/issues).
@@ -1538,6 +1673,7 @@ The only dependency is the standard library, so Dependabot does not raise that l
 | Branch names | `release/` and `hotfix/` are picked up by the publishing workflow. `merge/` gets the "release" label, and such a pull request is left out of the release notes | Use `feature/` for working branches |
 | The head of a pull request | Making `main` or `develop` the head fails the "Check the PR head branch" workflow. A pull request from a fork is not failed, because no branch of this repository would be deleted | Leave releases to the workflow. The details are in [CLAUDE.md](CLAUDE.md) (Japanese only) |
 | How to merge | With squash or rebase, the pull request does not appear in the release notes and collides at the next version | Merge with a merge commit (Create a merge commit) |
+| Runs waiting for approval | On a pull request opened by a workflow, CI and the other runs are created waiting for approval. If you merge without approving, they stay in Actions as expired failures | Press `Approve workflows to run`, and merge once CI passes |
 | Line endings | `.gitattributes` pins every file to LF | Bringing in CRLF files makes every line a difference in the first commit |
 
 ## Branches and releases
@@ -1555,9 +1691,17 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
 1. Put the version to release in `version`.  
    Do not include the `v` (for example `1.2.0`, `1.2.0-rc.1`)
 1. Turning on `auto_merge` merges without pausing for a review of the pull request and goes all the way to publication.  
-   However, if `main` has required checks or approval rules, it stops at the merge.  
-   CI on the pull request the workflow opened stays "waiting for approval" and never runs, so the required checks cannot be satisfied.  
-   When it stops, a person merging the pull request takes it through to publication
+   Instead of a person approving CI, the workflow runs CI (`ci.yml`) on the `release/vX.Y.Z` branch and waits up to 30 minutes for it to pass.  
+   Once it passes, it cancels the pull request's runs that are waiting for approval, and then merges.  
+   However, if `main` has required checks or approval rules, it may stop before the merge.  
+   The pull request's runs stay unapproved, so the required checks cannot be satisfied.  
+   When it can tell that the merge is blocked, it stops without cancelling the runs waiting for approval.  
+   It also stops, leaving the pull request open, when CI fails or does not finish within 30 minutes.  
+   When it stops, a person pressing `Approve workflows to run` and merging once CI passes takes it through to publication.  
+   If you merge without approving, the waiting runs stay behind as expired failures.  
+   When it stopped because CI was flaky, you can also press `Re-run failed jobs` on the "Release" run.  
+   It runs CI again and, once it passes, cancels the runs waiting for approval and goes on to merge and publish.  
+   `Re-run all jobs` stops at the check before branching, because the `release/vX.Y.Z` branch is still there
 1. The workflow first confirms that CI (`ci.yml`) passed on the latest commit of `develop`.  
    If CI is still running, it waits up to 30 minutes for it to finish.  
    If CI failed, was cancelled, or has no run at all, it stops here.  
@@ -1566,17 +1710,20 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
 1. Next, it branches `release/vX.Y.Z` from the commit it confirmed, brings in the content of `main`,  
    bumps the version in `package.json`, passes the document checks and then opens a pull request against `main`.  
    If `main` and `develop` conflict, it stops here
-1. Review the pull request and merge it with a merge commit (Create a merge commit).  
+1. Review the pull request and press `Approve workflows to run`.  
+   Once CI passes, merge it with a merge commit (Create a merge commit).  
    If you turned on `auto_merge` and it did not stop, you do not need this step.  
-   CI on this pull request is created "waiting for approval" and does not run until `Approve workflows to run` is pressed.  
-   That is because it is a pull request opened by GitHub Actions.  
-   CI on the latest commit of `develop` and the document check after the version bump (`npm run lint`) have already been confirmed inside the workflow.  
-   Merging without pressing it does not skip those two
+   The pull request was opened by GitHub Actions, so CI and the other runs are created "waiting for approval" and do not run until the button is pressed.  
+   CI runs on the very tree being released (the latest commit of `develop` with `main` brought in and the version bumped).  
+   The E2E tests of the screen and the Windows tests, which the workflow itself does not run, pass here too.  
+   If you merge without approving, the waiting runs expire when the pull request is closed and stay in Actions as failures.  
+   The details are in "CI on pull requests opened by a workflow"
 1. The "Publish release" workflow runs.  
    It creates the tag `vX.Y.Z`, creates a GitHub Release with the six archives attached, and merges `main` back into `develop`
 
 Before building the binaries, it runs the Go tests (`go test ./cmd/... ./internal/...`) on the `main` tree it is about to ship.  
-CI on the release pull request often stays "waiting for approval" and never runs, and when `auto_merge` merged it, CI on `main` does not run either.  
+This is the last check before publication.  
+CI on the release pull request does not run unless someone approves it, and when `auto_merge` merged it, CI for the `push` to `main` does not run either.  
 If even one test fails, it stops without creating the tag or the GitHub Release.  
 The E2E tests of the screen are not run here.  
 The screen is checked by CI on `develop`.
@@ -1623,15 +1770,66 @@ Only a version greater than the version on `develop`, the version on `main` and 
 It stops if the tag already exists, or if a `release/*` branch is still open.  
 A prerelease version such as `-rc.1` is marked as a prerelease on the GitHub Release too.
 
+When there is no such rule and it can merge `main` back into `develop` directly, it also starts CI on `develop` by hand (`workflow_dispatch`).  
+A commit pushed by GitHub Actions does not start the `push` CI, and the "check that CI on `develop` passed" step of the next release would stop.
+
 If there is a rule requiring pull requests on `develop`, merging `main` back into `develop` becomes a pull request every time.  
 The branch is named `merge/vX.Y.Z-into-develop`.  
-After a release, merge that pull request with a merge commit as well.
+This pull request is also opened by GitHub Actions, so CI and the other runs are created "waiting for approval".  
+After a release, press `Approve workflows to run`, and once CI passes, merge it with a merge commit.
 
 The body of the GitHub Release is built automatically from the titles and labels of the merged pull requests.  
 The classification is in `.github/release.yml`.  
 `.github/release-notes-header.md` goes at the top of the body.  
 That is because the Release page lists nothing but file names, and there is no way to tell that `darwin` means macOS.  
 Which one to download is written there.
+
+### CI on pull requests opened by a workflow
+
+On a pull request opened by GitHub Actions (`GITHUB_TOKEN`), the `pull_request` runs are created "waiting for approval".  
+This is how GitHub has behaved since June 2026 ([GitHub's announcement](https://github.blog/changelog/2026-06-11-bot-created-pull-requests-can-run-workflows-if-approved/)).  
+CI, CodeQL and "Check the PR head branch" do not run until someone with write access presses `Approve workflows to run` on the pull request.  
+The release pull request and the pull request that merges back into `develop` are such pull requests.
+
+| Path | What to do |
+| ---- | ---- |
+| A person merges | Press `Approve workflows to run`, and merge once CI passes |
+| `auto_merge` | The workflow runs CI on the `release/vX.Y.Z` branch, waits for it to pass, cancels the runs waiting for approval, and then merges |
+
+If you merge without approving, the waiting runs expire the moment the pull request is closed.  
+They stay in Actions as failed runs with no jobs at all.  
+The note on them reads "This workflow run required approval but was not approved before it expired."  
+That is what happened with v0.10.0 and v0.11.0.  
+It does not affect the checks on the commit on `main`, but red runs remain in the list in Actions.  
+The `auto_merge` path cancels them so that they remain as cancelled runs rather than as expired failures.
+
+GitHub's documentation does not say whether runs waiting for approval can be approved or cancelled through the API.  
+The approval API is documented as being for pull requests from first-time contributors on public forks.  
+The `auto_merge` path does not stop when a cancellation is refused; it prints a warning and carries on.  
+The result appears in the summary of that run, as the number of cancellations accepted and refused.  
+To check by hand, use these commands.
+
+```bash
+# The SHA at the head of the pull request
+sha="$(gh pr view <number> --json headRefOid --jq .headRefOid)"
+
+# List the runs on that SHA. Also see whether "waiting for approval" shows up in status or in conclusion
+gh api "repos/{owner}/{repo}/actions/runs?head_sha=${sha}" \
+  --jq '.workflow_runs[] | [.id, .event, .status, .conclusion, .name] | @tsv'
+
+# Approve one. See whether it starts, as it does with the button on the screen
+gh api --method POST "repos/{owner}/{repo}/actions/runs/<run id>/approve"
+
+# Cancel one. See whether its conclusion becomes cancelled
+gh api --method POST "repos/{owner}/{repo}/actions/runs/<run id>/cancel"
+
+# Look at its state
+gh api "repos/{owner}/{repo}/actions/runs/<run id>" --jq '[.status, .conclusion] | @tsv'
+```
+
+`gh` replaces `{owner}` and `{repo}` with the repository in the current directory.  
+Try cancelling only on a run you do not need (for example "Check the PR head branch" on the pull request that merges back into `develop`).  
+A cancelled run stays unrun on that pull request.
 
 ### Urgent fixes
 
@@ -1670,12 +1868,12 @@ That is because the "Publish release" workflow has the same check.
 
 | File | When it runs | What it does |
 | ---- | ---- | ---- |
-| `ci.yml` | `push` to `main` and `develop`, pull requests, every Monday (`govulncheck` only), manually (the `runner` input picks the runner for that run only) | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, the syntax and safety of the workflows, and known vulnerabilities in the Go standard library, and sees whether it builds for all six targets |
+| `ci.yml` | `push` to `main` and `develop`, pull requests, every Monday (`govulncheck` only), manually (the `runner` input picks the runner for that run only). With `auto_merge`, "Release" also runs it on the `release/*` branch through the same manual entry point | Checks the Japanese documents, Go formatting and tests (Linux and Windows), the coverage thresholds, the E2E tests of the screen, the syntax and safety of the workflows, and known vulnerabilities in the Go standard library, and sees whether it builds for all six targets |
 | `codeql.yml` | `push` to `main` and `develop`, pull requests, every Monday, manually (the `runner` input picks the runner for that run only) | Scans the workflows, the Go code and the JavaScript (the screen's `app.js` and the `.mjs` files for tests and tools) with CodeQL. The results are not a required check |
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
-| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it merges and goes through to publication |
+| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it runs CI on the release branch and waits for it to pass, cancels the pull request's runs waiting for approval, and then merges and goes through to publication |
 | `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Runs the Go tests, builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels

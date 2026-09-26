@@ -43,9 +43,10 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const sample = join(root, "samples", "harbor");
 const out = process.argv[2] ?? join(root, "docs", "images");
 
-// 書き換えと競合の場面で使う行。物理行の番号はヘッダーが1行目。
+// 書き換えと競合の場面で使う行。id は行の ID（app.js の data-id）で、見本はどのレコードも
+// 1物理行に収まるので、ヘッダーを1行目と数えた物理行の番号と同じになる。
 const workingRel = "Translations/_discovered/ja.working.csv";
-const wheels = { line: 10, source: "Don't forget the wheels." };
+const wheels = { id: 10, source: "Don't forget the wheels." };
 const typed = "ホイールも忘れずにね。";
 const theirs = "タイヤまわりもお願い。";
 
@@ -147,7 +148,7 @@ async function shot(page, name) {
 }
 
 async function typeIntoWheels(page) {
-  await page.locator(`#list .cell.translation[data-line="${wheels.line}"]`).click();
+  await page.locator(`#list .cell.translation[data-id="${wheels.id}"]`).click();
   await page.locator("textarea.editor").fill(typed);
 }
 

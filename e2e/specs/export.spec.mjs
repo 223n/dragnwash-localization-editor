@@ -266,7 +266,9 @@ function expectSameTree(before, after) {
 // 書かれた ja の公開ファイルのバイト列を返す。
 //
 // 写すのは、待ち受けが開いているリポジトリを publish に書き換えさせないためである。
-// 作業ディレクトリも一時ディレクトリにする（dwloc は logs/ をカレントに作る）。
+// 作業ディレクトリも一時ディレクトリにする（dwloc は logs/ をカレントに作る）。書き込みの
+// 錠のファイルも一時ディレクトリに置かせる（support/dwloc.mjs の launchDwloc と同じ。
+// 渡さないと、利用者のキャッシュのフォルダーに、入力と書き出し先の錠のファイルが残る）。
 async function publishWithCli(server) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "dwloc-e2e-publish-")));
   try {
@@ -274,8 +276,10 @@ async function publishWithCli(server) {
     await cp(server.root, root, { recursive: true });
     await promisify(execFile)(binaryPath(), ["publish", "--root", root, "--no-game", "--locale", "ja"], {
       cwd: dir,
+      env: { ...process.env, DWLOC_LOCK_DIR: join(dir, "locks") },
       windowsHide: true,
     });
+    expect((await readdir(join(dir, "locks"))).length, "錠のファイルが一時ディレクトリに無い").toBeGreaterThan(0);
     return await readFile(join(root, publishedRel));
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -547,7 +551,7 @@ test.describe("未保存の訳があるとき", () => {
     expect((await pickerLog(page)).calls).toHaveLength(0);
 
     // 訳は画面に残り、保存できていないことも出たまま。ファイルは1バイトも変わらない。
-    await expect(page.locator(`#list .cell.translation[data-line="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
+    await expect(page.locator(`#list .cell.translation[data-id="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
     await expect(saveState(page)).toHaveText(msg("ja", "ui.save_retrying"));
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
   });
@@ -619,7 +623,7 @@ test.describe("未保存の訳があるとき", () => {
     expect(exportsOf(seen)).toHaveLength(0);
     expect((await pickerLog(page)).calls).toHaveLength(0);
     // 訳は画面に残り、ファイルは1バイトも変わっていない。
-    await expect(page.locator(`#list .cell.translation[data-line="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
+    await expect(page.locator(`#list .cell.translation[data-id="${SAMPLE_LINES.goodbye}"]`)).toHaveText(typed);
     expect((await server.readRoot(workingRel)).equals(before)).toBe(true);
 
     // 元の訳（空）へ戻すと、保存できない行ではなくなる。そうすれば書き出せる。
