@@ -18,8 +18,8 @@ import (
 // 報告が表の upstream（無ければ want）と一致するかも確かめる。設定されていなければ
 // dwloc の側だけを確かめる。CI には上流のリポジトリも Python も無いので、
 // 飛ばせることが必須。dwloc は上流の dev の版に合わせてあるので、dev の版を渡す。
-// 翻訳者の PR の CI が走る main の版とは、credits.txt の検査の有無だけが違う
-// （main の版を渡すと credits.txt の入力だけが割れる）。
+// いま合わせてあるのは caa470b までの版で、上流の dev（5e14be8）と main（4e8a2e8）の
+// どちらでも同じファイル（blob 3948566）。翻訳者の PR の CI も同じ版で走る。
 //
 //	git -C <上流> show upstream/dev:tools/check-translations.py > check-translations.py
 //	DWLOC_UPSTREAM_CHECKER=$PWD/check-translations.py go test ./internal/validate -run Upstream
@@ -69,8 +69,8 @@ func fakePNG(width, height uint32, pad int) string {
 	return b.String()
 }
 
-// upstreamCases は、上流の調査（f816618、c8fda90、cc01bfc、912f519）で dwloc と
-// 判定が割れた入力と、その周りの境目。
+// upstreamCases は、上流の調査（f816618、c8fda90、cc01bfc、912f519、caa470b）で
+// dwloc と判定が割れた入力と、その周りの境目。
 func upstreamCases() []upstreamCase {
 	long := strings.Repeat
 	withStrings := func(files map[string]string) map[string]string {
@@ -87,7 +87,7 @@ func upstreamCases() []upstreamCase {
 	const (
 		tex        = "Translations/xx/textures/"
 		texCredits = tex + "credits.csv"
-		notStatus  = `" is not a status; use one of supervised, proofread, converted, provisional, fun`
+		notStatus  = `" is not a status; use one of supervised, native, proofread, converted, provisional, fun`
 		parseError = "could not be parsed as CSV (field larger than field limit (131072))"
 		onlyPNG    = ": only .png files, credits.csv and fallback.txt belong in textures/"
 	)
@@ -239,17 +239,22 @@ func upstreamCases() []upstreamCase {
 			upstream: []string{upPath + ":3: expected 6 fields, got 1"},
 		},
 
-		// credits.txt（912f519）。
+		// credits.txt（912f519。状態語の native は caa470b）。
 		{
 			name:  "credits.txtの状態語が違う",
 			files: credits("done\n名前\n"),
 			want:  []string{"Translations/xx/credits.txt:1: \"done" + notStatus},
 		},
 		{
+			// ネイティブが訳したパック。上流の tr がこの形。
+			name:  "credits.txtのnativeは状態語",
+			files: credits("native\n名前\n"),
+		},
+		{
 			name:  "credits.txtがコメントと空行だけ",
 			files: credits("# メモ\n\n  \n"),
 			want: []string{"Translations/xx/credits.txt: empty; the first line is the status " +
-				"(supervised, proofread, converted, provisional, fun)"},
+				"(supervised, native, proofread, converted, provisional, fun)"},
 		},
 		{
 			name:  "credits.txtは前後の空白と大文字小文字を問わない",
