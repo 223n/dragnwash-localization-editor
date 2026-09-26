@@ -139,18 +139,29 @@ xattr -d com.apple.quarantine ./dwloc
 ./dwloc version
 ```
 
-The mark is attached to the `.tar.gz` you downloaded.  
-When you extract it with `tar` in a terminal, the mark usually does not carry over to `./dwloc`, and the `xattr` line prints `No such xattr`.  
+A `.tar.gz` downloaded with a browser carries the quarantine mark (`com.apple.quarantine`).  
+Even when you extract it with `tar` in a terminal, the mark carries over to `./dwloc` inside.  
+While the mark is there, Gatekeeper stops it from running.  
+So do not skip the `xattr` line.
+
+If you skip the `xattr` line and run `./dwloc version`, a window says that Apple could not verify that "dwloc" is free of malware.  
+Press "Done" there, run the `xattr` line, and then run `./dwloc version` again.  
+"Move to Trash" moves the extracted `dwloc` to the Trash.  
+If that happens, extract it from the `.tar.gz` again.
+
+A file downloaded with `gh release download` had no mark.  
+Then the `xattr` line prints `No such xattr`.  
 That is fine.  
-Just move on to the next line.  
-The line is there in case you extracted it in Finder, or the mark was carried over after all.  
-If the mark is still there, Gatekeeper stops it from running.
+Just move on to the next line.
 
 Section 5.3 of [docs/research.md](docs/research.md) notes that from macOS 15 Sequoia onwards, the workaround of opening a file with right-click → "Open" was removed.  
 The same section notes that for a command-line binary, the single `xattr` line is enough.
 
 > [!NOTE]
-> How this actually looks on macOS has not been verified with this binary either.
+> This was verified on macOS 27.2 (Apple Silicon) with the `darwin_arm64` archive of `v0.11.0` (26 September 2026).  
+> The mark a browser leaves was reproduced by adding it by hand to an archive downloaded with `gh release download`.  
+> The window was seen on a Mac set to Japanese; the English button names above were not seen.  
+> The Intel build (`darwin_amd64`) and extracting in Finder have not been verified.
 
 ### Running it on Linux
 
@@ -368,6 +379,11 @@ What creates that working copy is a button inside the game.
 
 The working copy is created only for the language selected at that moment.  
 That is because `Export working copy` exports the single locale the game currently has loaded.
+
+On a Mac keyboard, hold `fn` and press `F1`.  
+`F1` alone did not open the window (verified on a Mac with the default keyboard settings).  
+If "Use F1, F2, etc. keys as standard function keys" is on under "Keyboard" in System Settings, `fn` should not be needed.  
+That has not been verified.
 
 On the Steam Deck you cannot open the window unless you map `F1` to a button in Steam Input.  
 Even without mapping it, you can still switch the language from `Options → "Language (Mod)"`.  
@@ -769,7 +785,8 @@ If it disagrees, it stops without writing any locale (exit code `1`).
 1. Copy `Translations/<locale>/strings.csv` from the repository over the file with the same name on the game side.
    The destination is under the folder `dwloc` prints to standard error as "where it searched" (`<where it searched>/Translations/<locale>/strings.csv`)
 1. If the game is running, the hot reload picks it up in about two seconds.
-   If it is not running, start it once
+   If it is not running, start it once.
+   On macOS it may not reload while the game window is in the background (see "Editing translations on screen" below)
 1. Run `F1 → Translation → Export working copy` again in the game
 1. Run `dwloc publish` once more
 
@@ -865,8 +882,16 @@ Without it, neither the plugin folder nor the working copy is created.
 
 If you bring over a working copy exported on another PC, you can point `--game` at that folder.
 
+On a Mac with the mod installed the experimental way, the following has been verified.
+
+- `--game auto` finds the game folder, and `diff` reads the working copy
+- `edit` fills the source text column, and saving changes only that line of the working copy
+- `publish --game auto` passes with exit code `0`, and the translation changed in `edit` goes into the published file
+
 > [!NOTE]
-> Whether `dwloc` finds, reads and writes the game on a Mac with the mod installed the experimental way has not been verified yet.
+> The environment was macOS 27.2 (Apple Silicon), Doorstop 4.6.0 and ModFramework 1.5.0 (26 September 2026).  
+> `dwloc` was a development build after `v0.11.0`.  
+> It has not been verified on an Intel Mac (`darwin_amd64`).
 
 ### Editing translations on screen
 
@@ -890,6 +915,12 @@ When it saves to the working copy, the game reloads it in about two seconds.
 You can translate, check it on screen and repeat, with no restart.  
 It works when the game is running, that language is selected, and `Developer tools` is on.  
 Whether it was applied shows up as `[reload]` in `F1 → Activity log` in the game.
+
+When this was verified on macOS, the game did not reload while its window was in the background.  
+It reloaded when the game window was brought to the front.  
+If what you typed in the browser does not show up, bring the game window to the front once.  
+Whether the same happens on Windows has not been verified.
+
 The language of the screen and the messages is decided by the `Accept-Language` your browser sends.  
 If `ja` does not match, the screen and all the guidance come out in English.  
 There is no switch inside the screen, so restart it with `--ui-lang ja`.
@@ -1455,6 +1486,7 @@ The screen for editing translations in a browser (`dwloc edit`) works too.
 
 The `edit` screen has been verified on a real Windows machine with input through an actual `IME` (`dwloc 0.4.1`, 17 September 2026).  
 Opening the folded explanations from the keyboard has been verified on a real machine too (`dwloc 0.5.0`, 18 September 2026).  
+On a real Mac, `diff`, `edit` and `publish` have been verified against a game with the mod installed the experimental way (a development build after `v0.11.0`, 26 September 2026).  
 What has not been verified yet is the `IME` for `ko`, `zh-Hans` and `zh-Hant`, Firefox and Safari, and  
 the behaviour when started from the file manager on macOS and Linux.  
 If you try it and something looks wrong, please tell us in an [issue](https://github.com/223n/dragnwash-localization-editor/issues).
