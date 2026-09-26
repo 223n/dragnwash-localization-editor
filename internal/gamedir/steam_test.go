@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setHome は [os.UserHomeDir] が返す場所を dir にする。空にすると
@@ -44,6 +45,8 @@ func noReg(t *testing.T) {
 // Windows では reg.bat にして、出力は別のファイルから type で写す。echo で
 // 書かせると、非ASCIIのバイト列がコンソールのコードページで変わりうる。
 // ほかの OS ではシェルの組み込みの printf に8進で書かせ、外部のコマンドに頼らない。
+//
+// 偽物を待つ上限は、試験のあいだ fakeRegTimeout へ延ばす。
 func fakeReg(t *testing.T, output []byte, code int) {
 	t.Helper()
 
@@ -66,6 +69,83 @@ func fakeReg(t *testing.T, output []byte, code int) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PATH", dir)
+	setRegTimeout(t, fakeRegTimeout)
+}
+
+// fakeRegTimeout は、偽の reg を置いた試験で reg を待つ上限。
+//
+// 本番の2秒（regTimeout）は本物の reg.exe の速さから決めたもので、偽物には
+// 足りない。偽物は試験ごとに書いたスクリプトをシェルで起動する。実測（macOS 27.2、
+// Apple Silicon）で、負荷の無いときでも読み終わるまで中央 0.1 秒、長いと 0.8 秒
+// かかった。全パッケージを同時に回したときは2秒を超えて空が返り、読み取りの試験が
+// 落ちた。時間切れで落ちる試験は、読み取りの門ではなく機械の混み具合を見ることになる。
+//
+// 1分にしたのは、混んでいるだけで切れないようにしつつ、偽物が刺さったとき
+// （試験の誤り）にも go test の既定の上限（10分）より先に戻るためである。
+// 時間切れのときの振る舞いは、短い上限で別に試す（TestSteamPathFromRegistryTimeout）。
+const fakeRegTimeout = time.Minute
+
+// setRegTimeout は、試験のあいだだけ reg を待つ上限を d にする。
+func setRegTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	old := regTimeout
+	regTimeout = d
+	t.Cleanup(func() { regTimeout = old })
+}
+
+// stallingRegEnv が立っていると、この試験の実行ファイルは、刺さった reg の
+// 代わりになる（[TestMain]）。
+const stallingRegEnv = "DWLOC_TEST_STALLING_REG"
+
+// stallingRegDelay は、刺さった reg の代わりが値を返すまでの時間。
+//
+// 上限で切られる前提の偽物なので、ふだんはここまで待たない。切られなかったとき
+// （時間切れの門が壊れたとき）に正しい値を返し、試験を落とすためにある。
+// 混んだ機械で試験の側が止まっていても、先に値を返してしまわない長さにしてある。
+const stallingRegDelay = time.Minute
+
+// TestMain は、stallingRegEnv が立っていれば刺さった reg の代わりになり、
+// そうでなければ試験を走らせる。
+func TestMain(m *testing.M) {
+	if os.Getenv(stallingRegEnv) != "" {
+		time.Sleep(stallingRegDelay)
+		fmt.Print(steamPathQueryOutput)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// stallingReg は PATH を、刺さった reg だけにする。偽物はこの試験の実行ファイルの
+// 写しで、起動すると stallingRegDelay のあいだ止まってから、正しい値を返す。
+//
+// [fakeReg] のようなスクリプトにしないのは、止まり方を揃えられないためである。
+// シェルにも cmd.exe にも組み込みの sleep が無い。外の sleep や ping を子として
+// 呼ぶと、時間切れで殺されるのはシェルだけで、残った子が標準出力を握ったまま
+// 読み終わりを待たせる（os/exec の WaitDelay の説明）。回数で回すループは、
+// かかる時間が機械とシェルと混み具合で大きく変わる。実行ファイルの写しなら、
+// 1つのプロセスが CPU を使わずに止まり、殺せばそのまま終わる。
+func stallingReg(t *testing.T) {
+	t.Helper()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	name := "reg"
+	if runtime.GOOS == "windows" {
+		name = "reg.exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(stallingRegEnv, "1")
 	t.Setenv("PATH", dir)
 }
 
@@ -307,11 +387,11 @@ func TestWindowsSteamRootsIncludeDefaults(t *testing.T) {
 	t.Errorf("既定の場所が候補に無い: %q", got)
 }
 
-func TestSteamPathFromRegistry(t *testing.T) {
-	// 実機（Windows 11 Pro 26200）の reg query の出力と同じ形。
-	const found = "\r\nHKEY_CURRENT_USER\\Software\\Valve\\Steam\r\n" +
-		"    SteamPath    REG_SZ    c:/program files (x86)/steam\r\n\r\n"
+// steamPathQueryOutput は、実機（Windows 11 Pro 26200）の reg query の出力と同じ形。
+const steamPathQueryOutput = "\r\nHKEY_CURRENT_USER\\Software\\Valve\\Steam\r\n" +
+	"    SteamPath    REG_SZ    c:/program files (x86)/steam\r\n\r\n"
 
+func TestSteamPathFromRegistry(t *testing.T) {
 	tests := []struct {
 		name string
 		// output が nil なら reg を置かない。
@@ -321,7 +401,7 @@ func TestSteamPathFromRegistry(t *testing.T) {
 	}{
 		{
 			name:   "ASCII の値を読む",
-			output: []byte(found),
+			output: []byte(steamPathQueryOutput),
 			want:   "c:/program files (x86)/steam",
 		},
 		{
@@ -335,7 +415,7 @@ func TestSteamPathFromRegistry(t *testing.T) {
 		{
 			// 値が無いとき reg は 1 で終わる。標準出力に何か出ていても信じない。
 			name:   "reg が失敗したら読まない",
-			output: []byte(found),
+			output: []byte(steamPathQueryOutput),
 			code:   1,
 			want:   "",
 		},
@@ -359,6 +439,21 @@ func TestSteamPathFromRegistry(t *testing.T) {
 				t.Errorf("steamPathFromRegistry() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSteamPathFromRegistryTimeout(t *testing.T) {
+	// reg が刺さったら、待ち切らずに空を返す（regTimeout のコメント）。候補が1つ
+	// 減るだけで、既定の場所から探し続けられる。
+	//
+	// 偽物は、上限で切られなければ正しい値を返す。空が返れば、上限で切ったことになる。
+	// 上限は偽物の起動より短くてもよい。起動の前に切れても、起動したあとで切れても
+	// 空が返るので、混み具合で結果が変わらない。
+	stallingReg(t)
+	setRegTimeout(t, 100*time.Millisecond)
+
+	if got := steamPathFromRegistry(); got != "" {
+		t.Errorf("時間切れなのに値を返した: %q", got)
 	}
 }
 
