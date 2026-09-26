@@ -55,8 +55,10 @@ type Line struct {
 // ものを返します。先頭の BOM は除きます。
 //
 // 実データの試験が、読み手（internal/csvfile）とは別の数え方で行数を出すためにあります。
-// 値の中に改行を持つレコードや、空白だけの行は、読み手と数え方が割れます。実データに
-// 行をまたぐレコードが無いことは、csvfile の TestRealDataWholeReaderAgrees が見ています。
+// 値の中に改行を持つレコードや、空白だけの行は、読み手と数え方が割れます。上流 main の
+// tr/strings.csv には、訳が行をまたぐレコードがあります。行をまたぐのが公開ファイルの訳の
+// 列だけで、再生順の2ファイルには無いことは、csvfile の TestRealDataWholeReaderAgrees が
+// 見ています。
 func ContentLines(data []byte) []Line {
 	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	var out []Line

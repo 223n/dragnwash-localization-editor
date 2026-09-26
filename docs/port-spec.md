@@ -1792,7 +1792,7 @@ Emit 内: `if (src != null) resolved++; else unresolved++;`（sources に key �
 
 ## 実データの形式
 
-この節の件数と形（1839件、15件、BOM付き、8列など）は、移植の基準にした上流 003ed1e のものである。上流 main（dc55c9e、2026-09-25 に確かめた）では、ロケールが16になり、data/script_order.csv に norm・fp・nlen の3列が足されて11列になり、data/level_flow.csv に BOM が無い。実データの試験（internal の各 realdata_test.go）は上流 main に追従し、件数と形を読んだリポジトリから数える（改善の決定 31。internal/sourcerepo）。003ed1e に固有の形（8列の再生順、BOM付きの level_flow.csv）は、合成の見本の試験（internal/order の TestLoadPowerShellOlderShapes、internal/csvfile の TestReadPowerShellRows「BOMを剥がす」）で確かめる。
+この節の件数と形（1839件、15件、BOM付き、8列など）は、移植の基準にした上流 003ed1e のものである。上流 main（dc55c9e、2026-09-25 に確かめた）では、ロケールが16になり、data/script_order.csv に norm・fp・nlen の3列が足されて11列になり、data/level_flow.csv に BOM が無い。その後に入った tr（f831c54）でロケールが17になり、tr/strings.csv には訳が引用符の中で改行するレコード（スタッフクレジットの UI の訳）が7件ある（7622cba で確かめた）。「埋め込み改行を含むフィールドは実データに0件」は 003ed1e と dc55c9e の話で、tr には当てはまらない。実データの試験（internal の各 realdata_test.go）は上流 main に追従し、件数と形を読んだリポジトリから数える（改善の決定 31。internal/sourcerepo）。003ed1e に固有の形（8列の再生順、BOM付きの level_flow.csv）は、合成の見本の試験（internal/order の TestLoadPowerShellOlderShapes、internal/csvfile の TestReadPowerShellRows「BOMを剥がす」）で確かめる。
 
 ### データ構造
 
