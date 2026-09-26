@@ -26,7 +26,8 @@ on:
   # GITHUB_TOKEN が開いた PR（リリースの PR と、develop へ戻す PR）では、pull_request の実行は「承認待ち」で
   # 作られ、書き込み権限のある人が「Approve workflows to run」を押すまで動かない。承認して、CI が通ってから
   # マージする。承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として
-  # Actions に残る（main のコミットの判定には響かない）。auto_merge の経路は、マージの前に取り消す
+  # Actions に残る（main のコミットの判定には響かない）。承認待ちの実行は取り消せない（HTTP 409）。
+  # auto_merge の経路は、マージの前に API で承認し、承認できなければこの入口で release ブランチの CI を動かす
   workflow_dispatch:
     inputs:
       runner:

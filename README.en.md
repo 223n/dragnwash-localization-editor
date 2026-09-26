@@ -1691,16 +1691,21 @@ develop ──▶ release/vX.Y.Z ──(pull request)──▶ main ──▶ ta
 1. Put the version to release in `version`.  
    Do not include the `v` (for example `1.2.0`, `1.2.0-rc.1`)
 1. Turning on `auto_merge` merges without pausing for a review of the pull request and goes all the way to publication.  
-   Instead of a person approving CI, the workflow runs CI (`ci.yml`) on the `release/vX.Y.Z` branch and waits up to 30 minutes for it to pass.  
-   Once it passes, it cancels the pull request's runs that are waiting for approval, and then merges.  
-   However, if `main` has required checks or approval rules, it may stop before the merge.  
-   The pull request's runs stay unapproved, so the required checks cannot be satisfied.  
-   When it can tell that the merge is blocked, it stops without cancelling the runs waiting for approval.  
+   Instead of a person pressing `Approve workflows to run`, the workflow approves the pull request's runs that are waiting for approval through the API.  
+   Once the CI run starts, it waits up to 30 minutes for it to pass and then merges.  
+   If the approval is refused, it runs CI (`ci.yml`) on the `release/vX.Y.Z` branch instead, waits up to 30 minutes for it to pass, and then merges.  
+   In that case the pull request's runs stay waiting for approval and remain as expired failures after the merge.  
+   Whether `GITHUB_TOKEN` can approve them has not been confirmed yet.  
+   Which of the two happened appears in the summary of that run.  
+   If `main` has required checks or approval rules, it may stop at the merge.  
    It also stops, leaving the pull request open, when CI fails or does not finish within 30 minutes.  
-   When it stops, a person pressing `Approve workflows to run` and merging once CI passes takes it through to publication.  
-   If you merge without approving, the waiting runs stay behind as expired failures.  
+   When it stops, a person confirming that CI passed and then merging takes it through to publication.  
+   If the pull request shows `Approve workflows to run`, press it and wait for CI to pass first.  
+   If you merge without pressing it, the waiting runs stay behind as expired failures.  
    When it stopped because CI was flaky, you can also press `Re-run failed jobs` on the "Release" run.  
-   It runs CI again and, once it passes, cancels the runs waiting for approval and goes on to merge and publish.  
+   If runs waiting for approval remain, it starts again from the approval.  
+   If it had already approved the pull request's CI, it runs CI again on the `release/vX.Y.Z` branch.  
+   Once CI passes, it goes on to merge and publish.  
    `Re-run all jobs` stops at the check before branching, because the `release/vX.Y.Z` branch is still there
 1. The workflow first confirms that CI (`ci.yml`) passed on the latest commit of `develop`.  
    If CI is still running, it waits up to 30 minutes for it to finish.  
@@ -1776,7 +1781,9 @@ A commit pushed by GitHub Actions does not start the `push` CI, and the "check t
 If there is a rule requiring pull requests on `develop`, merging `main` back into `develop` becomes a pull request every time.  
 The branch is named `merge/vX.Y.Z-into-develop`.  
 This pull request is also opened by GitHub Actions, so CI and the other runs are created "waiting for approval".  
-After a release, press `Approve workflows to run`, and once CI passes, merge it with a merge commit.
+After a release, press `Approve workflows to run`, and once CI passes, merge it with a merge commit.  
+Instead of the button, you can also approve them through the API (confirmed with v0.12.0).  
+The steps are in "CI on pull requests opened by a workflow".
 
 The body of the GitHub Release is built automatically from the titles and labels of the merged pull requests.  
 The classification is in `.github/release.yml`.  
@@ -1793,43 +1800,57 @@ The release pull request and the pull request that merges back into `develop` ar
 
 | Path | What to do |
 | ---- | ---- |
-| A person merges | Press `Approve workflows to run`, and merge once CI passes |
-| `auto_merge` | The workflow runs CI on the `release/vX.Y.Z` branch, waits for it to pass, cancels the runs waiting for approval, and then merges |
+| A person merges | Press `Approve workflows to run`, and merge once CI passes. You can also approve them through the API instead of the button |
+| `auto_merge` | The workflow approves the runs waiting for approval through the API, and merges once CI passes. If the approval is refused, it runs CI on the `release/vX.Y.Z` branch instead |
 
 If you merge without approving, the waiting runs expire the moment the pull request is closed.  
 They stay in Actions as failed runs with no jobs at all.  
 The note on them reads "This workflow run required approval but was not approved before it expired."  
 That is what happened with v0.10.0 and v0.11.0.  
-It does not affect the checks on the commit on `main`, but red runs remain in the list in Actions.  
-The `auto_merge` path cancels them so that they remain as cancelled runs rather than as expired failures.
+It does not affect the checks on the commit on `main`, but red runs remain in the list in Actions.
 
-GitHub's documentation does not say whether runs waiting for approval can be approved or cancelled through the API.  
-The approval API is documented as being for pull requests from first-time contributors on public forks.  
-The `auto_merge` path does not stop when a cancellation is refused; it prints a warning and carries on.  
-The result appears in the summary of that run, as the number of cancellations accepted and refused.  
-To check by hand, use these commands.
+Through the API, a run waiting for approval comes back with `status` set to `completed` and `conclusion` set to `action_required`.  
+This was confirmed on the two pull requests of v0.12.0 (the release and the merge back into `develop`).  
+Because it counts as a finished run, cancelling it (`cancel`) is refused with `Cannot cancel a workflow run that is completed.` (HTTP 409).  
+The `auto_merge` of v0.12.0 could not cancel its three runs this way, and left them as expired failures.
+
+Approval (`approve`) is used instead of cancelling.  
+Approving with the user's `gh` token started the same run again as its second attempt (`run_attempt` becomes 2).  
+This was confirmed on the three runs of the pull request that merged v0.12.0 back into `develop`.  
+The one who triggered that attempt (`triggering_actor`) becomes the person who approved it.
+
+Whether `GITHUB_TOKEN` can approve them has not been confirmed yet.  
+GitHub's documentation describes the approval API as being for pull requests from first-time contributors on public forks.  
+On the other hand, its table of permissions lists it as usable with GitHub App installation tokens, needing write access to Actions.  
+`GITHUB_TOKEN` is one of those tokens, but the documentation does not say whether it can approve the runs of a pull request the workflow itself opened.  
+The `auto_merge` path does not stop when the approval is refused; it runs CI on the `release/vX.Y.Z` branch instead.  
+The same goes when the approval is accepted but the runs do not start.  
+The result appears in the summary of that run, as the number of runs approved and started and the number refused.  
+Check this summary the next time you release with `auto_merge`.
+
+To approve by hand, use these commands.  
+The pull request that merges back into `develop` can be approved the same way.
 
 ```bash
 # The SHA at the head of the pull request
 sha="$(gh pr view <number> --json headRefOid --jq .headRefOid)"
 
-# List the runs on that SHA. Also see whether "waiting for approval" shows up in status or in conclusion
+# List the runs on that SHA that are waiting for approval
 gh api "repos/{owner}/{repo}/actions/runs?head_sha=${sha}" \
-  --jq '.workflow_runs[] | [.id, .event, .status, .conclusion, .name] | @tsv'
+  --jq '.workflow_runs[] | select(.conclusion == "action_required") | [.id, .event, .name] | @tsv'
 
-# Approve one. See whether it starts, as it does with the button on the screen
-gh api --method POST "repos/{owner}/{repo}/actions/runs/<run id>/approve"
+# Approve every run waiting for approval
+for id in $(gh api "repos/{owner}/{repo}/actions/runs?head_sha=${sha}" \
+  --jq '.workflow_runs[] | select(.conclusion == "action_required") | .id'); do
+  gh api --method POST "repos/{owner}/{repo}/actions/runs/${id}/approve"
+done
 
-# Cancel one. See whether its conclusion becomes cancelled
-gh api --method POST "repos/{owner}/{repo}/actions/runs/<run id>/cancel"
-
-# Look at its state
-gh api "repos/{owner}/{repo}/actions/runs/<run id>" --jq '[.status, .conclusion] | @tsv'
+# Look at its state. Once it starts, run_attempt becomes 2
+gh api "repos/{owner}/{repo}/actions/runs/<run id>" --jq '[.status, .conclusion, .run_attempt] | @tsv'
 ```
 
 `gh` replaces `{owner}` and `{repo}` with the repository in the current directory.  
-Try cancelling only on a run you do not need (for example "Check the PR head branch" on the pull request that merges back into `develop`).  
-A cancelled run stays unrun on that pull request.
+Approve with the token of someone who has write access.
 
 ### Urgent fixes
 
@@ -1873,7 +1894,7 @@ That is because the "Publish release" workflow has the same check.
 | `labels.yml` | Changes to `.github/labels.yml`, pull requests (check only), manually | Brings the repository's labels in line with the definition. On a pull request it only shows what would change. A sync from `main` does not delete labels that are missing from the file |
 | `labeler.yml` | When a pull request is opened, updated or reopened | Adds labels based on the files changed and the branch name |
 | `branch-guard.yml` | When a pull request is opened, updated or reopened | Fails if the head branch is `main` or `develop`. It does not block the merge |
-| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it runs CI on the release branch and waits for it to pass, cancels the pull request's runs waiting for approval, and then merges and goes through to publication |
+| `release.yml` | Manually | Confirms that CI passed on the latest commit of `develop`, then branches a release branch from it, bumps the version and opens a pull request against `main`. With `auto_merge`, it approves the pull request's runs waiting for approval through the API, waits for CI to pass, and then merges and goes through to publication. If it cannot approve them, it runs CI on the release branch and waits for that instead |
 | `release-publish.yml` | When a `release/*` or `hotfix/*` pull request is merged into `main`. When "Release" merged it with `auto_merge`, it is called directly from there | Runs the Go tests, builds the six binaries, unpacks and runs an archive, creates the tag, creates the GitHub Release with the archives attached, and merges `main` back into `develop` |
 
 ## Labels
