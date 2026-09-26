@@ -579,7 +579,9 @@ jobs:
         # この PR も GITHUB_TOKEN が開くので、pull_request の実行（CI、CodeQL、branch-guard）は「承認待ち」で
         # 作られる。人が「Approve workflows to run」を押し、CI が通ってからマージするよう、本文と要約に書く。
         # 承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残る。
-        # この PR を自動でマージする経路は無いので、取り消しの段は置かない
+        # 承認待ちの実行は取り消せない（HTTP 409）。人のトークンなら API でも承認できる（v0.12.0 の PR #87 で確かめた）。
+        # 手順は README の「ワークフローが開いたPull RequestのCI」にある。この PR を自動でマージする経路は無いので、
+        # ここでは承認しない
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |

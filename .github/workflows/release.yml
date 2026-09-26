@@ -18,12 +18,16 @@ name: リリース
 # （v0.10.0 と v0.11.0 がそうだった。main のコミットの判定には響かない）。
 #
 # auto_merge を有効にすると、人手を挟まずにこのワークフローの中で PR をマージし、公開まで進める。
-# 人が承認できないので、代わりに release ブランチで CI（ci.yml）を workflow_dispatch で動かし、通るのを待つ。
-# マージの前に、PR の承認待ちの実行を取り消す。期限切れの失敗ではなく、取り消しとして残すためである。
-# ただし main に必須のチェックや承認のルールがあると、auto_merge はマージの前で止まることがある。
-# PR の実行は承認されないままなので、必須のチェックが埋まらないためである
-# （release ブランチの workflow_dispatch の実行で埋まるかは確かめていない）。
-# 塞がれていると分かったときは、承認待ちの実行を取り消さずに止まる。
+# 人の代わりに、PR の承認待ちの実行を API（POST /actions/runs/{id}/approve）で承認し、PR の CI が通るのを待つ。
+# 承認待ちの実行は、API では status=completed、conclusion=action_required として返る。そのため取り消し
+# （cancel）は「完了した実行は取り消せない」（HTTP 409）で拒まれる。v0.12.0 の3件がそうなり、期限切れの
+# 失敗として残った。人のトークンでの承認は通り、実行は次の試行（run_attempt 2）として動き出した（PR #87）。
+# GITHUB_TOKEN で承認できるかは、GitHub の文書に書かれておらず、確かめてもいない。
+# 承認を拒まれたときや、受け付けられても動き出さないときは、release ブランチで CI（ci.yml）を
+# workflow_dispatch で動かし、通るのを待つ。その場合、PR の実行は承認待ちのまま、マージのあとに
+# 期限切れの失敗として Actions に残る。
+# main に必須のチェックや承認のルールがあると、auto_merge はマージの段で止まることがある
+# （release ブランチの workflow_dispatch の実行で必須のチェックが埋まるかは確かめていない）。
 # その場合は人が承認して CI が通ってから PR をマージすれば、release-publish.yml が動いて公開まで進む。
 #
 # PR は必ずマージコミット（Create a merge commit）でマージする。
@@ -386,7 +390,8 @@ jobs:
             echo
             if [ "${AUTO_MERGE}" = 'true' ]; then
               echo "\`auto_merge\` で動いています。人の承認とマージは要りません。"
-              echo "ワークフローがこのブランチで CI を動かし、通ったら、この PR の承認待ちの実行を取り消してからマージします。"
+              echo "ワークフローがこの PR の承認待ちの実行を API で承認し、CI が通ったらマージします。"
+              echo "承認を拒まれたときは、代わりにこのブランチで CI を動かし、通ったらマージします。その場合、この PR の実行は承認されないまま、マージのあとに期限切れの失敗として Actions に残ります。"
               echo "止まったときは、ワークフローの実行の画面に理由と次にすることが出ます。"
               echo "止まって人がマージするときは、この PR に「Approve workflows to run」が出ていれば押し、CI が通ってからにしてください。承認せずにマージすると、承認待ちの実行は PR を閉じたときに期限切れになり、失敗として Actions に残ります。"
             else
@@ -441,19 +446,20 @@ jobs:
     if: inputs.auto_merge
     needs: prepare
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    # release ブランチの CI を待つ上限（30分）に、実行が作られるのを待つ分（5分）と、
-    # 承認待ちの実行を取り消してマージする分を足す
+    # PR の承認待ちの実行を承認し、動き出したかを確かめる分（最大4分）と、CI を待つ上限（30分）と、
+    # release ブランチで CI を動かすときに実行が作られるのを待つ分（5分）と、マージする分を足す
     timeout-minutes: 45
     permissions:
       contents: write        # PR をマージし、release ブランチを消す
       pull-requests: write   # PR をマージする
-      actions: write         # release ブランチで CI を動かし、PR の承認待ちの実行を取り消す
+      actions: write         # PR の承認待ちの実行を承認し、承認できなければ release ブランチで CI を動かす
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: ${{ needs.prepare.outputs.branch }}
       HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
       PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
       PR_URL: ${{ needs.prepare.outputs.pr_url }}
+      CI_WORKFLOW: ci.yml
     steps:
       - name: GitHub CLIがあることを確かめる
         run: |
@@ -462,9 +468,183 @@ jobs:
             exit 1
           fi
 
+      - name: リリースブランチの先端を確かめる
+        # release ブランチが prepare の押したコミットのままかを見る。動いていると、CI を走らせる木と
+        # マージする木が食い違う
+        run: |
+          if ! tip="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BRANCH}" --jq '.commit.sha')"; then
+            echo "::error::${BRANCH} の先端の SHA を取れなかった。PR は開いたままにしてある。一時の失敗なら、この「リリース」の実行の「Re-run failed jobs」で入れ直す: ${PR_URL}"
+            exit 1
+          fi
+          if [ "${tip}" != "${HEAD_SHA}" ]; then
+            echo "::error::${BRANCH} の先端（${tip:-空}）が、このワークフローの押したコミット（${HEAD_SHA}）と違う。PR の中身を確かめる。PR は開いたままにしてある。PR の画面に「Approve workflows to run」が出ていれば押し、CI が通ってから人がマージする: ${PR_URL}"
+            exit 1
+          fi
+
+      - name: 承認待ちのPRの実行を承認する
+        id: approve
+        # GITHUB_TOKEN が開いた PR の pull_request の実行（CI、CodeQL、branch-guard）は承認待ちで作られる。
+        # auto_merge では人が「Approve workflows to run」を押さないので、PR の先端の SHA の承認待ちの実行を
+        # API で承認する。承認しないままマージすると、PR を閉じたときに期限切れになり、失敗として Actions に残る。
+        #
+        # 承認待ちの実行は、API では status=completed、conclusion=action_required として返る。取り消し（cancel）は
+        # HTTP 409 で拒まれるので使わない（v0.12.0 で確かめた）。人のトークンでの承認は通り、同じ実行が次の試行
+        # （run_attempt 2）として動き出した（PR #87 で確かめた）。
+        # GITHUB_TOKEN で承認できるかは、GitHub の文書に書かれておらず、確かめてもいない。文書の権限の表では、
+        # この API は GitHub App のインストールトークン（GITHUB_TOKEN もこれにあたる）で Actions の write を求める。
+        # 拒まれても失敗にせず、警告を出して release ブランチで CI を動かす経路へ回す。結果は要約に件数で出る。
+        #
+        # 承認を受け付けられても、動き出さないことがありうる。動き出したと確かめた実行だけを、あとの段で待つ。
+        # CI（ci.yml）の実行が動き出したら、それを CI の関門にし、release ブランチで CI を動かす段は飛ばす。
+        # 実行が作られるのを PENDING_APPEAR_SECONDS 秒まで待つ。承認したら引き直し、新しく出てこなくなったら終える。
+        # 状態は status と conclusion のどちらに action_required が入っても拾う
+        env:
+          PENDING_APPEAR_SECONDS: '60'
+          PENDING_LIMIT_SECONDS: '180'
+          PENDING_POLL_SECONDS: '10'
+          START_SECONDS: '60'
+        run: |
+          runs="repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100"
+          pick='.workflow_runs[]
+            | select(.event == "pull_request" or .event == "pull_request_target")
+            | select(.status == "action_required" or .conclusion == "action_required")
+            | [(.id | tostring), (.path // ""), (.name // ""), (.html_url // "")] | join("\t")'
+
+          started="$(date +%s)"
+          api_failures=0
+          attempted=' '
+          accepted=''
+          refused=0
+          listed=false
+          while :; do
+            elapsed=$(( $(date +%s) - started ))
+            if ! list="$(gh api "${runs}" --jq "${pick}")"; then
+              api_failures=$((api_failures + 1))
+              if [ "${api_failures}" -ge 3 ]; then
+                echo "::warning::承認待ちの実行を3回続けて引けなかった。承認せずに、${BRANCH} で CI を動かす"
+                break
+              fi
+              echo "::warning::承認待ちの実行を引けなかった。${PENDING_POLL_SECONDS}秒後に引き直す"
+            else
+              api_failures=0
+              listed=true
+              new=0
+              while IFS=$'\t' read -r id wf_path name url <&3; do
+                if [ -z "${id}" ]; then
+                  continue
+                fi
+                case "${attempted}" in
+                  *" ${id} "*)
+                    # 承認を頼んだ実行。動き出したかは、このあとで確かめる
+                    continue
+                    ;;
+                esac
+                attempted="${attempted}${id} "
+                new=$((new + 1))
+                if gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/approve" --silent </dev/null; then
+                  accepted="${accepted}${id}"$'\t'"${wf_path}"$'\t'"${name}"$'\t'"${url}"$'\n'
+                  echo "承認を頼んだ: ${name} ${url}"
+                else
+                  refused=$((refused + 1))
+                  echo "::warning::承認待ちの実行を承認できなかった。PR を閉じると期限切れの失敗として残る: ${name} ${url}"
+                fi
+              done 3<<<"${list}"
+              if [ "${new}" -eq 0 ]; then
+                # 承認したあとに引き直して、新しく出てこなければ終える
+                if [ "${attempted}" != ' ' ]; then
+                  break
+                fi
+                if [ "${elapsed}" -ge "${PENDING_APPEAR_SECONDS}" ]; then
+                  break
+                fi
+              fi
+            fi
+            if [ "${elapsed}" -ge "${PENDING_LIMIT_SECONDS}" ]; then
+              echo "::warning::承認待ちの実行の承認を ${PENDING_LIMIT_SECONDS} 秒で打ち切った"
+              break
+            fi
+            sleep "${PENDING_POLL_SECONDS}"
+          done
+
+          # 承認を受け付けた実行が、承認待ちから抜けて動き出したかを確かめる。
+          # 抜けたかは、最新の試行が「completed と action_required」の組のままかで見る。
+          # 動き出してすぐ終わる実行（branch-guard は10秒ほど）もあるので、completed だけでは見ない
+          approved=''
+          ci_run=''
+          stuck=''
+          remaining="${accepted}"
+          confirm_started="$(date +%s)"
+          while [ -n "${remaining}" ]; do
+            next=''
+            while IFS=$'\t' read -r id wf_path name url <&3; do
+              if [ -z "${id}" ]; then
+                continue
+              fi
+              if ! state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" --jq '[.status, (.conclusion // "none"), (.run_attempt | tostring)] | join(" ")' </dev/null)"; then
+                state='unknown'
+              fi
+              case "${state}" in
+                unknown | 'completed action_required '*)
+                  next="${next}${id}"$'\t'"${wf_path}"$'\t'"${name}"$'\t'"${url}"$'\n'
+                  continue
+                  ;;
+              esac
+              echo "動き出した（${state}）: ${name} ${url}"
+              approved="${approved} ${id}"
+              if [ "${wf_path}" = ".github/workflows/${CI_WORKFLOW}" ]; then
+                ci_run="${id}"
+              fi
+            done 3<<<"${remaining}"
+            remaining="${next}"
+            if [ -z "${remaining}" ]; then
+              break
+            fi
+            if [ $(( $(date +%s) - confirm_started )) -ge "${START_SECONDS}" ]; then
+              stuck="${remaining}"
+              break
+            fi
+            sleep "${PENDING_POLL_SECONDS}"
+          done
+          if [ -n "${stuck}" ]; then
+            echo "::warning::承認を受け付けたが、${START_SECONDS} 秒たっても動き出したと確かめられない実行がある。承認待ちのままなら、PR を閉じると期限切れの失敗として残る"
+            printf '%s' "${stuck}" | cut -f3,4 | tr '\t' ' '
+          fi
+
+          {
+            echo "approved=${approved# }"
+            echo "ci_run=${ci_run}"
+          } >> "$GITHUB_OUTPUT"
+
+          started_count="$(printf '%s\n' "${approved}" | wc -w | tr -d ' ')"
+          stuck_count="$(printf '%s' "${stuck}" | grep -c . || true)"
+          {
+            if [ "${attempted}" = ' ' ]; then
+              if [ "${listed}" = 'true' ]; then
+                echo "- 承認待ちの実行: PR の先端（${HEAD_SHA}）に無かった"
+              else
+                echo "- 承認待ちの実行: 引けなかったため、承認していない"
+              fi
+            else
+              echo "- 承認待ちの実行: 承認して動き出した ${started_count} 件、拒まれた ${refused} 件、受け付けたが動き出したと確かめられなかった ${stuck_count} 件"
+              if [ -n "${stuck}" ]; then
+                printf '%s' "${stuck}" | cut -f3,4 | tr '\t' ' ' | sed 's/^/  - /'
+              fi
+            fi
+            if [ -n "${ci_run}" ]; then
+              echo "- PR の CI を承認でき、動き出したので、PR の CI を待ってマージする"
+            elif [ "${attempted}" = ' ' ]; then
+              echo "- PR に承認待ちの CI が見つからなかったので、${BRANCH} で CI を動かして待つ"
+            else
+              echo "- PR の CI を承認して動かせなかったので、${BRANCH} で CI を動かして待つ。承認待ちのまま残った PR の実行は、マージのあとに期限切れの失敗として残る"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${ci_run}" ]; then
+            echo "::notice::PR の CI の実行を承認でき、動き出した。${BRANCH} で CI は動かさない"
+          fi
+
       - name: リリースブランチでCIを走らせて待つ
-        # auto_merge では、人が PR の「Approve workflows to run」を押さない。PR の CI の代わりに、
-        # release ブランチで CI（ci.yml）を workflow_dispatch で動かし、通るのを待ってからマージする。
+        # PR の CI の実行を承認できなかったときだけ動く。PR の CI の代わりに、release ブランチで CI（ci.yml）を
+        # workflow_dispatch で動かし、通るのを待ってからマージする。
         # GITHUB_TOKEN が起こすイベントのうち、workflow_dispatch は実行を作れる。
         # 走るのはリリースする木そのもの（develop の先端に main を取り込み、版を上げたもの）で、
         # 公開のワークフローが走らせない画面の E2E と Windows のテストも、ここで通る。
@@ -472,33 +652,21 @@ jobs:
         # 待ち方は prepare の「developのCIが通ったことを確かめる」と同じにする。上限は CI_WAIT_MINUTES 分で、
         # 実行が作られるのを CI_APPEAR_MINUTES 分だけ待つ。結論が success 以外なら止め、PR は開いたままにする。
         # 動かした実行は、動かす前から同じ SHA にあった実行（手で動かしたものや、このジョブの前の試行のもの）を
-        # 除いて見分ける。ci.yml の concurrency の組は ref とイベントを含むので、PR の承認待ちの実行とは
-        # 互いに止め合わない
+        # 除いて見分ける。ci.yml の concurrency の組は ref とイベントを含むので、PR の実行とは互いに止め合わない
         #
-        # 止まったときは、ここより後の段（取り消し）に進まないので、PR の実行は承認待ちのまま残る。
+        # 止まったときも、承認できなかった PR の実行は承認待ちのまま残る。
         # そのため、どの案内でも、人がマージするなら「Approve workflows to run」を押して CI が通ってからにする、と出す。
         # 一時の失敗（CI の揺れや API の失敗）なら、この「リリース」の実行の「Re-run failed jobs」でも進められる。
         # merge ジョブと、それに続く publish ジョブが入れ直され、前の試行で動かした実行は除いて見分ける。
         # 「Re-run all jobs」は、release ブランチが残っているため prepare の「タグとブランチが未使用で、版が新しいことを確かめる」で止まる
+        if: steps.approve.outputs.ci_run == ''
         env:
-          CI_WORKFLOW: ci.yml
           CI_WAIT_MINUTES: '30'
           CI_APPEAR_MINUTES: '5'
           CI_POLL_SECONDS: '20'
         run: |
-          by_hand='PR は開いたままにしてある。PR の「Approve workflows to run」を押し、CI が通ってから人がマージする（押さずにマージすると、承認待ちの実行が期限切れの失敗として残る）'
-          rerun='一時の失敗なら、この「リリース」の実行の「Re-run failed jobs」で入れ直してもよい（CI を動かし直し、通れば承認待ちの実行を取り消して、マージと公開まで進む）'
-
-          # release ブランチが prepare の押したコミットのままかを見る。動いていると、CI を走らせる木と
-          # マージする木が食い違う
-          if ! tip="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BRANCH}" --jq '.commit.sha')"; then
-            echo "::error::${BRANCH} の先端の SHA を取れなかった。${by_hand}。${rerun}: ${PR_URL}"
-            exit 1
-          fi
-          if [ "${tip}" != "${HEAD_SHA}" ]; then
-            echo "::error::${BRANCH} の先端（${tip:-空}）が、このワークフローの押したコミット（${HEAD_SHA}）と違う。PR の中身を確かめる。${by_hand}: ${PR_URL}"
-            exit 1
-          fi
+          by_hand='PR は開いたままにしてある。PR の画面に「Approve workflows to run」が出ていれば押し、CI が通ってから人がマージする（出ているのに押さずにマージすると、承認待ちの実行が期限切れの失敗として残る）'
+          rerun='一時の失敗なら、この「リリース」の実行の「Re-run failed jobs」で入れ直してもよい（承認待ちの実行があれば承認を試し、CI を動かし直して、通ればマージと公開まで進む）'
 
           runs="repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${HEAD_SHA}&branch=${BRANCH}&event=workflow_dispatch&per_page=100"
           if ! before="$(gh api "${runs}" --jq '[.workflow_runs[].id | tostring] | join(",")')"; then
@@ -571,130 +739,92 @@ jobs:
           echo "CI が通ったことを確かめた: ${url}"
           echo "- ${BRANCH} の CI: ${url}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: マージできる状態かを確かめる
-        # main のルール（必須のチェックや承認）で塞がれているなら、承認待ちの実行を取り消す前に止める。
-        # 取り消してしまうと、人が「Approve workflows to run」を押して PR の CI でルールを満たす道が無くなる。
-        # 状態を引けなかったとき（UNKNOWN を含む）は、止めずに進める。塞がれていれば、マージの段で止まる
-        run: |
-          if ! state="$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json mergeStateStatus --jq '.mergeStateStatus')"; then
-            echo "::warning::PR のマージの状態を引けなかった。確かめずに進める"
-            exit 0
-          fi
-          echo "PR のマージの状態: ${state:-空}"
-          if [ "${state}" = 'BLOCKED' ]; then
-            echo "::error::PR のマージが ${MAIN_BRANCH} のルール（必須のチェックや承認）で塞がれている。承認待ちの実行は取り消さずに残した。PR の「Approve workflows to run」を押し、CI が通ってから人がマージすれば、「リリースを公開する」が動いて公開まで進む: ${PR_URL}"
-            exit 1
-          fi
-
-      - name: 承認待ちのPRの実行を取り消す
-        # GITHUB_TOKEN が開いた PR の pull_request の実行（CI、CodeQL、branch-guard）は承認待ちで作られる。
-        # 承認しないままマージすると、PR を閉じたときに期限切れになり、失敗として Actions に残る。
-        # auto_merge では人が承認できないので、マージの前に PR の先端の SHA の承認待ちの実行を取り消し、
-        # 取り消しとして残す。リリースの中身は、前の段で release ブランチの CI が確かめてある。
+      - name: 承認したPRの実行を待つ
+        # 前の段で承認して動き出した PR の実行（CI、CodeQL、branch-guard）が終わるのを待つ。
+        # CI（ci.yml）の実行を承認できたときは、それがリリースする木を確かめる CI になる。PR の CI は PR の head に
+        # main を取り込んだ木で走るが、release ブランチはすでに main を取り込んであるので、中身は同じになる。
+        # 結論が success 以外なら止め、PR は開いたままにする。
         #
-        # 承認待ちの実行を API で取り消せるかは、GitHub の文書に書かれていない。拒まれても失敗にせず、
-        # 警告を出して進める。赤い実行が Actions に残るだけで、リリースの中身には響かない。
-        # 実行が作られるのを PENDING_APPEAR_SECONDS 秒まで待つ。取り消したら引き直し、新しく出てこなくなったら終える。
-        # 状態は status と conclusion のどちらに action_required が入っても拾う
+        # CI 以外の実行も、終わるのを待ってからマージする。マージして release ブランチを消したあとに走り出した実行が
+        # 木を取得できるかは確かめていないため、先に終わらせておく。結論が success 以外でも止めずに警告にとどめる。
+        # 人がマージする経路でも、関門にしているのは CI だけのためである。
+        # 上限は RUN_WAIT_MINUTES 分で、release ブランチで CI を動かす段と同じにする
+        if: steps.approve.outputs.approved != ''
         env:
-          PENDING_APPEAR_SECONDS: '60'
-          PENDING_LIMIT_SECONDS: '180'
-          PENDING_POLL_SECONDS: '10'
+          APPROVED: ${{ steps.approve.outputs.approved }}
+          CI_RUN: ${{ steps.approve.outputs.ci_run }}
+          RUN_WAIT_MINUTES: '30'
+          RUN_POLL_SECONDS: '20'
         run: |
-          runs="repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100"
-          pick='.workflow_runs[]
-            | select(.event == "pull_request" or .event == "pull_request_target")
-            | select(.status == "action_required" or .conclusion == "action_required")
-            | [(.id | tostring), (.name // ""), (.html_url // "")] | join("\t")'
+          rerun='一時の失敗なら、PR の CI の実行の画面で「Re-run failed jobs」を押し、通ってから人がマージする。この「リリース」の実行の「Re-run failed jobs」で入れ直してもよい（PR の実行は承認済みなので、代わりに release ブランチで CI を動かし、通ればマージと公開まで進む）'
 
+          read -r -a ids <<<"${APPROVED}"
           started="$(date +%s)"
           api_failures=0
-          attempted=' '
-          accepted=0
-          refused=0
-          still=''
-          listed=false
           while :; do
             elapsed=$(( $(date +%s) - started ))
-            if ! list="$(gh api "${runs}" --jq "${pick}")"; then
-              api_failures=$((api_failures + 1))
-              if [ "${api_failures}" -ge 3 ]; then
-                echo "::warning::承認待ちの実行を3回続けて引けなかった。取り消さずにマージへ進む。PR を閉じると、承認待ちの実行は期限切れの失敗として残る: ${PR_URL}"
+            waiting=''
+            failed=false
+            results=''
+            for id in "${ids[@]}"; do
+              if ! line="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" --jq '[(.id | tostring), .status, (.conclusion // "none"), (.name // ""), (.html_url // "")] | join("\t")')"; then
+                failed=true
                 break
               fi
-              echo "::warning::承認待ちの実行を引けなかった。${PENDING_POLL_SECONDS}秒後に引き直す"
+              results="${results}${line}"$'\n'
+              IFS=$'\t' read -r _ status _ name url <<<"${line}"
+              if [ "${status}" != 'completed' ]; then
+                waiting="${waiting}${name}（${status}） "
+              fi
+            done
+            if [ "${failed}" = 'true' ]; then
+              api_failures=$((api_failures + 1))
+              if [ "${api_failures}" -ge 3 ]; then
+                echo "::error::承認した PR の実行を3回続けて引けなかった。PR は開いたままにしてある。PR の実行が通ったのを確かめてから、人がマージする: ${PR_URL}"
+                exit 1
+              fi
+              echo "::warning::承認した PR の実行を引けなかった。${RUN_POLL_SECONDS}秒後に引き直す"
             else
               api_failures=0
-              listed=true
-              new=0
-              still=''
-              while IFS=$'\t' read -r id name url <&3; do
-                if [ -z "${id}" ]; then
-                  continue
-                fi
-                case "${attempted}" in
-                  *" ${id} "*)
-                    # 取り消しを頼んだのに、まだ承認待ちのまま
-                    still="${still}${name} ${url}"$'\n'
-                    continue
-                    ;;
-                esac
-                attempted="${attempted}${id} "
-                new=$((new + 1))
-                if gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" --silent </dev/null; then
-                  accepted=$((accepted + 1))
-                  echo "取り消しを頼んだ: ${name} ${url}"
-                else
-                  refused=$((refused + 1))
-                  echo "::warning::承認待ちの実行を取り消せなかった。PR を閉じると期限切れの失敗として残る: ${name} ${url}"
-                fi
-              done 3<<<"${list}"
-              if [ "${new}" -eq 0 ]; then
-                # 取り消したあとに引き直して、新しく出てこなければ終える
-                if [ "${attempted}" != ' ' ]; then
-                  break
-                fi
-                if [ "${elapsed}" -ge "${PENDING_APPEAR_SECONDS}" ]; then
-                  break
-                fi
+              if [ -z "${waiting}" ]; then
+                break
               fi
+              echo "終わるのを待つ（${elapsed}秒経過）: ${waiting}"
             fi
-            if [ "${elapsed}" -ge "${PENDING_LIMIT_SECONDS}" ]; then
-              echo "::warning::承認待ちの実行の取り消しを ${PENDING_LIMIT_SECONDS} 秒で打ち切った。マージへ進む"
-              break
+            if [ "${elapsed}" -ge $((RUN_WAIT_MINUTES * 60)) ]; then
+              echo "::error::承認した PR の実行が ${RUN_WAIT_MINUTES} 分たっても終わらない。PR は開いたままにしてある。PR の実行が通ったのを確かめてから、人がマージする: ${PR_URL}"
+              exit 1
             fi
-            sleep "${PENDING_POLL_SECONDS}"
+            sleep "${RUN_POLL_SECONDS}"
           done
 
-          if [ "${attempted}" = ' ' ]; then
-            if [ "${listed}" = 'true' ]; then
-              echo "::notice::PR の先端（${HEAD_SHA}）に承認待ちの pull_request の実行は無かった"
-              echo "- 承認待ちの実行: 取り消すものは無かった" >> "$GITHUB_STEP_SUMMARY"
+          ci_ok=true
+          while IFS=$'\t' read -r id status conclusion name url <&3; do
+            if [ -z "${id}" ]; then
+              continue
+            fi
+            echo "- PR の ${name}: ${conclusion} ${url}" >> "$GITHUB_STEP_SUMMARY"
+            if [ "${conclusion}" = 'success' ]; then
+              echo "通った: ${name} ${url}"
+            elif [ "${id}" = "${CI_RUN}" ]; then
+              ci_ok=false
+              echo "::error::PR の CI は通っていない（${conclusion}）。PR は開いたままにしてある。${rerun}。直すべき不具合なら PR を閉じて ${BRANCH} を消し、develop で直してからやり直す。PR: ${PR_URL} CI の実行: ${url}"
             else
-              echo "- 承認待ちの実行: 引けなかったため、取り消していない" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::PR の ${name} は通っていない（${conclusion}）。CI ではないので、止めずにマージへ進む: ${url}"
             fi
-            exit 0
+          done 3<<<"${results}"
+          if [ "${ci_ok}" != 'true' ]; then
+            exit 1
           fi
-          if [ -n "${still}" ]; then
-            echo "::warning::取り消しを頼んだが、まだ承認待ちの実行がある。PR を閉じると期限切れの失敗として残る"
-            printf '%s' "${still}"
-          fi
-          {
-            echo "- 承認待ちの実行: 取り消しを受け付けた ${accepted} 件、拒まれた ${refused} 件"
-            if [ -n "${still}" ]; then
-              echo "- 取り消しを頼んだあとも承認待ちのまま:"
-              printf '%s' "${still}" | sed 's/^/  - /'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: PRをマージする
         # マージコミットで取り込む。CI を確かめたコミットのままのときだけマージする（--match-head-commit）。
         # main のルール（必須のチェックや承認）で止められた場合はここで失敗する。
         # その場合は人が PR をマージすれば、release-publish.yml が pull_request(closed) で動いて公開まで進む。
-        # 前の段で取り消せなかった承認待ちの実行が残っていれば、人が承認して CI が通ってからマージする
+        # 前の段で承認できなかった実行が残っていれば、人が承認して CI が通ってからマージする
         run: |
           if ! gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --delete-branch --match-head-commit "${HEAD_SHA}"; then
-            echo "::error::PR をマージできなかった。${MAIN_BRANCH} のルール（必須のチェックや承認）で止められたか、PR の先端が ${HEAD_SHA} から動いた。${BRANCH} の CI は通っている。人が PR をマージすれば、「リリースを公開する」が動いて公開まで進む。PR の画面に「Approve workflows to run」が出ていれば（承認待ちの実行を取り消せなかったとき）、押して CI が通ってからマージする（押さずにマージすると、承認待ちの実行が期限切れの失敗として残る）: ${PR_URL}"
+            echo "::error::PR をマージできなかった。${MAIN_BRANCH} のルール（必須のチェックや承認）で止められたか、PR の先端が ${HEAD_SHA} から動いた。CI は通っている。人が PR をマージすれば、「リリースを公開する」が動いて公開まで進む。PR の画面に「Approve workflows to run」が出ていれば（承認待ちの実行を承認できなかったとき）、押して CI が通ってからマージする（押さずにマージすると、承認待ちの実行が期限切れの失敗として残る）: ${PR_URL}"
             exit 1
           fi
 
