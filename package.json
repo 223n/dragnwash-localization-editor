@@ -31,7 +31,7 @@
     }
   },
   "devDependencies": {
-    "@223n/lint-config-ja": "^2.0.0",
+    "@223n/lint-config-ja": "^2.1.1",
     "@playwright/test": "^1.63.0",
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-report": "^3.0.1",
