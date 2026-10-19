@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
 
       - name: Nodeを用意
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # markdownlint-cli2 0.23 が Node 22 以上を求める
           node-version: '22'
@@ -124,7 +124,7 @@ jobs:
 
       - name: Nodeを用意
         # カバレッジの集計スクリプトを動かすためだけに使う。npm の依存は要らない
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
 
@@ -201,7 +201,7 @@ jobs:
           cache: true
 
       - name: Nodeを用意
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -244,7 +244,7 @@ jobs:
         # このジョブは秘密を環境に持たず、checkout も persist-credentials: false にしてある。
         # それでも残す期間は短くする
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # 落ちたジョブだけを再実行すると、同じ実行の中でもう一度上げる。名前がぶつからないよう試行の番号を付ける
           name: e2e-test-results-${{ github.run_attempt }}
